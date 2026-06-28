@@ -1,0 +1,47 @@
+# Observability stack for Tirelo Services: Prometheus + Grafana (+ exporters).
+# Run alongside the app stack:
+#   docker compose -f docker-compose.yml -f deploy/monitoring/docker-compose.monitoring.yml up -d
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - '9090:9090'
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/tirelo.json:ro
+    ports:
+      - '3000:3000'
+    depends_on:
+      - prometheus
+
+  # Optional exporters
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.40
+    command: ['--mongodb.uri=mongodb://mongo:27017']
+    ports: ['9216:9216']
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    ports: ['9121:9121']
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports: ['9100:9100']
+
+volumes:
+  prometheus-data:
+  grafana-data:

@@ -35,6 +35,30 @@ class MetricsService {
       memory: { rssMb: Math.round(mem.rss / 1048576), heapUsedMb: Math.round(mem.heapUsed / 1048576) },
     };
   }
+
+  /** Prometheus text exposition (no extra dependency). */
+  prometheus() {
+    const s = this.snapshot();
+    const lines = [
+      '# HELP tirelo_uptime_seconds Process uptime in seconds.',
+      '# TYPE tirelo_uptime_seconds gauge',
+      `tirelo_uptime_seconds ${s.uptimeSeconds}`,
+      '# HELP tirelo_requests_total Total HTTP requests handled.',
+      '# TYPE tirelo_requests_total counter',
+      `tirelo_requests_total ${s.requestsTotal}`,
+      '# HELP tirelo_requests_by_status HTTP requests by status class.',
+      '# TYPE tirelo_requests_by_status counter',
+      ...Object.entries(s.byStatus).map(([k, v]) => `tirelo_requests_by_status{class="${k}"} ${v}`),
+      '# HELP tirelo_errors_total 5xx responses.',
+      '# TYPE tirelo_errors_total counter',
+      `tirelo_errors_total ${s.errors}`,
+      '# HELP tirelo_memory_bytes Process memory.',
+      '# TYPE tirelo_memory_bytes gauge',
+      `tirelo_memory_bytes{type="rss"} ${s.memory.rssMb * 1048576}`,
+      `tirelo_memory_bytes{type="heap_used"} ${s.memory.heapUsedMb * 1048576}`,
+    ];
+    return `${lines.join('\n')}\n`;
+  }
 }
 
 module.exports = new MetricsService();

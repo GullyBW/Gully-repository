@@ -9,6 +9,7 @@
     "dev": "nodemon src/server.js",
     "test": "jest --runInBand",
     "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --config=playwright.ui.config.ts",
     "test:e2e:server": "node src/test-server.js"
   },
   "keywords": [

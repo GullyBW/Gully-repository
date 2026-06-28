@@ -86,6 +86,10 @@ function createApp() {
     });
   });
   app.get('/metrics', (_req, res) => res.json({ success: true, data: metrics.snapshot() }));
+  app.get('/metrics/prometheus', (_req, res) => {
+    res.set('Content-Type', 'text/plain; version=0.0.4');
+    res.send(metrics.prometheus());
+  });
 
   // Static serving for locally-stored uploads.
   if (config.storage.driver === 'local') {

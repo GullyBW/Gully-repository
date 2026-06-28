@@ -52,28 +52,44 @@ repositories.setMessageRepository(new MemoryMessageRepository());
 const http = require('http');
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const createApp = require('./app');
 const { attachSocket } = require('./realtime/socket');
 const userDomain = require('./domain/user');
 
 // Outer app exposes a TEST-ONLY admin seed route (never part of production app),
-// then mounts the real API. Lets the E2E suite exercise admin journeys.
+// then mounts the real API. Lets the E2E suite exercise admin journeys — both
+// via API token and via the browser login form (a real bcrypt password is set).
+const SEED_ADMIN_PASSWORD = 'admin-pass-123';
 const outer = express();
+
+// TEST-ONLY permissive CORS so the browser UI E2E (served from another port)
+// can call this API. Production `createApp()` adds no CORS and is untouched.
+outer.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-request-id');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  return next();
+});
+
 outer.use(express.json());
 outer.post('/__test__/seed-admin', async (_req, res) => {
+  const email = `admin-${Date.now()}@example.com`;
   const user = userDomain.createUser({
     name: 'E2E Admin',
-    email: `admin-${Date.now()}@example.com`,
-    passwordHash: 'x',
+    email,
+    passwordHash: bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10),
     role: 'admin',
   });
+  user.emailVerified = true;
   await repositories.getUserRepository().create(user);
   const token = jwt.sign(
     { sub: user.id, role: 'admin', email: user.email },
     config.auth.jwtSecret,
     { expiresIn: '1h' }
   );
-  res.json({ token, user: userDomain.toPublicJSON(user) });
+  res.json({ token, user: userDomain.toPublicJSON(user), email, password: SEED_ADMIN_PASSWORD });
 });
 outer.use(createApp());
 

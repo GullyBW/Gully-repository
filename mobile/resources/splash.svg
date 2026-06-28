@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2732" height="2732" viewBox="0 0 2732 2732" role="img" aria-label="Tirelo Services splash">
+  <rect width="2732" height="2732" fill="#1f7a8c"/>
+  <g transform="translate(1366,1230)">
+    <rect x="-220" y="-110" width="440" height="80" rx="40" fill="#ffffff"/>
+    <rect x="-40" y="-110" width="80" height="430" rx="40" fill="#ffffff"/>
+    <circle cx="200" cy="280" r="64" fill="#e9c46a"/>
+  </g>
+  <text x="1366" y="1720" text-anchor="middle" font-family="Roboto, Arial, sans-serif"
+        font-size="120" fill="#ffffff" letter-spacing="4">Tirelo Services</text>
+</svg>

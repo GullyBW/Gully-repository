@@ -1,0 +1,61 @@
+{
+  "title": "Tirelo Services — API",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate (req/s)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{ "expr": "rate(tirelo_requests_total[5m])", "legendFormat": "requests" }]
+    },
+    {
+      "id": 2,
+      "title": "5xx error rate",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [{ "expr": "rate(tirelo_errors_total[5m])", "legendFormat": "errors" }]
+    },
+    {
+      "id": 3,
+      "title": "Requests by status class",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "rate(tirelo_requests_by_status[5m])", "legendFormat": "{{class}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Memory (RSS)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "targets": [{ "expr": "tirelo_memory_bytes{type=\"rss\"}", "legendFormat": "rss" }]
+    },
+    {
+      "id": 5,
+      "title": "Uptime",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "targets": [{ "expr": "tirelo_uptime_seconds" }]
+    }
+  ]
+}
