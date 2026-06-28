@@ -27,4 +27,18 @@ export class NotificationService {
   markAllRead(): Observable<unknown> {
     return this.api.patch('/notifications/read-all', {}).pipe(tap(() => this.unread.set(0)));
   }
+
+  // ---- Push devices & preferences (Phase 2) ----
+
+  registerDevice(token: string, platform: 'android' | 'ios' | 'web'): Observable<unknown> {
+    return this.api.post('/notifications/devices', { token, platform });
+  }
+
+  getPreferences(): Observable<Record<string, boolean>> {
+    return this.api.get<Record<string, boolean>>('/notifications/preferences');
+  }
+
+  updatePreferences(prefs: Record<string, boolean>): Observable<Record<string, boolean>> {
+    return this.api.put<Record<string, boolean>>('/notifications/preferences', prefs);
+  }
 }

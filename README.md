@@ -287,3 +287,80 @@ const payment = await PaymentService.createPayment({
 // Redirect / push the customer using payment.providerMeta, then react to the
 // webhook (or poll PaymentService.getByReference) to mark the booking paid.
 ```
+
+---
+
+# Production phase (infrastructure & hardening)
+
+The following production capabilities extend the marketplace. Every integration
+is **optional with a safe fallback**, so the app runs end-to-end (and all 104
+tests pass) with no external services configured.
+
+## New backend modules
+
+| Area              | Endpoints (base `/api`)                                              | Notes |
+| ----------------- | ------------------------------------------------------------------- | ----- |
+| Auth hardening    | `auth/refresh`, `auth/logout`, `auth/verify-email`, `auth/forgot-password`, `auth/reset-password`, `auth/sessions`, `auth/sessions/:id` | Refresh-token rotation, email verification, password reset, device/session management |
+| Push (FCM)        | `notifications/devices`, `notifications/preferences`                 | Device-token storage, per-category preferences, push via FCM or console |
+| Uploads           | `uploads/:kind` (multipart `image`)                                  | Image-only, MIME + size validation, randomised names, thumbnails, served at `/uploads` |
+| Maps              | `geo/directions`, `addresses` (CRUD)                                 | Directions/Distance, saved addresses (multiple per customer) |
+| Admin             | `admin/dashboard`, `admin/users`, `admin/providers/:id/verify`, `admin/users/:id/suspend`, `admin/bookings`, `admin/bookings/:ref/cancel`, `admin/payments`, `admin/payments/:ref/refund`, `admin/broadcast`, `admin/audit-logs` | Admin-only; all mutations audited |
+| Analytics         | `analytics/provider`, `analytics/customer`, `analytics/admin`, `analytics/export?report=&format=csv` | Earnings, trends, demand, CSV export |
+| Messaging         | `messages/conversations`, `messages/:bookingReference`, `messages/:ref/read` | Booking-scoped chat (REST) + Socket.IO gateway |
+| Health/Perf       | `/health/live`, `/health/ready`                                     | Liveness/readiness; gzip, request logging, response cache, graceful shutdown |
+
+The **payment module is unchanged** — admin/analytics read payment data via
+additive, read-only repository methods only.
+
+## Real-time chat (Socket.IO)
+
+`src/realtime/socket.js` attaches to the HTTP server in `src/server.js` and
+authenticates with the same JWT (`handshake.auth.token`). Events:
+`conversation:join`, `message:send`, `message:read`, `typing`; the server emits
+`message:new`, `message:read`, `typing` to per-conversation rooms.
+
+## Configuration & graceful fallbacks
+
+| Feature        | Enable with                          | Fallback when unset                    |
+| -------------- | ------------------------------------ | -------------------------------------- |
+| Google Maps    | `GOOGLE_MAPS_API_KEY`                | Botswana sandbox (search/geocode/directions) |
+| Push (FCM)     | `PUSH_TRANSPORT=fcm` + `FCM_SERVICE_ACCOUNT` (+ `firebase-admin`) | Console transport (still records history) |
+| Redis cache    | `REDIS_URL` (+ `ioredis`)            | In-process TTL cache                   |
+| Image storage  | `STORAGE_DRIVER=local` (default)     | Local disk under `STORAGE_LOCAL_DIR`, served at `/uploads` |
+| Thumbnails     | install `sharp` (optionalDependency) | Original image used for both URLs      |
+| Email          | `EMAIL_TRANSPORT=smtp`               | Console transport (logs links; dev returns `devToken`) |
+
+`firebase-admin`, `ioredis` and `sharp` are **optionalDependencies** — the app
+detects them at runtime and degrades gracefully if absent.
+
+### Setup notes
+
+- **Google Maps**: enable the Geocoding, Places, Directions & Distance Matrix
+  APIs for your key. Set `GOOGLE_MAPS_API_KEY` (backend) and optionally
+  `googleMapsApiKey` in `mobile/src/environments/*` for the JS SDK.
+- **FCM**: create a Firebase service account, set `FCM_SERVICE_ACCOUNT` to its
+  JSON (or a path), `PUSH_TRANSPORT=fcm`, and `npm i firebase-admin`. Clients
+  register tokens via `POST /api/notifications/devices`.
+- **Storage**: local by default. For production set `STORAGE_DRIVER` to a cloud
+  driver and implement the provider in `src/services/storage/` behind the
+  existing `StorageProvider` interface (S3/GCS/R2/Azure) — no business-logic
+  changes required.
+
+## Deployment (Docker & CI)
+
+```bash
+docker compose up --build      # api + mongo + redis
+```
+
+- `Dockerfile` — production image (prod deps only, non-root, container healthcheck).
+- `docker-compose.yml` — api + MongoDB + Redis with a persisted uploads volume.
+- `.github/workflows/ci.yml` — runs backend tests, builds the Ionic app, and
+  builds the Docker image on every push/PR.
+
+Liveness `GET /health/live`, readiness `GET /health/ready` (checks DB + cache).
+`SIGTERM`/`SIGINT` trigger graceful shutdown (drain HTTP, close Mongo + cache).
+
+## Tests
+
+`npm test` runs **104 tests** across 17 suites against in-memory repositories —
+no MongoDB, Redis, FCM, Google Maps or cloud storage required.

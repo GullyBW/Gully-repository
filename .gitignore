@@ -3,4 +3,5 @@ node_modules/
 *.log
 coverage/
 dist/
+uploads/
 .DS_Store

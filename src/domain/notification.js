@@ -49,6 +49,22 @@ const TEMPLATES = {
     title: 'New review',
     body: (d) => `You received a ${d.rating || ''}-star review.`,
   },
+  [NOTIFICATION_TYPES.BOOKING_UPDATED]: {
+    title: 'Booking updated',
+    body: () => 'A booking has been updated.',
+  },
+  [NOTIFICATION_TYPES.NEW_FAVOURITE]: {
+    title: 'New favourite',
+    body: () => 'A customer added you to their favourites.',
+  },
+  [NOTIFICATION_TYPES.NEW_MESSAGE]: {
+    title: 'New message',
+    body: (d) => d.preview || 'You have a new message.',
+  },
+  [NOTIFICATION_TYPES.ANNOUNCEMENT]: {
+    title: 'Tirelo Services',
+    body: (d) => d.body || 'You have a new announcement.',
+  },
 };
 
 function buildNotification(userId, type, data = {}) {
@@ -57,8 +73,9 @@ function buildNotification(userId, type, data = {}) {
     id: uuidv4(),
     userId,
     type,
-    title: tpl ? tpl.title : 'Notification',
-    body: tpl ? tpl.body(data) : '',
+    // data.title lets callers (e.g. admin broadcasts) override the template.
+    title: data.title || (tpl ? tpl.title : 'Notification'),
+    body: tpl ? tpl.body(data) : data.body || '',
     data,
     read: false,
     createdAt: new Date(),

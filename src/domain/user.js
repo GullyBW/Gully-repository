@@ -24,12 +24,23 @@ function createUser(input) {
     phone: input.phone,
     // Optional provider profile (profession, services, location).
     profile: input.profile || {},
+    avatarUrl: input.avatarUrl || '',
+
+    // Phase 8 security fields.
+    emailVerified: false,
+    emailVerificationToken: null,
+    emailVerificationExpires: null,
+    passwordResetToken: null,
+    passwordResetExpires: null,
+    suspended: false,
+    suspendedReason: null,
+
     createdAt: now,
     updatedAt: now,
   };
 }
 
-/** Shape returned to clients / embedded in JWTs — never exposes the hash. */
+/** Shape returned to clients / embedded in JWTs — never exposes the hash or tokens. */
 function toPublicJSON(user) {
   return {
     id: user.id,
@@ -38,6 +49,9 @@ function toPublicJSON(user) {
     role: user.role,
     phone: user.phone,
     profile: user.profile,
+    avatarUrl: user.avatarUrl || '',
+    emailVerified: !!user.emailVerified,
+    suspended: !!user.suspended,
     createdAt: user.createdAt,
   };
 }

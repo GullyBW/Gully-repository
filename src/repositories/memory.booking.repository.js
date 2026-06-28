@@ -29,6 +29,23 @@ class MemoryBookingRepository {
     return this._listBy('providerId', providerId, limit);
   }
 
+  /** Cross-cutting query for admin/analytics. */
+  async query({ status, limit = 100 } = {}) {
+    return [...this.store.values()]
+      .filter((b) => !status || b.status === status)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit)
+      .map((b) => ({ ...b }));
+  }
+
+  async all() {
+    return [...this.store.values()].map((b) => ({ ...b }));
+  }
+
+  async countByStatus(status) {
+    return [...this.store.values()].filter((b) => !status || b.status === status).length;
+  }
+
   _listBy(field, value, limit) {
     return [...this.store.values()]
       .filter((b) => b[field] === value)

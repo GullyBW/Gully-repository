@@ -84,6 +84,42 @@ class GeoService {
     };
   }
 
+  /**
+   * Route between two points. Uses the Google Directions API when live, else a
+   * sandbox estimate (haversine distance + an average-speed duration). Same
+   * return shape either way: { distanceKm, durationMinutes, polyline }.
+   */
+  static async directions(from, to) {
+    if (!isValidPoint(from) || !isValidPoint(to)) {
+      throw ApiError.badRequest('Valid from/to coordinates are required');
+    }
+    if (!GeoService.isLive) {
+      const distanceKm = Math.round(haversineKm(from, to) * 10) / 10;
+      const durationMinutes = Math.max(1, Math.round((distanceKm / 40) * 60)); // ~40 km/h
+      return { distanceKm, durationMinutes, polyline: null, sandbox: true };
+    }
+    const { data } = await axios.get(`${config.maps.baseUrl}/directions/json`, {
+      params: {
+        origin: `${from.lat},${from.lng}`,
+        destination: `${to.lat},${to.lng}`,
+        key: config.maps.googleApiKey,
+      },
+      timeout: 15000,
+    });
+    const route = (data.routes || [])[0];
+    const leg = route && route.legs && route.legs[0];
+    return {
+      distanceKm: leg ? Math.round((leg.distance.value / 1000) * 10) / 10 : null,
+      durationMinutes: leg ? Math.round(leg.duration.value / 60) : null,
+      polyline: route ? route.overview_polyline?.points : null,
+    };
+  }
+
+  /** Distance + ETA between provider and customer (alias suited to bookings). */
+  static async travelEstimate(from, to) {
+    return GeoService.directions(from, to);
+  }
+
   /** Coordinates -> nearest known address (reverse geocode). */
   static async reverseGeocode(lat, lng) {
     const point = { lat: Number(lat), lng: Number(lng) };

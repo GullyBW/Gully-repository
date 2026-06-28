@@ -1,25 +1,38 @@
 'use strict';
 
 const domain = require('../domain/notification');
-const { getNotificationRepository } = require('../repositories');
+const deviceDomain = require('../domain/deviceToken');
+const prefDomain = require('../domain/notificationPreference');
+const PushService = require('./push.service');
+const {
+  getNotificationRepository,
+  getDeviceTokenRepository,
+  getNotificationPreferenceRepository,
+} = require('../repositories');
+const { categoryForNotification } = require('../utils/constants');
 const ApiError = require('../utils/ApiError');
 
 /**
- * In-app notifications. `emit` is fire-and-forget from the caller's perspective
- * (failures are swallowed so a notification never breaks a booking/payment), and
- * is the single hook a future push-notification transport (FCM) would tap into.
+ * In-app notifications + push delivery. `emit` always records an in-app
+ * notification (history) and, when the user's preferences allow that category,
+ * dispatches a push via PushService. Failures never break the caller.
  */
 class NotificationService {
   static get repo() {
     return getNotificationRepository();
   }
 
-  /** Create a notification for a user from a template. Never throws. */
   static async emit(userId, type, data = {}) {
     try {
       const notification = domain.buildNotification(userId, type, data);
       const saved = await NotificationService.repo.create(notification);
-      // Hook point: dispatchPush(saved) once a device-token registry exists.
+
+      // Respect per-category push preferences; in-app history is always kept.
+      const category = categoryForNotification(type);
+      const pref = await getNotificationPreferenceRepository().findByUser(userId);
+      if (prefDomain.isEnabled(pref, category)) {
+        PushService.dispatch(userId, saved).catch(() => {});
+      }
       return saved;
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -49,6 +62,42 @@ class NotificationService {
   static async markAllRead(actor) {
     await NotificationService.repo.markAllRead(actor.id);
     return { success: true };
+  }
+
+  // ---- Device tokens (Phase 2) ----
+
+  static async registerDevice(actor, token, platform) {
+    if (!token) throw ApiError.badRequest('token is required');
+    const record = deviceDomain.createDeviceToken(actor.id, token, platform);
+    const saved = await getDeviceTokenRepository().upsert(record);
+    return deviceDomain.toPublicJSON(saved);
+  }
+
+  static async unregisterDevice(token) {
+    const removed = await getDeviceTokenRepository().removeByToken(token);
+    return { removed };
+  }
+
+  static async listDevices(actor) {
+    const devices = await getDeviceTokenRepository().listByUser(actor.id);
+    return devices.map(deviceDomain.toPublicJSON);
+  }
+
+  // ---- Preferences (Phase 2) ----
+
+  static async getPreferences(actor) {
+    const pref =
+      (await getNotificationPreferenceRepository().findByUser(actor.id)) ||
+      prefDomain.defaultPreferences(actor.id);
+    return pref.categories;
+  }
+
+  static async updatePreferences(actor, input) {
+    const repo = getNotificationPreferenceRepository();
+    const pref = (await repo.findByUser(actor.id)) || prefDomain.defaultPreferences(actor.id);
+    prefDomain.applyEdit(pref, input);
+    const saved = await repo.save(pref);
+    return saved.categories;
   }
 }
 

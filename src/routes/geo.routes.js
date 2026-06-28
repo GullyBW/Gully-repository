@@ -14,6 +14,7 @@ router.use(authenticate);
 router.get('/search', GeoController.search);
 router.get('/reverse', GeoController.reverse);
 router.get('/distance', GeoController.distance);
+router.get('/directions', GeoController.directions);
 router.post('/geocode', validateBody(Joi.object({ address: Joi.string().min(2).required() })), GeoController.geocode);
 
 module.exports = router;

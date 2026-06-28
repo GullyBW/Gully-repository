@@ -18,6 +18,18 @@ const userSchema = new mongoose.Schema(
     },
     phone: { type: String },
     profile: { type: mongoose.Schema.Types.Mixed, default: {} },
+
+    // Phase 8: verification, password reset, suspension.
+    emailVerified: { type: Boolean, default: false },
+    emailVerificationToken: { type: String, default: null },
+    emailVerificationExpires: { type: Date, default: null },
+    passwordResetToken: { type: String, default: null },
+    passwordResetExpires: { type: Date, default: null },
+    suspended: { type: Boolean, default: false, index: true },
+    suspendedReason: { type: String, default: null },
+
+    // Phase 3: uploaded profile photo (URL produced by StorageService).
+    avatarUrl: { type: String, default: '' },
   },
   { timestamps: true }
 );

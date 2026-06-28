@@ -32,6 +32,25 @@ class MongoTransactionRepository {
       .limit(Math.min(limit, 100))
       .lean();
   }
+
+  async query({ status, method, limit = 100 } = {}) {
+    const q = {};
+    if (status) q.status = status;
+    if (method) q.method = method;
+    return Transaction.find(q).sort({ createdAt: -1 }).limit(Math.min(limit, 500)).lean();
+  }
+
+  async all() {
+    return Transaction.find({}).lean();
+  }
+
+  async sumByStatus(status) {
+    const res = await Transaction.aggregate([
+      { $match: { status } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    return res.length ? res[0].total : 0;
+  }
 }
 
 module.exports = MongoTransactionRepository;

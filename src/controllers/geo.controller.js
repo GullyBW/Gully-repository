@@ -30,6 +30,14 @@ const GeoController = {
     const km = GeoService.estimateTravelKm(from, to);
     res.json({ success: true, data: { distanceKm: km } });
   }),
+
+  // GET /api/geo/directions?fromLat=&fromLng=&toLat=&toLng=
+  directions: asyncHandler(async (req, res) => {
+    const from = { lat: Number(req.query.fromLat), lng: Number(req.query.fromLng) };
+    const to = { lat: Number(req.query.toLat), lng: Number(req.query.toLng) };
+    const result = await GeoService.directions(from, to);
+    res.json({ success: true, data: result });
+  }),
 };
 
 module.exports = GeoController;

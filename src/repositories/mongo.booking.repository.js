@@ -34,6 +34,20 @@ class MongoBookingRepository {
       .limit(Math.min(limit, 100))
       .lean();
   }
+
+  async query({ status, limit = 100 } = {}) {
+    const q = {};
+    if (status) q.status = status;
+    return Booking.find(q).sort({ createdAt: -1 }).limit(Math.min(limit, 500)).lean();
+  }
+
+  async all() {
+    return Booking.find({}).lean();
+  }
+
+  async countByStatus(status) {
+    return Booking.countDocuments(status ? { status } : {});
+  }
 }
 
 module.exports = MongoBookingRepository;

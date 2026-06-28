@@ -23,8 +23,25 @@ const loginSchema = Joi.object({
   password: Joi.string().required(),
 });
 
+const refreshSchema = Joi.object({ refreshToken: Joi.string().required() });
+const logoutSchema = Joi.object({ refreshToken: Joi.string().optional() });
+const verifyEmailSchema = Joi.object({ token: Joi.string().required() });
+const forgotSchema = Joi.object({ email: Joi.string().email().required() });
+const resetSchema = Joi.object({
+  token: Joi.string().required(),
+  password: Joi.string().min(8).max(128).required(),
+});
+
 router.post('/register', validateBody(registerSchema), AuthController.register);
 router.post('/login', validateBody(loginSchema), AuthController.login);
+router.post('/refresh', validateBody(refreshSchema), AuthController.refresh);
+router.post('/logout', validateBody(logoutSchema), AuthController.logout);
+router.post('/verify-email', validateBody(verifyEmailSchema), AuthController.verifyEmail);
+router.post('/forgot-password', validateBody(forgotSchema), AuthController.forgotPassword);
+router.post('/reset-password', validateBody(resetSchema), AuthController.resetPassword);
+
 router.get('/me', authenticate, AuthController.me);
+router.get('/sessions', authenticate, AuthController.sessions);
+router.delete('/sessions/:id', authenticate, AuthController.revokeSession);
 
 module.exports = router;

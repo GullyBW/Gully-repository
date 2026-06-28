@@ -8,6 +8,13 @@ const MongoReviewRepository = require('./mongo.review.repository');
 const MongoFavouriteRepository = require('./mongo.favourite.repository');
 const MongoNotificationRepository = require('./mongo.notification.repository');
 const MongoAvailabilityRepository = require('./mongo.availability.repository');
+const MongoRefreshTokenRepository = require('./mongo.refreshToken.repository');
+const MongoAuditLogRepository = require('./mongo.auditLog.repository');
+const MongoDeviceTokenRepository = require('./mongo.deviceToken.repository');
+const MongoNotificationPreferenceRepository = require('./mongo.notificationPreference.repository');
+const MongoSavedAddressRepository = require('./mongo.savedAddress.repository');
+const MongoConversationRepository = require('./mongo.conversation.repository');
+const MongoMessageRepository = require('./mongo.message.repository');
 
 /**
  * Central registry of repositories. Each defaults to its MongoDB implementation
@@ -24,6 +31,13 @@ const repos = {
   favourite: new MongoFavouriteRepository(),
   notification: new MongoNotificationRepository(),
   availability: new MongoAvailabilityRepository(),
+  refreshToken: new MongoRefreshTokenRepository(),
+  auditLog: new MongoAuditLogRepository(),
+  deviceToken: new MongoDeviceTokenRepository(),
+  notificationPreference: new MongoNotificationPreferenceRepository(),
+  savedAddress: new MongoSavedAddressRepository(),
+  conversation: new MongoConversationRepository(),
+  message: new MongoMessageRepository(),
 };
 
 module.exports = {
@@ -65,5 +79,40 @@ module.exports = {
   getAvailabilityRepository: () => repos.availability,
   setAvailabilityRepository: (r) => {
     repos.availability = r;
+  },
+
+  getRefreshTokenRepository: () => repos.refreshToken,
+  setRefreshTokenRepository: (r) => {
+    repos.refreshToken = r;
+  },
+
+  getAuditLogRepository: () => repos.auditLog,
+  setAuditLogRepository: (r) => {
+    repos.auditLog = r;
+  },
+
+  getDeviceTokenRepository: () => repos.deviceToken,
+  setDeviceTokenRepository: (r) => {
+    repos.deviceToken = r;
+  },
+
+  getNotificationPreferenceRepository: () => repos.notificationPreference,
+  setNotificationPreferenceRepository: (r) => {
+    repos.notificationPreference = r;
+  },
+
+  getSavedAddressRepository: () => repos.savedAddress,
+  setSavedAddressRepository: (r) => {
+    repos.savedAddress = r;
+  },
+
+  getConversationRepository: () => repos.conversation,
+  setConversationRepository: (r) => {
+    repos.conversation = r;
+  },
+
+  getMessageRepository: () => repos.message,
+  setMessageRepository: (r) => {
+    repos.message = r;
   },
 };

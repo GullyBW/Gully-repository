@@ -31,6 +31,33 @@ const NotificationController = {
     await NotificationService.markAllRead(req.user);
     res.json({ success: true });
   }),
+
+  // ---- Devices ----
+  registerDevice: asyncHandler(async (req, res) => {
+    const device = await NotificationService.registerDevice(req.user, req.body.token, req.body.platform);
+    res.status(201).json({ success: true, data: device });
+  }),
+
+  listDevices: asyncHandler(async (req, res) => {
+    const devices = await NotificationService.listDevices(req.user);
+    res.json({ success: true, data: devices });
+  }),
+
+  unregisterDevice: asyncHandler(async (req, res) => {
+    const result = await NotificationService.unregisterDevice(req.params.token);
+    res.json({ success: true, data: result });
+  }),
+
+  // ---- Preferences ----
+  getPreferences: asyncHandler(async (req, res) => {
+    const prefs = await NotificationService.getPreferences(req.user);
+    res.json({ success: true, data: prefs });
+  }),
+
+  updatePreferences: asyncHandler(async (req, res) => {
+    const prefs = await NotificationService.updatePreferences(req.user, req.body);
+    res.json({ success: true, data: prefs });
+  }),
 };
 
 module.exports = NotificationController;

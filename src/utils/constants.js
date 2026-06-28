@@ -106,9 +106,58 @@ const NOTIFICATION_TYPES = Object.freeze({
   REVIEW_REMINDER: 'review_reminder',
   // Provider-facing
   NEW_BOOKING: 'new_booking',
+  BOOKING_UPDATED: 'booking_updated',
   BOOKING_CANCELLED: 'booking_cancelled',
   PAYMENT_RECEIVED: 'payment_received',
   REVIEW_RECEIVED: 'review_received',
+  NEW_FAVOURITE: 'new_favourite',
+  // Both
+  NEW_MESSAGE: 'new_message',
+  ANNOUNCEMENT: 'announcement',
+});
+
+/**
+ * Maps each notification type to a preference category so users can toggle
+ * whole groups on/off (Phase 2 notification preferences).
+ */
+const NOTIFICATION_CATEGORIES = Object.freeze({
+  bookings: [
+    NOTIFICATION_TYPES.BOOKING_ACCEPTED,
+    NOTIFICATION_TYPES.PROVIDER_EN_ROUTE,
+    NOTIFICATION_TYPES.PROVIDER_ARRIVED,
+    NOTIFICATION_TYPES.JOB_COMPLETED,
+    NOTIFICATION_TYPES.NEW_BOOKING,
+    NOTIFICATION_TYPES.BOOKING_UPDATED,
+    NOTIFICATION_TYPES.BOOKING_CANCELLED,
+  ],
+  payments: [NOTIFICATION_TYPES.PAYMENT_CONFIRMED, NOTIFICATION_TYPES.PAYMENT_RECEIVED],
+  reviews: [NOTIFICATION_TYPES.REVIEW_REMINDER, NOTIFICATION_TYPES.REVIEW_RECEIVED],
+  messages: [NOTIFICATION_TYPES.NEW_MESSAGE],
+  social: [NOTIFICATION_TYPES.NEW_FAVOURITE],
+  marketing: [NOTIFICATION_TYPES.ANNOUNCEMENT],
+});
+
+/** Resolve the preference category for a notification type. */
+function categoryForNotification(type) {
+  for (const [category, types] of Object.entries(NOTIFICATION_CATEGORIES)) {
+    if (types.includes(type)) return category;
+  }
+  return 'bookings';
+}
+
+const AUDIT_ACTIONS = Object.freeze({
+  LOGIN: 'login',
+  LOGIN_FAILED: 'login_failed',
+  LOGOUT: 'logout',
+  TOKEN_REFRESH: 'token_refresh',
+  PASSWORD_RESET: 'password_reset',
+  EMAIL_VERIFIED: 'email_verified',
+  PROVIDER_VERIFIED: 'provider_verified',
+  PROVIDER_SUSPENDED: 'provider_suspended',
+  BOOKING_CANCELLED_ADMIN: 'booking_cancelled_admin',
+  REFUND_ISSUED: 'refund_issued',
+  REVIEW_MODERATED: 'review_moderated',
+  BROADCAST_SENT: 'broadcast_sent',
 });
 
 module.exports = {
@@ -123,4 +172,7 @@ module.exports = {
   PROVIDER_AVAILABILITY,
   REVIEW_STATUS,
   NOTIFICATION_TYPES,
+  NOTIFICATION_CATEGORIES,
+  categoryForNotification,
+  AUDIT_ACTIONS,
 };

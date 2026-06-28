@@ -21,8 +21,39 @@ const config = {
 
   auth: {
     jwtSecret: process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
-    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    // Access tokens are short-lived now that refresh tokens exist; default kept
+    // at 7d for backward compatibility unless ACCESS_TOKEN_TTL is set.
+    jwtExpiresIn: process.env.ACCESS_TOKEN_TTL || process.env.JWT_EXPIRES_IN || '7d',
+    refreshTokenTtlDays: parseInt(process.env.REFRESH_TOKEN_TTL_DAYS, 10) || 30,
     bcryptRounds: parseInt(process.env.BCRYPT_ROUNDS, 10) || 10,
+  },
+
+  email: {
+    // 'console' (default) logs emails; 'smtp' would use a real transport.
+    transport: process.env.EMAIL_TRANSPORT || 'console',
+    from: process.env.EMAIL_FROM || 'Tirelo Services <no-reply@tirelo.example.com>',
+    appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:8100',
+  },
+
+  redis: {
+    // When unset, CacheService transparently uses an in-process LRU-ish map.
+    url: process.env.REDIS_URL || '',
+    defaultTtlSeconds: parseInt(process.env.CACHE_TTL_SECONDS, 10) || 60,
+  },
+
+  push: {
+    // 'fcm' uses firebase-admin when configured; otherwise a console transport.
+    transport: process.env.PUSH_TRANSPORT || (process.env.FCM_SERVICE_ACCOUNT ? 'fcm' : 'console'),
+    fcmServiceAccount: process.env.FCM_SERVICE_ACCOUNT || '', // path or JSON
+    maxRetries: parseInt(process.env.PUSH_MAX_RETRIES, 10) || 3,
+  },
+
+  storage: {
+    // 'local' (default) or 's3' | 'gcs' | 'r2' | 'azure' (cloud-ready).
+    driver: process.env.STORAGE_DRIVER || 'local',
+    localDir: process.env.STORAGE_LOCAL_DIR || 'uploads',
+    publicBaseUrl: process.env.STORAGE_PUBLIC_BASE_URL || '', // defaults to PUBLIC_BASE_URL/uploads
+    maxBytes: parseInt(process.env.UPLOAD_MAX_BYTES, 10) || 5 * 1024 * 1024,
   },
 
   maps: {

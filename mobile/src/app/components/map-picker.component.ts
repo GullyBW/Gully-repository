@@ -1,8 +1,9 @@
-import { Component, EventEmitter, Input, Output, inject } from '@angular/core';
+import { Component, EventEmitter, Input, OnInit, Output, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { IonicModule, ToastController } from '@ionic/angular';
 import { GeoService } from '../core/geo.service';
+import { SavedAddress, SavedAddressService } from '../core/saved-address.service';
 import { BookingLocation, Place } from '../core/models';
 
 /**
@@ -30,6 +31,24 @@ import { BookingLocation, Place } from '../core/models';
     <ion-button expand="block" fill="outline" (click)="useCurrent()">
       <ion-icon slot="start" name="locate-outline"></ion-icon>
       Use my current location
+    </ion-button>
+
+    <div *ngIf="savedAddresses.length" class="saved">
+      <p class="muted">Saved places</p>
+      <ion-chip *ngFor="let s of savedAddresses" (click)="pickSaved(s)">
+        <ion-icon name="bookmark-outline"></ion-icon>
+        <ion-label>{{ s.label }}</ion-label>
+      </ion-chip>
+    </div>
+
+    <ion-button
+      *ngIf="value?.lat != null"
+      size="small"
+      fill="clear"
+      (click)="saveCurrent()"
+    >
+      <ion-icon slot="start" name="bookmark-outline"></ion-icon>
+      Save this location
     </ion-button>
 
     <ion-searchbar
@@ -70,14 +89,38 @@ import { BookingLocation, Place } from '../core/models';
     `,
   ],
 })
-export class MapPickerComponent {
+export class MapPickerComponent implements OnInit {
   private geo = inject(GeoService);
+  private savedAddressService = inject(SavedAddressService);
   private toast = inject(ToastController);
 
   @Input() value?: BookingLocation;
   @Output() valueChange = new EventEmitter<BookingLocation>();
 
   results: Place[] = [];
+  savedAddresses: SavedAddress[] = [];
+
+  ngOnInit(): void {
+    this.savedAddressService.list().subscribe({
+      next: (a) => (this.savedAddresses = a),
+      error: () => (this.savedAddresses = []),
+    });
+  }
+
+  pickSaved(s: SavedAddress): void {
+    this.value = { lat: s.lat, lng: s.lng, address: s.address };
+    this.valueChange.emit(this.value);
+  }
+
+  saveCurrent(): void {
+    if (this.value?.lat == null) return;
+    this.savedAddressService
+      .create({ label: this.value.address?.split(',')[0] || 'Saved', ...this.value })
+      .subscribe((a) => {
+        this.savedAddresses = [a, ...this.savedAddresses];
+        this.notify('Location saved');
+      });
+  }
 
   onSearch(q: string): void {
     if (!q || q.length < 2) {
