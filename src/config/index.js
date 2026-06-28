@@ -25,6 +25,23 @@ const config = {
     bcryptRounds: parseInt(process.env.BCRYPT_ROUNDS, 10) || 10,
   },
 
+  maps: {
+    // Google Maps Geocoding/Places key. When absent, the geo service falls back
+    // to a built-in Botswana sandbox so the marketplace is fully usable in dev.
+    googleApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
+    baseUrl: process.env.GOOGLE_MAPS_BASE_URL || 'https://maps.googleapis.com/maps/api',
+  },
+
+  // Cross-cutting limits.
+  rateLimit: {
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
+    max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 300,
+  },
+  uploads: {
+    dir: process.env.UPLOAD_DIR || 'uploads',
+    maxBytes: parseInt(process.env.UPLOAD_MAX_BYTES, 10) || 5 * 1024 * 1024, // 5MB
+  },
+
   providers: {
     orange_money: {
       baseUrl: process.env.ORANGE_MONEY_BASE_URL,

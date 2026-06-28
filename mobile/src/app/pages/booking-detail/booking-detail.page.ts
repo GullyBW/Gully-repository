@@ -56,6 +56,14 @@ import { Booking, BookingStatus } from '../../core/models';
         >
           Pay {{ b.amount / 100 | currency: b.currency : 'symbol-narrow' }}
         </ion-button>
+        <ion-button
+          *ngIf="b.status === 'completed'"
+          expand="block"
+          fill="outline"
+          (click)="goReview()"
+        >
+          Leave a review
+        </ion-button>
       </ng-container>
 
       <ion-button
@@ -107,6 +115,10 @@ export class BookingDetailPage implements ViewWillEnter {
 
   goPay(): void {
     this.router.navigate(['/bookings', this.reference, 'pay']);
+  }
+
+  goReview(): void {
+    this.router.navigate(['/bookings', this.reference, 'review']);
   }
 
   setStatus(status: BookingStatus): void {

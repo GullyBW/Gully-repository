@@ -17,14 +17,15 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/tabs/tabs.page').then((m) => m.TabsPage),
     children: [
       { path: '', redirectTo: 'home', pathMatch: 'full' },
-      {
-        path: 'home',
-        loadComponent: () => import('./pages/home/home.page').then((m) => m.HomePage),
-      },
+      { path: 'home', loadComponent: () => import('./pages/home/home.page').then((m) => m.HomePage) },
       {
         path: 'bookings',
+        loadComponent: () => import('./pages/bookings/bookings.page').then((m) => m.BookingsPage),
+      },
+      {
+        path: 'notifications',
         loadComponent: () =>
-          import('./pages/bookings/bookings.page').then((m) => m.BookingsPage),
+          import('./pages/notifications/notifications.page').then((m) => m.NotificationsPage),
       },
       {
         path: 'profile',
@@ -32,6 +33,46 @@ export const routes: Routes = [
       },
     ],
   },
+
+  // Discovery
+  {
+    path: 'providers',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/provider-list/provider-list.page').then((m) => m.ProviderListPage),
+  },
+  {
+    path: 'providers/:userId',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/provider-details/provider-details.page').then((m) => m.ProviderDetailsPage),
+  },
+  {
+    path: 'providers/:userId/book',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/booking-wizard/booking-wizard.page').then((m) => m.BookingWizardPage),
+  },
+
+  // Provider self-service
+  {
+    path: 'provider/dashboard',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/provider-dashboard/provider-dashboard.page').then(
+        (m) => m.ProviderDashboardPage
+      ),
+  },
+
+  // Favourites
+  {
+    path: 'favourites',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/favourites/favourites.page').then((m) => m.FavouritesPage),
+  },
+
+  // Bookings detail / payment / review
   {
     path: 'bookings/:reference',
     canActivate: [authGuard],
@@ -49,5 +90,12 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pages/confirmation/confirmation.page').then((m) => m.ConfirmationPage),
   },
+  {
+    path: 'bookings/:reference/review',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/leave-review/leave-review.page').then((m) => m.LeaveReviewPage),
+  },
+
   { path: '**', redirectTo: 'login' },
 ];

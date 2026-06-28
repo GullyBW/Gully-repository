@@ -58,6 +58,59 @@ const BOOKING_TRANSITIONS = Object.freeze({
   [BOOKING_STATUS.DECLINED]: [],
 });
 
+/**
+ * Service categories offered on the marketplace. `key` is the stable machine
+ * value stored on providers/bookings; `name` and `icon` (an Ionicons name) are
+ * for display.
+ */
+const SERVICE_CATEGORIES = Object.freeze([
+  { key: 'electrician', name: 'Electrician', icon: 'flash-outline' },
+  { key: 'plumber', name: 'Plumber', icon: 'water-outline' },
+  { key: 'mechanic', name: 'Mechanic', icon: 'car-outline' },
+  { key: 'cleaner', name: 'Cleaner', icon: 'sparkles-outline' },
+  { key: 'carpenter', name: 'Carpenter', icon: 'hammer-outline' },
+  { key: 'painter', name: 'Painter', icon: 'color-fill-outline' },
+  { key: 'appliance_repair', name: 'Appliance Repair', icon: 'build-outline' },
+  { key: 'air_conditioning', name: 'Air Conditioning', icon: 'snow-outline' },
+  { key: 'gardening', name: 'Gardening', icon: 'leaf-outline' },
+  { key: 'moving_services', name: 'Moving Services', icon: 'cube-outline' },
+  { key: 'security_services', name: 'Security Services', icon: 'shield-checkmark-outline' },
+  { key: 'it_services', name: 'IT Services', icon: 'laptop-outline' },
+  { key: 'satellite_installation', name: 'Satellite Installation', icon: 'tv-outline' },
+  { key: 'solar_installation', name: 'Solar Installation', icon: 'sunny-outline' },
+  { key: 'general_handyman', name: 'General Handyman', icon: 'construct-outline' },
+]);
+
+const SERVICE_CATEGORY_KEYS = Object.freeze(SERVICE_CATEGORIES.map((c) => c.key));
+
+const PROVIDER_AVAILABILITY = Object.freeze({
+  AVAILABLE: 'available',
+  BUSY: 'busy',
+  OFFLINE: 'offline',
+  VACATION: 'vacation',
+});
+
+const REVIEW_STATUS = Object.freeze({
+  PUBLISHED: 'published',
+  REPORTED: 'reported', // flagged, awaiting admin moderation
+  REMOVED: 'removed', // taken down by admin
+});
+
+const NOTIFICATION_TYPES = Object.freeze({
+  // Customer-facing
+  BOOKING_ACCEPTED: 'booking_accepted',
+  PROVIDER_EN_ROUTE: 'provider_en_route',
+  PROVIDER_ARRIVED: 'provider_arrived',
+  JOB_COMPLETED: 'job_completed',
+  PAYMENT_CONFIRMED: 'payment_confirmed',
+  REVIEW_REMINDER: 'review_reminder',
+  // Provider-facing
+  NEW_BOOKING: 'new_booking',
+  BOOKING_CANCELLED: 'booking_cancelled',
+  PAYMENT_RECEIVED: 'payment_received',
+  REVIEW_RECEIVED: 'review_received',
+});
+
 module.exports = {
   PAYMENT_METHODS,
   PAYMENT_STATUS,
@@ -65,4 +118,9 @@ module.exports = {
   USER_ROLES,
   BOOKING_STATUS,
   BOOKING_TRANSITIONS,
+  SERVICE_CATEGORIES,
+  SERVICE_CATEGORY_KEYS,
+  PROVIDER_AVAILABILITY,
+  REVIEW_STATUS,
+  NOTIFICATION_TYPES,
 };

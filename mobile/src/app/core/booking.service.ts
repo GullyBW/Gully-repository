@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { ApiService } from './api.service';
-import { Booking, BookingStatus, Payment, PaymentMethod, PaymentStatus } from './models';
+import { Booking, BookingLocation, BookingStatus, Payment, PaymentMethod, PaymentStatus } from './models';
 
 /** All booking operations, including kicking off payment for a booking. */
 @Injectable({ providedIn: 'root' })
@@ -22,7 +22,7 @@ export class BookingService {
     description?: string;
     amount: number;
     scheduledFor?: string;
-    location?: { address?: string };
+    location?: BookingLocation;
   }): Observable<Booking> {
     return this.api.post<Booking>('/bookings', input);
   }

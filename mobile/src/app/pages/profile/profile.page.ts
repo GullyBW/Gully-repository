@@ -1,13 +1,13 @@
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { IonicModule, ToastController } from '@ionic/angular';
 import { AuthService } from '../../core/auth.service';
 
 @Component({
   selector: 'app-profile',
   standalone: true,
-  imports: [IonicModule, CommonModule],
+  imports: [IonicModule, CommonModule, RouterLink],
   template: `
     <ion-header>
       <ion-toolbar color="primary">
@@ -38,6 +38,17 @@ import { AuthService } from '../../core/auth.service';
           </ion-card-content>
         </ion-card>
       </ng-container>
+
+      <ion-list>
+        <ion-item button routerLink="/favourites">
+          <ion-icon slot="start" name="heart-outline"></ion-icon>
+          <ion-label>Favourite providers</ion-label>
+        </ion-item>
+        <ion-item button routerLink="/provider/dashboard" *ngIf="user()?.role === 'provider'">
+          <ion-icon slot="start" name="briefcase-outline"></ion-icon>
+          <ion-label>Provider dashboard</ion-label>
+        </ion-item>
+      </ion-list>
 
       <ion-button expand="block" color="danger" (click)="logout()">Log out</ion-button>
     </ion-content>
