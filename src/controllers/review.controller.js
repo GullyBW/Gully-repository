@@ -12,6 +12,12 @@ const ReviewController = {
     res.json({ success: true, data: reviews });
   }),
 
+  // GET /api/reviews/mine  (customer's own reviews)
+  listMine: asyncHandler(async (req, res) => {
+    const reviews = await ReviewService.listMine(req.user);
+    res.json({ success: true, data: reviews });
+  }),
+
   // POST /api/reviews
   create: asyncHandler(async (req, res) => {
     const review = await ReviewService.create(req.user, req.body);

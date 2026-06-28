@@ -32,6 +32,7 @@ const moderateSchema = Joi.object({ action: Joi.string().valid('remove', 'publis
 router.get('/provider/:providerId', ReviewController.listForProvider);
 
 // Authenticated.
+router.get('/mine', authenticate, ReviewController.listMine);
 router.post('/', authenticate, validateBody(createSchema), ReviewController.create);
 router.patch('/:id', authenticate, validateBody(editSchema), ReviewController.edit);
 router.post('/:id/report', authenticate, validateBody(reportSchema), ReviewController.report);

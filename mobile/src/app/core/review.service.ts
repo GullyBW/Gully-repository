@@ -11,6 +11,10 @@ export class ReviewService {
     return this.api.get<Review[]>(`/reviews/provider/${providerId}`);
   }
 
+  mine(): Observable<Review[]> {
+    return this.api.get<Review[]>('/reviews/mine');
+  }
+
   create(input: {
     providerId: string;
     bookingReference: string;

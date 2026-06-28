@@ -39,14 +39,59 @@ import { AuthService } from '../../core/auth.service';
         </ion-card>
       </ng-container>
 
-      <ion-list>
+      <ion-list inset="true">
+        <ion-item button routerLink="/chat">
+          <ion-icon slot="start" name="chatbubbles-outline"></ion-icon>
+          <ion-label>Messages</ion-label>
+        </ion-item>
         <ion-item button routerLink="/favourites">
           <ion-icon slot="start" name="heart-outline"></ion-icon>
           <ion-label>Favourite providers</ion-label>
         </ion-item>
-        <ion-item button routerLink="/provider/dashboard" *ngIf="user()?.role === 'provider'">
+        <ion-item button routerLink="/saved-addresses">
+          <ion-icon slot="start" name="location-outline"></ion-icon>
+          <ion-label>Saved addresses</ion-label>
+        </ion-item>
+        <ion-item button routerLink="/payment-history">
+          <ion-icon slot="start" name="card-outline"></ion-icon>
+          <ion-label>Payment history</ion-label>
+        </ion-item>
+        <ion-item button routerLink="/review-history">
+          <ion-icon slot="start" name="star-outline"></ion-icon>
+          <ion-label>My reviews</ion-label>
+        </ion-item>
+        <ion-item button routerLink="/analytics/customer">
+          <ion-icon slot="start" name="stats-chart-outline"></ion-icon>
+          <ion-label>My activity</ion-label>
+        </ion-item>
+      </ion-list>
+
+      <ion-list inset="true" *ngIf="user()?.role === 'provider'">
+        <ion-item button routerLink="/provider/dashboard">
           <ion-icon slot="start" name="briefcase-outline"></ion-icon>
           <ion-label>Provider dashboard</ion-label>
+        </ion-item>
+        <ion-item button routerLink="/portfolio">
+          <ion-icon slot="start" name="images-outline"></ion-icon>
+          <ion-label>Portfolio</ion-label>
+        </ion-item>
+        <ion-item button routerLink="/analytics/provider">
+          <ion-icon slot="start" name="cash-outline"></ion-icon>
+          <ion-label>Earnings & analytics</ion-label>
+        </ion-item>
+      </ion-list>
+
+      <ion-list inset="true" *ngIf="user()?.role === 'admin'">
+        <ion-item button routerLink="/admin">
+          <ion-icon slot="start" name="shield-checkmark-outline"></ion-icon>
+          <ion-label>Admin portal</ion-label>
+        </ion-item>
+      </ion-list>
+
+      <ion-list inset="true">
+        <ion-item button routerLink="/settings">
+          <ion-icon slot="start" name="settings-outline"></ion-icon>
+          <ion-label>Settings</ion-label>
         </ion-item>
       </ion-list>
 

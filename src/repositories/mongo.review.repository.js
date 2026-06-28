@@ -27,6 +27,20 @@ class MongoReviewRepository {
       .limit(Math.min(limit, 10000))
       .lean();
   }
+
+  async listByStatus(status, { limit = 100 } = {}) {
+    return Review.find(status ? { status } : {})
+      .sort({ createdAt: -1 })
+      .limit(Math.min(limit, 1000))
+      .lean();
+  }
+
+  async listByCustomer(customerId, { limit = 100 } = {}) {
+    return Review.find({ customerId })
+      .sort({ createdAt: -1 })
+      .limit(Math.min(limit, 1000))
+      .lean();
+  }
 }
 
 module.exports = MongoReviewRepository;

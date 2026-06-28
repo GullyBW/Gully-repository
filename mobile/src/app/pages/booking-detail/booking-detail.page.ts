@@ -39,6 +39,11 @@ import { Booking, BookingStatus } from '../../core/models';
         </ion-card-content>
       </ion-card>
 
+      <ion-button expand="block" fill="outline" (click)="goChat()">
+        <ion-icon slot="start" name="chatbubbles-outline"></ion-icon>
+        Message {{ isCustomer ? 'provider' : 'customer' }}
+      </ion-button>
+
       <!-- Provider actions -->
       <ng-container *ngIf="isProvider">
         <ion-button *ngIf="b.status === 'pending'" expand="block" (click)="setStatus('accepted')">Accept</ion-button>
@@ -119,6 +124,10 @@ export class BookingDetailPage implements ViewWillEnter {
 
   goReview(): void {
     this.router.navigate(['/bookings', this.reference, 'review']);
+  }
+
+  goChat(): void {
+    this.router.navigate(['/chat', this.reference]);
   }
 
   setStatus(status: BookingStatus): void {

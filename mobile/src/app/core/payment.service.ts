@@ -15,4 +15,9 @@ export class PaymentService {
   get(reference: string): Observable<Payment> {
     return this.api.get<Payment>(`/payments/${reference}`);
   }
+
+  /** A customer's payment history. */
+  history(customerId: string): Observable<Payment[]> {
+    return this.api.get<Payment[]>(`/payments${ApiService.qs({ customerId })}`);
+  }
 }

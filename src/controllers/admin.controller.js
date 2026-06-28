@@ -49,6 +49,11 @@ const AdminController = {
     res.status(201).json({ success: true, data });
   }),
 
+  reviews: asyncHandler(async (req, res) => {
+    const data = await AdminService.reviews({ status: req.query.status });
+    res.json({ success: true, data });
+  }),
+
   auditLogs: asyncHandler(async (req, res) => {
     const data = await AdminService.auditLogs({ action: req.query.action, actorId: req.query.actorId });
     res.json({ success: true, data });

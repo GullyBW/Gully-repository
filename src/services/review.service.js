@@ -110,6 +110,18 @@ class ReviewService {
       .slice(0, limit)
       .map(domain.toPublicJSON);
   }
+
+  /** Admin moderation queue — defaults to reported reviews. */
+  static async listForModeration({ status = REVIEW_STATUS.REPORTED, limit = 100 } = {}) {
+    const reviews = await ReviewService.repo.listByStatus(status, { limit });
+    return reviews.map(domain.toPublicJSON);
+  }
+
+  /** A customer's own review history. */
+  static async listMine(actor, { limit = 100 } = {}) {
+    const reviews = await ReviewService.repo.listByCustomer(actor.id, { limit });
+    return reviews.map(domain.toPublicJSON);
+  }
 }
 
 module.exports = ReviewService;

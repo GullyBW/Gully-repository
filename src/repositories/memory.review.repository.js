@@ -34,6 +34,22 @@ class MemoryReviewRepository {
       .map((r) => ({ ...r }));
   }
 
+  async listByStatus(status, { limit = 100 } = {}) {
+    return [...this.store.values()]
+      .filter((r) => !status || r.status === status)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit)
+      .map((r) => ({ ...r }));
+  }
+
+  async listByCustomer(customerId, { limit = 100 } = {}) {
+    return [...this.store.values()]
+      .filter((r) => r.customerId === customerId)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit)
+      .map((r) => ({ ...r }));
+  }
+
   async clear() {
     this.store.clear();
   }

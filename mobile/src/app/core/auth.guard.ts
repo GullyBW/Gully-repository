@@ -9,3 +9,11 @@ export const authGuard: CanActivateFn = () => {
   if (auth.isAuthenticated()) return true;
   return router.parseUrl('/login');
 };
+
+/** Admin-only guard for the administration portal. */
+export const adminGuard: CanActivateFn = () => {
+  const auth = inject(AuthService);
+  const router = inject(Router);
+  if (auth.isAuthenticated() && auth.currentUser()?.role === 'admin') return true;
+  return router.parseUrl(auth.isAuthenticated() ? '/tabs/home' : '/login');
+};

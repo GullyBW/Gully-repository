@@ -9,6 +9,9 @@ export interface User {
   role: UserRole;
   phone?: string;
   profile?: Record<string, unknown>;
+  avatarUrl?: string;
+  emailVerified?: boolean;
+  suspended?: boolean;
   createdAt?: string;
 }
 
@@ -60,6 +63,7 @@ export interface Payment {
   amount: number;
   currency: string;
   description?: string;
+  createdAt?: string;
   providerMeta?: {
     checkoutUrl?: string;
     instructions?: string;
@@ -191,4 +195,25 @@ export interface BookingLocation {
   lat?: number;
   lng?: number;
   address?: string;
+}
+
+export interface Conversation {
+  id: string;
+  bookingReference: string;
+  customerId: string;
+  providerId: string;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  type: 'text' | 'image' | 'location';
+  text?: string;
+  imageUrl?: string;
+  location?: { lat: number; lng: number } | null;
+  readBy: string[];
+  createdAt: string;
 }

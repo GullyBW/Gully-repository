@@ -364,3 +364,32 @@ Liveness `GET /health/live`, readiness `GET /health/ready` (checks DB + cache).
 
 `npm test` runs **104 tests** across 17 suites against in-memory repositories —
 no MongoDB, Redis, FCM, Google Maps or cloud storage required.
+
+---
+
+# Production frontend (admin, chat, analytics, polish)
+
+The Ionic app now exposes the remaining user-facing interfaces over the existing
+REST + Socket.IO APIs (no backend rewrites; two additive read endpoints were
+added: `GET /api/reviews/mine`, `GET /api/admin/reviews`).
+
+- **Admin portal** (`/admin`, admin-guarded): dashboard (stats + charts),
+  provider management (verify/suspend), customer management, booking management
+  (filter/cancel), payment monitoring (+ refund request), review moderation,
+  broadcast centre, audit-log viewer.
+- **Real-time chat** (`/chat`): conversation list + chat window over Socket.IO —
+  live messages, typing indicators, read receipts, image sharing, auto-scroll.
+- **Analytics** (`/analytics/{provider,customer,admin}`): KPI cards + CSS bar
+  charts (no chart dependency) with CSV export.
+- **Provider experience**: earnings/analytics, portfolio manager (image upload),
+  availability editor (existing dashboard).
+- **Customer experience**: saved addresses (map picker), payment history, review
+  history, account settings.
+- **Polish**: class-based **dark mode** (`ThemeService` + Ionic dark palette),
+  offline banner, reusable `empty-state` / `skeleton-list` / `bar-chart`
+  components, pull-to-refresh, confirm dialogs, toasts. All routes are
+  lazy-loaded standalone components; the Socket.IO client reconnects
+  automatically and shares one connection.
+
+New frontend services: `AdminService`, `AnalyticsService`, `MessageService`,
+`SocketService`, `ThemeService`, `SavedAddressService`, `RecentlyViewedService`.

@@ -27,6 +27,7 @@ router.post('/bookings/:reference/cancel', AdminController.cancelBooking);
 router.post('/payments/:reference/refund', AdminController.refund);
 router.get('/payments', AdminController.payments);
 router.post('/broadcast', validateBody(broadcastSchema), AdminController.broadcast);
+router.get('/reviews', AdminController.reviews);
 router.get('/audit-logs', AdminController.auditLogs);
 
 module.exports = router;

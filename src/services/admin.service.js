@@ -147,6 +147,14 @@ class AdminService {
     return { sent: users.length };
   }
 
+  // ---- Review moderation queue ----
+  static async reviews({ status } = {}) {
+    // Lazy require to avoid a circular dependency (review.service → provider → admin chains).
+    // eslint-disable-next-line global-require
+    const ReviewService = require('./review.service');
+    return ReviewService.listForModeration({ status });
+  }
+
   // ---- Audit logs ----
   static async auditLogs(filter) {
     return AuditService.list(filter);

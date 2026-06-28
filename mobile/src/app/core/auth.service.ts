@@ -44,6 +44,16 @@ export class AuthService {
     return localStorage.getItem(TOKEN_KEY);
   }
 
+  listSessions(): Observable<
+    { id: string; device: string; ip: string; createdAt: string; lastUsedAt: string; revoked: boolean }[]
+  > {
+    return this.api.get('/auth/sessions');
+  }
+
+  revokeSession(id: string): Observable<unknown> {
+    return this.api.delete(`/auth/sessions/${id}`);
+  }
+
   isAuthenticated(): boolean {
     return !!this.getToken();
   }

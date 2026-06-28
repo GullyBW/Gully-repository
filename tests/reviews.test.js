@@ -76,6 +76,32 @@ describe('Reviews & ratings', () => {
     expect(profile.body.data.rating).toBe(5);
   });
 
+  it('lists the customer own reviews and the admin moderation queue', async () => {
+    const ref = await completeBooking(app, customer, provider);
+    const created = await request(app)
+      .post('/api/reviews')
+      .set(auth(customer.token))
+      .send({ providerId: provider.user.id, bookingReference: ref, rating: 5 });
+
+    const mine = await request(app).get('/api/reviews/mine').set(auth(customer.token));
+    expect(mine.status).toBe(200);
+    expect(mine.body.data.length).toBe(1);
+
+    // Report it, then it should appear in the admin moderation queue.
+    const reporter = await registerUser(app, 'customer', 'rev-reporter@example.com');
+    await request(app)
+      .post(`/api/reviews/${created.body.data.id}/report`)
+      .set(auth(reporter.token))
+      .send({ reason: 'spam' });
+
+    const admin = await makeAdmin();
+    const queue = await request(app)
+      .get('/api/admin/reviews')
+      .query({ status: 'reported' })
+      .set(auth(admin.token));
+    expect(queue.body.data.length).toBe(1);
+  });
+
   it('supports reporting and admin moderation (removed reviews drop from rating)', async () => {
     const ref = await completeBooking(app, customer, provider);
     const created = await request(app)
