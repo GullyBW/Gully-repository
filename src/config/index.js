@@ -19,6 +19,12 @@ const config = {
     defaultCurrency: process.env.DEFAULT_CURRENCY || 'BWP',
   },
 
+  auth: {
+    jwtSecret: process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    bcryptRounds: parseInt(process.env.BCRYPT_ROUNDS, 10) || 10,
+  },
+
   providers: {
     orange_money: {
       baseUrl: process.env.ORANGE_MONEY_BASE_URL,

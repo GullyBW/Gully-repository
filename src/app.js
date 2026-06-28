@@ -2,6 +2,8 @@
 
 const express = require('express');
 const paymentRoutes = require('./routes/payment.routes');
+const authRoutes = require('./routes/auth.routes');
+const bookingRoutes = require('./routes/booking.routes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 
 /**
@@ -21,8 +23,10 @@ function createApp() {
     })
   );
 
-  app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'tirelo-payment-service' }));
+  app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'tirelo-services-api' }));
 
+  app.use('/api/auth', authRoutes);
+  app.use('/api/bookings', bookingRoutes);
   app.use('/api/payments', paymentRoutes);
 
   app.use(notFoundHandler);

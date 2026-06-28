@@ -1,12 +1,28 @@
-# Tirelo Payment Service
+# Tirelo Services
 
-Payment system for the **Tirelo Services** application (Local Vendor Finder — on-demand
-plumbers, electricians, cleaners, traditional healers, etc.). It exposes a small,
-self-contained REST API and a **pluggable payment-gateway architecture** so the rest of
-the Tirelo backend (bookings, notifications) can charge customers and reconcile payments
-without knowing anything about individual providers.
+**Tirelo Services** is a Local Vendor Finder — it connects customers with on-demand local
+service providers (plumbers, electricians, cleaners, traditional healers, etc.), with
+booking and in-app payment.
 
-Built to match the project plan's stack: **Node.js + Express + MongoDB (Mongoose)**.
+This repository contains:
+
+- **`src/`** — the backend API (**Node.js + Express + MongoDB**): user authentication,
+  bookings, and a payment system with a **pluggable payment-gateway architecture**.
+- **`mobile/`** — the cross-platform mobile app (**Ionic + Angular**) that customers and
+  providers use to register, book services and pay.
+
+Built to match the project plan's stack.
+
+## Backend modules
+
+| Module        | Path                        | What it does                                            |
+| ------------- | --------------------------- | ------------------------------------------------------- |
+| Auth          | `src/services/auth.service` | Register/login, JWT issuance, role-based access         |
+| Bookings      | `src/services/booking.*`    | Service requests, status workflow, payment kickoff      |
+| Payments      | `src/services/payment.*`    | Pluggable gateways, webhooks, settlement                |
+
+All three services are storage-agnostic (repository pattern) and share the same
+`{ success, data }` response envelope.
 
 ## Supported payment methods / gateways
 
@@ -48,7 +64,43 @@ HTTP ─▶ routes ─▶ controller ─▶ PaymentService ─▶ Provider (gate
 
 ## API
 
-Base path: `/api/payments`
+`GET /health` reports service status. All other routes are under `/api`.
+
+### Authentication — `/api/auth`
+
+| Method & path        | Auth   | Description                                  |
+| -------------------- | ------ | -------------------------------------------- |
+| `POST /register`     | —      | Create a customer or provider account        |
+| `POST /login`        | —      | Log in, returns `{ user, token }`            |
+| `GET  /me`           | Bearer | Current user from the JWT                     |
+
+Passwords are hashed with bcrypt; sessions use JWTs (`Authorization: Bearer <token>`).
+Login responds identically for unknown emails and wrong passwords to avoid user
+enumeration. Roles: `customer`, `provider`, `admin`.
+
+```bash
+curl -X POST http://localhost:4000/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{ "name": "Kabo M", "email": "kabo@example.com", "password": "super-secret-pw", "role": "customer" }'
+```
+
+### Bookings — `/api/bookings` (all routes require a Bearer token)
+
+| Method & path                 | Who          | Description                                          |
+| ----------------------------- | ------------ | --------------------------------------------------- |
+| `POST /`                      | customer     | Request a service from a provider                    |
+| `GET  /`                      | any          | List my bookings (as customer or provider)           |
+| `GET  /:reference`            | participant  | View a booking                                       |
+| `PATCH /:reference/status`    | participant  | Move status (state machine + role rules enforced)    |
+| `POST /:reference/pay`        | customer     | Initiate payment for an accepted booking             |
+| `GET  /:reference/payment`    | participant  | Sync & read the booking's payment status             |
+
+Booking lifecycle: `pending → accepted → in_progress → completed` (or `declined` /
+`cancelled`). Providers accept and progress bookings; customers pay once accepted.
+`POST /:reference/pay` creates a transaction via the payment service and links it back to
+the booking — this is where bookings meet the payment backend.
+
+### Payments — `/api/payments`
 
 | Method & path                       | Description                                            |
 | ----------------------------------- | ----------------------------------------------------- |
@@ -58,8 +110,6 @@ Base path: `/api/payments`
 | `GET  /?customerId=...`             | List a customer's payments                             |
 | `POST /:reference/cancel`           | Cancel a non-completed payment                         |
 | `POST /webhook/:method`             | Provider callback that settles the payment            |
-
-Plus `GET /health`.
 
 ### Create a payment
 
@@ -131,9 +181,37 @@ npm run dev                 # needs a local MongoDB (see MONGODB_URI)
 npm test
 ```
 
-The suite runs against the in-memory repository, so **no MongoDB is required**. It covers
-creating payments across all gateways, webhook settlement, signature verification,
-idempotency, cancellation rules and listing.
+The suite runs against the in-memory repositories, so **no MongoDB is required**. 34 tests
+cover authentication (registration, login, JWT-protected routes), the booking workflow
+(creation, role-guarded status transitions, access control, payment integration) and
+payments (all gateways, webhook settlement, signature verification, idempotency,
+cancellation).
+
+## Mobile app (`mobile/`)
+
+A cross-platform **Ionic + Angular** app (standalone components) that talks to this
+backend. Customers register, request a service, and—once a provider accepts—pay in-app;
+providers accept and progress bookings.
+
+```bash
+cd mobile
+npm install
+npm start        # ionic/ng serve on http://localhost:8100
+```
+
+Set the backend URL in `mobile/src/environments/environment.ts` (`apiBaseUrl`).
+
+Structure:
+
+- `src/app/core/` — `ApiService`, `AuthService` (JWT in localStorage + auth interceptor +
+  route guard), `BookingService`, `PaymentService`, and shared `models.ts`.
+- `src/app/pages/` — Login, Register, Tabs (Home, Bookings, Profile), Booking detail,
+  **Payment** (choose gateway → initiate) and **Confirmation** (polls settlement, shows
+  checkout URL / mobile-money prompt / bank details from `providerMeta`).
+
+The payment screen calls `POST /api/bookings/:reference/pay`, then the confirmation screen
+polls `GET /api/bookings/:reference/payment` until the payment reaches a terminal state —
+which flips to `succeeded` as soon as the gateway webhook settles the transaction.
 
 ## Integrating into the Tirelo backend
 

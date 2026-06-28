@@ -1,20 +1,31 @@
 'use strict';
 
 const MongoTransactionRepository = require('./mongo.transaction.repository');
+const MongoUserRepository = require('./mongo.user.repository');
+const MongoBookingRepository = require('./mongo.booking.repository');
 
 /**
- * Holds the active transaction repository. Defaults to MongoDB in production;
- * tests (or a local no-DB run) can swap in the in-memory implementation via
- * `setTransactionRepository`. This keeps the service layer storage-agnostic.
+ * Holds the active repositories. Defaults to MongoDB in production; tests (or a
+ * local no-DB run) swap in the in-memory implementations via the setters. This
+ * keeps every service layer storage-agnostic.
  */
 let transactionRepository = new MongoTransactionRepository();
+let userRepository = new MongoUserRepository();
+let bookingRepository = new MongoBookingRepository();
 
-function getTransactionRepository() {
-  return transactionRepository;
-}
+module.exports = {
+  getTransactionRepository: () => transactionRepository,
+  setTransactionRepository: (repo) => {
+    transactionRepository = repo;
+  },
 
-function setTransactionRepository(repo) {
-  transactionRepository = repo;
-}
+  getUserRepository: () => userRepository,
+  setUserRepository: (repo) => {
+    userRepository = repo;
+  },
 
-module.exports = { getTransactionRepository, setTransactionRepository };
+  getBookingRepository: () => bookingRepository,
+  setBookingRepository: (repo) => {
+    bookingRepository = repo;
+  },
+};
