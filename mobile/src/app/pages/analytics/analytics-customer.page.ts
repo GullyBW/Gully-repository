@@ -2,12 +2,12 @@ import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { IonicModule, ViewWillEnter } from '@ionic/angular';
 import { AnalyticsService, CustomerAnalytics } from '../../core/analytics.service';
-import { BarChartComponent, ChartDatum } from '../../components/bar-chart.component';
+import { ChartCardComponent } from '../../components/chart-card.component';
 
 @Component({
   selector: 'app-analytics-customer',
   standalone: true,
-  imports: [IonicModule, CommonModule, BarChartComponent],
+  imports: [IonicModule, CommonModule, ChartCardComponent],
   template: `
     <ion-header>
       <ion-toolbar color="primary">
@@ -26,10 +26,7 @@ import { BarChartComponent, ChartDatum } from '../../components/bar-chart.compon
         </ion-row>
       </ion-grid>
 
-      <ion-card>
-        <ion-card-header><ion-card-title>Services used</ion-card-title></ion-card-header>
-        <ion-card-content><app-bar-chart [data]="categoryChart"></app-bar-chart></ion-card-content>
-      </ion-card>
+      <app-chart-card title="Services used" type="doughnut" [labels]="catLabels" [values]="catValues"></app-chart-card>
     </ion-content>
   `,
   styles: [
@@ -41,12 +38,14 @@ export class AnalyticsCustomerPage implements ViewWillEnter {
   private analytics = inject(AnalyticsService);
 
   data?: CustomerAnalytics;
-  categoryChart: ChartDatum[] = [];
+  catLabels: string[] = [];
+  catValues: number[] = [];
 
   ionViewWillEnter(): void {
     this.analytics.customer().subscribe((d) => {
       this.data = d;
-      this.categoryChart = d.byCategory.map((c) => ({ label: c.category, value: c.count }));
+      this.catLabels = d.byCategory.map((c) => c.category);
+      this.catValues = d.byCategory.map((c) => c.count);
     });
   }
 }

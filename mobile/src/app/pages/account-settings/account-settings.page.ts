@@ -5,6 +5,7 @@ import { Router } from '@angular/router';
 import { IonicModule, ToastController, ViewWillEnter } from '@ionic/angular';
 import { ThemeService } from '../../core/theme.service';
 import { NotificationService } from '../../core/notification.service';
+import { NativePushService } from '../../core/native-push.service';
 import { AuthService } from '../../core/auth.service';
 
 @Component({
@@ -29,6 +30,11 @@ import { AuthService } from '../../core/auth.service';
 
       <ion-list-header>Notification preferences</ion-list-header>
       <ion-list inset="true">
+        <ion-item *ngIf="pushAvailable">
+          <ion-icon slot="start" name="notifications-outline"></ion-icon>
+          <ion-label>Push notifications</ion-label>
+          <ion-button slot="end" fill="outline" (click)="enablePush()">Enable</ion-button>
+        </ion-item>
         <ion-item *ngFor="let key of prefKeys">
           <ion-toggle [(ngModel)]="prefs[key]" (ionChange)="savePrefs()">{{ key | titlecase }}</ion-toggle>
         </ion-item>
@@ -53,9 +59,12 @@ import { AuthService } from '../../core/auth.service';
 export class AccountSettingsPage implements ViewWillEnter {
   theme = inject(ThemeService);
   private notifications = inject(NotificationService);
+  private push = inject(NativePushService);
   private auth = inject(AuthService);
   private router = inject(Router);
   private toast = inject(ToastController);
+
+  pushAvailable = this.push.available;
 
   prefs: Record<string, boolean> = {};
   prefKeys: string[] = [];
@@ -71,6 +80,11 @@ export class AccountSettingsPage implements ViewWillEnter {
 
   savePrefs(): void {
     this.notifications.updatePreferences(this.prefs).subscribe();
+  }
+
+  async enablePush(): Promise<void> {
+    const ok = await this.push.enable();
+    await this.notify(ok ? 'Push notifications enabled' : 'Push permission denied');
   }
 
   revoke(id: string): void {

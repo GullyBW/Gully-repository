@@ -1,20 +1,20 @@
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { IonicModule, ViewWillEnter } from '@ionic/angular';
+import { ActionSheetController, IonicModule, ViewWillEnter } from '@ionic/angular';
 import { AnalyticsService, ProviderAnalytics } from '../../core/analytics.service';
-import { BarChartComponent, ChartDatum } from '../../components/bar-chart.component';
-import { downloadText } from '../../core/download.util';
+import { ChartCardComponent } from '../../components/chart-card.component';
+import { ReportExportService } from '../../core/report-export.service';
 
 @Component({
   selector: 'app-analytics-provider',
   standalone: true,
-  imports: [IonicModule, CommonModule, BarChartComponent],
+  imports: [IonicModule, CommonModule, ChartCardComponent],
   template: `
     <ion-header>
       <ion-toolbar color="primary">
         <ion-buttons slot="start"><ion-back-button defaultHref="/tabs/profile"></ion-back-button></ion-buttons>
         <ion-title>My earnings</ion-title>
-        <ion-buttons slot="end"><ion-button (click)="exportCsv()">CSV</ion-button></ion-buttons>
+        <ion-buttons slot="end"><ion-button (click)="exportReport()"><ion-icon slot="icon-only" name="download-outline"></ion-icon></ion-button></ion-buttons>
       </ion-toolbar>
     </ion-header>
 
@@ -30,15 +30,8 @@ import { downloadText } from '../../core/download.util';
         </ion-row>
       </ion-grid>
 
-      <ion-card>
-        <ion-card-header><ion-card-title>Monthly earnings</ion-card-title></ion-card-header>
-        <ion-card-content><app-bar-chart [data]="earningsChart" [format]="money"></app-bar-chart></ion-card-content>
-      </ion-card>
-
-      <ion-card>
-        <ion-card-header><ion-card-title>Bookings per month</ion-card-title></ion-card-header>
-        <ion-card-content><app-bar-chart [data]="bookingsChart"></app-bar-chart></ion-card-content>
-      </ion-card>
+      <app-chart-card title="Monthly earnings (BWP)" type="area" [labels]="months" [values]="earnings" seriesLabel="Earnings"></app-chart-card>
+      <app-chart-card title="Bookings per month" type="bar" [labels]="months" [values]="bookings" seriesLabel="Bookings"></app-chart-card>
     </ion-content>
   `,
   styles: [
@@ -48,21 +41,38 @@ import { downloadText } from '../../core/download.util';
 })
 export class AnalyticsProviderPage implements ViewWillEnter {
   private analytics = inject(AnalyticsService);
+  private exporter = inject(ReportExportService);
+  private actionSheet = inject(ActionSheetController);
 
   data?: ProviderAnalytics;
-  earningsChart: ChartDatum[] = [];
-  bookingsChart: ChartDatum[] = [];
-  money = (v: number) => `P${(v / 100).toFixed(0)}`;
+  months: string[] = [];
+  earnings: number[] = [];
+  bookings: number[] = [];
 
   ionViewWillEnter(): void {
     this.analytics.provider().subscribe((d) => {
       this.data = d;
-      this.earningsChart = d.monthly.map((m) => ({ label: m.month, value: m.earningsMinor }));
-      this.bookingsChart = d.monthly.map((m) => ({ label: m.month, value: m.bookings }));
+      this.months = d.monthly.map((m) => m.month);
+      this.earnings = d.monthly.map((m) => Math.round(m.earningsMinor / 100));
+      this.bookings = d.monthly.map((m) => m.bookings);
     });
   }
 
-  exportCsv(): void {
-    this.analytics.exportCsv('provider-monthly').subscribe((csv) => downloadText('earnings.csv', csv));
+  async exportReport(): Promise<void> {
+    const rows = (this.data?.monthly || []).map((m) => ({
+      month: m.month,
+      bookings: m.bookings,
+      earningsBWP: (m.earningsMinor / 100).toFixed(2),
+    }));
+    const sheet = await this.actionSheet.create({
+      header: 'Export earnings',
+      buttons: [
+        { text: 'CSV', handler: () => this.exporter.csv('earnings', rows) },
+        { text: 'Excel', handler: () => this.exporter.excel('earnings', rows) },
+        { text: 'PDF', handler: () => this.exporter.pdf('earnings', rows, 'Monthly earnings') },
+        { text: 'Cancel', role: 'cancel' },
+      ],
+    });
+    await sheet.present();
   }
 }

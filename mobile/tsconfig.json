@@ -13,6 +13,9 @@
     "declaration": false,
     "experimentalDecorators": true,
     "moduleResolution": "bundler",
+    "paths": {
+      "chart.js/dist/types/utils": ["node_modules/chart.js/dist/types/utils.d.ts"]
+    },
     "importHelpers": true,
     "target": "ES2022",
     "module": "ES2022",

@@ -5,6 +5,7 @@ import { IonicModule, ToastController, ViewWillEnter } from '@ionic/angular';
 import { ProviderService } from '../../core/provider.service';
 import { ReviewService } from '../../core/review.service';
 import { FavouriteService } from '../../core/favourite.service';
+import { RecentlyViewedService } from '../../core/recently-viewed.service';
 import { ProviderProfile, Review } from '../../core/models';
 import { RatingStarsComponent } from '../../components/rating-stars.component';
 
@@ -155,6 +156,7 @@ export class ProviderDetailsPage implements ViewWillEnter {
   private service = inject(ProviderService);
   private reviewService = inject(ReviewService);
   private favourites = inject(FavouriteService);
+  private recent = inject(RecentlyViewedService);
   private toast = inject(ToastController);
 
   provider?: ProviderProfile;
@@ -164,7 +166,10 @@ export class ProviderDetailsPage implements ViewWillEnter {
 
   ionViewWillEnter(): void {
     this.userId = this.route.snapshot.paramMap.get('userId') || '';
-    this.service.getProfile(this.userId).subscribe((p) => (this.provider = p));
+    this.service.getProfile(this.userId).subscribe((p) => {
+      this.provider = p;
+      this.recent.add(p); // track for "recently viewed"
+    });
     this.reviewService.listForProvider(this.userId).subscribe((r) => (this.reviews = r));
     this.favourites
       .list()

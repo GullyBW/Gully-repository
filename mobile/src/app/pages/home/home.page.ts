@@ -1,16 +1,17 @@
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { IonicModule, ViewWillEnter } from '@ionic/angular';
 import { CategoryService } from '../../core/category.service';
 import { AuthService } from '../../core/auth.service';
+import { RecentlyViewedService, RecentProvider } from '../../core/recently-viewed.service';
 import { Category } from '../../core/models';
 
 @Component({
   selector: 'app-home',
   standalone: true,
-  imports: [IonicModule, CommonModule, FormsModule],
+  imports: [IonicModule, CommonModule, FormsModule, RouterLink],
   template: `
     <ion-header>
       <ion-toolbar color="primary">
@@ -39,6 +40,18 @@ import { Category } from '../../core/models';
         <ion-icon slot="start" name="briefcase-outline"></ion-icon>
         Go to provider dashboard
       </ion-button>
+
+      <div *ngIf="recent.length" class="section-head">
+        <h3>Recently viewed</h3>
+        <ion-button size="small" fill="clear" routerLink="/recently-viewed">See all</ion-button>
+      </div>
+      <div *ngIf="recent.length" class="recent-scroll">
+        <div class="recent-card" *ngFor="let p of recent" (click)="openProvider(p)">
+          <img loading="lazy" [src]="p.profilePhoto || 'https://ui-avatars.com/api/?name=' + p.businessName" alt="" />
+          <span class="name">{{ p.businessName }}</span>
+          <span class="muted">{{ p.rating }}★ · {{ p.category | titlecase }}</span>
+        </div>
+      </div>
 
       <h3>Categories</h3>
       <ion-grid>
@@ -81,15 +94,53 @@ import { Category } from '../../core/models';
       .cat span {
         font-size: 0.75rem;
       }
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .recent-scroll {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        padding-bottom: 6px;
+      }
+      .recent-card {
+        flex: 0 0 auto;
+        width: 110px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        cursor: pointer;
+      }
+      .recent-card img {
+        width: 110px;
+        height: 80px;
+        object-fit: cover;
+        border-radius: 10px;
+      }
+      .recent-card .name {
+        font-size: 0.8rem;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .recent-card .muted {
+        font-size: 0.7rem;
+        color: var(--ion-color-medium);
+      }
     `,
   ],
 })
 export class HomePage implements ViewWillEnter {
   private categoryService = inject(CategoryService);
   private auth = inject(AuthService);
+  private recentService = inject(RecentlyViewedService);
   private router = inject(Router);
 
   categories: Category[] = [];
+  recent: RecentProvider[] = [];
   query = '';
 
   get firstName(): string {
@@ -102,10 +153,15 @@ export class HomePage implements ViewWillEnter {
 
   ionViewWillEnter(): void {
     this.categoryService.list().subscribe((c) => (this.categories = c));
+    this.recent = this.recentService.list().slice(0, 8);
   }
 
   openCategory(c: Category): void {
     this.router.navigate(['/providers'], { queryParams: { category: c.key } });
+  }
+
+  openProvider(p: RecentProvider): void {
+    this.router.navigate(['/providers', p.userId]);
   }
 
   searchProviders(): void {

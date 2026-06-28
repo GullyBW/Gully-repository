@@ -393,3 +393,50 @@ added: `GET /api/reviews/mine`, `GET /api/admin/reviews`).
 
 New frontend services: `AdminService`, `AnalyticsService`, `MessageService`,
 `SocketService`, `ThemeService`, `SavedAddressService`, `RecentlyViewedService`.
+
+---
+
+# Final polish (native, charts, PWA)
+
+The Ionic app is now native-ready (Capacitor) and PWA-installable, with rich
+charts and multi-format exports. No backend changes (still 105 tests passing).
+
+## Native (Capacitor)
+
+- `capacitor.config.ts` (appId `bw.co.tirelo.app`). Generate native projects with
+  `npx cap add android` / `npx cap add ios`, then `npx cap sync`.
+- **Push (FCM/APNs)** via `NativePushService` (`@capacitor/push-notifications`):
+  permission handling, registration + automatic token refresh → existing
+  `POST /api/notifications/devices`, foreground badge refresh, and tap-to-route.
+- **Deep links** via `DeepLinkService`: `appUrlOpen` + notification `data` both
+  resolve to in-app routes (booking, chat, review, provider, notifications).
+- **Haptics** via `HapticsService`. All native code is guarded by
+  `Capacitor.isNativePlatform()` so the web/PWA build is unaffected.
+
+## Charts & exports
+
+- `ChartCardComponent` wraps **Chart.js (ng2-charts)** — line / bar / pie /
+  doughnut / area — behind one swappable component. Analytics pages
+  (provider/customer/admin) now render real charts.
+- `ReportExportService` exports any table to **CSV, Excel (SheetJS) and PDF
+  (jsPDF + autotable)**; analytics pages offer an export action sheet.
+
+## Chat & recently viewed
+
+- Conversation list: search, **pin / archive / mute** (device-local via
+  `ChatPrefsService`).
+- Chat window: in-conversation **search**, **copy** message, **delete for me**,
+  **shared images** view.
+- **Recently viewed providers**: recorded on profile open, surfaced on Home and
+  a dedicated page with quick-book / remove / clear.
+
+## PWA & performance
+
+- Service worker (`ngsw-config.json`) + `manifest.webmanifest`, enabled in
+  production builds only.
+- `PreloadAllModules` route preloading, scroll-position restoration, and
+  `loading="lazy"` images. All routes remain lazy-loaded standalone components;
+  the Socket.IO client uses a single auto-reconnecting connection.
+
+> Note: provide PWA icons at `mobile/src/assets/icon/icon-192.png` and
+> `icon-512.png` (referenced by the manifest) before shipping.

@@ -15,6 +15,7 @@ import { RatingStarsComponent } from './rating-stars.component';
         <div class="row">
           <ion-avatar>
             <img
+              loading="lazy"
               [src]="provider.profilePhoto || 'https://ui-avatars.com/api/?name=' + (provider.businessName || 'P')"
               alt="provider photo"
             />

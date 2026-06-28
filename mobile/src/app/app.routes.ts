@@ -132,6 +132,12 @@ export const routes: Routes = [
 
   // Customer / provider experience
   {
+    path: 'recently-viewed',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/recently-viewed/recently-viewed.page').then((m) => m.RecentlyViewedPage),
+  },
+  {
     path: 'saved-addresses',
     canActivate: [authGuard],
     loadComponent: () =>

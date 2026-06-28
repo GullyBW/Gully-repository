@@ -48,6 +48,10 @@ import { AuthService } from '../../core/auth.service';
           <ion-icon slot="start" name="heart-outline"></ion-icon>
           <ion-label>Favourite providers</ion-label>
         </ion-item>
+        <ion-item button routerLink="/recently-viewed">
+          <ion-icon slot="start" name="time-outline"></ion-icon>
+          <ion-label>Recently viewed</ion-label>
+        </ion-item>
         <ion-item button routerLink="/saved-addresses">
           <ion-icon slot="start" name="location-outline"></ion-icon>
           <ion-label>Saved addresses</ion-label>

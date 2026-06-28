@@ -4,6 +4,8 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { IonicModule, ToastController } from '@ionic/angular';
 import { AuthService } from '../../core/auth.service';
+import { NativePushService } from '../../core/native-push.service';
+import { SocketService } from '../../core/socket.service';
 
 @Component({
   selector: 'app-login',
@@ -59,6 +61,8 @@ import { AuthService } from '../../core/auth.service';
 })
 export class LoginPage {
   private auth = inject(AuthService);
+  private push = inject(NativePushService);
+  private socket = inject(SocketService);
   private router = inject(Router);
   private toast = inject(ToastController);
 
@@ -72,6 +76,8 @@ export class LoginPage {
     this.auth.login(this.email, this.password).subscribe({
       next: () => {
         this.loading = false;
+        this.push.init();
+        this.socket.connect();
         this.router.navigateByUrl('/tabs/home');
       },
       error: async (err) => {

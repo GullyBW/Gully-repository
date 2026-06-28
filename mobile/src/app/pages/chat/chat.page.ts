@@ -3,11 +3,13 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
-import { IonContent, IonicModule, ToastController, ViewWillEnter, ViewWillLeave } from '@ionic/angular';
+import { ActionSheetController, AlertController, IonContent, IonicModule, ToastController, ViewWillEnter, ViewWillLeave } from '@ionic/angular';
 import { Subscription } from 'rxjs';
 import { MessageService } from '../../core/message.service';
 import { SocketService } from '../../core/socket.service';
 import { AuthService } from '../../core/auth.service';
+import { ChatPrefsService } from '../../core/chat-prefs.service';
+import { HapticsService } from '../../core/haptics.service';
 import { ChatMessage, Conversation } from '../../core/models';
 import { environment } from '../../../environments/environment';
 
@@ -23,14 +25,22 @@ import { environment } from '../../../environments/environment';
           Chat
           <div class="sub">Booking {{ bookingReference }}</div>
         </ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="searching = !searching"><ion-icon slot="icon-only" name="search-outline"></ion-icon></ion-button>
+          <ion-button (click)="showImages()"><ion-icon slot="icon-only" name="images-outline"></ion-icon></ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+      <ion-toolbar *ngIf="searching">
+        <ion-searchbar [(ngModel)]="search" placeholder="Search in conversation" [debounce]="150"></ion-searchbar>
       </ion-toolbar>
     </ion-header>
 
     <ion-content #content class="ion-padding chat-bg">
       <div
-        *ngFor="let m of messages"
+        *ngFor="let m of visibleMessages"
         class="bubble"
         [class.mine]="m.senderId === myId"
+        (click)="messageActions(m)"
       >
         <ng-container [ngSwitch]="m.type">
           <img *ngSwitchCase="'image'" [src]="m.imageUrl" class="msg-img" alt="image" />
@@ -96,6 +106,10 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
   private auth = inject(AuthService);
   private http = inject(HttpClient);
   private toast = inject(ToastController);
+  private prefs = inject(ChatPrefsService);
+  private actionSheet = inject(ActionSheetController);
+  private alert = inject(AlertController);
+  private haptics = inject(HapticsService);
 
   @ViewChild('content') content?: IonContent;
 
@@ -103,6 +117,8 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
   conversation?: Conversation;
   messages: ChatMessage[] = [];
   draft = '';
+  searching = false;
+  search = '';
   otherTyping = false;
   myId = this.auth.currentUser()?.id;
   private subs: Subscription[] = [];
@@ -145,9 +161,59 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
     this.cleanup();
   }
 
+  /** Messages minus locally-deleted ones, filtered by the in-conversation search. */
+  get visibleMessages(): ChatMessage[] {
+    const hidden = this.prefs.hiddenMessages();
+    const needle = this.search.toLowerCase();
+    return this.messages
+      .filter((m) => !hidden.has(m.id))
+      .filter((m) => !needle || (m.text || '').toLowerCase().includes(needle));
+  }
+
+  get sharedImages(): ChatMessage[] {
+    return this.messages.filter((m) => m.type === 'image' && m.imageUrl);
+  }
+
   isRead(m: ChatMessage): boolean {
     // Read by someone other than the sender.
     return (m.readBy || []).some((u) => u !== m.senderId);
+  }
+
+  async messageActions(m: ChatMessage): Promise<void> {
+    const sheet = await this.actionSheet.create({
+      header: m.type === 'text' ? m.text : `[${m.type}]`,
+      buttons: [
+        ...(m.type === 'text'
+          ? [{ text: 'Copy', icon: 'copy-outline', handler: () => this.copy(m) }]
+          : []),
+        { text: 'Delete for me', icon: 'trash-outline', role: 'destructive', handler: () => this.prefs.hideMessage(m.id) },
+        { text: 'Cancel', role: 'cancel' },
+      ],
+    });
+    await sheet.present();
+  }
+
+  private async copy(m: ChatMessage): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(m.text || '');
+      const t = await this.toast.create({ message: 'Copied', duration: 1200 });
+      await t.present();
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  async showImages(): Promise<void> {
+    const imgs = this.sharedImages;
+    const alert = await this.alert.create({
+      header: 'Shared images',
+      message:
+        imgs.length === 0
+          ? 'No images shared yet.'
+          : imgs.map((m) => `<a href="${m.imageUrl}" target="_blank">Image · ${new Date(m.createdAt).toLocaleString()}</a>`).join('<br/>'),
+      buttons: ['Close'],
+    });
+    await alert.present();
   }
 
   onTyping(): void {
@@ -163,6 +229,7 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
     const text = this.draft.trim();
     if (!text) return;
     this.draft = '';
+    this.haptics.impact();
     this.messagesApi.send(this.bookingReference, { type: 'text', text }).subscribe((m) => {
       if (!this.messages.some((x) => x.id === m.id)) this.messages.push(m);
       this.scrollDown();

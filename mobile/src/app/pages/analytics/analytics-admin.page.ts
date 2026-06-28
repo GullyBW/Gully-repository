@@ -1,20 +1,20 @@
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { IonicModule, ViewWillEnter } from '@ionic/angular';
+import { ActionSheetController, IonicModule, ViewWillEnter } from '@ionic/angular';
 import { AnalyticsService, AdminAnalytics } from '../../core/analytics.service';
-import { BarChartComponent, ChartDatum } from '../../components/bar-chart.component';
-import { downloadText } from '../../core/download.util';
+import { ChartCardComponent } from '../../components/chart-card.component';
+import { ReportExportService } from '../../core/report-export.service';
 
 @Component({
   selector: 'app-analytics-admin',
   standalone: true,
-  imports: [IonicModule, CommonModule, BarChartComponent],
+  imports: [IonicModule, CommonModule, ChartCardComponent],
   template: `
     <ion-header>
       <ion-toolbar color="primary">
         <ion-buttons slot="start"><ion-back-button defaultHref="/admin"></ion-back-button></ion-buttons>
         <ion-title>Platform analytics</ion-title>
-        <ion-buttons slot="end"><ion-button (click)="exportCsv()">CSV</ion-button></ion-buttons>
+        <ion-buttons slot="end"><ion-button (click)="exportReport()"><ion-icon slot="icon-only" name="download-outline"></ion-icon></ion-button></ion-buttons>
       </ion-toolbar>
     </ion-header>
 
@@ -26,29 +26,15 @@ import { downloadText } from '../../core/download.util';
         </ion-row>
       </ion-grid>
 
-      <ion-card>
-        <ion-card-header><ion-card-title>Popular services</ion-card-title></ion-card-header>
-        <ion-card-content><app-bar-chart [data]="categoryChart"></app-bar-chart></ion-card-content>
-      </ion-card>
-
-      <ion-card>
-        <ion-card-header><ion-card-title>Peak booking hours</ion-card-title></ion-card-header>
-        <ion-card-content><app-bar-chart [data]="hoursChart"></app-bar-chart></ion-card-content>
-      </ion-card>
-
-      <ion-card>
-        <ion-card-header><ion-card-title>Geographic demand</ion-card-title></ion-card-header>
-        <ion-card-content><app-bar-chart [data]="geoChart"></app-bar-chart></ion-card-content>
-      </ion-card>
+      <app-chart-card title="Popular services" type="bar" [labels]="catLabels" [values]="catValues" seriesLabel="Bookings"></app-chart-card>
+      <app-chart-card title="Peak booking hours" type="area" [labels]="hourLabels" [values]="hourValues" seriesLabel="Bookings"></app-chart-card>
+      <app-chart-card title="Geographic demand" type="doughnut" [labels]="geoLabels" [values]="geoValues"></app-chart-card>
 
       <ion-card>
         <ion-card-header><ion-card-title>Top providers</ion-card-title></ion-card-header>
         <ion-list>
           <ion-item *ngFor="let p of d.topProviders">
-            <ion-label>
-              <h3>{{ p.businessName }}</h3>
-              <p>{{ p.completedJobs }} jobs · {{ p.rating }}★</p>
-            </ion-label>
+            <ion-label><h3>{{ p.businessName }}</h3><p>{{ p.completedJobs }} jobs · {{ p.rating }}★</p></ion-label>
           </ion-item>
         </ion-list>
       </ion-card>
@@ -61,22 +47,40 @@ import { downloadText } from '../../core/download.util';
 })
 export class AnalyticsAdminPage implements ViewWillEnter {
   private analytics = inject(AnalyticsService);
+  private exporter = inject(ReportExportService);
+  private actionSheet = inject(ActionSheetController);
 
   data?: AdminAnalytics;
-  categoryChart: ChartDatum[] = [];
-  hoursChart: ChartDatum[] = [];
-  geoChart: ChartDatum[] = [];
+  catLabels: string[] = [];
+  catValues: number[] = [];
+  hourLabels: string[] = [];
+  hourValues: number[] = [];
+  geoLabels: string[] = [];
+  geoValues: number[] = [];
 
   ionViewWillEnter(): void {
     this.analytics.admin().subscribe((d) => {
       this.data = d;
-      this.categoryChart = d.popularCategories.map((c) => ({ label: c.category, value: c.count }));
-      this.hoursChart = d.peakHours.map((h) => ({ label: `${h.hour}:00`, value: h.count }));
-      this.geoChart = d.geographicDemand.map((g) => ({ label: g.area, value: g.count }));
+      this.catLabels = d.popularCategories.map((c) => c.category);
+      this.catValues = d.popularCategories.map((c) => c.count);
+      this.hourLabels = d.peakHours.map((h) => `${h.hour}:00`);
+      this.hourValues = d.peakHours.map((h) => h.count);
+      this.geoLabels = d.geographicDemand.map((g) => g.area);
+      this.geoValues = d.geographicDemand.map((g) => g.count);
     });
   }
 
-  exportCsv(): void {
-    this.analytics.exportCsv('admin-categories').subscribe((csv) => downloadText('categories.csv', csv));
+  async exportReport(): Promise<void> {
+    const rows = (this.data?.popularCategories || []).map((c) => ({ category: c.category, bookings: c.count }));
+    const sheet = await this.actionSheet.create({
+      header: 'Export popular services',
+      buttons: [
+        { text: 'CSV', handler: () => this.exporter.csv('popular-services', rows) },
+        { text: 'Excel', handler: () => this.exporter.excel('popular-services', rows) },
+        { text: 'PDF', handler: () => this.exporter.pdf('popular-services', rows, 'Popular services') },
+        { text: 'Cancel', role: 'cancel' },
+      ],
+    });
+    await sheet.present();
   }
 }
