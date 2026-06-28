@@ -30,6 +30,9 @@ const userSchema = new mongoose.Schema(
 
     // Phase 3: uploaded profile photo (URL produced by StorageService).
     avatarUrl: { type: String, default: '' },
+
+    // Chat: users this account has blocked from messaging it.
+    blockedUserIds: { type: [String], default: [] },
   },
   { timestamps: true }
 );

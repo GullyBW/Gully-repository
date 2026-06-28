@@ -84,4 +84,58 @@ describe('Messaging', () => {
     const res = await request(app).get('/api/messages/conversations').set(auth(customer.token));
     expect(res.body.data.length).toBe(1);
   });
+
+  it('toggles an emoji reaction on a message', async () => {
+    const sent = await request(app)
+      .post(`/api/messages/${bookingRef}`)
+      .set(auth(customer.token))
+      .send({ text: 'Thanks!' });
+    const messageId = sent.body.data.id;
+
+    const reacted = await request(app)
+      .post(`/api/messages/${bookingRef}/react`)
+      .set(auth(provider.token))
+      .send({ messageId, emoji: '👍' });
+    expect(reacted.status).toBe(200);
+    expect(reacted.body.data.reactions).toEqual([{ userId: provider.user.id, emoji: '👍' }]);
+
+    // Toggling the same emoji removes it.
+    const toggled = await request(app)
+      .post(`/api/messages/${bookingRef}/react`)
+      .set(auth(provider.token))
+      .send({ messageId, emoji: '👍' });
+    expect(toggled.body.data.reactions).toEqual([]);
+  });
+
+  it('reports a conversation (recorded in admin audit logs)', async () => {
+    const res = await request(app)
+      .post(`/api/messages/${bookingRef}/report`)
+      .set(auth(customer.token))
+      .send({ reason: 'spam' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.reported).toBe(true);
+  });
+
+  it('blocks a user and prevents messaging in both directions', async () => {
+    await request(app)
+      .post(`/api/blocks/${provider.user.id}`)
+      .set(auth(customer.token));
+
+    const blocked = await request(app)
+      .post(`/api/messages/${bookingRef}`)
+      .set(auth(provider.token))
+      .send({ text: 'Hello?' });
+    expect(blocked.status).toBe(403);
+
+    const list = await request(app).get('/api/blocks').set(auth(customer.token));
+    expect(list.body.data).toContain(provider.user.id);
+
+    // Unblock restores messaging.
+    await request(app).delete(`/api/blocks/${provider.user.id}`).set(auth(customer.token));
+    const ok = await request(app)
+      .post(`/api/messages/${bookingRef}`)
+      .set(auth(provider.token))
+      .send({ text: 'Hello again' });
+    expect(ok.status).toBe(201);
+  });
 });

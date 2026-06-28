@@ -11,6 +11,16 @@ class MemoryMessageRepository {
     return { ...m, readBy: [...m.readBy] };
   }
 
+  async findById(id) {
+    const m = this.store.get(id);
+    return m ? { ...m, readBy: [...m.readBy], reactions: [...(m.reactions || [])] } : null;
+  }
+
+  async save(m) {
+    this.store.set(m.id, { ...m, readBy: [...m.readBy], reactions: [...(m.reactions || [])] });
+    return { ...m, readBy: [...m.readBy], reactions: [...(m.reactions || [])] };
+  }
+
   async listByConversation(conversationId, { limit = 100 } = {}) {
     return [...this.store.values()]
       .filter((m) => m.conversationId === conversationId)

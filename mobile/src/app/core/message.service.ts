@@ -20,12 +20,26 @@ export class MessageService {
 
   send(
     bookingReference: string,
-    input: { type?: 'text' | 'image' | 'location'; text?: string; imageUrl?: string; location?: { lat: number; lng: number } }
+    input: {
+      type?: 'text' | 'image' | 'location';
+      text?: string;
+      imageUrl?: string;
+      location?: { lat: number; lng: number };
+      forwardedFrom?: string;
+    }
   ): Observable<ChatMessage> {
     return this.api.post<ChatMessage>(`/messages/${bookingReference}`, input);
   }
 
   markRead(bookingReference: string): Observable<unknown> {
     return this.api.post(`/messages/${bookingReference}/read`, {});
+  }
+
+  react(bookingReference: string, messageId: string, emoji: string): Observable<ChatMessage> {
+    return this.api.post<ChatMessage>(`/messages/${bookingReference}/react`, { messageId, emoji });
+  }
+
+  report(bookingReference: string, reason: string): Observable<unknown> {
+    return this.api.post(`/messages/${bookingReference}/report`, { reason });
   }
 }

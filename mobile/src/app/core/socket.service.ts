@@ -16,6 +16,7 @@ export class SocketService {
   private socket?: Socket;
 
   readonly messageNew$ = new Subject<ChatMessage>();
+  readonly messageReaction$ = new Subject<ChatMessage>();
   readonly messageRead$ = new Subject<{ userId: string }>();
   readonly typing$ = new Subject<{ userId: string; typing: boolean }>();
   readonly connected$ = new Subject<boolean>();
@@ -41,6 +42,7 @@ export class SocketService {
     this.socket.on('connect', () => this.connected$.next(true));
     this.socket.on('disconnect', () => this.connected$.next(false));
     this.socket.on('message:new', (m: ChatMessage) => this.messageNew$.next(m));
+    this.socket.on('message:reaction', (m: ChatMessage) => this.messageReaction$.next(m));
     this.socket.on('message:read', (p: { userId: string }) => this.messageRead$.next(p));
     this.socket.on('typing', (p: { userId: string; typing: boolean }) => this.typing$.next(p));
   }

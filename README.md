@@ -440,3 +440,22 @@ charts and multi-format exports. No backend changes (still 105 tests passing).
 
 > Note: provide PWA icons at `mobile/src/assets/icon/icon-192.png` and
 > `icon-512.png` (referenced by the manifest) before shipping.
+
+---
+
+# Release engineering
+
+- **E2E tests:** Playwright journeys in `e2e/` run against an in-memory API
+  (`src/test-server.js`) — `npm run test:e2e`. Covers customer, provider, admin,
+  messaging and notification flows. (108 Jest tests + 6 E2E suites passing.)
+- **Monitoring:** `GET /health/live`, `/health/ready`, `/metrics`; per-request
+  `x-request-id` correlation; crash reporting hook (`src/utils/crashReporter.js`,
+  Sentry-ready). See `docs/MONITORING.md`.
+- **Chat extras:** emoji reactions, forward, conversation report, block user,
+  conversation export (CSV) — all over the existing Socket.IO/REST APIs.
+- **Native & assets:** Capacitor build guide (`docs/NATIVE_BUILD.md`), Firebase/
+  Maps setup (`docs/FIREBASE.md`), asset generation (`docs/ASSETS.md`).
+- **Deployment:** `docs/DEPLOYMENT.md` + `deploy/` (nginx, backup script).
+- **Go-live:** `docs/RELEASE_CHECKLIST.md`. Full docs index: `docs/README.md`.
+- **CI:** `.github/workflows/ci.yml` runs backend tests, Playwright E2E, the
+  Ionic production build, and the Docker image build.

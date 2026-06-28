@@ -2,13 +2,15 @@
 
 const domain = require('../domain/message');
 const NotificationService = require('./notification.service');
+const AuditService = require('./audit.service');
+const BlockService = require('./block.service');
 const bus = require('../realtime/bus');
 const {
   getConversationRepository,
   getMessageRepository,
   getBookingRepository,
 } = require('../repositories');
-const { USER_ROLES, NOTIFICATION_TYPES } = require('../utils/constants');
+const { USER_ROLES, NOTIFICATION_TYPES, AUDIT_ACTIONS } = require('../utils/constants');
 const ApiError = require('../utils/ApiError');
 
 /**
@@ -53,6 +55,14 @@ class MessageService {
 
   static async sendMessage(actor, bookingReference, input) {
     const conversation = await MessageService.getOrCreateConversation(actor, bookingReference);
+
+    // Respect blocks in either direction.
+    const other =
+      actor.id === conversation.customerId ? conversation.providerId : conversation.customerId;
+    if (await BlockService.isBlockedBetween(actor.id, other)) {
+      throw new ApiError(403, 'Messaging is unavailable for this conversation');
+    }
+
     const message = await MessageService.messages.create(
       domain.createMessage(conversation.id, actor.id, input)
     );
@@ -79,6 +89,30 @@ class MessageService {
     await MessageService.messages.markRead(conversation.id, actor.id);
     bus.emit('message:read', conversation.id, { userId: actor.id });
     return { success: true };
+  }
+
+  /** Toggle an emoji reaction on a message (participant only). */
+  static async react(actor, bookingReference, messageId, emoji) {
+    const conversation = await MessageService.getOrCreateConversation(actor, bookingReference);
+    const message = await MessageService.messages.findById(messageId);
+    if (!message || message.conversationId !== conversation.id) {
+      throw ApiError.notFound('Message not found');
+    }
+    domain.toggleReaction(message, actor.id, emoji);
+    const saved = await MessageService.messages.save(message);
+    bus.emit('message:reaction', conversation.id, domain.messageJSON(saved));
+    return domain.messageJSON(saved);
+  }
+
+  /** Report a conversation for abuse (audited; surfaced in admin audit logs). */
+  static async report(actor, bookingReference, reason) {
+    const conversation = await MessageService.getOrCreateConversation(actor, bookingReference);
+    await AuditService.log(AUDIT_ACTIONS.CONVERSATION_REPORTED, {
+      actorId: actor.id,
+      targetId: conversation.id,
+      meta: { bookingReference, reason: reason || 'unspecified' },
+    });
+    return { reported: true };
   }
 
   static _assertParticipant(booking, actor) {

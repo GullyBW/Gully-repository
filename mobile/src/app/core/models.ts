@@ -215,5 +215,7 @@ export interface ChatMessage {
   imageUrl?: string;
   location?: { lat: number; lng: number } | null;
   readBy: string[];
+  reactions?: { userId: string; emoji: string }[];
+  forwardedFrom?: string | null;
   createdAt: string;
 }

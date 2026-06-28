@@ -25,6 +25,7 @@ function createUser(input) {
     // Optional provider profile (profession, services, location).
     profile: input.profile || {},
     avatarUrl: input.avatarUrl || '',
+    blockedUserIds: [],
 
     // Phase 8 security fields.
     emailVerified: false,

@@ -27,8 +27,24 @@ function createMessage(conversationId, senderId, input) {
     imageUrl: type === 'image' ? input.imageUrl || '' : '',
     location: type === 'location' ? input.location || null : null,
     readBy: [senderId],
+    reactions: [], // [{ userId, emoji }]
+    forwardedFrom: input.forwardedFrom || null,
     createdAt: new Date(),
   };
+}
+
+/** Toggle a user's emoji reaction on a message (one emoji per user). */
+function toggleReaction(message, userId, emoji) {
+  message.reactions = message.reactions || [];
+  const existing = message.reactions.find((r) => r.userId === userId);
+  if (existing && existing.emoji === emoji) {
+    message.reactions = message.reactions.filter((r) => r.userId !== userId);
+  } else if (existing) {
+    existing.emoji = emoji;
+  } else {
+    message.reactions.push({ userId, emoji });
+  }
+  return message;
 }
 
 function conversationJSON(c) {
@@ -52,8 +68,17 @@ function messageJSON(m) {
     imageUrl: m.imageUrl,
     location: m.location,
     readBy: m.readBy,
+    reactions: m.reactions || [],
+    forwardedFrom: m.forwardedFrom || null,
     createdAt: m.createdAt,
   };
 }
 
-module.exports = { createConversation, createMessage, conversationJSON, messageJSON, MESSAGE_TYPES };
+module.exports = {
+  createConversation,
+  createMessage,
+  toggleReaction,
+  conversationJSON,
+  messageJSON,
+  MESSAGE_TYPES,
+};

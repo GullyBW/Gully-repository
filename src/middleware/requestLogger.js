@@ -15,6 +15,7 @@ function requestLogger(req, res, next) {
     console.log(
       JSON.stringify({
         t: new Date().toISOString(),
+        id: req.id,
         method: req.method,
         path: req.originalUrl,
         status: res.statusCode,

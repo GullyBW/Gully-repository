@@ -9,6 +9,14 @@ class MongoMessageRepository {
     return doc.toObject();
   }
 
+  async findById(id) {
+    return Message.findOne({ id }).lean();
+  }
+
+  async save(m) {
+    return Message.findOneAndUpdate({ id: m.id }, { $set: m }, { new: true }).lean();
+  }
+
   async listByConversation(conversationId, { limit = 100 } = {}) {
     const docs = await Message.find({ conversationId })
       .sort({ createdAt: -1 })

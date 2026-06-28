@@ -10,6 +10,8 @@ import { SocketService } from '../../core/socket.service';
 import { AuthService } from '../../core/auth.service';
 import { ChatPrefsService } from '../../core/chat-prefs.service';
 import { HapticsService } from '../../core/haptics.service';
+import { BlockService } from '../../core/block.service';
+import { ReportExportService } from '../../core/report-export.service';
 import { ChatMessage, Conversation } from '../../core/models';
 import { environment } from '../../../environments/environment';
 
@@ -28,6 +30,7 @@ import { environment } from '../../../environments/environment';
         <ion-buttons slot="end">
           <ion-button (click)="searching = !searching"><ion-icon slot="icon-only" name="search-outline"></ion-icon></ion-button>
           <ion-button (click)="showImages()"><ion-icon slot="icon-only" name="images-outline"></ion-icon></ion-button>
+          <ion-button (click)="conversationMenu()"><ion-icon slot="icon-only" name="ellipsis-vertical"></ion-icon></ion-button>
         </ion-buttons>
       </ion-toolbar>
       <ion-toolbar *ngIf="searching">
@@ -48,8 +51,12 @@ import { environment } from '../../../environments/environment';
           <span *ngSwitchDefault>{{ m.text }}</span>
         </ng-container>
         <div class="meta">
+          <span *ngIf="m.forwardedFrom" class="fwd">forwarded · </span>
           {{ m.createdAt | date: 'shortTime' }}
           <ion-icon *ngIf="m.senderId === myId" [name]="isRead(m) ? 'checkmark-done' : 'checkmark'"></ion-icon>
+        </div>
+        <div class="reactions" *ngIf="m.reactions?.length">
+          <span *ngFor="let r of m.reactions">{{ r.emoji }}</span>
         </div>
       </div>
 
@@ -94,6 +101,8 @@ import { environment } from '../../../environments/environment';
         color: var(--ion-color-primary-contrast);
       }
       .meta { font-size: 0.65rem; opacity: 0.7; margin-top: 2px; text-align: right; }
+      .fwd { font-style: italic; }
+      .reactions { margin-top: 2px; font-size: 0.9rem; }
       .msg-img { max-width: 200px; border-radius: 8px; display: block; }
       .typing { font-size: 0.8rem; color: var(--ion-color-medium); padding: 4px; }
     `,
@@ -110,6 +119,8 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
   private actionSheet = inject(ActionSheetController);
   private alert = inject(AlertController);
   private haptics = inject(HapticsService);
+  private blocks = inject(BlockService);
+  private exporter = inject(ReportExportService);
 
   @ViewChild('content') content?: IonContent;
 
@@ -149,6 +160,10 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
           this.otherTyping = p.typing;
           if (p.typing) setTimeout(() => (this.otherTyping = false), 3000);
         }
+      }),
+      this.socket.messageReaction$.subscribe((m) => {
+        const idx = this.messages.findIndex((x) => x.id === m.id);
+        if (idx >= 0) this.messages[idx] = m;
       })
     );
   }
@@ -179,10 +194,21 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
     return (m.readBy || []).some((u) => u !== m.senderId);
   }
 
+  get otherUserId(): string | undefined {
+    if (!this.conversation) return undefined;
+    return this.myId === this.conversation.customerId
+      ? this.conversation.providerId
+      : this.conversation.customerId;
+  }
+
   async messageActions(m: ChatMessage): Promise<void> {
     const sheet = await this.actionSheet.create({
       header: m.type === 'text' ? m.text : `[${m.type}]`,
       buttons: [
+        { text: '👍 React', handler: () => this.react(m, '👍') },
+        { text: '❤️ React', handler: () => this.react(m, '❤️') },
+        { text: '😂 React', handler: () => this.react(m, '😂') },
+        { text: 'Forward', icon: 'arrow-redo-outline', handler: () => this.forward(m) },
         ...(m.type === 'text'
           ? [{ text: 'Copy', icon: 'copy-outline', handler: () => this.copy(m) }]
           : []),
@@ -191,6 +217,85 @@ export class ChatPage implements ViewWillEnter, ViewWillLeave, OnDestroy {
       ],
     });
     await sheet.present();
+  }
+
+  react(m: ChatMessage, emoji: string): void {
+    this.messagesApi.react(this.bookingReference, m.id, emoji).subscribe((updated) => {
+      const idx = this.messages.findIndex((x) => x.id === updated.id);
+      if (idx >= 0) this.messages[idx] = updated;
+    });
+  }
+
+  async forward(m: ChatMessage): Promise<void> {
+    const convos = await new Promise<{ bookingReference: string }[]>((resolve) =>
+      this.messagesApi.conversations().subscribe((c) => resolve(c))
+    );
+    const targets = convos.filter((c) => c.bookingReference !== this.bookingReference);
+    if (targets.length === 0) {
+      const t = await this.toast.create({ message: 'No other conversations', duration: 1500 });
+      await t.present();
+      return;
+    }
+    const alert = await this.alert.create({
+      header: 'Forward to',
+      inputs: targets.map((c, i) => ({
+        type: 'radio' as const,
+        label: `Booking ${c.bookingReference}`,
+        value: c.bookingReference,
+        checked: i === 0,
+      })),
+      buttons: [
+        { text: 'Cancel', role: 'cancel' },
+        {
+          text: 'Forward',
+          handler: (ref: string) => {
+            this.messagesApi
+              .send(ref, { type: m.type, text: m.text, imageUrl: m.imageUrl, forwardedFrom: m.id })
+              .subscribe(() => this.notify('Forwarded'));
+          },
+        },
+      ],
+    });
+    await alert.present();
+  }
+
+  async conversationMenu(): Promise<void> {
+    const sheet = await this.actionSheet.create({
+      header: 'Conversation',
+      buttons: [
+        { text: 'Export chat (CSV)', icon: 'download-outline', handler: () => this.exportChat() },
+        { text: 'Report conversation', icon: 'flag-outline', handler: () => this.reportConversation() },
+        { text: 'Block user', icon: 'ban-outline', role: 'destructive', handler: () => this.blockUser() },
+        { text: 'Cancel', role: 'cancel' },
+      ],
+    });
+    await sheet.present();
+  }
+
+  private exportChat(): void {
+    const rows = this.messages.map((m) => ({
+      at: m.createdAt,
+      from: m.senderId === this.myId ? 'me' : 'them',
+      type: m.type,
+      text: m.text || (m.type === 'image' ? m.imageUrl : ''),
+    }));
+    this.exporter.csv(`chat-${this.bookingReference}`, rows);
+  }
+
+  private reportConversation(): void {
+    this.messagesApi.report(this.bookingReference, 'reported from chat').subscribe(() =>
+      this.notify('Conversation reported')
+    );
+  }
+
+  private blockUser(): void {
+    if (!this.otherUserId) return;
+    this.blocks.block(this.otherUserId).subscribe(() => this.notify('User blocked'));
+  }
+
+  private async notify(message: string): Promise<void> {
+    const t = await this.toast.create({ message, duration: 1500 });
+    await t.present();
   }
 
   private async copy(m: ChatMessage): Promise<void> {

@@ -15,6 +15,8 @@ const messageSchema = new mongoose.Schema(
       lng: { type: Number },
     },
     readBy: { type: [String], default: [] },
+    reactions: { type: [{ userId: String, emoji: String, _id: false }], default: [] },
+    forwardedFrom: { type: String, default: null },
     createdAt: { type: Date, default: Date.now, index: true },
   },
   { timestamps: false }

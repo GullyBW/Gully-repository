@@ -29,6 +29,27 @@ const MessageController = {
     const result = await MessageService.markRead(req.user, req.params.bookingReference);
     res.json({ success: true, data: result });
   }),
+
+  // POST /api/messages/:bookingReference/react
+  react: asyncHandler(async (req, res) => {
+    const message = await MessageService.react(
+      req.user,
+      req.params.bookingReference,
+      req.body.messageId,
+      req.body.emoji
+    );
+    res.json({ success: true, data: message });
+  }),
+
+  // POST /api/messages/:bookingReference/report
+  report: asyncHandler(async (req, res) => {
+    const result = await MessageService.report(
+      req.user,
+      req.params.bookingReference,
+      req.body && req.body.reason
+    );
+    res.json({ success: true, data: result });
+  }),
 };
 
 module.exports = MessageController;

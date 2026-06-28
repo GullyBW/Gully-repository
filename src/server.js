@@ -6,9 +6,11 @@ const createApp = require('./app');
 const config = require('./config');
 const cache = require('./services/cache.service');
 const { attachSocket } = require('./realtime/socket');
+const crashReporter = require('./utils/crashReporter');
 
 async function start() {
   try {
+    crashReporter.init();
     await mongoose.connect(config.db.uri);
     // eslint-disable-next-line no-console
     console.log('[tirelo] connected to MongoDB');

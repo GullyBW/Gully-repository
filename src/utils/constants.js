@@ -158,6 +158,8 @@ const AUDIT_ACTIONS = Object.freeze({
   REFUND_ISSUED: 'refund_issued',
   REVIEW_MODERATED: 'review_moderated',
   BROADCAST_SENT: 'broadcast_sent',
+  CONVERSATION_REPORTED: 'conversation_reported',
+  USER_BLOCKED: 'user_blocked',
 });
 
 module.exports = {

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Tirelo Services">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f7a8c"/>
+      <stop offset="1" stop-color="#2a9d8f"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#g)"/>
+  <!-- Stylised "T" + spark mark -->
+  <rect x="300" y="300" width="424" height="84" rx="42" fill="#ffffff"/>
+  <rect x="470" y="300" width="84" height="430" rx="42" fill="#ffffff"/>
+  <circle cx="700" cy="700" r="70" fill="#e9c46a"/>
+</svg>
