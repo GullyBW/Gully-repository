@@ -8,3 +8,13 @@ playwright-report/
 playwright-report-ui/
 test-results/
 .DS_Store
+
+# Benchmark: ignore generated dataset snapshots and ad-hoc report sizes;
+# the committed small-run report (benchmark/reports/benchmark-small.*) and
+# latest.json are tracked as the reference baseline.
+benchmark/datasets/*
+!benchmark/datasets/.gitkeep
+!benchmark/datasets/README.md
+benchmark/reports/benchmark-tiny.*
+benchmark/reports/benchmark-medium.*
+benchmark/reports/benchmark-large.*

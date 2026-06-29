@@ -42,6 +42,11 @@ jobs:
       - run: npm run test:pg
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tirelo
+      - name: Benchmark smoke (tiny dataset)
+        run: node benchmark/scripts/run-all.js tiny --only=crud,search,query,payment
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tirelo
+          BENCH_SAMPLES: '200'
 
   e2e:
     name: E2E (Playwright)

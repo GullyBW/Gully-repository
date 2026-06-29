@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tirelo Services — PostgreSQL Benchmark Dashboard</title>
+<style>
+  :root { --bg:#0f1419; --card:#1a2027; --ink:#e6edf3; --muted:#8b949e; --accent:#3fb950; --warn:#d29922; --line:#2d333b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:20px 28px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; }
+  .muted { color:var(--muted); }
+  main { padding:24px 28px; max-width:1200px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; margin-bottom:24px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .kpi .v { font-size:22px; font-weight:600; }
+  .kpi .l { color:var(--muted); font-size:12px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:18px; }
+  section h2 { font-size:15px; margin:0 0 6px; }
+  section p { color:var(--muted); margin:0 0 12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin:8px 0 12px; }
+  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  td:not(:first-child) { font-variant-numeric:tabular-nums; }
+  .notes { list-style:none; padding:0; margin:8px 0 0; }
+  .notes li { color:var(--muted); padding:4px 0 4px 18px; position:relative; }
+  .notes li::before { content:"›"; position:absolute; left:2px; color:var(--accent); }
+  .bar { height:6px; background:var(--accent); border-radius:3px; display:inline-block; vertical-align:middle; }
+  .controls { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  input[type=file] { color:var(--muted); font-size:12px; }
+  .err { color:var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tirelo Services · PostgreSQL Benchmark</h1>
+  <span id="meta-line" class="muted"></span>
+  <div class="controls">
+    <label class="muted">Load report JSON: <input id="file" type="file" accept="application/json" /></label>
+  </div>
+</header>
+<main>
+  <div id="kpis" class="grid"></div>
+  <div id="sections"></div>
+  <p id="status" class="muted">Loading <code>../reports/latest.json</code>…</p>
+</main>
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+
+function render(doc) {
+  $('#status').textContent = '';
+  const m = doc.meta || {};
+  $('#meta-line').textContent =
+    `${m.datasetSize} dataset · ${m.drivers} · PG ${m.pgVersion||'?'} · ${m.cpu||''} · ${doc.generatedAt}`;
+
+  // KPIs pulled from known sections.
+  const kpis = [];
+  const find = (t) => (doc.sections||[]).find(s => s.title && s.title.includes(t));
+  const crud = find('Repository CRUD');
+  if (crud && crud.raw && crud.raw.create && crud.raw.create.postgres)
+    kpis.push(['PG create p50', crud.raw.create.postgres.p50 + ' ms']);
+  const conc = find('Concurrent load');
+  if (conc && conc.raw && conc.raw.concRows && conc.raw.concRows.length) {
+    const top = conc.raw.concRows[conc.raw.concRows.length-1];
+    kpis.push(['Peak throughput', Math.round(top[1]) + ' ops/s']);
+    kpis.push(['p95 @ peak', top[3] + ' ms']);
+  }
+  const pay = find('Payment');
+  if (pay && pay.raw) kpis.push(['Payment create p50', pay.raw.createStat.p50 + ' ms']);
+  kpis.push(['Dataset', `${m.users}u / ${m.providers}p / ${m.bookings}b`]);
+  $('#kpis').innerHTML = kpis.map(([l,v]) =>
+    `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+
+  $('#sections').innerHTML = (doc.sections||[]).map(renderSection).join('');
+}
+
+function renderSection(s) {
+  const tables = (s.tables||[]).map(t => `
+    <h3 class="muted" style="font-size:13px;margin:10px 0 2px">${t.title||''}</h3>
+    <table><thead><tr>${t.columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+    <tbody>${t.rows.map(r=>`<tr>${r.map(c=>`<td>${c==null?'':c}</td>`).join('')}</tr>`).join('')}</tbody></table>`).join('');
+  const notes = (s.notes||[]).length
+    ? `<ul class="notes">${s.notes.map(n=>`<li>${escapeHtml(n)}</li>`).join('')}</ul>` : '';
+  return `<section><h2>${s.title}</h2>${s.description?`<p>${escapeHtml(s.description)}</p>`:''}${tables}${notes}</section>`;
+}
+
+function escapeHtml(x){return String(x).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+fetch('../reports/latest.json').then(r => r.ok ? r.json() : Promise.reject()).then(render)
+  .catch(() => { $('#status').innerHTML =
+    '<span class="err">No latest.json found. Run <code>npm run bench</code>, or load a report JSON manually.</span>'; });
+
+$('#file').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => { try { render(JSON.parse(reader.result)); } catch (err) { $('#status').textContent = 'Invalid JSON'; } };
+  reader.readAsText(f);
+});
+</script>
+</body>
+</html>

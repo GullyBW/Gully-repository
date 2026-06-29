@@ -6,6 +6,8 @@
 | [API_REFERENCE.md](./API_REFERENCE.md) | Endpoint groups + operational endpoints |
 | [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | Tables/collections & fields |
 | [POSTGRES.md](./POSTGRES.md) | PostgreSQL driver, JSONB storage, config, tests, migrations |
+| [BENCHMARKING.md](./BENCHMARKING.md) | Benchmark suite: how to run, methodology, interpreting results |
+| [PERFORMANCE_REPORT.md](./PERFORMANCE_REPORT.md) | PostgreSQL benchmark results, query/index analysis, tuning checklist |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker, env vars, Postgres/Redis, nginx/HTTPS, backups, PWA |
 | [CI_CD.md](./CI_CD.md) | GitHub Actions workflows & secrets |
 | [FIREBASE.md](./FIREBASE.md) | Firebase project, FCM, Android/iOS, Google Maps keys, troubleshooting |
