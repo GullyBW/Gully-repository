@@ -16,29 +16,43 @@ const MongoSavedAddressRepository = require('./mongo.savedAddress.repository');
 const MongoConversationRepository = require('./mongo.conversation.repository');
 const MongoMessageRepository = require('./mongo.message.repository');
 
+const config = require('../config');
+
 /**
- * Central registry of repositories. Each defaults to its MongoDB implementation
- * in production; tests (or a local no-DB run) swap in the in-memory versions via
+ * Central registry of repositories. The active set is chosen by `DB_DRIVER`
+ * (`postgres` by default, or `mongo`); tests swap in the in-memory versions via
  * the setters. Every service layer reaches storage only through these getters,
  * so the whole backend is storage-agnostic.
  */
-const repos = {
-  transaction: new MongoTransactionRepository(),
-  user: new MongoUserRepository(),
-  booking: new MongoBookingRepository(),
-  provider: new MongoProviderRepository(),
-  review: new MongoReviewRepository(),
-  favourite: new MongoFavouriteRepository(),
-  notification: new MongoNotificationRepository(),
-  availability: new MongoAvailabilityRepository(),
-  refreshToken: new MongoRefreshTokenRepository(),
-  auditLog: new MongoAuditLogRepository(),
-  deviceToken: new MongoDeviceTokenRepository(),
-  notificationPreference: new MongoNotificationPreferenceRepository(),
-  savedAddress: new MongoSavedAddressRepository(),
-  conversation: new MongoConversationRepository(),
-  message: new MongoMessageRepository(),
-};
+function buildMongoRepositories() {
+  return {
+    transaction: new MongoTransactionRepository(),
+    user: new MongoUserRepository(),
+    booking: new MongoBookingRepository(),
+    provider: new MongoProviderRepository(),
+    review: new MongoReviewRepository(),
+    favourite: new MongoFavouriteRepository(),
+    notification: new MongoNotificationRepository(),
+    availability: new MongoAvailabilityRepository(),
+    refreshToken: new MongoRefreshTokenRepository(),
+    auditLog: new MongoAuditLogRepository(),
+    deviceToken: new MongoDeviceTokenRepository(),
+    notificationPreference: new MongoNotificationPreferenceRepository(),
+    savedAddress: new MongoSavedAddressRepository(),
+    conversation: new MongoConversationRepository(),
+    message: new MongoMessageRepository(),
+  };
+}
+
+function buildDefaultRepositories() {
+  if (config.db.driver === 'postgres') {
+    // eslint-disable-next-line global-require
+    return require('./postgres').buildPostgresRepositories();
+  }
+  return buildMongoRepositories();
+}
+
+const repos = buildDefaultRepositories();
 
 module.exports = {
   getTransactionRepository: () => repos.transaction,

@@ -1,7 +1,11 @@
 # Database schema
 
-MongoDB (Mongoose). All collections also have an in-memory repository for tests.
-Amounts are integers in **minor units** (thebe). Keys below omit `_id`/timestamps.
+PostgreSQL is the default driver (`DB_DRIVER=postgres`); MongoDB (Mongoose) is an
+alternate driver. Each Postgres table stores the full domain object in a **JSONB
+`doc`** column plus a few extracted, indexed columns for filtering — see
+[POSTGRES.md](./POSTGRES.md) and `src/db/schema.sql`. The field names below are the
+domain fields stored in `doc` (and exposed by the in-memory repository for tests).
+Amounts are integers in **minor units** (thebe). Keys below omit `id`/timestamps.
 
 ## users
 `id` (uuid, unique), `name`, `email` (unique), `passwordHash`, `role`

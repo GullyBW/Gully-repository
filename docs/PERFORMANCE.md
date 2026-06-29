@@ -9,7 +9,7 @@
 | DB indexing | Indexes on lookup fields (`reference`, `userId`, `email`, `status`, `providerId`, geo lat/lng, `createdAt`) across schemas |
 | Query shaping | `.lean()` reads, capped result sets, status-class counters instead of full scans for stats |
 | Payload size | JSON body limit 1mb; minor-unit integers (no float math) |
-| Connection mgmt | Graceful shutdown drains HTTP + Mongo + cache; keep-alive via proxy |
+| Connection mgmt | Graceful shutdown drains HTTP + DB (pg pool / Mongo) + cache; keep-alive via proxy |
 
 ## Frontend optimizations in place
 
@@ -53,8 +53,9 @@ npx lighthouse http://localhost:8100 --preset=desktop --view
 1. Run **Lighthouse** against the hosted PWA and record LCP/INP/CLS per release;
    add a CI Lighthouse-CI job if budgets are exceeded.
 2. Enable **Redis** in multi-instance deployments so cache + rate limiting are shared.
-3. Add **compound indexes** for the hottest provider-search filter combinations
-   once production query patterns are known; consider a Mongo `2dsphere` index
-   if geo search volume grows (current haversine ranking is in-process).
+3. Add **compound/GIN indexes** for the hottest provider-search filter combinations
+   once production query patterns are known (Postgres JSONB `doc` paths, or a Mongo
+   `2dsphere` index) if geo search volume grows — the current haversine ranking is
+   in-process.
 4. Serve images via a **CDN** and adopt cloud object storage (`STORAGE_DRIVER`).
 5. Monitor 5xx rate and p95 latency via `/metrics/prometheus` + Grafana.

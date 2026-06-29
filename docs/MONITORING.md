@@ -6,7 +6,7 @@
 | --- | --- |
 | `GET /health` | basic liveness (service name) |
 | `GET /health/live` | liveness probe (k8s `livenessProbe`) |
-| `GET /health/ready` | readiness — checks Mongo connection + cache backend; 503 when not ready |
+| `GET /health/ready` | readiness — checks DB connection (Postgres/Mongo) + cache backend; reports `driver`; 503 when not ready |
 | `GET /metrics` | in-process counters (requests, status classes, errors, memory, uptime) |
 
 ## Structured logging
@@ -35,7 +35,7 @@ installed (`npm i @sentry/node`). Swap the `report` body for another provider.
 | --- | --- |
 | API | 5xx rate (`/metrics`), p95 latency (logs `ms`) |
 | Auth | spikes in `login_failed` audit entries (`GET /api/admin/audit-logs?action=login_failed`) |
-| Database | Mongo connection state (`/health/ready`), slow queries |
+| Database | DB connection state (`/health/ready`), slow queries; `postgres-exporter` metrics |
 | Notifications | push delivery failures (PushService logs / FCM dashboard) |
 | Uploads | storage errors, disk/bucket usage |
 | Payments | failed vs succeeded counts (`GET /api/admin/payments?status=failed`) |

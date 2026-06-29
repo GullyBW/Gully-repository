@@ -10,9 +10,9 @@ scrape_configs:
       - targets: ['api:4000']
 
   # Optional exporters (add to docker-compose.monitoring.yml as needed):
-  - job_name: mongodb
+  - job_name: postgres
     static_configs:
-      - targets: ['mongodb-exporter:9216']
+      - targets: ['postgres-exporter:9187']
 
   - job_name: redis
     static_configs:

@@ -13,6 +13,7 @@ const { requestId } = require('./middleware/requestId');
 const config = require('./config');
 const cache = require('./services/cache.service');
 const metrics = require('./services/metrics.service');
+const postgres = require('./db/postgres');
 
 // Routes
 const authRoutes = require('./routes/auth.routes');
@@ -77,11 +78,24 @@ function createApp() {
   // Health / readiness probes.
   app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'tirelo-services-api' }));
   app.get('/health/live', (_req, res) => res.json({ status: 'live' }));
-  app.get('/health/ready', (_req, res) => {
-    const dbReady = config.env === 'test' || mongoose.connection.readyState === 1;
+  app.get('/health/ready', async (_req, res) => {
+    let dbReady;
+    if (config.env === 'test') {
+      dbReady = true;
+    } else if (config.db.driver === 'postgres') {
+      try {
+        await postgres.query('SELECT 1');
+        dbReady = true;
+      } catch (_err) {
+        dbReady = false;
+      }
+    } else {
+      dbReady = mongoose.connection.readyState === 1;
+    }
     res.status(dbReady ? 200 : 503).json({
       status: dbReady ? 'ready' : 'not-ready',
       db: dbReady,
+      driver: config.db.driver,
       cache: cache.backend,
     });
   });

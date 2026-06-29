@@ -6,7 +6,8 @@ _Tirelo Services — release engineering & launch readiness._
 
 | Check | Result |
 | --- | --- |
-| Jest unit/integration | ✅ **111 passed** (18 suites), in-memory repos, no MongoDB |
+| Jest unit/integration | ✅ **111 passed** (18 suites), in-memory repos, no database |
+| PostgreSQL integration (`test:pg`) | ✅ **6 passed** against a real Postgres (auth/refresh, discovery, booking+payment, JSONB chat, reviews, admin aggregations) |
 | Playwright **API** E2E | ✅ **6 passed** (customer, provider, admin, messaging, notifications) |
 | Playwright **Browser UI** E2E | ✅ **24 passed** (12 specs × desktop + mobile-viewport projects) |
 | PWA production build | ✅ succeeds; **service worker generated** |
@@ -68,7 +69,7 @@ These are environment constraints, each fully documented with steps:
 ## 5. Launch checklist (summary)
 
 1. ❗ Provision production secrets (JWT, gateways, FCM, Maps) — never defaults.
-2. Stand up MongoDB (replica set) + Redis; set env; verify `/health/ready`.
+2. Stand up PostgreSQL (or MongoDB with `DB_DRIVER=mongo`) + Redis; set env; verify `/health/ready`.
 3. TLS at proxy (HSTS); CORS allow-list if PWA origin ≠ API origin.
 4. Generate PWA/native icons + splash; add the two manifest PNGs.
 5. Run `native.yml` with signing secrets → upload AAB / iOS archive.

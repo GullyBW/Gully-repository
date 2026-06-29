@@ -12,6 +12,15 @@ const config = {
   publicBaseUrl: process.env.PUBLIC_BASE_URL || 'http://localhost:4000',
 
   db: {
+    // 'postgres' (default) or 'mongo'. The repository layer is storage-agnostic;
+    // this only selects which concrete repositories the registry builds.
+    driver: process.env.DB_DRIVER || 'postgres',
+    // PostgreSQL connection (default driver).
+    postgresUrl:
+      process.env.DATABASE_URL ||
+      process.env.POSTGRES_URL ||
+      'postgresql://postgres@localhost:5432/tirelo',
+    // MongoDB connection (when DB_DRIVER=mongo).
     uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/tirelo',
   },
 

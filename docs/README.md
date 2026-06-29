@@ -4,8 +4,9 @@
 | --- | --- |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System overview, layering, folder structure |
 | [API_REFERENCE.md](./API_REFERENCE.md) | Endpoint groups + operational endpoints |
-| [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | Collections & fields |
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker, env vars, Mongo/Redis, nginx/HTTPS, backups, PWA |
+| [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | Tables/collections & fields |
+| [POSTGRES.md](./POSTGRES.md) | PostgreSQL driver, JSONB storage, config, tests, migrations |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker, env vars, Postgres/Redis, nginx/HTTPS, backups, PWA |
 | [CI_CD.md](./CI_CD.md) | GitHub Actions workflows & secrets |
 | [FIREBASE.md](./FIREBASE.md) | Firebase project, FCM, Android/iOS, Google Maps keys, troubleshooting |
 | [NATIVE_BUILD.md](./NATIVE_BUILD.md) | Capacitor Android/iOS build & release |

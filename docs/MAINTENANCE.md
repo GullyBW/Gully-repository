@@ -35,7 +35,9 @@
   + rate limiting are shared across instances.
 - Socket.IO across instances needs a shared adapter (e.g. `@socket.io/redis-adapter`)
   — add when running more than one instance.
-- MongoDB → replica set; add read replicas / sharding as volume grows.
+- PostgreSQL (default) → managed HA instance; add read replicas / connection
+  pooling (PgBouncer) as volume grows. On Mongo (`DB_DRIVER=mongo`) → replica set;
+  add read replicas / sharding.
 
 ## Feature flags / config
 

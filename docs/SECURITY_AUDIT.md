@@ -16,7 +16,7 @@ Legend: ✅ implemented · ⚠️ implemented with a recommended hardening · �
 | Rate limiting | ⚠️ | `express-rate-limit` on `/api` (prod). **Recommend** stricter per-route limits on auth endpoints + account lockout after N failed logins. |
 | CSRF | ✅ | Stateless Bearer-token auth (no auth cookies) → CSRF not applicable. |
 | XSS | ✅ | API emits JSON only; Angular auto-escapes templates; Helmet CSP enabled. |
-| SQL/NoSQL injection | ✅ | Mongoose with typed schemas; no string-built queries; Joi validation; regex escaping in provider/user search. |
+| SQL/NoSQL injection | ✅ | PostgreSQL via **parameterized `pg` queries** ($1/$2 placeholders, no string interpolation); Mongoose typed schemas on the Mongo driver; Joi validation; regex escaping in provider/user search. |
 | Content Security Policy | ✅ | Helmet defaults; `crossOriginResourcePolicy: cross-origin` for uploaded images. |
 | CORS | ⚠️ | Production API adds no CORS (same-origin). **Recommend** an explicit origin allow-list if the PWA is hosted on a different origin than the API. |
 | Secrets management | ⚠️ | Env-driven; `.env` git-ignored. **❗ Override `JWT_SECRET`** and all default secrets in production (defaults are dev-only). |

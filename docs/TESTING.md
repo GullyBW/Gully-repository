@@ -6,10 +6,24 @@
 npm test
 ```
 
-108 tests run against **in-memory repositories** (no MongoDB). Coverage spans
+108 tests run against **in-memory repositories** (no database). Coverage spans
 auth/security, providers & discovery, bookings, reviews, favourites,
 availability, geo, notifications/FCM, uploads, admin, analytics, messaging
 (incl. reactions/report/block) and payments.
+
+## Backend integration against PostgreSQL (Jest)
+
+```bash
+npm run test:pg          # requires DATABASE_URL to a real Postgres
+```
+
+Runs the suite in `tests-pg/` against a live PostgreSQL (the default driver),
+exercising the JSONB document storage end-to-end: auth + refresh-token rotation,
+provider discovery (filter/sort/distance/text), booking → card payment webhook →
+settlement, messaging reactions + read receipts, review rating recompute,
+saved-address default-clearing, favourites and admin aggregations. It runs in CI
+via the `backend-pg` job with a Postgres service container. See
+[POSTGRES.md](./POSTGRES.md).
 
 ## End-to-end (Playwright)
 

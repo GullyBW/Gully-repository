@@ -27,10 +27,11 @@ services:
       - prometheus
 
   # Optional exporters
-  mongodb-exporter:
-    image: percona/mongodb_exporter:0.40
-    command: ['--mongodb.uri=mongodb://mongo:27017']
-    ports: ['9216:9216']
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: postgresql://postgres:postgres@postgres:5432/tirelo?sslmode=disable
+    ports: ['9187:9187']
 
   redis-exporter:
     image: oliver006/redis_exporter:latest

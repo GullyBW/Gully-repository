@@ -5,15 +5,26 @@ const mongoose = require('mongoose');
 const createApp = require('./app');
 const config = require('./config');
 const cache = require('./services/cache.service');
+const postgres = require('./db/postgres');
 const { attachSocket } = require('./realtime/socket');
 const crashReporter = require('./utils/crashReporter');
+
+async function connectDatabase() {
+  if (config.db.driver === 'postgres') {
+    await postgres.ensureSchema();
+    // eslint-disable-next-line no-console
+    console.log('[tirelo] connected to PostgreSQL (schema ready)');
+  } else {
+    await mongoose.connect(config.db.uri);
+    // eslint-disable-next-line no-console
+    console.log('[tirelo] connected to MongoDB');
+  }
+}
 
 async function start() {
   try {
     crashReporter.init();
-    await mongoose.connect(config.db.uri);
-    // eslint-disable-next-line no-console
-    console.log('[tirelo] connected to MongoDB');
+    await connectDatabase();
 
     const app = createApp();
     const server = http.createServer(app);
@@ -45,7 +56,8 @@ function setupGracefulShutdown(server) {
     // Stop accepting new connections, then drain dependencies.
     server.close(async () => {
       try {
-        await mongoose.connection.close();
+        if (config.db.driver === 'postgres') await postgres.close();
+        else await mongoose.connection.close();
         await cache.close();
       } catch (_err) {
         /* ignore */

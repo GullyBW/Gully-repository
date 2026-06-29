@@ -6,7 +6,7 @@ booking and in-app payment.
 
 This repository contains:
 
-- **`src/`** — the backend API (**Node.js + Express + MongoDB**): user authentication,
+- **`src/`** — the backend API (**Node.js + Express + PostgreSQL**): user authentication,
   bookings, and a payment system with a **pluggable payment-gateway architecture**.
 - **`mobile/`** — the cross-platform mobile app (**Ionic + Angular**) that customers and
   providers use to register, book services and pay.
@@ -59,14 +59,15 @@ exercisable without live accounts. Going live is a configuration change, not a c
 HTTP ─▶ routes ─▶ controller ─▶ PaymentService ─▶ Provider (gateway adapter)
                                       │
                                       ▼
-                          Transaction repository  (Mongo  | in-memory)
+                          Transaction repository  (Postgres | Mongo | in-memory)
 ```
 
 - **`src/providers`** — gateway adapters (one per payment method) behind a common interface.
 - **`src/services/payment.service.js`** — the single integration point: create, fetch,
   list, cancel, and process provider webhooks. Storage-agnostic.
-- **`src/repositories`** — pluggable persistence. `MongoTransactionRepository` in production;
-  `MemoryTransactionRepository` for tests / no-DB runs.
+- **`src/repositories`** — pluggable persistence selected by `DB_DRIVER`:
+  PostgreSQL (JSONB, default) or Mongo in production; `MemoryTransactionRepository`
+  for tests / no-DB runs. See [docs/POSTGRES.md](docs/POSTGRES.md).
 - **`src/domain/transaction.js`** — pure status-transition & serialization rules shared by
   every repository.
 - Amounts are stored in **minor units** (thebe) to avoid floating-point errors.
@@ -217,7 +218,7 @@ as an audit event on the transaction for reconciliation.
 ```bash
 npm install
 cp .env.example .env        # fill in provider credentials when going live
-npm run dev                 # needs a local MongoDB (see MONGODB_URI)
+npm run dev                 # needs a local PostgreSQL (see DATABASE_URL) — or DB_DRIVER=mongo
 ```
 
 ## Tests
@@ -226,7 +227,9 @@ npm run dev                 # needs a local MongoDB (see MONGODB_URI)
 npm test
 ```
 
-The suite runs against the in-memory repositories, so **no MongoDB is required**. 69 tests
+The suite runs against the in-memory repositories, so **no database is required**.
+For integration tests against a real PostgreSQL, run `npm run test:pg` (see
+[docs/POSTGRES.md](docs/POSTGRES.md)). 69 tests
 cover authentication, payments (all gateways, webhooks, idempotency), the booking
 workflow, provider profiles & discovery search (filters/sort/distance/pagination),
 reviews & ratings (verified-booking rule, rating recomputation, moderation), favourites,
@@ -349,21 +352,21 @@ detects them at runtime and degrades gracefully if absent.
 ## Deployment (Docker & CI)
 
 ```bash
-docker compose up --build      # api + mongo + redis
+docker compose up --build      # api + postgres + redis
 ```
 
 - `Dockerfile` — production image (prod deps only, non-root, container healthcheck).
-- `docker-compose.yml` — api + MongoDB + Redis with a persisted uploads volume.
+- `docker-compose.yml` — api + PostgreSQL + Redis with a persisted uploads volume.
 - `.github/workflows/ci.yml` — runs backend tests, builds the Ionic app, and
   builds the Docker image on every push/PR.
 
 Liveness `GET /health/live`, readiness `GET /health/ready` (checks DB + cache).
-`SIGTERM`/`SIGINT` trigger graceful shutdown (drain HTTP, close Mongo + cache).
+`SIGTERM`/`SIGINT` trigger graceful shutdown (drain HTTP, close DB + cache).
 
 ## Tests
 
 `npm test` runs **104 tests** across 17 suites against in-memory repositories —
-no MongoDB, Redis, FCM, Google Maps or cloud storage required.
+no database, Redis, FCM, Google Maps or cloud storage required.
 
 ---
 

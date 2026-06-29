@@ -3,9 +3,9 @@
 ## Backend (Docker)
 
 ```bash
-# Build & run the full stack (api + mongo + redis)
+# Build & run the full stack (api + postgres + redis)
 docker compose up --build -d
-# API on :4000, MongoDB on :27017, Redis on :6379
+# API on :4000, PostgreSQL on :5432, Redis on :6379
 ```
 
 For a standalone image:
@@ -22,7 +22,9 @@ See `.env.example` for the full list. Production minimum:
 | Var | Notes |
 | --- | --- |
 | `NODE_ENV` | `production` |
-| `MONGODB_URI` | managed MongoDB connection string |
+| `DB_DRIVER` | `postgres` (default) or `mongo` |
+| `DATABASE_URL` | managed PostgreSQL connection string (when `DB_DRIVER=postgres`) |
+| `MONGODB_URI` | managed MongoDB connection string (only when `DB_DRIVER=mongo`) |
 | `JWT_SECRET` | long random secret |
 | `PUBLIC_BASE_URL` | public URL (used in webhook/callback URLs) |
 | `REDIS_URL` | enables shared cache (optional) |
@@ -30,10 +32,13 @@ See `.env.example` for the full list. Production minimum:
 | `FCM_SERVICE_ACCOUNT` + `PUSH_TRANSPORT=fcm` | push (optional) |
 | Payment gateway keys | Orange Money / MyZaka / card (see `.env.example`) |
 
-### MongoDB
+### PostgreSQL (default)
 
-Use a managed replica set (Atlas, or self-hosted 3-node RS). Create a least-
-privilege app user. Enable daily automated snapshots (see Backups).
+Use a managed instance (RDS, Cloud SQL, Neon, Supabase, …) reachable via
+`DATABASE_URL`. Create a least-privilege app user/role. The base schema is
+created idempotently on boot (`ensureSchema`); see [POSTGRES.md](./POSTGRES.md).
+Enable daily automated snapshots (see Backups). To run on Mongo instead, set
+`DB_DRIVER=mongo` + `MONGODB_URI` (a managed replica set, e.g. Atlas).
 
 ### Redis
 
@@ -58,8 +63,8 @@ reporting.
 
 ### Backups & disaster recovery
 
-- DB: nightly `mongodump` (sample `deploy/backup.sh`) to object storage, plus
-  managed snapshots. Test restores quarterly.
+- DB: nightly `pg_dump` (sample `deploy/backup.sh`; `mongodump` when on Mongo) to
+  object storage, plus managed snapshots. Test restores quarterly.
 - Uploads: if using local storage, back up the `uploads` volume; prefer cloud
   object storage (`STORAGE_DRIVER=s3|gcs|r2|azure`) in production.
 - DR target: RPO ≤ 24h (snapshots) / RTO ≤ 1h (redeploy image + restore DB).

@@ -6,7 +6,7 @@ Ionic/Angular client (web PWA + native Android/iOS via Capacitor).
 ## High-level
 
 ```
-Ionic/Angular app ──HTTPS REST──▶  Express API ──▶ services ──▶ repositories ──▶ MongoDB
+Ionic/Angular app ──HTTPS REST──▶  Express API ──▶ services ──▶ repositories ──▶ PostgreSQL
         │                              │                              ▲
         └────────Socket.IO────────────┘                              │
                                        └── CacheService (Redis | memory)
@@ -18,10 +18,12 @@ External: Google Maps · FCM · payment gateways (Orange Money / MyZaka / card /
 - **routes/** — Express routers; input validation (Joi) + auth/role middleware.
 - **controllers/** — thin HTTP adapters (`{ success, data }` envelope).
 - **services/** — business logic; the only place that talks to repositories.
-- **repositories/** — storage behind getters/setters; Mongo in prod, in-memory
-  for tests (`setXRepository`). Every domain has both implementations.
+- **repositories/** — storage behind getters/setters; PostgreSQL (JSONB) by
+  default, Mongo as an alternate driver, in-memory for tests (`setXRepository`).
+  The active set is chosen by `DB_DRIVER` (see [POSTGRES.md](./POSTGRES.md)).
 - **domain/** — pure helpers (status machines, serialization), no I/O.
-- **models/** — Mongoose schemas.
+- **db/** — `postgres.js` (pg pool + `ensureSchema`) and `schema.sql`.
+- **models/** — Mongoose schemas (used only when `DB_DRIVER=mongo`).
 - **middleware/**, **utils/**, **realtime/** (Socket.IO gateway + bus).
 
 The **payment module** (`src/services/payment.service.js`, `src/providers/*`,
@@ -33,7 +35,8 @@ integrates with it through `PaymentService`.
 ```
 src/
   app.js                 Express app factory (middleware + route mounting)
-  server.js              Production entry (Mongo connect, Socket.IO, graceful shutdown)
+  server.js              Production entry (DB connect, Socket.IO, graceful shutdown)
+  db/                    postgres.js (pool + ensureSchema) + schema.sql
   test-server.js         In-memory API for E2E / smoke (no external deps)
   config/                Central env-driven config
   routes/ controllers/ services/ repositories/ domain/ models/
