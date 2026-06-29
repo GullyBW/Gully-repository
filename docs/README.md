@@ -4,6 +4,7 @@
 | --- | --- |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System overview, layering, folder structure |
 | [API_REFERENCE.md](./API_REFERENCE.md) | Endpoint groups + operational endpoints |
+| [API_POSTMAN.md](./API_POSTMAN.md) | OpenAPI spec + Postman collection/environment (import guide) |
 | [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | Tables/collections & fields |
 | [POSTGRES.md](./POSTGRES.md) | PostgreSQL driver, JSONB storage, config, tests, migrations |
 | [BENCHMARKING.md](./BENCHMARKING.md) | Benchmark suite: how to run, methodology, interpreting results |

@@ -1,0 +1,3000 @@
+{
+  "info": {
+    "_postman_id": "5777d38d-97f0-4491-ae92-bc804dac28e0",
+    "name": "Tirelo Services API (v1.0.0)",
+    "description": "REST API for Tirelo Services — a Botswana on-demand local-services marketplace (provider discovery, bookings, payments, reviews, messaging, notifications, analytics and admin).\n\n## Conventions\n- All responses are JSON enveloped as `{ \"success\": true, \"data\": ... }`; errors are `{ \"success\": false, \"error\": { \"message\": ..., \"details\"?: ... } }`.\n- Monetary amounts are integers in **minor units** (thebe; 100 thebe = 1 BWP).\n- Authentication is a Bearer JWT in the `Authorization` header: `Authorization: Bearer <accessToken>`.\n- Obtain tokens via `POST /api/auth/login` (or `/register`), refresh via `POST /api/auth/refresh`.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "description": "Registration, login, token refresh, sessions and password reset.",
+      "item": [
+        {
+          "name": "POST /api/auth/register  —  Register a customer or provider",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Register a customer or provider\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Kagiso Modise\",\n  \"email\": \"kagiso@example.bw\",\n  \"password\": \"Sup3rSecret!\",\n  \"role\": \"customer\",\n  \"phone\": \"+26771000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-capture auth tokens from the response into collection variables.",
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const d = (j && j.data) || {};",
+                  "  if (d.token) pm.collectionVariables.set('accessToken', d.token);",
+                  "  if (d.refreshToken) pm.collectionVariables.set('refreshToken', d.refreshToken);",
+                  "  if (d.token) console.log('Saved accessToken to collection variables');",
+                  "} catch (e) { /* non-JSON or error response */ }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/login  —  Log in and receive access + refresh tokens",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Log in and receive access + refresh tokens\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"kagiso@example.bw\",\n  \"password\": \"Sup3rSecret!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-capture auth tokens from the response into collection variables.",
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const d = (j && j.data) || {};",
+                  "  if (d.token) pm.collectionVariables.set('accessToken', d.token);",
+                  "  if (d.refreshToken) pm.collectionVariables.set('refreshToken', d.refreshToken);",
+                  "  if (d.token) console.log('Saved accessToken to collection variables');",
+                  "} catch (e) { /* non-JSON or error response */ }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/refresh  —  Rotate the refresh token for a new access token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Rotate the refresh token for a new access token\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-capture auth tokens from the response into collection variables.",
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const d = (j && j.data) || {};",
+                  "  if (d.token) pm.collectionVariables.set('accessToken', d.token);",
+                  "  if (d.refreshToken) pm.collectionVariables.set('refreshToken', d.refreshToken);",
+                  "  if (d.token) console.log('Saved accessToken to collection variables');",
+                  "} catch (e) { /* non-JSON or error response */ }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/logout  —  Revoke a refresh token (sign out)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Revoke a refresh token (sign out)\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/auth/verify-email  —  Verify an email address with a token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/verify-email",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "verify-email"
+              ]
+            },
+            "description": "Verify an email address with a token\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"email-verification-token\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/auth/forgot-password  —  Request a password-reset token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "description": "Request a password-reset token\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"kagiso@example.bw\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/auth/reset-password  —  Set a new password using a reset token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "Set a new password using a reset token\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"password-reset-token\",\n  \"password\": \"N3wSecret!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/auth/me  —  Get the authenticated user profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Get the authenticated user profile\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/auth/sessions  —  List active refresh-token sessions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/sessions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "sessions"
+              ]
+            },
+            "description": "List active refresh-token sessions\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /api/auth/sessions/:id  —  Revoke a specific session",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/sessions/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "sessions",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>"
+                }
+              ]
+            },
+            "description": "Revoke a specific session\n\nAuth: user"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "description": "Service category catalogue.",
+      "item": [
+        {
+          "name": "GET /api/categories  —  List service categories",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/categories",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "categories"
+              ]
+            },
+            "description": "List service categories\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Providers",
+      "description": "Provider discovery, profiles and self-management.",
+      "item": [
+        {
+          "name": "GET /api/providers  —  Search / discover providers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/providers?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "providers"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "plumb",
+                  "description": "Free-text search (business name, name, bio).",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "plumber",
+                  "description": "Service category key.",
+                  "disabled": true
+                },
+                {
+                  "key": "minRating",
+                  "value": "4",
+                  "description": "Minimum average rating.",
+                  "disabled": true
+                },
+                {
+                  "key": "maxPrice",
+                  "value": "50000",
+                  "description": "Max starting price (minor units).",
+                  "disabled": true
+                },
+                {
+                  "key": "availableOnly",
+                  "value": "true",
+                  "description": "Only providers currently available.",
+                  "disabled": true
+                },
+                {
+                  "key": "verifiedOnly",
+                  "value": "true",
+                  "description": "Only verified providers.",
+                  "disabled": true
+                },
+                {
+                  "key": "lat",
+                  "value": "-24.6282",
+                  "description": "Caller latitude (enables distance ranking).",
+                  "disabled": true
+                },
+                {
+                  "key": "lng",
+                  "value": "25.9231",
+                  "description": "Caller longitude.",
+                  "disabled": true
+                },
+                {
+                  "key": "maxDistanceKm",
+                  "value": "20",
+                  "description": "Filter to within this distance (requires lat/lng).",
+                  "disabled": true
+                },
+                {
+                  "key": "sort",
+                  "value": "highest_rated",
+                  "description": "nearest | highest_rated | lowest_price | most_jobs | fastest_response.",
+                  "disabled": true
+                },
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Page number (default 1).",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Items per page (max 50).",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Search / discover providers\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/providers/me  —  Get my provider profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/providers/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "me"
+              ]
+            },
+            "description": "Get my provider profile\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/providers  —  Create or update my provider profile",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/providers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "providers"
+              ]
+            },
+            "description": "Create or update my provider profile\n\nAuth: provider",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"businessName\": \"Kagiso's Plumbing\",\n  \"fullName\": \"Kagiso Modise\",\n  \"bio\": \"Licensed plumber serving Gaborone and surrounds.\",\n  \"category\": \"plumber\",\n  \"categories\": [\n    \"plumber\",\n    \"general_handyman\"\n  ],\n  \"yearsExperience\": 8,\n  \"languages\": [\n    \"Setswana\",\n    \"English\"\n  ],\n  \"startingPrice\": 25000,\n  \"operatingHours\": \"Mon-Sat 08:00-17:00\",\n  \"location\": {\n    \"lat\": -24.6282,\n    \"lng\": 25.9231,\n    \"address\": \"Gaborone\"\n  },\n  \"responseTimeMinutes\": 30\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/providers/availability  —  Set my live availability status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/providers/availability",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "availability"
+              ]
+            },
+            "description": "Set my live availability status\n\nAuth: provider",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"available\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/providers/:userId/verify  —  Verify / unverify a provider (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/providers/:userId/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                ":userId",
+                "verify"
+              ],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "<userId>"
+                }
+              ]
+            },
+            "description": "Verify / unverify a provider (admin)\n\nAuth: admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verified\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/providers/:userId  —  Get a provider public profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/providers/:userId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                ":userId"
+              ],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "<userId>"
+                }
+              ]
+            },
+            "description": "Get a provider public profile\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Reviews",
+      "description": "Provider reviews, editing, reporting and moderation.",
+      "item": [
+        {
+          "name": "GET /api/reviews/provider/:providerId  —  List published reviews for a provider",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reviews/provider/:providerId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                "provider",
+                ":providerId"
+              ],
+              "variable": [
+                {
+                  "key": "providerId",
+                  "value": "<providerId>"
+                }
+              ]
+            },
+            "description": "List published reviews for a provider\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/reviews/mine  —  List my submitted reviews",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reviews/mine",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                "mine"
+              ]
+            },
+            "description": "List my submitted reviews\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/reviews  —  Create a review (verified booking required)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reviews"
+              ]
+            },
+            "description": "Create a review (verified booking required)\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"prov-123\",\n  \"bookingReference\": \"BKG-ABC123\",\n  \"rating\": 5,\n  \"title\": \"Excellent work\",\n  \"comment\": \"Fast, tidy and professional.\",\n  \"photos\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/reviews/:id  —  Edit my review",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reviews/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>"
+                }
+              ]
+            },
+            "description": "Edit my review\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rating\": 4,\n  \"comment\": \"Updated: still great.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/reviews/:id/report  —  Report a review for moderation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reviews/:id/report",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                ":id",
+                "report"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>"
+                }
+              ]
+            },
+            "description": "Report a review for moderation\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Inappropriate content\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/reviews/:id/moderate  —  Moderate a reported review (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reviews/:id/moderate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reviews",
+                ":id",
+                "moderate"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>"
+                }
+              ]
+            },
+            "description": "Moderate a reported review (admin)\n\nAuth: admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"remove\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Favourites",
+      "description": "Saved/favourite providers.",
+      "item": [
+        {
+          "name": "GET /api/favourites  —  List my favourite providers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/favourites",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "favourites"
+              ]
+            },
+            "description": "List my favourite providers\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/favourites/:providerId  —  Add a provider to favourites",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/favourites/:providerId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "favourites",
+                ":providerId"
+              ],
+              "variable": [
+                {
+                  "key": "providerId",
+                  "value": "<providerId>"
+                }
+              ]
+            },
+            "description": "Add a provider to favourites\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /api/favourites/:providerId  —  Remove a provider from favourites",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/favourites/:providerId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "favourites",
+                ":providerId"
+              ],
+              "variable": [
+                {
+                  "key": "providerId",
+                  "value": "<providerId>"
+                }
+              ]
+            },
+            "description": "Remove a provider from favourites\n\nAuth: user"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Availability",
+      "description": "Provider working hours and bookable slots.",
+      "item": [
+        {
+          "name": "GET /api/availability/me  —  Get my availability settings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/availability/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "availability",
+                "me"
+              ]
+            },
+            "description": "Get my availability settings\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /api/availability  —  Upsert my availability settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/availability",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "availability"
+              ]
+            },
+            "description": "Upsert my availability settings\n\nAuth: provider",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workingDays\": [\n    1,\n    2,\n    3,\n    4,\n    5\n  ],\n  \"startTime\": \"08:00\",\n  \"endTime\": \"17:00\",\n  \"slotMinutes\": 60,\n  \"holidays\": [\n    \"2026-07-01\"\n  ],\n  \"emergencyAvailable\": false,\n  \"vacationMode\": false,\n  \"vacationUntil\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/availability/:providerId/slots  —  Get bookable slots for a date",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/availability/:providerId/slots?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "availability",
+                ":providerId",
+                "slots"
+              ],
+              "variable": [
+                {
+                  "key": "providerId",
+                  "value": "<providerId>"
+                }
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-07-05",
+                  "description": "ISO date (YYYY-MM-DD).",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Get bookable slots for a date\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/availability/:providerId  —  Get a provider availability",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/availability/:providerId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "availability",
+                ":providerId"
+              ],
+              "variable": [
+                {
+                  "key": "providerId",
+                  "value": "<providerId>"
+                }
+              ]
+            },
+            "description": "Get a provider availability\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "description": "In-app notifications, device tokens and preferences.",
+      "item": [
+        {
+          "name": "GET /api/notifications  —  List my notifications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications"
+              ],
+              "query": [
+                {
+                  "key": "unreadOnly",
+                  "value": "true",
+                  "description": "Only unread.",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List my notifications\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/notifications/unread-count  —  Count my unread notifications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/unread-count",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "unread-count"
+              ]
+            },
+            "description": "Count my unread notifications\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/notifications/read-all  —  Mark all my notifications read",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/read-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "read-all"
+              ]
+            },
+            "description": "Mark all my notifications read\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/notifications/devices  —  List my registered push devices",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/devices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "devices"
+              ]
+            },
+            "description": "List my registered push devices\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/notifications/devices  —  Register a push device token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/devices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "devices"
+              ]
+            },
+            "description": "Register a push device token\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"fcm-device-token-abc123\",\n  \"platform\": \"android\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /api/notifications/devices/:token  —  Unregister a push device token",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/devices/:token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "devices",
+                ":token"
+              ],
+              "variable": [
+                {
+                  "key": "token",
+                  "value": "<token>"
+                }
+              ]
+            },
+            "description": "Unregister a push device token\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/notifications/preferences  —  Get my notification preferences",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/preferences",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "preferences"
+              ]
+            },
+            "description": "Get my notification preferences\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /api/notifications/preferences  —  Update my notification preferences",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/preferences",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "preferences"
+              ]
+            },
+            "description": "Update my notification preferences\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bookings\": true,\n  \"payments\": true,\n  \"messages\": true,\n  \"marketing\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/notifications/:id/read  —  Mark one notification read",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/:id/read",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                ":id",
+                "read"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>"
+                }
+              ]
+            },
+            "description": "Mark one notification read\n\nAuth: user"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Geo",
+      "description": "Geocoding, distance and directions (Botswana sandbox unless a Maps key is set).",
+      "item": [
+        {
+          "name": "GET /api/geo/search  —  Search places by text",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/geo/search?q=Gaborone",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "geo",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "Gaborone",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Search places by text\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/geo/reverse  —  Reverse geocode a coordinate",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/geo/reverse?lat=-24.6282&lng=25.9231",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "geo",
+                "reverse"
+              ],
+              "query": [
+                {
+                  "key": "lat",
+                  "value": "-24.6282",
+                  "disabled": false
+                },
+                {
+                  "key": "lng",
+                  "value": "25.9231",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Reverse geocode a coordinate\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/geo/distance  —  Estimate travel distance between two points",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/geo/distance?fromLat=-24.6282&fromLng=25.9231&toLat=-24.65&toLng=25.91",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "geo",
+                "distance"
+              ],
+              "query": [
+                {
+                  "key": "fromLat",
+                  "value": "-24.6282",
+                  "disabled": false
+                },
+                {
+                  "key": "fromLng",
+                  "value": "25.9231",
+                  "disabled": false
+                },
+                {
+                  "key": "toLat",
+                  "value": "-24.65",
+                  "disabled": false
+                },
+                {
+                  "key": "toLng",
+                  "value": "25.91",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Estimate travel distance between two points\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/geo/directions  —  Get directions between two points",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/geo/directions?fromLat=-24.6282&fromLng=25.9231&toLat=-24.65&toLng=25.91",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "geo",
+                "directions"
+              ],
+              "query": [
+                {
+                  "key": "fromLat",
+                  "value": "-24.6282",
+                  "disabled": false
+                },
+                {
+                  "key": "fromLng",
+                  "value": "25.9231",
+                  "disabled": false
+                },
+                {
+                  "key": "toLat",
+                  "value": "-24.65",
+                  "disabled": false
+                },
+                {
+                  "key": "toLng",
+                  "value": "25.91",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Get directions between two points\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/geo/geocode  —  Geocode an address",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/geo/geocode",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "geo",
+                "geocode"
+              ]
+            },
+            "description": "Geocode an address\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"address\": \"Plot 123, Gaborone\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Saved Addresses",
+      "description": "Customer saved addresses.",
+      "item": [
+        {
+          "name": "GET /api/addresses  —  List my saved addresses",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/addresses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "addresses"
+              ]
+            },
+            "description": "List my saved addresses\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/addresses  —  Create a saved address",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/addresses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "addresses"
+              ]
+            },
+            "description": "Create a saved address\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Home\",\n  \"address\": \"Plot 123, Gaborone\",\n  \"lat\": -24.6282,\n  \"lng\": 25.9231,\n  \"isDefault\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /api/addresses/:id  —  Update a saved address",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/addresses/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "addresses",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>"
+                }
+              ]
+            },
+            "description": "Update a saved address\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Home\",\n  \"address\": \"Plot 123, Gaborone\",\n  \"lat\": -24.6282,\n  \"lng\": 25.9231,\n  \"isDefault\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /api/addresses/:id  —  Delete a saved address",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/addresses/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "addresses",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>"
+                }
+              ]
+            },
+            "description": "Delete a saved address\n\nAuth: user"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Uploads",
+      "description": "Secure image uploads (multipart/form-data, field \"image\").",
+      "item": [
+        {
+          "name": "POST /api/uploads/:kind  —  Upload an image",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/uploads/:kind",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "uploads",
+                ":kind"
+              ],
+              "variable": [
+                {
+                  "key": "kind",
+                  "value": "<kind>"
+                }
+              ]
+            },
+            "description": "Upload an image\n\nkind ∈ customer_photo | provider_photo | business_logo | portfolio | certificate | job_photo | review_photo | message_image\n\nAuth: user",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": [],
+                  "description": "The image file to upload."
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "description": "Booking-scoped real-time chat (also over Socket.IO).",
+      "item": [
+        {
+          "name": "GET /api/messages/conversations  —  List my conversations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/messages/conversations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "messages",
+                "conversations"
+              ]
+            },
+            "description": "List my conversations\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/messages/:bookingReference  —  Get message history for a booking",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/messages/:bookingReference",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "messages",
+                ":bookingReference"
+              ],
+              "variable": [
+                {
+                  "key": "bookingReference",
+                  "value": "<bookingReference>"
+                }
+              ]
+            },
+            "description": "Get message history for a booking\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/messages/:bookingReference  —  Send a message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/messages/:bookingReference",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "messages",
+                ":bookingReference"
+              ],
+              "variable": [
+                {
+                  "key": "bookingReference",
+                  "value": "<bookingReference>"
+                }
+              ]
+            },
+            "description": "Send a message\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"text\",\n  \"text\": \"Hi, are you available tomorrow morning?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/messages/:bookingReference/read  —  Mark the conversation read",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/messages/:bookingReference/read",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "messages",
+                ":bookingReference",
+                "read"
+              ],
+              "variable": [
+                {
+                  "key": "bookingReference",
+                  "value": "<bookingReference>"
+                }
+              ]
+            },
+            "description": "Mark the conversation read\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/messages/:bookingReference/react  —  React to a message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/messages/:bookingReference/react",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "messages",
+                ":bookingReference",
+                "react"
+              ],
+              "variable": [
+                {
+                  "key": "bookingReference",
+                  "value": "<bookingReference>"
+                }
+              ]
+            },
+            "description": "React to a message\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messageId\": \"msg-123\",\n  \"emoji\": \"👍\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/messages/:bookingReference/report  —  Report a conversation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/messages/:bookingReference/report",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "messages",
+                ":bookingReference",
+                "report"
+              ],
+              "variable": [
+                {
+                  "key": "bookingReference",
+                  "value": "<bookingReference>"
+                }
+              ]
+            },
+            "description": "Report a conversation\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Inappropriate content\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Blocks",
+      "description": "Block / unblock other users.",
+      "item": [
+        {
+          "name": "GET /api/blocks  —  List users I have blocked",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/blocks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "blocks"
+              ]
+            },
+            "description": "List users I have blocked\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/blocks/:userId  —  Block a user",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/blocks/:userId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "blocks",
+                ":userId"
+              ],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "<userId>"
+                }
+              ]
+            },
+            "description": "Block a user\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /api/blocks/:userId  —  Unblock a user",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/blocks/:userId",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "blocks",
+                ":userId"
+              ],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "<userId>"
+                }
+              ]
+            },
+            "description": "Unblock a user\n\nAuth: user"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Analytics",
+      "description": "Provider, customer and admin analytics + exports.",
+      "item": [
+        {
+          "name": "GET /api/analytics/provider  —  Provider analytics dashboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/provider",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "provider"
+              ]
+            },
+            "description": "Provider analytics dashboard\n\nAuth: provider"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/analytics/customer  —  Customer analytics dashboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/customer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "customer"
+              ]
+            },
+            "description": "Customer analytics dashboard\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/analytics/admin  —  Admin analytics dashboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/admin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "admin"
+              ]
+            },
+            "description": "Admin analytics dashboard\n\nAuth: admin"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/analytics/export  —  Export a report (CSV or JSON)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/analytics/export?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "report",
+                  "value": "bookings",
+                  "description": "Report name to export.",
+                  "disabled": true
+                },
+                {
+                  "key": "format",
+                  "value": "csv",
+                  "description": "csv (default) or json.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Export a report (CSV or JSON)\n\nAuth: user"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Bookings",
+      "description": "Create and manage bookings; initiate payment for a booking.",
+      "item": [
+        {
+          "name": "POST /api/bookings  —  Create a booking",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings"
+              ]
+            },
+            "description": "Create a booking\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"prov-123\",\n  \"serviceType\": \"plumber\",\n  \"description\": \"Leaking kitchen tap needs repair.\",\n  \"scheduledFor\": \"2026-07-05T09:00:00.000Z\",\n  \"amount\": 35000,\n  \"currency\": \"BWP\",\n  \"location\": {\n    \"address\": \"Plot 123, Gaborone\",\n    \"lat\": -24.6282,\n    \"lng\": 25.9231\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/bookings  —  List my bookings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List my bookings\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/bookings/:reference  —  Get a booking",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/:reference",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings",
+                ":reference"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Get a booking\n\nAuth: user"
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/bookings/:reference/status  —  Update booking status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/:reference/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings",
+                ":reference",
+                "status"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Update booking status\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"accepted\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/bookings/:reference/pay  —  Initiate payment for a booking",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/:reference/pay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings",
+                ":reference",
+                "pay"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Initiate payment for a booking\n\nAuth: user",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"orange_money\",\n  \"payerMsisdn\": \"+26771000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/bookings/:reference/payment  —  Get a booking payment status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/:reference/payment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings",
+                ":reference",
+                "payment"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Get a booking payment status\n\nAuth: user"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Payments",
+      "description": "Payment creation, lookup, cancellation and gateway webhooks. These routes are unauthenticated by design (the gateway calls the webhook; the app initiates payments via the Bookings endpoints).",
+      "item": [
+        {
+          "name": "GET /api/payments/methods  —  List supported payment methods",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments/methods",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "payments",
+                "methods"
+              ]
+            },
+            "description": "List supported payment methods\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/payments  —  List payments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "payments"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "succeeded",
+                  "disabled": true
+                },
+                {
+                  "key": "method",
+                  "value": "orange_money",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List payments\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/payments  —  Create a payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "payments"
+              ]
+            },
+            "description": "Create a payment\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"cust-123\",\n  \"bookingId\": \"BKG-ABC123\",\n  \"providerId\": \"prov-123\",\n  \"amount\": 35000,\n  \"currency\": \"BWP\",\n  \"method\": \"orange_money\",\n  \"payerMsisdn\": \"+26771000000\",\n  \"description\": \"Plumbing job\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/payments/:reference  —  Get a payment by reference",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments/:reference",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "payments",
+                ":reference"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Get a payment by reference\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/payments/:reference/cancel  —  Cancel a pending payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments/:reference/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "payments",
+                ":reference",
+                "cancel"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Cancel a pending payment\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Customer abandoned checkout\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/payments/webhook/:method  —  Gateway webhook (Orange Money / MyZaka / card / bank)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-signature",
+                "value": "sha256-hmac-of-raw-body",
+                "description": "Gateway HMAC signature."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments/webhook/:method",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "payments",
+                "webhook",
+                ":method"
+              ],
+              "variable": [
+                {
+                  "key": "method",
+                  "value": "<method>"
+                }
+              ]
+            },
+            "description": "Gateway webhook (Orange Money / MyZaka / card / bank)\n\nSignature is read from x-signature / x-orange-signature / x-myzaka-signature headers. method ∈ orange_money | myzaka | card | bank_transfer.\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reference\": \"TRL-XXXX\",\n  \"status\": \"PAID\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "Administrative dashboard, moderation, payments and audit. Requires an admin token.",
+      "item": [
+        {
+          "name": "GET /api/admin/dashboard  —  Admin dashboard summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/dashboard",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "dashboard"
+              ]
+            },
+            "description": "Admin dashboard summary\n\nAuth: admin"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/admin/users  —  Search users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/users?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "kagiso",
+                  "disabled": true
+                },
+                {
+                  "key": "role",
+                  "value": "provider",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Search users\n\nAuth: admin"
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/admin/providers/:userId/verify  —  Verify / unverify a provider",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/providers/:userId/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "providers",
+                ":userId",
+                "verify"
+              ],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "<userId>"
+                }
+              ]
+            },
+            "description": "Verify / unverify a provider\n\nAuth: admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verified\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/admin/users/:userId/suspend  —  Suspend / unsuspend a user",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/users/:userId/suspend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "users",
+                ":userId",
+                "suspend"
+              ],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "<userId>"
+                }
+              ]
+            },
+            "description": "Suspend / unsuspend a user\n\nAuth: admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"suspended\": true,\n  \"reason\": \"Policy violation\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/admin/bookings  —  List bookings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/bookings?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "bookings"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List bookings\n\nAuth: admin"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/admin/bookings/:reference/cancel  —  Cancel a booking (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/bookings/:reference/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "bookings",
+                ":reference",
+                "cancel"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Cancel a booking (admin)\n\nAuth: admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Fraudulent booking\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/admin/payments/:reference/refund  —  Record a refund",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/payments/:reference/refund",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "payments",
+                ":reference",
+                "refund"
+              ],
+              "variable": [
+                {
+                  "key": "reference",
+                  "value": "<reference>"
+                }
+              ]
+            },
+            "description": "Record a refund\n\nAuth: admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Service not delivered\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/admin/payments  —  List payments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/payments?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "payments"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "succeeded",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List payments\n\nAuth: admin"
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/admin/broadcast  —  Broadcast a notification",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/broadcast",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "broadcast"
+              ]
+            },
+            "description": "Broadcast a notification\n\nAuth: admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"customer\",\n  \"title\": \"Scheduled maintenance\",\n  \"body\": \"The app will be briefly unavailable tonight.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/admin/reviews  —  List reviews (moderation queue)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/reviews?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "reviews"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "reported",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List reviews (moderation queue)\n\nAuth: admin"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/admin/audit-logs  —  List audit-log entries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/audit-logs?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "audit-logs"
+              ],
+              "query": [
+                {
+                  "key": "action",
+                  "value": "login",
+                  "disabled": true
+                },
+                {
+                  "key": "actorId",
+                  "value": "cust-123",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List audit-log entries\n\nAuth: admin"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Operational",
+      "description": "Health, readiness and metrics (no /api prefix).",
+      "item": [
+        {
+          "name": "GET /health  —  Liveness (service name)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Liveness (service name)\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /health/live  —  Liveness probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/live",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "live"
+              ]
+            },
+            "description": "Liveness probe\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /health/ready  —  Readiness probe (DB + cache + driver)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "Readiness probe (DB + cache + driver)\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /metrics  —  In-process metrics (JSON)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            },
+            "description": "In-process metrics (JSON)\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /metrics/prometheus  —  Prometheus exposition metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics/prometheus",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "metrics",
+                "prometheus"
+              ]
+            },
+            "description": "Prometheus exposition metrics\n\nAuth: public",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

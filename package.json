@@ -12,6 +12,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --config=playwright.ui.config.ts",
     "test:e2e:server": "node src/test-server.js",
+    "docs:api": "node scripts/generate-api-docs.js",
     "bench": "node benchmark/scripts/run-all.js",
     "bench:small": "node benchmark/scripts/run-all.js small",
     "bench:seed": "node benchmark/scripts/seed.js",
