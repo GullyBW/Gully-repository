@@ -32,6 +32,7 @@ const adminRoutes = require('./routes/admin.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
 const messageRoutes = require('./routes/message.routes');
 const blockRoutes = require('./routes/block.routes');
+const tradingRoutes = require('./routes/trading.routes');
 
 /**
  * Builds the Express app. Exported separately from the server so tests can
@@ -127,6 +128,7 @@ function createApp() {
   app.use('/api/admin', adminRoutes);
   app.use('/api/bookings', bookingRoutes);
   app.use('/api/payments', paymentRoutes);
+  app.use('/api/trading', tradingRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

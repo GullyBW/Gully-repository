@@ -27,11 +27,31 @@ Built to match the project plan's stack.
 | Notifications | `src/services/notification.service` | In-app events for both parties (push-ready)                 |
 | Bookings      | `src/services/booking.service`    | Discovery-driven booking workflow + payment kickoff          |
 | Payments      | `src/services/payment.service`    | Pluggable gateways, webhooks, settlement (**unchanged**)     |
+| Trading       | `src/services/trading.service`    | Day-trading engine: IBKR data + news → signals → risk → paper/live execution |
 
 Every service is storage-agnostic (repository pattern) and shares the same
 `{ success, data }` response envelope. The payment module was not modified — the
 marketplace was built around it, and bookings hand it a completed booking exactly
 as before.
+
+### Day-trading subsystem (`src/trading/`, `/api/trading`)
+
+A self-contained intraday algorithmic-trading engine. It pulls real-time market
+data, news and fundamentals through **Interactive Brokers** (Client Portal Web
+API), fuses a full **technical-analysis** library with a transparent **news
+sentiment** engine, blends four **strategies** (momentum, mean-reversion,
+breakout, news) into one explainable signal, sizes every trade through an
+institutional **risk manager** (volatility target + fractional Kelly, ATR stops,
+exposure/position limits, daily-loss kill switch), and executes on a **paper
+broker by default** — live IBKR order routing is hard-gated behind two
+independent switches. Ships with an offline **market simulator** and an
+event-driven **backtester** so the whole stack runs and is tested without any
+external feed. See **[docs/TRADING.md](docs/TRADING.md)** for the full design,
+the IBKR setup guide, the safety model and the API reference.
+
+> ⚠️ Research / paper-trading software — **not financial advice**. Trading
+> carries risk of loss; understand the code and risk limits before enabling
+> live routing.
 
 ## Supported payment methods / gateways
 

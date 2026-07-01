@@ -110,6 +110,62 @@ const config = {
       returnUrl: process.env.CARD_GATEWAY_RETURN_URL || 'http://localhost:4000/payment/complete',
     },
   },
+
+  // ---- Day-trading subsystem (see docs/TRADING.md) ----
+  // Everything defaults to a safe, fully-offline paper-trading sandbox so the
+  // engine boots and is testable without an Interactive Brokers connection.
+  trading: {
+    // 'simulated' (default, offline) or 'ibkr' (Interactive Brokers Client
+    // Portal Web API). The market-data layer is provider-agnostic; this only
+    // selects which adapter the registry builds.
+    dataProvider: process.env.TRADING_DATA_PROVIDER || 'simulated',
+
+    // 'paper' (default) simulates fills locally. 'live' is required *in
+    // addition to* liveOrdersEnabled below before a real order can ever leave
+    // this process — two independent switches, both off by default.
+    runMode: process.env.TRADING_RUN_MODE || 'paper',
+    liveOrdersEnabled: process.env.TRADING_LIVE_ORDERS_ENABLED === 'true',
+
+    baseCurrency: process.env.TRADING_BASE_CURRENCY || 'USD',
+    // Symbols the engine watches when none are supplied explicitly.
+    watchlist: (process.env.TRADING_WATCHLIST || 'AAPL,MSFT,NVDA,TSLA,AMZN,SPY')
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean),
+
+    // Interactive Brokers Client Portal Gateway. Run the gateway locally and
+    // authenticate once; the adapter then talks to it over HTTPS.
+    ibkr: {
+      baseUrl: process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api',
+      accountId: process.env.IBKR_ACCOUNT_ID || '',
+      // The self-signed gateway cert means TLS verification is usually off for
+      // localhost; leave true when pointing at a trusted proxy.
+      rejectUnauthorized: process.env.IBKR_TLS_REJECT_UNAUTHORIZED === 'true',
+      timeoutMs: parseInt(process.env.IBKR_TIMEOUT_MS, 10) || 8000,
+    },
+
+    // Risk limits applied to every sizing decision (see risk/riskManager.js).
+    risk: {
+      startingEquity: parseFloat(process.env.TRADING_STARTING_EQUITY) || 100000,
+      riskPerTradePct: parseFloat(process.env.TRADING_RISK_PER_TRADE_PCT) || 0.01, // 1% of equity
+      maxPositionPct: parseFloat(process.env.TRADING_MAX_POSITION_PCT) || 0.2, // 20% notional cap
+      maxPortfolioExposurePct: parseFloat(process.env.TRADING_MAX_EXPOSURE_PCT) || 1.0,
+      maxOpenPositions: parseInt(process.env.TRADING_MAX_OPEN_POSITIONS, 10) || 8,
+      maxDailyLossPct: parseFloat(process.env.TRADING_MAX_DAILY_LOSS_PCT) || 0.03, // 3% kill-switch
+      targetAnnualVolPct: parseFloat(process.env.TRADING_TARGET_VOL_PCT) || 0.15,
+      kellyFraction: parseFloat(process.env.TRADING_KELLY_FRACTION) || 0.5, // half-Kelly
+      atrStopMultiple: parseFloat(process.env.TRADING_ATR_STOP_MULT) || 2.0,
+      atrTargetMultiple: parseFloat(process.env.TRADING_ATR_TARGET_MULT) || 3.0,
+    },
+
+    // Relative weights the ensemble gives each strategy's vote.
+    strategyWeights: {
+      momentum: parseFloat(process.env.TRADING_W_MOMENTUM) || 1.0,
+      mean_reversion: parseFloat(process.env.TRADING_W_MEANREV) || 0.8,
+      breakout: parseFloat(process.env.TRADING_W_BREAKOUT) || 1.0,
+      news_sentiment: parseFloat(process.env.TRADING_W_NEWS) || 1.2,
+    },
+  },
 };
 
 module.exports = config;

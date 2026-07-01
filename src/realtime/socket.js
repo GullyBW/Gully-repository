@@ -59,11 +59,24 @@ function attachSocket(httpServer, opts = {}) {
         /* ignore */
       }
     });
+
+    // Live trading feed: any authenticated client can subscribe to signals,
+    // fills and cycle summaries broadcast by the trading engine.
+    socket.on('trading:subscribe', (ack) => {
+      socket.join('trading');
+      if (typeof ack === 'function') ack({ ok: true });
+    });
+    socket.on('trading:unsubscribe', () => socket.leave('trading'));
   });
 
-  // Relay service-emitted events into the right conversation room.
-  bus.setEmitter((event, conversationId, payload) => {
-    io.to(`conv:${conversationId}`).emit(event, payload);
+  // Relay service-emitted events. Trading events fan out to the shared
+  // 'trading' room; everything else targets a per-conversation room.
+  bus.setEmitter((event, room, payload) => {
+    if (typeof event === 'string' && event.startsWith('trading:')) {
+      io.to(room || 'trading').emit(event, payload);
+    } else {
+      io.to(`conv:${room}`).emit(event, payload);
+    }
   });
 
   return io;
