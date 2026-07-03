@@ -75,3 +75,48 @@ GET  /v1/admin/notifications/stats
 Guarantees: ledger routes are read-only (no write endpoint exists); audit records
 are immutable (no mutation endpoint exists); the restricted heritage view returns
 metadata only, is audited per access, and has no export counterpart.
+
+## Phase 2 — client surface (Flutter / PWA)
+
+```
+GET  /v1/flags                                    resolved flag/config snapshot for the caller
+GET  /v1/wallet/accounts | /v1/wallet/history | /v1/wallet/payouts
+GET  /v1/payments/intents                         my mobile-money activity
+GET  /v1/kgetsi/campaigns                         public browse (never drafts)
+GET  /v1/loeto/experiences                        listings with ratings
+GET  /v1/loeto/bookings                           my booking history
+POST /v1/loeto/bookings/{id}/review               settled bookings only, one per booking
+GET  /v1/loeto/bookings/{id}/ics                  offline itinerary (text/calendar)
+GET  /v1/puo/courses | /v1/puo/progress
+POST /v1/puo/lessons/{id}/complete                idempotent; respects restricted gates
+GET  /v1/lelapa/circles | POST /v1/lelapa/circles
+GET  /v1/lelapa/circles/{id}/tree | …/events      members only
+POST /v1/lelapa/circles/{id}/invitations | …/relations | …/events
+POST /v1/lelapa/invitations/{id}/accept           msisdn-bound acceptance
+GET  /app | /app/manifest.json | /app/sw.js       the PWA shell
+```
+
+## Phase 2 — administration additions
+
+```
+Pilots:     GET/POST /v1/admin/pilots · POST …/{id}/stage|villages|wards|admins
+            GET …/{id}/health | …/{id}/report
+Flags:      GET /v1/admin/flags · POST /v1/admin/flags/{key} (define/set) · …/unset
+Analytics:  GET /v1/admin/analytics/dashboard      (aggregates only, PII-free)
+Security:   GET /v1/admin/security/events | report | device-risk/{userRef}
+            POST …/holds/{userRef}/release · POST …/rotation/run
+Ops:        GET/POST /v1/admin/ops/incidents (+/ack /resolve /notes)
+            POST /v1/admin/ops/maintenance · GET …/config | health-report | capacity
+            GET/POST /v1/admin/ops/backups · POST …/backups/{id}/verify
+Integr.:    GET /v1/admin/integrations · POST …/gov-id/verify · GET …/gis/geocode
+```
+
+Behavioural changes (backward compatible):
+- `POST /v1/identity/otp/verify` accepts an optional `geo {lat,lng}` used only
+  for impossible-travel detection; failures feed OTP-bruteforce heuristics.
+- Payouts consult real device-registration age (SIM-swap heuristic) and are
+  denied while a security hold is active on the account.
+- During maintenance mode, member mutations return `503 MAINTENANCE`
+  (retryable: offline clients keep queueing); reads/webhooks/admin unaffected.
+- Repeated 4xx abuse (40+ in 5 min per identity/IP) yields `429 RATE_LIMITED`
+  for 15 minutes.

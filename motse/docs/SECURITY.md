@@ -39,6 +39,35 @@
 | A09 Logging/monitoring failures | Structured logs with trace ids; authz-denial metrics; Sev-1 variance events page admins; RED metrics per route. |
 | A10 SSRF | The core makes no outbound requests from user input; provider adapters call fixed operator endpoints configured by env. |
 
+## Phase 2 — security assurance layer (WS6)
+
+Detection on top of the Phase-1 enforcement, all surfaced in the portal's
+Security/Ops tabs and `GET /v1/admin/security/report`:
+
+- **Security event stream** — typed events (`new_device`,
+  `otp_bruteforce_suspected`, `account_takeover_suspected`,
+  `impossible_travel`, `api_abuse`) with severities; high severity auto-opens
+  a Sev-2 incident.
+- **Account-takeover detection** — ≥5 OTP failures followed by a success from
+  a never-seen device places a 24-hour payout hold (releasable by an admin,
+  audited both ways).
+- **Impossible travel** — consecutive logins whose implied speed exceeds
+  900 km/h (and >100 km apart) raise high severity + hold. Login geo is
+  optional and used for nothing else.
+- **SIM-swap monitoring** — device registration ages are recorded at login;
+  payouts from devices younger than 24h open fraud reviews, and payouts to an
+  msisdn different from the account's registered number are flagged for review.
+- **API abuse detection** — 40+ 4xx responses in 5 minutes per identity/IP
+  blocks that key for 15 minutes (429), with a security event.
+- **Device risk scoring** — root/jailbreak signals, registration age, active
+  holds and account-sharing breadth blend into a 0–100 score with reasons
+  (`GET /v1/admin/security/device-risk/{userRef}?device_id=…`).
+- **Credential rotation automation** — per-secret interval policies (90 days
+  for webhook secrets) executed by the weekly job or on demand; the previous
+  version stays verify-valid for exactly one rotation.
+- **Continuous dependency scanning** — `npm run motse:security-scan` in CI on
+  every push; high/critical advisories fail the build (§13.1 supply chain).
+
 ## Key rotation runbook
 
 1. Portal → Security → Rotate (or `POST /v1/admin/security/secrets/:name/rotate`).

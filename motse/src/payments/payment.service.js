@@ -108,7 +108,7 @@ class PaymentService {
     const existing = this.intents.findOne((i) => i.idempotency_key === idempotencyKey);
     if (existing) return existing;
     const provider = this.provider(providerName);
-    this.fraud.assess({ kind: 'payout', actorRef, amountMinor, subjectRef: sourceAccountId, deviceAgeMs });
+    this.fraud.assess({ kind: 'payout', actorRef, amountMinor, subjectRef: sourceAccountId, deviceAgeMs, msisdn });
     // Money leaves the member account NOW, into clearing — the ledger
     // is the source of truth for "in flight" (§9.1).
     const ledgerPayout = this.ledger.requestPayout({

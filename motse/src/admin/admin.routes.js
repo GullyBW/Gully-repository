@@ -407,6 +407,112 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.get('/notifications/stats', run(() => platform.notifications.deliveryStats()));
   router.post('/search/reindex', run(() => platform.search.reindex()));
 
+  // ── Phase 2: pilot management & feature flags (WS7) ────────────────
+  router.get('/pilots', run(() => platform.pilots.list()));
+  router.post('/pilots', run((req) =>
+    platform.pilots.create(
+      { name: req.body.name, district: req.body.district, flagProfile: req.body.flag_profile },
+      req.actor
+    )
+  ));
+  router.post('/pilots/:id/stage', run((req) =>
+    platform.pilots.advanceStage(req.params.id, req.body.stage, req.actor)
+  ));
+  router.post('/pilots/:id/villages', run((req) =>
+    platform.pilots.registerVillage(
+      req.params.id,
+      { name: req.body.name, wardName: req.body.ward_name, headmanMsisdn: req.body.headman_msisdn },
+      req.actor
+    )
+  ));
+  router.post('/pilots/:id/wards', run((req) =>
+    platform.pilots.enrollWard(req.params.id, req.body.ward_ref, req.actor)
+  ));
+  router.post('/pilots/:id/admins', run((req) =>
+    platform.pilots.assignAdmin(req.params.id, req.body.user_ref, req.actor)
+  ));
+  router.get('/pilots/:id/health', run((req) => platform.pilots.health(req.params.id)));
+  router.get('/pilots/:id/report', run((req) => platform.pilots.report(req.params.id)));
+  router.get('/flags', run(() => platform.flags.list()));
+  router.post('/flags/:key', run((req) => {
+    if (req.body.define) {
+      platform.flags.define(req.params.key, {
+        description: req.body.description,
+        defaultValue: req.body.default_value,
+        kind: req.body.kind,
+      });
+    }
+    if (req.body.scope !== undefined) {
+      return platform.flags.set(req.params.key, req.body.scope, req.body.value, req.actor);
+    }
+    return platform.flags.definition(req.params.key);
+  }));
+  router.post('/flags/:key/unset', run((req) => ({
+    removed: platform.flags.unset(req.params.key, req.body.scope, req.actor),
+  })));
+
+  // ── Phase 2: analytics (WS5 — aggregates only, no PII) ─────────────
+  router.get('/analytics/dashboard', run(() => platform.analytics.dashboard()));
+
+  // ── Phase 2: security assurance (WS6) ──────────────────────────────
+  router.get('/security/events', run((req) =>
+    platform.assurance.listEvents({ severity: req.query.severity, type: req.query.type })
+  ));
+  router.get('/security/report', run(() => platform.assurance.report()));
+  router.post('/security/holds/:userRef/release', run((req) => ({
+    released: platform.assurance.releaseHold(req.params.userRef, req.actor),
+  })));
+  router.get('/security/device-risk/:userRef', run((req) =>
+    platform.assurance.deviceRisk(req.params.userRef, req.query.device_id)
+  ));
+  router.post('/security/rotation/run', run((req) => ({
+    rotated: platform.assurance.runRotation(req.actor),
+  })));
+
+  // ── Phase 2: operations (WS10) ─────────────────────────────────────
+  router.get('/ops/incidents', run((req) => platform.ops.listIncidents({ state: req.query.state })));
+  router.post('/ops/incidents', run((req) => platform.ops.openIncident(req.body, req.actor)));
+  router.post('/ops/incidents/:id/ack', run((req) =>
+    platform.ops.acknowledgeIncident(req.params.id, req.actor, req.body.note)
+  ));
+  router.post('/ops/incidents/:id/resolve', run((req) =>
+    platform.ops.resolveIncident(req.params.id, req.actor, req.body.resolution)
+  ));
+  router.post('/ops/incidents/:id/notes', run((req) =>
+    platform.ops.addTimelineNote(req.params.id, req.actor, req.body.note)
+  ));
+  router.post('/ops/maintenance', run((req) =>
+    platform.ops.setMaintenance(req.body.on, req.body.message, req.actor)
+  ));
+  router.get('/ops/config', run(() => platform.ops.configView()));
+  router.get('/ops/health-report', run(() => platform.ops.healthReport()));
+  router.get('/ops/capacity', run(() => platform.ops.capacityReport()));
+  router.post('/ops/backups', run((req) => {
+    const summary = platform.backups.snapshot(platform, { note: req.body.note });
+    platform.audit.append(req.actor, 'ops.backup_created', `backup:${summary.id}`, null, {
+      manifest_checksum: summary.manifest_checksum,
+    });
+    return summary;
+  }));
+  router.get('/ops/backups', run(() => platform.backups.list()));
+  router.post('/ops/backups/:id/verify', run((req) => platform.backups.verify(req.params.id)));
+
+  // ── Phase 2: integrations (WS9) ────────────────────────────────────
+  router.get('/integrations', run(() => platform.integrations.describe()));
+  router.post('/integrations/gov-id/verify', run((req) => {
+    const result = platform.integrations.get('gov_identity').verifyNationalId({
+      omang: req.body.omang,
+      fullName: req.body.full_name,
+      dob: req.body.dob,
+    });
+    platform.audit.append(req.actor, 'integrations.gov_id_checked', `user:${req.body.user_ref || 'unknown'}`,
+      null, { verified: result.verified });
+    return result;
+  }));
+  router.get('/integrations/gis/geocode', run((req) =>
+    platform.integrations.get('gis').geocode(req.query.name)
+  ));
+
   return router;
 }
 

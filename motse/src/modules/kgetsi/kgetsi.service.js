@@ -249,6 +249,14 @@ class KgetsiService {
     });
   }
 
+  /** Public browse: campaigns accepting or reporting — never drafts. */
+  listCampaigns({ state } = {}) {
+    return this.campaigns.find((c) => {
+      if (state) return c.state === state;
+      return ['live', 'funded', 'completing', 'closed'].includes(c.state);
+    });
+  }
+
   // ── Public transparency (§7.3) ─────────────────────────────────────
 
   /**

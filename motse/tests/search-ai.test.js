@@ -162,12 +162,20 @@ describe('AI foundation (extension points only)', () => {
 
     const { app } = createApp(w.p);
     const res = await request(app).get('/v1/ai/capabilities');
+    // Phase 2 ships local providers for translation/search/summarize/
+    // tag/recommend by default; cloud transcription needs credentials —
+    // here it's configured because the test registered a stub.
     expect(res.body.capabilities).toEqual(
       expect.arrayContaining([
         { capability: 'transcription', configured: true },
-        { capability: 'translation', configured: false },
-        { capability: 'recommendation', configured: false },
+        { capability: 'translation', configured: true },
+        { capability: 'recommendation', configured: true },
       ])
+    );
+    const fresh = createApp();
+    const freshRes = await request(fresh.app).get('/v1/ai/capabilities');
+    expect(freshRes.body.capabilities).toEqual(
+      expect.arrayContaining([{ capability: 'transcription', configured: false }])
     );
   });
 });

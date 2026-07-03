@@ -38,6 +38,29 @@ const { Logger } = require('./monitoring/logger');
 const { MonitoringService } = require('./monitoring/monitoring.service');
 const { SearchService } = require('./search/search.service');
 const { AiRegistry } = require('./ai/registry');
+const { FlagService } = require('./pilot/flags.service');
+const { PilotService } = require('./pilot/pilot.service');
+const { AnalyticsService } = require('./analytics/analytics.service');
+const { AssuranceService } = require('./security/assurance.service');
+const { OpsService } = require('./ops/ops.service');
+const { BackupService } = require('./ops/backup.service');
+const {
+  TfIdfSemanticSearchProvider,
+  ExtractiveSummarizerProvider,
+  MetadataTaggerProvider,
+  CooccurrenceRecommenderProvider,
+  PhraseTranslatorProvider,
+} = require('./ai/providers/local');
+const { CloudSpeechToTextProvider, CloudTranslationProvider } = require('./ai/providers/cloud');
+const {
+  IntegrationRegistry,
+  SandboxBankProvider,
+  SandboxGovIdentityProvider,
+  SandboxGisProvider,
+  SandboxEmailProvider,
+  SandboxWhatsAppProvider,
+  IcsCalendarProvider,
+} = require('./integrations/registry');
 
 /**
  * Composition root — the modular monolith (P6). Domains live behind hard
@@ -104,9 +127,32 @@ function createPlatform({
     ],
   });
 
+  // ── Phase 2: integrations (constructed early — notifications bridge) ─
+  const integrations = new IntegrationRegistry({ clock });
+  integrations.register('bank', new SandboxBankProvider({ clock }));
+  integrations.register('gov_identity', new SandboxGovIdentityProvider());
+  integrations.register('gis', new SandboxGisProvider());
+  integrations.register('email', new SandboxEmailProvider({ clock }));
+  integrations.register('calendar', new IcsCalendarProvider({ clock }));
+  if (process.env.MOTSE_WHATSAPP_TOKEN) {
+    integrations.register('whatsapp', new SandboxWhatsAppProvider({ clock }));
+  }
+
+  const bridgedAdapters = {
+    email: { send: (p) => integrations.get('email').send({ to: p.to, subject: p.subject, body: p.body }) },
+    ...(integrations.has('whatsapp')
+      ? {
+          whatsapp: {
+            send: (p) =>
+              integrations.get('whatsapp').sendTemplate({ to: p.to, template: 'motse_notify', params: [p.body] }),
+          },
+        }
+      : {}),
+    ...notificationAdapters,
+  };
   const notifications = new NotificationService(
     { store, clock, bus, identity },
-    notificationAdapters
+    bridgedAdapters
   );
   notifications.bindLedgerAccounts(ledger.accounts);
 
@@ -136,6 +182,7 @@ function createPlatform({
     mmino,
     payments,
     notifications,
+    integrations,
   };
 
   platform.sync = new OutboxSyncService(platform);
@@ -143,6 +190,45 @@ function createPlatform({
   platform.sms = new SmsGateway(platform);
   platform.search = new SearchService({ store, clock, bus, platform });
   platform.ai = new AiRegistry({ media, heritage, audit, clock });
+
+  // ── Phase 2: production AI providers (local defaults; cloud by env) ─
+  platform.ai.register(new TfIdfSemanticSearchProvider());
+  platform.ai.register(new ExtractiveSummarizerProvider());
+  platform.ai.register(new MetadataTaggerProvider({ knownEntities: ['tsodilo', 'bakalanga', 'bangwato'] }));
+  platform.ai.register(new CooccurrenceRecommenderProvider());
+  platform.ai.register(new PhraseTranslatorProvider());
+  if (process.env.MOTSE_AI_SPEECH_KEY) {
+    platform.ai.register(new CloudSpeechToTextProvider({ apiKey: process.env.MOTSE_AI_SPEECH_KEY }));
+  }
+  if (process.env.MOTSE_AI_TRANSLATE_KEY) {
+    platform.ai.register(new CloudTranslationProvider({ apiKey: process.env.MOTSE_AI_TRANSLATE_KEY }));
+  }
+
+  // ── Phase 2: pilots, analytics, assurance, ops ─────────────────────
+  platform.flags = new FlagService({ store, clock, audit, bus });
+  platform.flags.define('module.kgetsi', { description: 'Kgetsi campaigns', defaultValue: true });
+  platform.flags.define('module.loeto', { description: 'Loeto tourism', defaultValue: true });
+  platform.flags.define('module.mmino', { description: 'Mmino streaming (last phase)', defaultValue: false });
+  platform.flags.define('config.data_budget_kb', {
+    description: 'Per-screen data budget (P8)',
+    defaultValue: 2048,
+    kind: 'config',
+  });
+
+  platform.analytics = new AnalyticsService({ clock, bus, platform });
+  platform.pilots = new PilotService({
+    store, clock, identity, kgotla, flags: platform.flags, audit, bus,
+  });
+  platform.pilots.bindAnalytics(platform.analytics);
+
+  platform.assurance = new AssuranceService({ store, clock, identity, secrets, fraud, audit, bus });
+  // Rotation automation: webhook secrets rotate quarterly by policy.
+  for (const providerName of platform.payments.providers.keys()) {
+    platform.assurance.setRotationPolicy(`webhook:${providerName}`, 90);
+  }
+
+  platform.backups = new BackupService({ clock });
+  platform.ops = new OpsService({ store, clock, bus, audit, platform });
 
   // Built last: sees every registered event schema (see module docs).
   platform.metrics = new Metrics();

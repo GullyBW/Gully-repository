@@ -1,0 +1,58 @@
+{
+  "uid": "motse-notifications",
+  "title": "Motse · Notifications",
+  "schemaVersion": 39,
+  "tags": [
+    "motse",
+    "notifications"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Dispatched by category",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum by (category) (rate(motse_notifications_total[5m]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Civic alerts (exempt category)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(motse_domain_events_total{type=\"kgotla.alert.published\"}[5m]))",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

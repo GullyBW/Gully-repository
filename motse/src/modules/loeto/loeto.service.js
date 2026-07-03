@@ -16,6 +16,7 @@ class LoetoService {
   constructor({ store, clock, identity, ledger, escrow, bus, audit }) {
     this.experiences = store.collection('experiences');
     this.bookings = store.collection('bookings');
+    this.reviews = store.collection('booking_reviews');
     this.clock = clock;
     this.identity = identity;
     this.ledger = ledger;
@@ -147,6 +148,52 @@ class LoetoService {
     const booking = this.bookings.get(bookingId);
     if (!booking) throw err('NOT_FOUND', `No booking ${bookingId}`);
     return booking;
+  }
+
+  // ── Reviews & history (Phase 2) ────────────────────────────────────
+
+  listExperiences() {
+    return this.experiences.find((e) => e.state === 'active').map((experience) => ({
+      ...experience,
+      rating: this.ratingFor(experience.id),
+    }));
+  }
+
+  bookingsFor(guestRef) {
+    return this.bookings.find((b) => b.guest_ref === guestRef);
+  }
+
+  /** One review per settled booking, by the guest who travelled. */
+  addReview(bookingId, guestRef, { rating, comment }) {
+    const booking = this.get(bookingId);
+    if (booking.guest_ref !== guestRef) {
+      throw err('PERMISSION_DENIED', 'Only the guest reviews their booking');
+    }
+    if (booking.state !== 'settled') {
+      throw err('STATE_CONFLICT', 'Reviews open after the experience settles');
+    }
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw err('INVALID_ARGUMENT', 'rating must be an integer 1–5');
+    }
+    if (this.reviews.findOne((r) => r.booking_ref === bookingId)) {
+      throw err('STATE_CONFLICT', 'This booking is already reviewed');
+    }
+    return this.reviews.insert({
+      id: id('rvw'),
+      booking_ref: bookingId,
+      experience_ref: booking.experience_id,
+      guest_ref: guestRef,
+      rating,
+      comment: comment || null,
+      created_at: this.clock.nowIso(),
+    });
+  }
+
+  ratingFor(experienceId) {
+    const reviews = this.reviews.find((r) => r.experience_ref === experienceId);
+    if (reviews.length === 0) return { count: 0, average: null };
+    const total = reviews.reduce((s, r) => s + r.rating, 0);
+    return { count: reviews.length, average: Math.round((total / reviews.length) * 10) / 10 };
   }
 }
 

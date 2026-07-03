@@ -474,6 +474,115 @@ const views = {
   },
 };
 
+views.pilots = async (m) => {
+  const pilots = await api('/v1/admin/pilots');
+  m.innerHTML = `
+    <div class="row">
+      <input id="pName" placeholder="Pilot name"><input id="pDistrict" placeholder="District">
+      <button class="act" id="pMk">Create pilot</button>
+    </div>
+    ${pilots.map((p) => `
+      <div class="card"><h3>${esc(p.name)} ${pill(p.stage, p.stage==='live'?'ok':'warn')}</h3>
+        <div class="dim">${esc(p.district)} · ${p.ward_refs.length} ward(s) · ${p.admins.length} admin(s)</div>
+        <div class="row">
+          <button class="act subtle" data-stage="${esc(p.id)}">Advance stage</button>
+          <button class="act subtle" data-village="${esc(p.id)}">Register village</button>
+          <button class="act subtle" data-padmin="${esc(p.id)}">Assign admin</button>
+          <button class="act subtle" data-health="${esc(p.id)}">Health</button>
+          <button class="act subtle" data-report="${esc(p.id)}">Report</button>
+        </div><div id="px-${esc(p.id)}"></div>
+      </div>`).join('') || '<p class="hint">No pilots yet.</p>'}
+    <h2>Feature flags & remote config</h2><div id="flagsOut"></div>`;
+  const flags = await api('/v1/admin/flags');
+  $('#flagsOut').innerHTML = table(flags, [
+    { h:'Key', f:(f)=>`<span class="mono">${esc(f.key)}</span>` },
+    { h:'Default', f:(f)=>esc(JSON.stringify(f.default_value)) },
+    { h:'Overrides', f:(f)=>f.overrides.map((o)=>`${esc(o.scope)}=${esc(JSON.stringify(o.value))}`).join('<br>')||'—' },
+    { h:'', f:(f)=>`<button class="act subtle" data-flag="${esc(f.key)}">Set</button>` }]);
+  $('#pMk').onclick = () => act('/v1/admin/pilots', { name:$('#pName').value, district:$('#pDistrict').value }, ()=>views.pilots(m));
+  m.querySelectorAll('[data-stage]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/pilots/${b.dataset.stage}/stage`,
+    { stage: prompt('Next stage? (onboarding|live|scaled|paused)') }, ()=>views.pilots(m)); });
+  m.querySelectorAll('[data-village]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/pilots/${b.dataset.village}/villages`,
+    { name: prompt('Village name?'), headman_msisdn: prompt('Headman phone (optional)?')||undefined }, ()=>views.pilots(m)); });
+  m.querySelectorAll('[data-padmin]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/pilots/${b.dataset.padmin}/admins`,
+    { user_ref: prompt('User id (must be L3)?') }, ()=>views.pilots(m)); });
+  m.querySelectorAll('[data-health]').forEach((b)=>{ b.onclick=async()=>{
+    const h = await api(`/v1/admin/pilots/${b.dataset.health}/health`);
+    $('#px-'+b.dataset.health).innerHTML = `<pre>${esc(JSON.stringify(h,null,2))}</pre>`; };});
+  m.querySelectorAll('[data-report]').forEach((b)=>{ b.onclick=async()=>{
+    const r = await api(`/v1/admin/pilots/${b.dataset.report}/report`);
+    $('#px-'+b.dataset.report).innerHTML = `<pre>${esc(JSON.stringify(r,null,2))}</pre>`; };});
+  m.querySelectorAll('[data-flag]').forEach((b)=>{ b.onclick=()=>{
+    const scope = prompt('Scope? (global | ward:<id> | morafe:<ref> | user:<id>)');
+    const value = prompt('Value? (JSON, e.g. true or 1024)');
+    act(`/v1/admin/flags/${encodeURIComponent(b.dataset.flag)}`, { scope, value: JSON.parse(value) }, ()=>views.pilots(m)); };});
+};
+
+views.analytics = async (m) => {
+  const d = await api('/v1/admin/analytics/dashboard');
+  m.innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="n">${d.activity.dau_today}</div><div class="l">DAU today</div></div>
+      <div class="card"><div class="n">${d.activity.mau}</div><div class="l">MAU (30d)</div></div>
+      <div class="card"><div class="n">${d.payment_conversion.conversion_pct}%</div><div class="l">Payment conversion</div></div>
+      <div class="card"><div class="n">${d.verification_conversion.l0_to_l1_pct}% / ${d.verification_conversion.l1_to_l2_pct}%</div><div class="l">L0→L1 / L1→L2</div></div>
+      <div class="card"><div class="n">${d.escrow_completion.completion_pct}%</div><div class="l">Escrow completion</div></div>
+      <div class="card"><div class="n">${d.tourism.bookings}</div><div class="l">Tourism bookings</div></div>
+      <div class="card"><div class="n">${d.search.queries_today}</div><div class="l">Search queries today</div></div>
+      <div class="card"><div class="n">${d.offline.sync_batches_today}</div><div class="l">Offline sync batches</div></div>
+    </div>
+    <h2>DAU (30 days)</h2>
+    <div class="card"><div style="display:flex;align-items:flex-end;gap:2px;height:80px">
+      ${d.activity.series.map((s)=>`<div title="${esc(s.date)}: ${s.dau}" style="flex:1;background:var(--accent);height:${Math.max(s.dau * 8, 2)}px"></div>`).join('')}
+    </div></div>
+    <h2>Feature usage today</h2><pre>${esc(JSON.stringify(d.feature_usage_today, null, 2))}</pre>
+    <h2>Provider success rates</h2><pre>${esc(JSON.stringify(d.provider_success_rates, null, 2))}</pre>
+    <h2>Top search terms (no user linkage)</h2><pre>${esc(JSON.stringify(d.search.top_terms, null, 2))}</pre>
+    <h2>Notifications</h2><pre>${esc(JSON.stringify(d.notifications, null, 2))}</pre>`;
+};
+
+views.ops = async (m) => {
+  const [incidents, health, capacity, config, backups, secReport] = await Promise.all([
+    api('/v1/admin/ops/incidents'), api('/v1/admin/ops/health-report'),
+    api('/v1/admin/ops/capacity'), api('/v1/admin/ops/config'),
+    api('/v1/admin/ops/backups'), api('/v1/admin/security/report')]);
+  m.innerHTML = `
+    <div class="row">
+      <button class="act ${config.maintenance.on?'':'danger'}" id="maint">${config.maintenance.on?'End maintenance':'Start maintenance'}</button>
+      <button class="act subtle" id="bkp">Take backup</button>
+      <button class="act subtle" id="rot">Run credential rotation</button>
+    </div>
+    <div class="cards">
+      <div class="card ${health.readiness.ready?'ok':'bad'}"><div class="n">${health.readiness.ready?'READY':'DEGRADED'}</div><div class="l">Readiness</div></div>
+      <div class="card ${health.open_incidents?'warn':''}"><div class="n">${health.open_incidents}</div><div class="l">Open incidents</div></div>
+      <div class="card"><div class="n">${capacity.utilization.users_vs_year1_pct}%</div><div class="l">of year-1 MAU target</div></div>
+      <div class="card ${secReport.events.by_severity.high?'bad':''}"><div class="n">${secReport.events.by_severity.high||0}</div><div class="l">High security events · ${secReport.active_holds} holds</div></div>
+    </div>
+    <h2>Incidents</h2>
+    ${table(incidents, [
+      { h:'Severity', f:(i)=>pill(i.severity, i.severity==='sev1'?'bad':'warn') },
+      { h:'Title', f:(i)=>esc(i.title) }, { h:'State', f:(i)=>statePill(i.state) },
+      { h:'Opened', f:(i)=>esc(i.opened_at) },
+      { h:'', f:(i)=>i.state!=='resolved'?`<button class="act subtle" data-ack="${esc(i.id)}">Ack</button> <button class="act" data-res="${esc(i.id)}">Resolve</button>`:'' }])}
+    <h2>Backups (verification on demand)</h2>
+    ${table(backups, [
+      { h:'Backup', f:(b)=>`<span class="mono">${esc(b.id)}</span>` },
+      { h:'Created', f:(b)=>esc(b.created_at) }, { h:'Note', f:(b)=>esc(b.note||'—') },
+      { h:'', f:(b)=>`<button class="act subtle" data-verify="${esc(b.id)}">Verify</button>` }])}
+    <h2>Security report</h2><pre>${esc(JSON.stringify(secReport, null, 2))}</pre>
+    <h2>Live configuration (redacted)</h2><pre>${esc(JSON.stringify(config, null, 2))}</pre>
+    <h2>Capacity planning</h2><pre>${esc(JSON.stringify(capacity, null, 2))}</pre>`;
+  $('#maint').onclick = () => act('/v1/admin/ops/maintenance',
+    { on: !config.maintenance.on, message: config.maintenance.on ? null : prompt('Maintenance message?') }, ()=>views.ops(m));
+  $('#bkp').onclick = () => act('/v1/admin/ops/backups', { note: prompt('Backup note?')||'manual' }, ()=>views.ops(m));
+  $('#rot').onclick = () => act('/v1/admin/security/rotation/run', {}, ()=>views.ops(m));
+  m.querySelectorAll('[data-ack]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/ops/incidents/${b.dataset.ack}/ack`, { note: prompt('Note?') }, ()=>views.ops(m)); });
+  m.querySelectorAll('[data-res]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/ops/incidents/${b.dataset.res}/resolve`, { resolution: prompt('Resolution?') }, ()=>views.ops(m)); });
+  m.querySelectorAll('[data-verify]').forEach((b)=>{ b.onclick=async()=>{
+    const v = await api(`/v1/admin/ops/backups/${b.dataset.verify}/verify`, { method:'POST', body:{} });
+    toast(v.valid ? 'Backup VERIFIED — all checksums match' : 'Backup INVALID: ' + v.failures.join(','), !v.valid); };});
+};
+
 async function act(path, body, after) {
   try { await api(path, { method:'POST', body }); toast('Done.'); if (after) after(); }
   catch (e) { toast(e.message, true); }
@@ -484,6 +593,7 @@ const SECTIONS = [
   ['dashboard','Dashboard'], ['identity','Identity'], ['governance','Governance'],
   ['ledger','Ledger'], ['heritage','Heritage'], ['finance','Finance'],
   ['audit','Audit'], ['security','Security'],
+  ['pilots','Pilots'], ['analytics','Analytics'], ['ops','Ops'],
 ];
 function nav(active) {
   $('#nav').innerHTML = SECTIONS.map(([k,l]) =>

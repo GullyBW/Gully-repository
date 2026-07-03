@@ -17,6 +17,7 @@ class PuoService {
     this.courses = store.collection('courses');
     this.lessons = store.collection('lessons');
     this.threads = store.collection('correction_threads');
+    this.progress = store.collection('lesson_progress');
     this.clock = clock;
     this.identity = identity;
     this.heritage = heritage;
@@ -73,6 +74,43 @@ class PuoService {
     if (!lesson) throw err('NOT_FOUND', `No lesson ${lessonId}`);
     this.heritage.read(lesson.source_item_ref, readerRef); // may throw MEMBERSHIP_REQUIRED
     return lesson;
+  }
+
+  // ── Progress tracking (Phase 2) ────────────────────────────────────
+
+  /** Completion respects the lesson's read gate (restricted sources). */
+  markLessonComplete(lessonId, learnerRef) {
+    this.readLesson(lessonId, learnerRef); // throws MEMBERSHIP_REQUIRED if gated
+    const existing = this.progress.findOne(
+      (p) => p.lesson_ref === lessonId && p.learner_ref === learnerRef
+    );
+    if (existing) return existing; // idempotent completion
+    return this.progress.insert({
+      id: id('prg'),
+      lesson_ref: lessonId,
+      learner_ref: learnerRef,
+      completed_at: this.clock.nowIso(),
+    });
+  }
+
+  progressFor(learnerRef) {
+    const completed = this.progress.find((p) => p.learner_ref === learnerRef);
+    const byCourse = {};
+    for (const record of completed) {
+      const lesson = this.lessons.get(record.lesson_ref);
+      if (!lesson) continue;
+      const course = this.courses.get(lesson.course_ref);
+      if (!course) continue;
+      if (!byCourse[course.id]) {
+        byCourse[course.id] = { title: course.title, completed: 0, total: course.lesson_refs.length };
+      }
+      byCourse[course.id].completed += 1;
+    }
+    return { completed_lessons: completed.length, by_course: byCourse };
+  }
+
+  listCourses() {
+    return this.courses.find();
   }
 
   // ── Correction threads (§7.2) ──────────────────────────────────────

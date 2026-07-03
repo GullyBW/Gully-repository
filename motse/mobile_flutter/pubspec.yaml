@@ -1,0 +1,31 @@
+name: motse
+description: Motse — civic, cultural and financial platform for Botswana.
+publish_to: "none"
+version: 2.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  flutter_secure_storage: ^9.0.0 # tokens at rest, encrypted (§13.1)
+  local_auth: ^2.2.0 # biometric gate for privileged actions (§5.3)
+  sqflite: ^2.3.2 # offline store + outbox (P1, §8)
+  path_provider: ^2.1.2
+  connectivity_plus: ^6.0.1 # outbox flush on reconnect
+  provider: ^6.1.2 # app state
+  just_audio: ^0.9.36 # heritage audio playback
+  video_player: ^2.8.3 # heritage video playback
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

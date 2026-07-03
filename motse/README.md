@@ -7,9 +7,33 @@ platform primitives that every module consumes — a **verified identity graph**
 engine**.
 
 ```bash
-npm run motse:test    # 12 suites / 126 tests
-npm run motse:start   # boots the modular monolith on :4100 (/v1, /health, /admin)
+npm run motse:test       # 20 suites / 193 tests
+npm run motse:coverage   # coverage gates on new components (95/95/90)
+npm run motse:start      # :4100 — /v1 API, /admin portal, /app PWA, /metrics
+npm run motse:bench      # in-process performance benchmark
+npm run motse:load       # HTTP load test against a running server
 ```
+
+## Phase 2 — national-platform readiness
+
+| Workstream | Where | Verified |
+| --- | --- | --- |
+| Flutter app (offline-first, all modules) | [`mobile_flutter/`](mobile_flutter) | Dart contract tests; **needs `flutter analyze && flutter test` on adoption (no SDK here)** |
+| PWA (desktop/mobile/tablet) | `src/pwa/` → `/app` | Playwright browser run + jest |
+| Infrastructure as code | [`../deploy/motse/`](../deploy/motse) | CI builds+smokes the image; helm/terraform validate on adoption |
+| Observability | `deploy/motse/observability/` (10 Grafana dashboards + alert rules) | generator run; alerts reviewed |
+| Analytics (PII-free) | `src/analytics/` + portal Analytics tab | jest incl. a no-user-ids-in-output assertion |
+| Security assurance | `src/security/assurance.service.js` + Security tab | jest: ATO, impossible travel, SIM-swap, abuse, rotation |
+| Pilot management + flags | `src/pilot/` + Pilots tab | jest: stage gates, per-ward flag rollout, onboarding |
+| AI providers (through the safety gate) | `src/ai/providers/` | jest: real local providers + cloud adapters w/ fake transports |
+| Integrations (bank/gov-ID/GIS/email/WhatsApp/calendar) | `src/integrations/` | jest incl. notification bridging + ICS |
+| Ops tooling (incidents, maintenance, backups/DR, capacity) | `src/ops/` + Ops tab | jest incl. a full restore drill on a fresh platform |
+
+Docs: [MOBILE](docs/MOBILE.md) · [INFRASTRUCTURE](docs/INFRASTRUCTURE.md) ·
+[OPERATIONS (runbooks)](docs/OPERATIONS.md) · [ANALYTICS](docs/ANALYTICS.md) ·
+[PILOTS](docs/PILOTS.md) · [AI](docs/AI.md) · [SECURITY](docs/SECURITY.md) ·
+[API](docs/API.md) · [PAYMENTS](docs/PAYMENTS.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) ·
+[TESTING](docs/TESTING.md) · [ADMIN-PORTAL](docs/ADMIN-PORTAL.md)
 
 ## Phase 1 — production readiness
 

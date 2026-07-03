@@ -69,6 +69,30 @@ class LedgerService {
     return this.balances.get(accountId) || 0;
   }
 
+  /** A member's own accounts with balances (the wallet screen). */
+  accountsFor(ownerRef) {
+    return this.accounts
+      .find((a) => a.owner_ref === ownerRef)
+      .map((account) => ({ ...account, balance_minor: this.balance(account.id) }));
+  }
+
+  /** A member's own posting history across their accounts (receipts). */
+  historyFor(ownerRef, limit = 50) {
+    const mine = new Set(this.accounts.find((a) => a.owner_ref === ownerRef).map((a) => a.id));
+    return this.postings
+      .find((p) => p.entries.some((e) => mine.has(e.account_id)))
+      .slice(-limit)
+      .reverse()
+      .map((posting) => ({
+        id: posting.id,
+        ts: posting.ts,
+        purpose: posting.purpose,
+        ref: posting.ref,
+        // Only the caller's own legs — other parties' accounts stay private.
+        my_entries: posting.entries.filter((e) => mine.has(e.account_id)),
+      }));
+  }
+
   // ── Postings (double entry) ────────────────────────────────────────
 
   /**

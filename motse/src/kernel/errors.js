@@ -55,6 +55,7 @@ const CODES = {
   IDEMPOTENCY_KEY_REQUIRED: { status: 400, retryable: false, message: 'Mutating requests require an Idempotency-Key header' },
   STATE_CONFLICT: { status: 409, retryable: false, message: 'Operation not valid in the current state' },
   RATE_LIMITED: { status: 429, retryable: true, message: 'Too many requests' },
+  MAINTENANCE: { status: 503, retryable: true, message: 'Platform is in maintenance mode' },
   INTERNAL: { status: 500, retryable: true, message: 'Internal error' },
 };
 

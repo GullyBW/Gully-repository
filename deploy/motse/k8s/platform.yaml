@@ -1,0 +1,155 @@
+# Namespace, configuration, ingress and scheduled jobs for Motse core.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: motse
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: motse-config
+  namespace: motse
+data:
+  NODE_ENV: "production"
+  MOTSE_PORT: "4100"
+  MOTSE_LOG_LEVEL: "info"
+  MOTSE_RATE_CAPACITY: "300"
+  MOTSE_RATE_REFILL: "5"
+---
+# Secrets are created from GCP Secret Manager by CI (never committed):
+#   kubectl create secret generic motse-secrets \
+#     --from-literal=MOTSE_SECRET=... \
+#     --from-literal=MOTSE_ADMIN_BOOTSTRAP_TOKEN=... \
+#     --from-literal=MOTSE_ORANGE_API_KEY=... (etc.)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: motse-secrets
+  namespace: motse
+type: Opaque
+stringData: {} # placeholder — populated by the deploy pipeline
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: motse-core
+  namespace: motse
+  annotations:
+    kubernetes.io/ingress.class: gce
+    networking.gke.io/managed-certificates: motse-cert
+spec:
+  rules:
+    - host: api.motse.bw
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: motse-core, port: { number: 80 } } }
+---
+# Scheduled jobs (docs/DEPLOYMENT.md): each calls an authenticated admin
+# endpoint with a service-account token minted by the ops tooling.
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: motse-retry-drain, namespace: motse }
+spec:
+  schedule: "* * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: drain
+              image: curlimages/curl:8.7.1
+              args: ["-s", "-X", "POST", "http://motse-core/v1/admin/finance/retries/drain",
+                     "-H", "Authorization: Bearer $(OPS_TOKEN)", "-H", "Idempotency-Key: drain-$(POD_NAME)",
+                     "-H", "X-Device-Id: ops-cron"]
+              env:
+                - { name: OPS_TOKEN, valueFrom: { secretKeyRef: { name: motse-ops, key: token } } }
+                - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: motse-reconcile, namespace: motse }
+spec:
+  schedule: "15 2 * * *" # nightly (§9.2)
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: reconcile
+              image: curlimages/curl:8.7.1
+              command: ["/bin/sh", "-c"]
+              args:
+                - >
+                  for p in orange_money myzaka smega; do
+                  curl -s -X POST http://motse-core/v1/admin/finance/reconcile
+                  -H "Authorization: Bearer $OPS_TOKEN" -H "Content-Type: application/json"
+                  -H "Idempotency-Key: reconcile-$POD_NAME-$p" -H "X-Device-Id: ops-cron"
+                  -d "{\"provider\":\"$p\"}"; done
+              env:
+                - { name: OPS_TOKEN, valueFrom: { secretKeyRef: { name: motse-ops, key: token } } }
+                - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: motse-deletion-sweep, namespace: motse }
+spec:
+  schedule: "0 3 * * *" # daily 14/90-day contract sweep (§6.4)
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: sweep
+              image: curlimages/curl:8.7.1
+              args: ["-s", "-X", "POST", "http://motse-core/v1/admin/heritage/deletion-sweep",
+                     "-H", "Authorization: Bearer $(OPS_TOKEN)", "-H", "Idempotency-Key: sweep-$(POD_NAME)",
+                     "-H", "X-Device-Id: ops-cron"]
+              env:
+                - { name: OPS_TOKEN, valueFrom: { secretKeyRef: { name: motse-ops, key: token } } }
+                - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: motse-backup, namespace: motse }
+spec:
+  schedule: "0 */6 * * *" # 6-hourly snapshots + verification
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: curlimages/curl:8.7.1
+              args: ["-s", "-X", "POST", "http://motse-core/v1/admin/ops/backups",
+                     "-H", "Authorization: Bearer $(OPS_TOKEN)", "-H", "Content-Type: application/json",
+                     "-H", "Idempotency-Key: backup-$(POD_NAME)", "-H", "X-Device-Id: ops-cron",
+                     "-d", "{\"note\":\"scheduled\"}"]
+              env:
+                - { name: OPS_TOKEN, valueFrom: { secretKeyRef: { name: motse-ops, key: token } } }
+                - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: motse-secret-rotation, namespace: motse }
+spec:
+  schedule: "0 4 * * 1" # weekly check; policies decide what actually rotates
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: rotate
+              image: curlimages/curl:8.7.1
+              args: ["-s", "-X", "POST", "http://motse-core/v1/admin/security/rotation/run",
+                     "-H", "Authorization: Bearer $(OPS_TOKEN)", "-H", "Idempotency-Key: rotate-$(POD_NAME)",
+                     "-H", "X-Device-Id: ops-cron"]
+              env:
+                - { name: OPS_TOKEN, valueFrom: { secretKeyRef: { name: motse-ops, key: token } } }
+                - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }

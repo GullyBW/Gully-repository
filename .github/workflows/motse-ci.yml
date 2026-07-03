@@ -1,0 +1,44 @@
+# Motse CI (Phase 2): tests + coverage gates + continuous dependency
+# scanning (WS6). Tirelo suites run in the pre-existing ci.yml.
+name: motse-ci
+on:
+  push:
+    paths: ['motse/**', 'deploy/motse/**', 'package*.json']
+  pull_request:
+    paths: ['motse/**', 'deploy/motse/**', 'package*.json']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Motse test suite
+        run: npm run motse:test
+      - name: Coverage gates (new components ≥95% stmt/line, ≥90% branch)
+        run: npm run motse:coverage
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: npm audit (fails on high/critical)
+        run: node motse/scripts/security-scan.js
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build -f deploy/motse/Dockerfile -t motse-core:${{ github.sha }} .
+      - name: Boot smoke test
+        run: |
+          docker run -d --rm --name motse-smoke -p 4100:4100 motse-core:${{ github.sha }}
+          sleep 3
+          curl -sf http://127.0.0.1:4100/health
+          curl -sf http://127.0.0.1:4100/health/ready
+          docker rm -f motse-smoke

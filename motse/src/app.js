@@ -53,8 +53,24 @@ function createApp(platform = createPlatform(), options = {}) {
   });
   // Request metrics + structured logs (§16).
   app.use(platform.monitoring.httpMiddleware());
+  // Analytics ingestion + API-abuse telemetry (Phase 2): pure counters
+  // on response finish; abuse blocks read like rate limiting.
+  app.use((req, res, next) => {
+    const abuseKey = req.actor || req.ip || 'anonymous';
+    if (req.path.startsWith('/v1') && platform.assurance.isBlocked(abuseKey)) {
+      return next(new MotseError('RATE_LIMITED', 'Temporarily blocked for API abuse'));
+    }
+    res.on('finish', () => {
+      platform.analytics.recordRequest(req.originalUrl.split('?')[0], req.actor, res.statusCode);
+      platform.assurance.recordApiOutcome(req.actor || req.ip || 'anonymous', res.statusCode);
+    });
+    return next();
+  });
   // Rate limiting / API throttling (§13.1) — token bucket per identity.
   app.use('/v1', platform.rateLimiter.middleware());
+  // Maintenance mode (Phase 2, WS10): member mutations pause; reads,
+  // health, operator webhooks and the admin surface stay available.
+  app.use('/v1', platform.ops.maintenanceMiddleware());
 
   // ── Gateway: idempotency enforcement (§7.1) ────────────────────────
   const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -132,12 +148,25 @@ function createApp(platform = createPlatform(), options = {}) {
 
   // ── Identity (§5) ──────────────────────────────────────────────────
   app.post('/v1/identity/otp', run((req) => platform.identity.requestOtp(req.body.msisdn)));
-  app.post('/v1/identity/otp/verify', run((req) =>
-    platform.identity.verifyOtp(req.body.msisdn, req.body.code, {
-      deviceId: req.get('X-Device-Id'),
-      userId: req.body.user_id,
-    })
-  ));
+  app.post('/v1/identity/otp/verify', run((req) => {
+    try {
+      const result = platform.identity.verifyOtp(req.body.msisdn, req.body.code, {
+        deviceId: req.get('X-Device-Id'),
+        userId: req.body.user_id,
+      });
+      // Login telemetry: device registration age, impossible travel,
+      // account-takeover heuristics (Phase 2 security assurance).
+      platform.assurance.recordLogin(result.user.id, {
+        deviceId: req.get('X-Device-Id'),
+        msisdn: req.body.msisdn,
+        geo: req.body.geo,
+      });
+      return result;
+    } catch (e) {
+      if (e.code === 'INVALID_ARGUMENT') platform.assurance.recordAuthFailure(req.body.msisdn);
+      throw e;
+    }
+  }));
   app.post('/v1/identity/sessions/refresh', run((req) =>
     platform.identity.refreshSession(req.body.refresh_token)
   ));
@@ -433,6 +462,8 @@ function createApp(platform = createPlatform(), options = {}) {
       ref: req.body.ref,
       actorRef: req.actor,
       idempotencyKey: req.idemKey,
+      // Real device age feeds the SIM-swap heuristic (Phase 2).
+      deviceAgeMs: platform.assurance.deviceAgeMs(req.actor, req.get('X-Device-Id')),
     });
   }));
   app.post('/v1/payments/intents/:id/refund', auth, run((req) =>
@@ -466,18 +497,120 @@ function createApp(platform = createPlatform(), options = {}) {
   ));
 
   // ── Search ─────────────────────────────────────────────────────────
-  app.get('/v1/search', authOptional, run((req) =>
-    platform.search.search(req.query.q, {
+  app.get('/v1/search', authOptional, run((req) => {
+    const result = platform.search.search(req.query.q, {
       types: req.query.types ? String(req.query.types).split(',') : null,
       readerRef: req.actor || null,
       limit: Number(req.query.limit) || 20,
-    })
-  ));
+    });
+    platform.analytics.trackSearch(req.query.q); // terms only, no user linkage
+    return result;
+  }));
 
   // ── Device trust signals (§13.1) ───────────────────────────────────
   app.post('/v1/identity/devices/signals', auth, run((req) =>
     platform.identity.reportDeviceSignal(req.get('X-Device-Id') || req.body.device_id, req.body)
   ));
+
+  // ── Phase 2: client-facing surface (wallet, browse, family, flags) ─
+  app.get('/v1/flags', authOptional, run((req) =>
+    platform.flags.snapshotFor(platform.identity, req.actor)
+  ));
+  app.get('/v1/wallet/accounts', auth, run((req) => platform.ledger.accountsFor(req.actor)));
+  app.get('/v1/wallet/history', auth, run((req) =>
+    platform.ledger.historyFor(req.actor, Number(req.query.limit) || 50)
+  ));
+  app.get('/v1/wallet/payouts', auth, run((req) =>
+    platform.ledger.payouts.find((p) => {
+      const account = platform.ledger.accounts.get(p.account_id);
+      return account && account.owner_ref === req.actor;
+    })
+  ));
+  app.get('/v1/payments/intents', auth, run((req) =>
+    platform.payments.intents.find((i) => i.actor_ref === req.actor)
+  ));
+  app.get('/v1/kgetsi/campaigns', run((req) =>
+    paginate(platform.kgetsi.listCampaigns({ state: req.query.state }), {
+      pageToken: req.query.page_token,
+      pageSize: req.query.page_size,
+    })
+  ));
+  app.get('/v1/loeto/experiences', run((req) =>
+    paginate(platform.loeto.listExperiences(), {
+      pageToken: req.query.page_token,
+      pageSize: req.query.page_size,
+    })
+  ));
+  app.get('/v1/loeto/bookings', auth, run((req) => platform.loeto.bookingsFor(req.actor)));
+  app.post('/v1/loeto/bookings/:id/review', auth, run((req) =>
+    platform.loeto.addReview(req.params.id, req.actor, {
+      rating: req.body.rating,
+      comment: req.body.comment,
+    })
+  ));
+  app.get('/v1/loeto/bookings/:id/ics', auth, run((req, res) => {
+    const booking = platform.loeto.get(req.params.id);
+    if (booking.guest_ref !== req.actor) {
+      throw new MotseError('PERMISSION_DENIED', 'Not your booking');
+    }
+    const experience = platform.loeto.experiences.get(booking.experience_id);
+    const start = req.query.start || platform.clock.nowIso();
+    const { ics } = platform.integrations.get('calendar').createEvent({
+      title: `Loeto: ${experience.title}`,
+      start,
+      end: req.query.end || start,
+      location: 'Botswana',
+      description: `Booking ${booking.id}`,
+    });
+    res.set('Content-Type', 'text/calendar');
+    res.send(ics);
+    return undefined;
+  }));
+  app.get('/v1/puo/courses', run(() => platform.puo.listCourses()));
+  app.post('/v1/puo/lessons/:id/complete', auth, run((req) =>
+    platform.puo.markLessonComplete(req.params.id, req.actor)
+  ));
+  app.get('/v1/puo/progress', auth, run((req) => platform.puo.progressFor(req.actor)));
+  app.get('/v1/lelapa/circles', auth, run((req) => platform.lelapa.circlesFor(req.actor)));
+  app.post('/v1/lelapa/circles', auth, run((req) =>
+    platform.lelapa.createCircle(req.actor, req.body.name)
+  ));
+  app.get('/v1/lelapa/circles/:id/tree', auth, run((req) =>
+    platform.lelapa.familyTree(req.params.id, req.actor)
+  ));
+  app.post('/v1/lelapa/circles/:id/invitations', auth, run((req) =>
+    platform.lelapa.inviteMember(req.params.id, req.actor, {
+      msisdn: req.body.msisdn,
+      relation: req.body.relation,
+      relatedTo: req.body.related_to,
+    })
+  ));
+  app.post('/v1/lelapa/invitations/:id/accept', auth, run((req) =>
+    platform.lelapa.acceptInvitation(req.params.id, req.actor)
+  ));
+  app.post('/v1/lelapa/circles/:id/relations', auth, run((req) =>
+    platform.lelapa.setRelation(req.params.id, req.actor, {
+      memberRef: req.body.member_ref,
+      relation: req.body.relation,
+      relatedTo: req.body.related_to,
+    })
+  ));
+  app.post('/v1/lelapa/circles/:id/events', auth, run((req) =>
+    platform.lelapa.createFamilyEvent(req.params.id, req.actor, req.body)
+  ));
+  app.get('/v1/lelapa/circles/:id/events', auth, run((req) =>
+    platform.lelapa.familyEvents(req.params.id, req.actor)
+  ));
+
+  // ── Progressive Web App (Phase 2, WS2) ─────────────────────────────
+  app.get('/app', (req, res) => res.sendFile(path.join(__dirname, 'pwa', 'app.html')));
+  app.get('/app/manifest.json', (req, res) =>
+    res.sendFile(path.join(__dirname, 'pwa', 'manifest.json'))
+  );
+  app.get('/app/sw.js', (req, res) => {
+    res.set('Content-Type', 'application/javascript');
+    res.sendFile(path.join(__dirname, 'pwa', 'sw.js'));
+  });
 
   // ── AI foundation (extension points only) ──────────────────────────
   app.get('/v1/ai/capabilities', run(() => ({

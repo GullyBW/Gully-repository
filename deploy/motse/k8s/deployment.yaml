@@ -1,0 +1,81 @@
+# Motse core — Kubernetes base manifests (Phase 2, WS3).
+# Rolling deployments, health probes, resource envelopes, non-root.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: motse-core
+  namespace: motse
+  labels: { app: motse-core }
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } # zero-downtime
+  selector:
+    matchLabels: { app: motse-core }
+  template:
+    metadata:
+      labels: { app: motse-core }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4100"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: motse-core
+          image: REGISTRY/motse-core:VERSION # pinned by CI, never :latest
+          ports: [{ containerPort: 4100, name: http }]
+          envFrom:
+            - configMapRef: { name: motse-config }
+            - secretRef: { name: motse-secrets }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: motse-core
+  namespace: motse
+spec:
+  selector: { app: motse-core }
+  ports: [{ port: 80, targetPort: http, name: http }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: motse-core
+  namespace: motse
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: motse-core }
+  minReplicas: 3
+  maxReplicas: 20 # civic-alert peaks model 20× baseline (doc §15.2)
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: motse-core
+  namespace: motse
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: motse-core }
