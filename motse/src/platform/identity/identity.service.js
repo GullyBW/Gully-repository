@@ -24,6 +24,7 @@ class IdentityService {
     this.roles = store.collection('role_grants');
     this.memberships = store.collection('morafe_memberships');
     this.endorsements = store.collection('ward_endorsements');
+    this.deviceSignals = store.collection('device_signals');
     this.clock = clock;
     this.audit = audit;
     this.secret = secret;
@@ -168,12 +169,111 @@ class IdentityService {
 
   requireLevel(userId, requiredLevel) {
     const user = this._mustGet(userId);
+    if (user.suspended) {
+      throw err('PERMISSION_DENIED', 'Account suspended', { suspended: true });
+    }
     if (LEVELS.indexOf(user.level) < LEVELS.indexOf(requiredLevel)) {
       throw err('AUTH_LEVEL_REQUIRED', `This action requires ${requiredLevel}`, {
         required_level: requiredLevel,
       });
     }
     return user;
+  }
+
+  // ── Administration (admin portal; caller authorization at API layer) ─
+
+  /**
+   * Admin-driven level change with a mandatory reason — every change is
+   * on the audit chain. Institution verification (L3) should prefer
+   * grantInstitutional; this is the general lever for corrections.
+   */
+  adminSetLevel(userId, level, actor, reason) {
+    if (!LEVELS.includes(level)) throw err('INVALID_ARGUMENT', `Unknown level ${level}`);
+    if (!reason) throw err('INVALID_ARGUMENT', 'A reason is required for admin level changes');
+    const user = this._mustGet(userId);
+    const updated = this.users.update(userId, { level });
+    this.audit.append(actor, 'identity.admin_level_set', `user:${userId}`,
+      { level: user.level }, { level, reason });
+    return updated;
+  }
+
+  suspendUser(userId, reason, actor) {
+    if (!reason) throw err('INVALID_ARGUMENT', 'A reason is required to suspend');
+    this._mustGet(userId);
+    const updated = this.users.update(userId, {
+      suspended: { reason, by: actor, at: this.clock.nowIso() },
+    });
+    this.revokeAllSessions(userId, actor);
+    this.audit.append(actor, 'identity.user_suspended', `user:${userId}`, null, { reason });
+    return updated;
+  }
+
+  reinstateUser(userId, actor, note) {
+    const user = this._mustGet(userId);
+    if (!user.suspended) return user;
+    const updated = this.users.update(userId, { suspended: null });
+    this.audit.append(actor, 'identity.user_reinstated', `user:${userId}`,
+      { suspended: user.suspended }, { note: note || null });
+    return updated;
+  }
+
+  listSessions(userId) {
+    return this.sessions
+      .find((s) => s.user_ref === userId)
+      .map(({ refresh_token, ...safe }) => safe); // never expose refresh tokens
+  }
+
+  revokeSession(sessionId, actor) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    this.sessions.delete(sessionId);
+    this.audit.append(actor, 'identity.session_revoked', `user:${session.user_ref}`, null, {
+      session_id: sessionId,
+    });
+    return true;
+  }
+
+  revokeAllSessions(userId, actor) {
+    let count = 0;
+    for (const session of this.sessions.find((s) => s.user_ref === userId)) {
+      this.sessions.delete(session.id);
+      count += 1;
+    }
+    if (count > 0) {
+      this.audit.append(actor, 'identity.sessions_revoked', `user:${userId}`, null, { count });
+    }
+    return count;
+  }
+
+  /** Verification history for the admin portal: audit chain + endorsements. */
+  verificationHistory(userId) {
+    this._mustGet(userId);
+    return {
+      audit: this.audit.chainFor(`user:${userId}`),
+      endorsements: this.endorsements.find((e) => e.user_ref === userId),
+      memberships: this.memberships.find((m) => m.user_ref === userId),
+    };
+  }
+
+  // ── Device trust (§13.1: root/jailbreak degrades privileged actions) ─
+
+  reportDeviceSignal(deviceId, signal) {
+    const existing = this.deviceSignals.findOne((s) => s.device_id === deviceId);
+    const flags = {
+      rooted: !!signal.rooted,
+      jailbroken: !!signal.jailbroken,
+      emulator: !!signal.emulator,
+      reported_at: this.clock.nowIso(),
+    };
+    if (existing) return this.deviceSignals.update(existing.id, flags);
+    return this.deviceSignals.insert({ id: id('dvs'), device_id: deviceId, ...flags });
+  }
+
+  isDeviceTrusted(deviceId) {
+    if (!deviceId) return true; // no device context (e.g. USSD) — level gates still apply
+    const signal = this.deviceSignals.findOne((s) => s.device_id === deviceId);
+    if (!signal) return true;
+    return !(signal.rooted || signal.jailbroken || signal.emulator);
   }
 
   // ── Contextual RBAC (§5.2) ─────────────────────────────────────────
@@ -295,6 +395,15 @@ class IdentityService {
     if (claims.exp < this.clock.nowMs()) throw err('UNAUTHENTICATED', 'Token expired');
     if (claims.dev && deviceId && claims.dev !== deviceId) {
       throw err('UNAUTHENTICATED', 'Token bound to a different device');
+    }
+    // Revoked sessions kill their access tokens immediately, and a
+    // suspended account cannot authenticate at all.
+    if (claims.sid && !this.sessions.get(claims.sid)) {
+      throw err('UNAUTHENTICATED', 'Session revoked');
+    }
+    const user = this.users.get(claims.sub);
+    if (user && user.suspended) {
+      throw err('UNAUTHENTICATED', 'Account suspended');
     }
     return claims;
   }

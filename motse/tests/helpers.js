@@ -109,4 +109,20 @@ function liveCampaign(w, { campaignClass = 'community', targetMinor = 50000 } = 
   return w.p.kgetsi.goLive(campaign.id, w.admin.id);
 }
 
-module.exports = { world, verifiedUser, freshVerifiedUser, fundedWallet, publishedItem, liveCampaign };
+/** Grant a fresh L3 platform_admin (as the bootstrap endpoint would). */
+function adminUser(p, deviceId = 'dev-padmin') {
+  const user = p.identity.registerAnonymous(deviceId);
+  p.identity.grantInstitutional(user.id, { institution: 'Motse Ops' }, 'system:bootstrap');
+  p.identity.grantRole(user.id, 'platform_admin', 'platform', 'system:bootstrap');
+  return p.identity.get(user.id);
+}
+
+module.exports = {
+  world,
+  verifiedUser,
+  freshVerifiedUser,
+  fundedWallet,
+  publishedItem,
+  liveCampaign,
+  adminUser,
+};

@@ -7,9 +7,40 @@ platform primitives that every module consumes — a **verified identity graph**
 engine**.
 
 ```bash
-npm run motse:test    # 7 suites / 54 tests
-npm run motse:start   # boots the modular monolith on :4100 (/v1, /health)
+npm run motse:test    # 12 suites / 126 tests
+npm run motse:start   # boots the modular monolith on :4100 (/v1, /health, /admin)
 ```
+
+## Phase 1 — production readiness
+
+Built on top of the core platform (docs in [`docs/`](docs)):
+
+- **Administration portal** — `/admin` (self-contained SPA) + `/v1/admin` API:
+  dashboard, identity management, councils & governance (Ring-3 freezes, elections,
+  disputes), read-only ledger explorer, heritage administration (flagged queue,
+  consents, deletion receipts, audited restricted view), financial administration
+  (escrow monitoring, milestone queue, failed payouts, fraud reviews), audit
+  explorer with inclusion-proof verification and CSV export.
+  → [docs/ADMIN-PORTAL.md](docs/ADMIN-PORTAL.md)
+- **Botswana payments** — Orange Money, Mascom MyZaka, BeMobile Smega behind one
+  `PaymentProvider` contract: C2B, B2C, refunds (where supported), HMAC-signed
+  webhooks with replay/duplicate defences, retry queue with dead-lettering, daily
+  reconciliation with Sev-1 variance paging. Sandbox mode without credentials.
+  → [docs/PAYMENTS.md](docs/PAYMENTS.md)
+- **Notifications** — event-driven, five channels (in-app/SMS/push/email/WhatsApp
+  adapter slot), per-category preferences, quiet hours, civic-emergency exemption.
+- **Monitoring** — Prometheus `/metrics`, `/health/ready`, structured JSON logs
+  with trace ids, ledger/escrow/payment/queue/sync gauges.
+- **Security hardening** — rate limiting, secret rotation, webhook signing, replay
+  protection, fraud hooks, device trust, security headers, denial auditing, OWASP
+  review. → [docs/SECURITY.md](docs/SECURITY.md)
+- **Search** — event-maintained inverted index over all ten modules; restricted
+  content fails closed out of the index; member-scoped family search.
+- **AI foundation** — provider interfaces only (transcription, translation,
+  summarization, knowledge search, tagging, recommendations) behind a safety gate
+  that enforces `no_derivatives_no_training` before any provider sees content.
+
+Coverage on Phase-1 components: 91.7% statements / 95.1% lines.
 
 ## Architecture
 

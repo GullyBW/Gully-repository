@@ -33,6 +33,9 @@ class LedgerService {
     this.accounts = store.collection('ledger_accounts');
     this.postings = store.collection('ledger_postings');
     this.payouts = store.collection('ledger_payouts');
+    this.rejections = store.collection('ledger_rejections');
+    this.reconciliationRuns = store.collection('reconciliation_runs');
+    this.splitTemplates = store.collection('split_templates');
     this.balances = new Map(); // account id -> minor units, maintained per posting
     this.clock = clock;
     this.bus = bus;
@@ -40,7 +43,9 @@ class LedgerService {
     this.audit = audit;
 
     bus.register('ledger.posting.committed', 1, ['posting_id', 'purpose', 'ref']);
+    bus.register('ledger.posting.rejected', 1, ['reason', 'purpose']);
     bus.register('ledger.payout.settled', 1, ['payout_id', 'account_id', 'amount_minor']);
+    bus.register('ledger.payout.failed', 1, ['payout_id', 'reason']);
     bus.register('ledger.reconciliation.variance', 1, ['variance_minor', 'details']);
   }
 
@@ -73,10 +78,32 @@ class LedgerService {
    * Every posting references a business object (`ref`) per §9.1.
    */
   post({ entries, purpose, ref, idempotencyKey, actorRef = 'system:ledger' }) {
-    const { result } = this.idempotency.execute(`ledger:${idempotencyKey}`, () =>
-      this._commit({ entries, purpose, ref, actorRef, idempotencyKey })
-    );
-    return result;
+    try {
+      const { result } = this.idempotency.execute(`ledger:${idempotencyKey}`, () =>
+        this._commit({ entries, purpose, ref, actorRef, idempotencyKey })
+      );
+      return result;
+    } catch (e) {
+      // Domain rejections are recorded for the admin ledger explorer —
+      // once per idempotency key, so replays don't spam the log.
+      if (e.retryable === false && e.code !== 'IDEMPOTENT_REPLAY') {
+        const already = this.rejections.findOne((r) => r.idempotency_key === idempotencyKey);
+        if (!already) {
+          this.rejections.insert({
+            id: id('rej'),
+            reason: e.code,
+            domain_reason: e.domainReason || null,
+            purpose,
+            ref,
+            idempotency_key: idempotencyKey,
+            actor_ref: actorRef,
+            ts: this.clock.nowIso(),
+          });
+          this.bus.publish('ledger.posting.rejected', { reason: e.code, purpose, ref });
+        }
+      }
+      throw e;
+    }
   }
 
   _commit({ entries, purpose, ref, actorRef, idempotencyKey }) {
@@ -199,6 +226,34 @@ class LedgerService {
     };
   }
 
+  /**
+   * Split-template registry: declarative, versioned templates (§9.3)
+   * browsable in the admin ledger explorer. Registering a new version
+   * never mutates an old one — history is preserved.
+   */
+  registerSplitTemplate({ name, version, shares }, actorRef = 'system:ledger') {
+    const totalPct = shares.reduce((s, share) => s + share.pct, 0);
+    if (totalPct !== 100) throw err('INVALID_ARGUMENT', `Template "${name}" sums to ${totalPct}%`);
+    if (this.splitTemplates.findOne((t) => t.name === name && t.version === version)) {
+      throw err('STATE_CONFLICT', `Template ${name}@v${version} already registered`);
+    }
+    const template = this.splitTemplates.insert({
+      id: id('spt'),
+      name,
+      version,
+      shares: shares.map((s) => ({ ...s })),
+      registered_by: actorRef,
+      registered_at: this.clock.nowIso(),
+    });
+    this.audit.append(actorRef, 'ledger.split_template_registered', `split_template:${name}`,
+      null, { version, shares });
+    return template;
+  }
+
+  listSplitTemplates() {
+    return this.splitTemplates.find();
+  }
+
   /** Largest-remainder apportionment: integer shares that sum exactly. */
   static apportion(amountMinor, pcts) {
     const raw = pcts.map((pct) => (amountMinor * pct) / 100);
@@ -239,6 +294,33 @@ class LedgerService {
       created_at: this.clock.nowIso(),
     });
     return payout;
+  }
+
+  /**
+   * Provider dispatch failed permanently: reverse the clearing posting
+   * so the member's money comes back, and mark the payout failed for
+   * the admin review queue. Never silently swallows money.
+   */
+  failPayout(payoutId, reason) {
+    const payout = this.payouts.get(payoutId);
+    if (!payout) throw err('NOT_FOUND', `No payout ${payoutId}`);
+    if (payout.state !== 'pending') return payout;
+    this.post({
+      entries: [
+        { account_id: payout.provider_account_id, amount_minor: -payout.amount_minor },
+        { account_id: payout.account_id, amount_minor: payout.amount_minor },
+      ],
+      purpose: 'payout_reversal',
+      ref: payout.ref,
+      idempotencyKey: `payout-reversal:${payoutId}`,
+    });
+    const failed = this.payouts.update(payoutId, {
+      state: 'failed',
+      failure_reason: reason,
+      failed_at: this.clock.nowIso(),
+    });
+    this.bus.publish('ledger.payout.failed', { payout_id: payoutId, reason });
+    return failed;
   }
 
   /** Provider delivery receipt confirms the payout (webhook-driven). */
@@ -300,6 +382,7 @@ class LedgerService {
         0
       );
     const report = {
+      id: id('rec'),
       provider_account_id: providerAccountId,
       matched,
       unmatched_statement_lines: unmatchedStatement,
@@ -307,6 +390,7 @@ class LedgerService {
       variance_minor: variance,
       ran_at: this.clock.nowIso(),
     };
+    this.reconciliationRuns.insert({ ...report });
     if (variance > 0) {
       this.bus.publish('ledger.reconciliation.variance', {
         variance_minor: variance,

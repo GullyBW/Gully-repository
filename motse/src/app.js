@@ -1,11 +1,14 @@
 'use strict';
 
+const path = require('path');
 const express = require('express');
+const helmet = require('helmet');
 const { createPlatform } = require('./container');
 const { MotseError } = require('./kernel/errors');
 const { paginate, applyFieldMask } = require('./kernel/pagination');
 const { id } = require('./kernel/ids');
 const { AuditLog } = require('./platform/governance/auditLog');
+const { createAdminRouter } = require('./admin/admin.routes');
 
 /**
  * API gateway + /v1 surface (doc §7).
@@ -17,9 +20,30 @@ const { AuditLog } = require('./platform/governance/auditLog');
  * this implementation mounts them as trailing path segments
  * (/items/{id}/validate) — same contract, Express-friendly syntax.
  */
-function createApp(platform = createPlatform()) {
+function createApp(platform = createPlatform(), options = {}) {
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  // Security headers (§13.1 client/transport hardening at the edge).
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"], // the admin portal is a self-contained page
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:'],
+        },
+      },
+    })
+  );
+  // Raw body retained for webhook HMAC verification over exact bytes.
+  app.use(
+    express.json({
+      limit: '1mb',
+      verify: (req, res, buf) => {
+        req.rawBody = buf.toString('utf8');
+      },
+    })
+  );
 
   // Trace ids end-to-end (§16 observability).
   app.use((req, res, next) => {
@@ -27,11 +51,18 @@ function createApp(platform = createPlatform()) {
     res.set('X-Trace-Id', req.traceId);
     next();
   });
+  // Request metrics + structured logs (§16).
+  app.use(platform.monitoring.httpMiddleware());
+  // Rate limiting / API throttling (§13.1) — token bucket per identity.
+  app.use('/v1', platform.rateLimiter.middleware());
 
   // ── Gateway: idempotency enforcement (§7.1) ────────────────────────
   const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
   app.use('/v1', (req, res, next) => {
     if (!MUTATING.has(req.method)) return next();
+    // Operator webhooks authenticate by HMAC + replay windows instead;
+    // mobile-money providers do not send Idempotency-Key headers.
+    if (req.path.startsWith('/payments/webhooks/')) return next();
     const key = req.get('Idempotency-Key');
     if (!key) return next(new MotseError('IDEMPOTENCY_KEY_REQUIRED'));
     req.idemKey = key;
@@ -82,6 +113,22 @@ function createApp(platform = createPlatform()) {
   app.get('/health', (req, res) =>
     res.json({ ok: true, service: 'motse-core', trial_balance: platform.ledger.trialBalance() })
   );
+  app.get('/health/ready', (req, res) => {
+    const readiness = platform.monitoring.readiness();
+    res.status(readiness.ready ? 200 : 503).json(readiness);
+  });
+  app.get('/metrics', (req, res) => {
+    res.set('Content-Type', 'text/plain; version=0.0.4');
+    res.send(platform.metrics.render());
+  });
+
+  // ── Administration portal + API (Phase 1) ──────────────────────────
+  const bootstrapToken =
+    options.adminBootstrapToken ||
+    process.env.MOTSE_ADMIN_BOOTSTRAP_TOKEN ||
+    (process.env.NODE_ENV !== 'production' ? 'dev-bootstrap-token' : null);
+  app.use('/v1/admin', createAdminRouter(platform, { auth: (...a) => auth(...a), bootstrapToken }));
+  app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin', 'portal.html')));
 
   // ── Identity (§5) ──────────────────────────────────────────────────
   app.post('/v1/identity/otp', run((req) => platform.identity.requestOtp(req.body.msisdn)));
@@ -360,12 +407,109 @@ function createApp(platform = createPlatform()) {
     platform.sms.handleInbound(req.body.msisdn, req.body.text, req.body.message_id)
   ));
 
+  // ── Payments (Phase 1: Orange Money / MyZaka / Smega) ──────────────
+  app.post('/v1/payments/collections', auth, run((req) =>
+    platform.payments.collect({
+      provider: req.body.provider,
+      msisdn: req.body.msisdn,
+      amountMinor: req.body.amount_minor,
+      destAccountId: req.body.dest_account_id,
+      purposeRef: req.body.purpose_ref,
+      actorRef: req.actor,
+      idempotencyKey: req.idemKey,
+    })
+  ));
+  app.post('/v1/payments/payouts', auth, run((req) => {
+    // Untrusted devices (root/jailbreak signals) lose payout privileges
+    // (§13.1 "root/jailbreak signal degrades privileged actions").
+    if (!platform.identity.isDeviceTrusted(req.get('X-Device-Id'))) {
+      throw new MotseError('PERMISSION_DENIED', 'Payouts are disabled on this device');
+    }
+    return platform.payments.payout({
+      provider: req.body.provider,
+      sourceAccountId: req.body.source_account_id,
+      msisdn: req.body.msisdn,
+      amountMinor: req.body.amount_minor,
+      ref: req.body.ref,
+      actorRef: req.actor,
+      idempotencyKey: req.idemKey,
+    });
+  }));
+  app.post('/v1/payments/intents/:id/refund', auth, run((req) =>
+    platform.payments.refund({
+      intentId: req.params.id,
+      actorRef: req.actor,
+      idempotencyKey: req.idemKey,
+    })
+  ));
+  app.get('/v1/payments/intents/:id', auth, run((req) => platform.payments.intent(req.params.id)));
+  app.post('/v1/payments/webhooks/:provider', run((req) =>
+    platform.payments.processWebhook(req.params.provider, req.rawBody, {
+      'x-motse-signature': req.get('X-Motse-Signature'),
+      'x-motse-timestamp': req.get('X-Motse-Timestamp'),
+      'x-motse-nonce': req.get('X-Motse-Nonce'),
+    })
+  ));
+
+  // ── Notifications ──────────────────────────────────────────────────
+  app.get('/v1/notifications', auth, run((req) =>
+    paginate(platform.notifications.inboxFor(req.actor).reverse(), {
+      pageToken: req.query.page_token,
+      pageSize: req.query.page_size,
+    })
+  ));
+  app.post('/v1/notifications/:id/read', auth, run((req) =>
+    platform.notifications.markRead(req.params.id, req.actor)
+  ));
+  app.put('/v1/notifications/preferences/:category', auth, run((req) =>
+    platform.notifications.setPreference(req.actor, req.params.category, req.body.channels || {})
+  ));
+
+  // ── Search ─────────────────────────────────────────────────────────
+  app.get('/v1/search', authOptional, run((req) =>
+    platform.search.search(req.query.q, {
+      types: req.query.types ? String(req.query.types).split(',') : null,
+      readerRef: req.actor || null,
+      limit: Number(req.query.limit) || 20,
+    })
+  ));
+
+  // ── Device trust signals (§13.1) ───────────────────────────────────
+  app.post('/v1/identity/devices/signals', auth, run((req) =>
+    platform.identity.reportDeviceSignal(req.get('X-Device-Id') || req.body.device_id, req.body)
+  ));
+
+  // ── AI foundation (extension points only) ──────────────────────────
+  app.get('/v1/ai/capabilities', run(() => ({
+    capabilities: require('./ai/registry').CAPABILITIES.map((capability) => ({
+      capability,
+      configured: platform.ai.configured(capability),
+    })),
+  })));
+  app.post('/v1/ai/:capability', auth, run((req) =>
+    platform.ai.run(req.params.capability, req.body, req.actor)
+  ));
+
   // ── Problem-details error envelope (§7.1) ──────────────────────────
   // eslint-disable-next-line no-unused-vars
   app.use((error, req, res, next) => {
     if (error instanceof MotseError) {
+      // Permission auditing: every authz denial is queryable (§13).
+      if (error.status === 401 || error.status === 403) {
+        platform.store.collection('security_denials').insert({
+          id: id('den'),
+          actor_ref: req.actor || null,
+          code: error.code,
+          method: req.method,
+          path: req.originalUrl,
+          trace_id: req.traceId,
+          ts: platform.clock.nowIso(),
+        });
+        platform.metrics.inc('motse_authz_denials_total', { code: error.code });
+      }
       return res.status(error.status).json(error.toProblem(req.traceId));
     }
+    platform.logger.error('unhandled', { trace_id: req.traceId, error: error.message });
     return res.status(500).json({
       code: 'INTERNAL',
       message: 'Internal error',

@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motse — Administration</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1a2129; --line:#2b3540; --text:#e6edf3; --dim:#8b98a5;
+          --accent:#4f9cf9; --ok:#3fb950; --warn:#d29922; --bad:#f85149; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:16px; padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; }
+  header .who { margin-left:auto; color:var(--dim); font-size:12px; }
+  nav { display:flex; gap:4px; padding:8px 20px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  nav button { background:none; border:1px solid transparent; color:var(--dim); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  nav button.active, nav button:hover { color:var(--text); border-color:var(--line); background:var(--bg); }
+  main { padding:20px; max-width:1200px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; margin-bottom:20px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .card .n { font-size:24px; font-weight:600; }
+  .card .l { color:var(--dim); font-size:12px; }
+  .card.bad .n { color:var(--bad); } .card.ok .n { color:var(--ok); } .card.warn .n { color:var(--warn); }
+  h2 { font-size:15px; margin:18px 0 10px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; font-size:12px; }
+  tr:last-child td { border-bottom:none; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; border:1px solid var(--line); }
+  .pill.ok { color:var(--ok); border-color:var(--ok); } .pill.bad { color:var(--bad); border-color:var(--bad); }
+  .pill.warn { color:var(--warn); border-color:var(--warn); }
+  .row { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; align-items:center; }
+  input, select { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 10px; font-size:13px; }
+  button.act { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px; cursor:pointer; font-size:13px; }
+  button.act.subtle { background:var(--panel); border:1px solid var(--line); color:var(--text); }
+  button.act.danger { background:var(--bad); }
+  #login { max-width:360px; margin:80px auto; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:24px; }
+  #login h1 { margin-bottom:14px; font-size:18px; }
+  #login input { width:100%; margin-bottom:10px; }
+  #toast { position:fixed; bottom:20px; right:20px; background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--accent); padding:10px 16px; border-radius:8px; display:none; max-width:420px; font-size:13px; z-index:10; }
+  #toast.bad { border-left-color:var(--bad); }
+  .mono { font-family:ui-monospace,monospace; font-size:12px; color:var(--dim); }
+  .hint { color:var(--dim); font-size:12px; margin:8px 0; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:12px; overflow:auto; font-size:12px; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Motse Administration</h1>
+  <div id="step1">
+    <input id="msisdn" placeholder="Phone number e.g. +26771000000" autocomplete="tel">
+    <button class="act" id="btnOtp" style="width:100%">Send verification code</button>
+    <p class="hint">Sandbox mode shows the code here after sending.</p>
+  </div>
+  <div id="step2" style="display:none">
+    <input id="otp" placeholder="6-digit code" inputmode="numeric">
+    <button class="act" id="btnVerify" style="width:100%">Sign in</button>
+    <p class="hint" id="sandboxHint"></p>
+  </div>
+</div>
+
+<div id="shell" style="display:none">
+  <header>
+    <h1>Motse Administration</h1>
+    <span class="who" id="who"></span>
+    <button class="act subtle" id="btnLogout">Sign out</button>
+  </header>
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+const DEVICE = 'admin-portal';
+let TOKEN = sessionStorage.getItem('motse_admin_token') || null;
+let ME = sessionStorage.getItem('motse_admin_user') || null;
+
+const $ = (sel) => document.querySelector(sel);
+const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const bwp = (m) => 'BWP ' + (Number(m||0)/100).toLocaleString(undefined,{minimumFractionDigits:2});
+const idem = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+
+function toast(msg, bad) {
+  const t = $('#toast');
+  t.textContent = msg; t.className = bad ? 'bad' : ''; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => { t.style.display = 'none'; }, 4200);
+}
+
+async function api(path, { method = 'GET', body, mutate } = {}) {
+  const headers = { 'Content-Type': 'application/json', 'X-Device-Id': DEVICE };
+  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+  if (method !== 'GET') headers['Idempotency-Key'] = mutate || idem();
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (data.domain_reason || data.message || res.statusText) + (data.code ? ` [${data.code}]` : '');
+    if (res.status === 401) { logout(); }
+    throw new Error(msg);
+  }
+  return data;
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────
+$('#btnOtp').onclick = async () => {
+  try {
+    const out = await api('/v1/identity/otp', { method:'POST', body:{ msisdn: $('#msisdn').value.trim() } });
+    $('#step1').style.display = 'none'; $('#step2').style.display = 'block';
+    if (out.sandbox_code) $('#sandboxHint').textContent = 'Sandbox code: ' + out.sandbox_code;
+    $('#otp').focus();
+  } catch (e) { toast(e.message, true); }
+};
+$('#btnVerify').onclick = async () => {
+  try {
+    const out = await api('/v1/identity/otp/verify', { method:'POST',
+      body:{ msisdn: $('#msisdn').value.trim(), code: $('#otp').value.trim() } });
+    TOKEN = out.session.access_token; ME = out.user.id;
+    sessionStorage.setItem('motse_admin_token', TOKEN);
+    sessionStorage.setItem('motse_admin_user', ME);
+    boot();
+  } catch (e) { toast(e.message, true); }
+};
+function logout() {
+  TOKEN = null; ME = null; sessionStorage.clear();
+  $('#shell').style.display = 'none'; $('#login').style.display = 'block';
+  $('#step1').style.display = 'block'; $('#step2').style.display = 'none';
+}
+$('#btnLogout').onclick = logout;
+
+// ── Rendering helpers ────────────────────────────────────────────────
+function table(rows, cols) {
+  if (!rows || rows.length === 0) return '<p class="hint">Nothing here.</p>';
+  const head = cols.map((c) => `<th>${esc(c.h)}</th>`).join('');
+  const body = rows.map((r) => '<tr>' + cols.map((c) =>
+    `<td${c.num ? ' class="num"' : ''}>${c.f(r)}</td>`).join('') + '</tr>').join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+const pill = (v, cls) => `<span class="pill ${cls||''}">${esc(v)}</span>`;
+const statePill = (s) => pill(s, ['completed','validated','active','settled','closed','resolved','applied','published'].includes(s) ? 'ok'
+  : ['failed','frozen','flagged','denied'].includes(s) ? 'bad' : 'warn');
+
+// ── Views ────────────────────────────────────────────────────────────
+const views = {
+
+  async dashboard(m) {
+    const d = await api('/v1/admin/dashboard');
+    m.innerHTML = `
+      <div class="cards">
+        <div class="card"><div class="n">${d.users.total}</div><div class="l">Users (${d.users.suspended} suspended)</div></div>
+        <div class="card"><div class="n">${d.users.by_level.L1}/${d.users.by_level.L2}/${d.users.by_level.L3}</div><div class="l">L1 / L2 / L3</div></div>
+        <div class="card ${d.pending_approvals.milestones ? 'warn' : ''}"><div class="n">${d.pending_approvals.milestones}</div><div class="l">Milestones awaiting release</div></div>
+        <div class="card ${d.pending_approvals.flagged_heritage ? 'warn' : ''}"><div class="n">${d.pending_approvals.flagged_heritage}</div><div class="l">Flagged heritage</div></div>
+        <div class="card"><div class="n">${bwp(d.escrow.held_minor)}</div><div class="l">Held in ${d.escrow.count} escrows (${d.escrow.frozen} frozen, ${d.escrow.stuck} stuck)</div></div>
+        <div class="card"><div class="n">${d.transactions.postings_today}</div><div class="l">Postings today (${d.transactions.postings_total} total)</div></div>
+        <div class="card ${d.transactions.trial_balance.balanced ? 'ok' : 'bad'}"><div class="n">${d.transactions.trial_balance.balanced ? 'BALANCED' : d.transactions.trial_balance.total_minor}</div><div class="l">Trial balance</div></div>
+        <div class="card"><div class="n">${d.governance.open_disputes}</div><div class="l">Open disputes · ${d.governance.frozen_seats} frozen seats · ${d.governance.open_elections} elections</div></div>
+        <div class="card"><div class="n">${d.heritage.total}</div><div class="l">Heritage items (${d.heritage.restricted} restricted)</div></div>
+        <div class="card ${d.api_health.ready ? 'ok' : 'bad'}"><div class="n">${d.api_health.ready ? 'READY' : 'DEGRADED'}</div><div class="l">API health</div></div>
+        <div class="card ${d.alerts.reconciliation_variances ? 'bad' : 'ok'}"><div class="n">${d.alerts.reconciliation_variances}</div><div class="l">Reconciliation variances</div></div>
+        <div class="card ${d.pending_approvals.failed_payouts ? 'bad' : ''}"><div class="n">${d.pending_approvals.failed_payouts}</div><div class="l">Failed payouts · ${d.pending_approvals.fraud_reviews} fraud reviews</div></div>
+      </div>
+      <h2>Payments</h2>
+      <pre>${esc(JSON.stringify(d.payments, null, 2))}</pre>
+      <h2>System alerts</h2>
+      <pre>${esc(JSON.stringify(d.alerts, null, 2))}</pre>`;
+  },
+
+  async identity(m) {
+    m.innerHTML = `<div class="row">
+        <input id="q" placeholder="Search id / name / ward">
+        <select id="lvl"><option value="">Any level</option><option>L0</option><option>L1</option><option>L2</option><option>L3</option></select>
+        <button class="act" id="go">Search</button>
+      </div><div id="out"></div><div id="detail"></div>`;
+    const load = async () => {
+      const out = await api(`/v1/admin/users?query=${encodeURIComponent($('#q').value)}&level=${$('#lvl').value}&page_size=25`);
+      $('#out').innerHTML = table(out.items, [
+        { h:'User', f:(u)=>`<a href="#" class="mono" data-u="${esc(u.id)}">${esc(u.id)}</a>` },
+        { h:'Level', f:(u)=>pill(u.level, u.level==='L3'?'ok':'') },
+        { h:'Ward', f:(u)=>esc(u.ward_ref||'—') },
+        { h:'Morafe', f:(u)=>esc((u.morafe_refs||[]).join(', ')||'—') },
+        { h:'Status', f:(u)=>u.suspended?pill('suspended','bad'):pill('active','ok') },
+      ]);
+      $('#out').querySelectorAll('a[data-u]').forEach((a)=>{ a.onclick=(e)=>{e.preventDefault(); detail(a.dataset.u);}; });
+    };
+    const detail = async (uid) => {
+      const d = await api('/v1/admin/users/' + uid);
+      $('#detail').innerHTML = `
+        <h2>${esc(uid)} ${d.user.suspended ? pill('suspended','bad') : pill(d.user.level,'ok')}</h2>
+        <div class="row">
+          <select id="setLvl"><option>L0</option><option>L1</option><option>L2</option><option>L3</option></select>
+          <button class="act" id="doLvl">Set level</button>
+          <button class="act danger" id="doSusp">${d.user.suspended?'Reinstate':'Suspend'}</button>
+          <button class="act subtle" id="doRevoke">Revoke sessions</button>
+          <button class="act subtle" id="doInst">Verify institution</button>
+        </div>
+        <h2>Devices</h2>${table(d.devices.map((x)=>({x})), [{h:'Device', f:(r)=>esc(r.x)}])}
+        <h2>Sessions</h2>${table(d.sessions, [
+          { h:'Session', f:(s)=>`<span class="mono">${esc(s.id)}</span>` },
+          { h:'Device', f:(s)=>esc(s.device_id||'—') },
+          { h:'Created', f:(s)=>esc(s.created_at) }])}
+        <h2>Roles</h2>${table(d.roles, [
+          { h:'Role', f:(r)=>esc(r.role) }, { h:'Scope', f:(r)=>esc(r.scope) },
+          { h:'State', f:(r)=>r.suspended?pill('suspended','bad'):pill('active','ok') }])}
+        <h2>Verification history</h2>${table(d.verification.audit, [
+          { h:'When', f:(a)=>esc(a.ts) }, { h:'Action', f:(a)=>esc(a.action) },
+          { h:'By', f:(a)=>`<span class="mono">${esc(a.actor_ref)}</span>` }])}`;
+      $('#doLvl').onclick = () => act(`/v1/admin/users/${uid}/level`, { level:$('#setLvl').value, reason: prompt('Reason for level change?') }, () => detail(uid));
+      $('#doSusp').onclick = () => d.user.suspended
+        ? act(`/v1/admin/users/${uid}/reinstate`, { note: prompt('Reinstatement note?') }, () => detail(uid))
+        : act(`/v1/admin/users/${uid}/suspend`, { reason: prompt('Suspension reason?') }, () => detail(uid));
+      $('#doRevoke').onclick = () => act(`/v1/admin/users/${uid}/sessions/revoke`, {}, () => detail(uid));
+      $('#doInst').onclick = () => act(`/v1/admin/users/${uid}/institution`, { institution: prompt('Institution name?') }, () => detail(uid));
+    };
+    $('#go').onclick = load;
+    await load();
+  },
+
+  async governance(m) {
+    const [c, e, d, r] = await Promise.all([
+      api('/v1/admin/councils'), api('/v1/admin/elections'),
+      api('/v1/admin/disputes'), api('/v1/admin/resolutions')]);
+    m.innerHTML = `
+      <div class="row">
+        <input id="morafe" placeholder="morafe ref e.g. bakalanga"><button class="act" id="mkCouncil">Create council</button>
+      </div>
+      <h2>Councils & seats</h2>
+      ${table(c.seats, [
+        { h:'Seat', f:(s)=>`<span class="mono">${esc(s.id)}</span>` },
+        { h:'Morafe', f:(s)=>esc(s.morafe_ref) }, { h:'Kind', f:(s)=>esc(s.kind) },
+        { h:'Holder', f:(s)=>`<span class="mono">${esc(s.holder_ref)}</span>` },
+        { h:'State', f:(s)=>statePill(s.state) },
+        { h:'', f:(s)=>`<button class="act ${s.state==='frozen'?'subtle':'danger'}" data-seat="${esc(s.id)}" data-frozen="${s.state==='frozen'}">${s.state==='frozen'?'Unfreeze':'Freeze (Ring 3)'}</button>` }])}
+      <div class="row">
+        <select id="councilSel">${c.councils.map((x)=>`<option value="${esc(x.id)}">${esc(x.morafe_ref)}</option>`).join('')}</select>
+        <input id="seatHolder" placeholder="holder user id">
+        <select id="seatKind"><option>bogosi</option><option>association</option><option>elected</option></select>
+        <button class="act" id="mkSeat">Grant seat</button>
+        <input id="elDesc" placeholder="election description">
+        <button class="act subtle" id="mkEl">Open election</button>
+      </div>
+      <h2>Elections</h2>
+      ${table(e, [
+        { h:'Election', f:(x)=>`<span class="mono">${esc(x.id)}</span>` },
+        { h:'Morafe', f:(x)=>esc(x.morafe_ref) }, { h:'Seat', f:(x)=>esc(x.seat_description) },
+        { h:'State', f:(x)=>statePill(x.state) },
+        { h:'Turnout', f:(x)=>x.turnout?`${x.turnout.votes_cast}/${x.turnout.eligible}`:'—' },
+        { h:'', f:(x)=>x.state==='open'?`<button class="act subtle" data-close="${esc(x.id)}">Close</button>`:'' }])}
+      <h2>Disputes</h2>
+      ${table(d, [
+        { h:'Dispute', f:(x)=>`<span class="mono">${esc(x.id)}</span>` },
+        { h:'Object', f:(x)=>`<span class="mono">${esc(x.object_ref)}</span>` },
+        { h:'Ring', f:(x)=>pill('Ring '+x.ring, x.ring===2?'warn':'') },
+        { h:'SLA', f:(x)=>esc(x.sla_deadline?.slice(0,10)||'') },
+        { h:'State', f:(x)=>statePill(x.state) },
+        { h:'', f:(x)=>x.state==='open'?`<button class="act subtle" data-esc="${esc(x.id)}">Escalate</button> <button class="act" data-res="${esc(x.id)}">Resolve</button>`:'' }])}
+      <h2>Trust resolution history (quorum tracking)</h2>
+      ${table(r.resolutions, [
+        { h:'Resolution', f:(x)=>esc(x.title) }, { h:'Kind', f:(x)=>esc(x.kind) },
+        { h:'Signatures', f:(x)=>`${x.signatures_count}/${x.quorum} ${x.quorum_met?pill('quorum','ok'):''}` },
+        { h:'State', f:(x)=>statePill(x.state) }])}`;
+    $('#mkCouncil').onclick = () => act('/v1/admin/councils', { morafe_ref:$('#morafe').value }, () => views.governance(m));
+    $('#mkSeat').onclick = () => act(`/v1/admin/councils/${$('#councilSel').value}/seats`,
+      { kind:$('#seatKind').value, holder_ref:$('#seatHolder').value }, () => views.governance(m));
+    $('#mkEl').onclick = () => act(`/v1/admin/councils/${$('#councilSel').value}/elections`,
+      { seat_description:$('#elDesc').value }, () => views.governance(m));
+    m.querySelectorAll('[data-seat]').forEach((b)=>{ b.onclick=()=> b.dataset.frozen==='true'
+      ? act(`/v1/admin/seats/${b.dataset.seat}/unfreeze`, {}, ()=>views.governance(m))
+      : act(`/v1/admin/seats/${b.dataset.seat}/freeze`, { reason: prompt('Freeze reason?') }, ()=>views.governance(m)); });
+    m.querySelectorAll('[data-close]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/elections/${b.dataset.close}/close`,
+      { eligible: Number(prompt('Eligible voters?')||0) }, ()=>views.governance(m)); });
+    m.querySelectorAll('[data-esc]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/disputes/${b.dataset.esc}/escalate`, {}, ()=>views.governance(m)); });
+    m.querySelectorAll('[data-res]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/disputes/${b.dataset.res}/resolve`,
+      { resolution: prompt('Resolution?') }, ()=>views.governance(m)); });
+  },
+
+  async ledger(m) {
+    const [tb, acc, esc_, tpl, rec, rej, idm] = await Promise.all([
+      api('/v1/admin/ledger/trial-balance'), api('/v1/admin/ledger/accounts?page_size=50'),
+      api('/v1/admin/ledger/escrows'), api('/v1/admin/ledger/split-templates'),
+      api('/v1/admin/ledger/reconciliation-runs'), api('/v1/admin/ledger/rejections'),
+      api('/v1/admin/ledger/idempotency?page_size=25')]);
+    m.innerHTML = `
+      <div class="cards">
+        <div class="card ${tb.balanced?'ok':'bad'}"><div class="n">${tb.balanced?'0':tb.total_minor}</div><div class="l">Trial balance (read-only ledger — no edit surface exists)</div></div>
+      </div>
+      <div class="row"><input id="jref" placeholder="filter journal by ref"><button class="act" id="jgo">Browse journal</button></div>
+      <div id="journal"></div>
+      <h2>General ledger — accounts</h2>
+      ${table(acc.items, [
+        { h:'Account', f:(a)=>`<span class="mono">${esc(a.id)}</span>` },
+        { h:'Owner', f:(a)=>`<span class="mono">${esc(a.owner_ref)}</span>` },
+        { h:'Type', f:(a)=>esc(a.type) },
+        { h:'Balance', num:true, f:(a)=>bwp(a.balance_minor) }])}
+      <h2>Escrow balances</h2>
+      ${table(esc_, [
+        { h:'Ref', f:(x)=>`<span class="mono">${esc(x.ref)}</span>` },
+        { h:'Funded', num:true, f:(x)=>bwp(x.funded_minor) },
+        { h:'Released', num:true, f:(x)=>bwp(x.released_minor) },
+        { h:'Refunded', num:true, f:(x)=>bwp(x.refunded_minor) },
+        { h:'Frozen', f:(x)=>x.frozen?pill('frozen','bad'):'' }])}
+      <h2>Split templates</h2>
+      ${table(tpl, [
+        { h:'Name', f:(t)=>esc(t.name) }, { h:'Version', f:(t)=>'v'+t.version },
+        { h:'Shares', f:(t)=>t.shares.map((s)=>`${esc(s.beneficiary||s.account_id)} ${s.pct}%`).join(' · ') }])}
+      <h2>Provider reconciliation & variance alerts</h2>
+      ${table(rec, [
+        { h:'Run', f:(x)=>esc(x.ran_at) }, { h:'Matched', num:true, f:(x)=>x.matched },
+        { h:'Variance', num:true, f:(x)=>x.variance_minor>0?pill(x.variance_minor,'bad'):pill('0','ok') }])}
+      <h2>Failed postings</h2>
+      ${table(rej, [
+        { h:'When', f:(x)=>esc(x.ts) }, { h:'Reason', f:(x)=>pill(x.reason,'bad') },
+        { h:'Detail', f:(x)=>esc(x.domain_reason||'') }, { h:'Purpose', f:(x)=>esc(x.purpose) }])}
+      <h2>Idempotency history</h2>
+      ${table(idm.items, [
+        { h:'Key', f:(x)=>`<span class="mono">${esc(x.key)}</span>` },
+        { h:'At', f:(x)=>esc(x.at) }, { h:'Outcome', f:(x)=>esc(x.outcome) }])}`;
+    $('#jgo').onclick = async () => {
+      const out = await api(`/v1/admin/ledger/journal?ref=${encodeURIComponent($('#jref').value)}&page_size=25`);
+      $('#journal').innerHTML = '<h2>Journal</h2>' + table(out.items, [
+        { h:'Posting', f:(p)=>`<span class="mono">${esc(p.id)}</span>` },
+        { h:'When', f:(p)=>esc(p.ts) }, { h:'Purpose', f:(p)=>esc(p.purpose) },
+        { h:'Ref', f:(p)=>`<span class="mono">${esc(p.ref)}</span>` },
+        { h:'Entries', f:(p)=>p.entries.map((en)=>`${esc(en.account_id.slice(0,14))}… ${en.amount_minor>0?'+':''}${en.amount_minor}`).join('<br>') }]);
+    };
+  },
+
+  async heritage(m) {
+    const [flagged, consents, dels, restricted] = await Promise.all([
+      api('/v1/admin/heritage/flagged'), api('/v1/admin/heritage/consents?page_size=25'),
+      api('/v1/admin/heritage/deletions'), api('/v1/admin/heritage/restricted')]);
+    m.innerHTML = `
+      <h2>Flagged content (custodian review queue)</h2>
+      ${table(flagged, [
+        { h:'Item', f:(i)=>`<span class="mono">${esc(i.id)}</span>` },
+        { h:'Title', f:(i)=>esc(i.title||'—') }, { h:'Morafe', f:(i)=>esc(i.morafe_ref) },
+        { h:'Visibility', f:(i)=>pill(i.visibility, i.visibility==='members'?'warn':'') }])}
+      <h2>Consent history</h2>
+      ${table(consents.items, [
+        { h:'Consent', f:(c)=>`<span class="mono">${esc(c.id)}</span>` },
+        { h:'Subject', f:(c)=>`<span class="mono">${esc(c.subject_ref)}</span>` },
+        { h:'Language', f:(c)=>esc(c.language) }, { h:'Scope', f:(c)=>esc(c.scope) },
+        { h:'Status', f:(c)=>c.revocation?pill('revoked','bad'):pill('active','ok') }])}
+      <div class="row"><button class="act" id="sweep">Run deletion sweep</button></div>
+      <h2>Deletion requests & signed receipts (14/90-day contract)</h2>
+      ${table(dels, [
+        { h:'Media', f:(x)=>`<span class="mono">${esc(x.media_id)}</span>` },
+        { h:'State', f:(x)=>statePill(x.state) },
+        { h:'Hard delete by', f:(x)=>esc(x.hard_delete_by?.slice(0,10)) },
+        { h:'Purge by', f:(x)=>esc(x.backup_purge_by?.slice(0,10)) },
+        { h:'Receipt', f:(x)=>x.completion_receipt?`<span class="mono">${esc(x.completion_receipt.signature.slice(0,20))}…</span>`:'—' }])}
+      <h2>Restricted content (metadata only — this view is itself audited; no export exists)</h2>
+      ${table(restricted, [
+        { h:'Item', f:(i)=>`<span class="mono">${esc(i.id)}</span>` },
+        { h:'Type', f:(i)=>esc(i.type) }, { h:'Morafe', f:(i)=>esc(i.morafe_ref) },
+        { h:'State', f:(i)=>statePill(i.state) }])}`;
+    $('#sweep').onclick = () => act('/v1/admin/heritage/deletion-sweep', {}, () => views.heritage(m));
+  },
+
+  async finance(m) {
+    const [escrows, pending, payments, failed, fraud] = await Promise.all([
+      api('/v1/admin/finance/escrows'), api('/v1/admin/finance/milestones/pending'),
+      api('/v1/admin/finance/payments?page_size=25'), api('/v1/admin/finance/payouts/failed'),
+      api('/v1/admin/finance/fraud-reviews')]);
+    m.innerHTML = `
+      <div class="row">
+        <select id="recProv"><option>orange_money</option><option>myzaka</option><option>smega</option></select>
+        <button class="act" id="recGo">Run reconciliation</button>
+        <button class="act subtle" id="drain">Drain retry queue</button>
+      </div>
+      <h2>Escrow monitoring (${escrows.stuck.length} stuck)</h2>
+      ${table(escrows.escrows, [
+        { h:'Ref', f:(x)=>`<span class="mono">${esc(x.ref)}</span>` },
+        { h:'Held', num:true, f:(x)=>bwp(x.funded_minor-x.released_minor-x.refunded_minor) },
+        { h:'Frozen', f:(x)=>x.frozen?pill('frozen','bad'):pill('ok','ok') }])}
+      <h2>Milestones awaiting approval/release</h2>
+      ${table(pending, [
+        { h:'Campaign', f:(x)=>esc(x.campaign_title) }, { h:'Class', f:(x)=>esc(x.class) },
+        { h:'Milestone', f:(x)=>esc(x.milestone.description) },
+        { h:'Amount', num:true, f:(x)=>bwp(x.milestone.amount_minor) },
+        { h:'State', f:(x)=>statePill(x.milestone.state) },
+        { h:'Approvals', f:(x)=>`${x.milestone.approvals.length}/2` }])}
+      <h2>Payment intents</h2>
+      ${table(payments.items, [
+        { h:'Intent', f:(x)=>`<span class="mono">${esc(x.id)}</span>` },
+        { h:'Provider', f:(x)=>esc(x.provider) }, { h:'Type', f:(x)=>esc(x.type) },
+        { h:'Amount', num:true, f:(x)=>bwp(x.amount_minor) },
+        { h:'State', f:(x)=>statePill(x.state) },
+        { h:'', f:(x)=>['pending_provider','retrying'].includes(x.state)?`<button class="act subtle" data-verify="${esc(x.id)}">Verify at operator</button>`:'' }])}
+      <h2>Failed payouts (manual review)</h2>
+      ${table(failed.ledger_payouts, [
+        { h:'Payout', f:(x)=>`<span class="mono">${esc(x.id)}</span>` },
+        { h:'Amount', num:true, f:(x)=>bwp(x.amount_minor) },
+        { h:'Reason', f:(x)=>pill(x.failure_reason||'unknown','bad') },
+        { h:'Reversed', f:()=>pill('funds returned','ok') }])}
+      <h2>Fraud reviews</h2>
+      ${table(fraud, [
+        { h:'Review', f:(x)=>`<span class="mono">${esc(x.id)}</span>` },
+        { h:'Check', f:(x)=>esc(x.check) }, { h:'Detail', f:(x)=>esc(x.detail) },
+        { h:'', f:(x)=>`<button class="act subtle" data-frw="${esc(x.id)}">Close</button>` }])}`;
+    $('#recGo').onclick = () => act('/v1/admin/finance/reconcile', { provider:$('#recProv').value }, () => views.finance(m));
+    $('#drain').onclick = () => act('/v1/admin/finance/retries/drain', {}, () => views.finance(m));
+    m.querySelectorAll('[data-verify]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/finance/payments/${b.dataset.verify}/verify`, {}, ()=>views.finance(m)); });
+    m.querySelectorAll('[data-frw]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/finance/fraud-reviews/${b.dataset.frw}/close`,
+      { resolution: prompt('Resolution?') }, ()=>views.finance(m)); });
+  },
+
+  async audit(m) {
+    m.innerHTML = `
+      <div class="row">
+        <input id="obj" placeholder="object ref e.g. campaign:cmp_… / user:usr_…" style="min-width:320px">
+        <button class="act" id="objGo">Object history + verify chain</button>
+        <input id="act2" placeholder="actor ref e.g. usr_…">
+        <button class="act subtle" id="actGo">User history</button>
+        <button class="act subtle" id="expJson">Export JSON</button>
+        <button class="act subtle" id="expCsv">Export CSV</button>
+      </div><div id="out"></div>`;
+    const render = (entries, verification) => {
+      $('#out').innerHTML = (verification ? `<div class="cards"><div class="card ${verification.valid?'ok':'bad'}">
+        <div class="n">${verification.valid?'VALID':'BROKEN'}</div><div class="l">Hash chain (${verification.length} entries)</div></div></div>` : '') +
+        table(entries, [
+          { h:'When', f:(a)=>esc(a.ts) }, { h:'Actor', f:(a)=>`<span class="mono">${esc(a.actor_ref)}</span>` },
+          { h:'Action', f:(a)=>esc(a.action) }, { h:'Object', f:(a)=>`<span class="mono">${esc(a.object_ref)}</span>` },
+          { h:'Hash', f:(a)=>`<span class="mono">${esc(a.hash.slice(0,16))}…</span>` },
+          { h:'Proof', f:(a)=>`<button class="act subtle" data-proof="${esc(a.object_ref)}|${esc(a.id)}">Verify inclusion</button>` }]);
+      $('#out').querySelectorAll('[data-proof]').forEach((b)=>{ b.onclick=async()=>{
+        const [ref, id_] = b.dataset.proof.split('|');
+        const p = await api(`/v1/admin/audit/proof/${encodeURIComponent(ref)}/${id_}`);
+        toast(p.valid ? 'Inclusion proof VERIFIED against chain head' : 'Inclusion proof FAILED', !p.valid);
+      };});
+    };
+    $('#objGo').onclick = async () => {
+      const out = await api('/v1/admin/audit/object/' + encodeURIComponent($('#obj').value));
+      render(out.entries, out.verification);
+    };
+    $('#actGo').onclick = async () => {
+      const out = await api('/v1/admin/audit/actor/' + encodeURIComponent($('#act2').value) + '?page_size=50');
+      render(out.items, null);
+    };
+    $('#expJson').onclick = () => window.open('/v1/admin/audit/export?prefix=' + encodeURIComponent($('#obj').value) + '&token=1');
+    $('#expCsv').onclick = async () => {
+      const res = await fetch('/v1/admin/audit/export?format=csv&prefix=' + encodeURIComponent($('#obj').value),
+        { headers: { Authorization:'Bearer '+TOKEN, 'X-Device-Id':DEVICE } });
+      const blob = await res.blob(); const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'motse-audit.csv'; a.click();
+    };
+  },
+
+  async security(m) {
+    const [denials, secrets, perms, notif] = await Promise.all([
+      api('/v1/admin/security/denials'), api('/v1/admin/security/secrets'),
+      api('/v1/admin/security/permission-audit'), api('/v1/admin/notifications/stats')]);
+    m.innerHTML = `
+      <h2>Secrets (values never leave the secret manager)</h2>
+      ${table(secrets, [
+        { h:'Name', f:(s)=>`<span class="mono">${esc(s.name)}</span>` },
+        { h:'Version', f:(s)=>'v'+s.current_version }, { h:'Rotated', f:(s)=>esc(s.rotated_at) },
+        { h:'', f:(s)=>`<button class="act subtle" data-rot="${esc(s.name)}">Rotate</button>` }])}
+      <h2>Authorization denials</h2>
+      ${table(denials.slice(-30).reverse(), [
+        { h:'When', f:(d)=>esc(d.ts) }, { h:'Actor', f:(d)=>`<span class="mono">${esc(d.actor_ref||'anon')}</span>` },
+        { h:'Code', f:(d)=>pill(d.code,'bad') }, { h:'Path', f:(d)=>`<span class="mono">${esc(d.method+' '+d.path)}</span>` }])}
+      <h2>Permission audit — live role grants</h2>
+      ${table(perms.grants, [
+        { h:'User', f:(g)=>`<span class="mono">${esc(g.user_ref)}</span>` },
+        { h:'Role', f:(g)=>esc(g.role) }, { h:'Scope', f:(g)=>`<span class="mono">${esc(g.scope)}</span>` },
+        { h:'Granted by', f:(g)=>`<span class="mono">${esc(g.granted_by)}</span>` },
+        { h:'State', f:(g)=>g.suspended?pill('suspended','bad'):pill('active','ok') }])}
+      <h2>Notification delivery</h2><pre>${esc(JSON.stringify(notif, null, 2))}</pre>
+      <div class="row"><button class="act subtle" id="reindex">Rebuild search index</button></div>`;
+    m.querySelectorAll('[data-rot]').forEach((b)=>{ b.onclick=()=>act(`/v1/admin/security/secrets/${b.dataset.rot}/rotate`, {}, ()=>views.security(m)); });
+    $('#reindex').onclick = () => act('/v1/admin/search/reindex', {}, () => toast('Search index rebuilt'));
+  },
+};
+
+async function act(path, body, after) {
+  try { await api(path, { method:'POST', body }); toast('Done.'); if (after) after(); }
+  catch (e) { toast(e.message, true); }
+}
+
+// ── Shell ────────────────────────────────────────────────────────────
+const SECTIONS = [
+  ['dashboard','Dashboard'], ['identity','Identity'], ['governance','Governance'],
+  ['ledger','Ledger'], ['heritage','Heritage'], ['finance','Finance'],
+  ['audit','Audit'], ['security','Security'],
+];
+function nav(active) {
+  $('#nav').innerHTML = SECTIONS.map(([k,l]) =>
+    `<button data-v="${k}" class="${k===active?'active':''}">${l}</button>`).join('');
+  $('#nav').querySelectorAll('button').forEach((b)=>{ b.onclick=()=>show(b.dataset.v); });
+}
+async function show(view) {
+  nav(view);
+  const m = $('#main'); m.innerHTML = '<p class="hint">Loading…</p>';
+  try { await views[view](m); }
+  catch (e) { m.innerHTML = `<p class="hint">${esc(e.message)}</p>`; toast(e.message, true); }
+}
+async function boot() {
+  try {
+    await api('/v1/admin/dashboard'); // proves platform_admin(platform)
+  } catch (e) {
+    toast('This account lacks platform_admin — use the bootstrap endpoint (see docs). ' + e.message, true);
+    return;
+  }
+  $('#login').style.display = 'none'; $('#shell').style.display = 'block';
+  $('#who').textContent = ME || '';
+  show('dashboard');
+}
+if (TOKEN) boot();
+</script>
+</body>
+</html>
