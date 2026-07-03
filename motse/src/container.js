@@ -32,6 +32,7 @@ const {
   MyZakaProvider,
   SmegaProvider,
 } = require('./payments/providers');
+const { PayPalProvider } = require('./payments/paypal.provider');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -44,6 +45,13 @@ const { AnalyticsService } = require('./analytics/analytics.service');
 const { AssuranceService } = require('./security/assurance.service');
 const { OpsService } = require('./ops/ops.service');
 const { BackupService } = require('./ops/backup.service');
+const { WorkflowService } = require('./workflow/workflow.service');
+const { SEED_WORKFLOWS } = require('./workflow/definitions');
+const { PluginManager } = require('./plugins/plugin.manager');
+const { AiEvaluator } = require('./ai/evaluation/evaluator');
+const { SecurityScorecard } = require('./security/scorecard');
+const { DeveloperService } = require('./developer/developer.service');
+const { I18n } = require('./i18n/i18n');
 const {
   TfIdfSemanticSearchProvider,
   ExtractiveSummarizerProvider,
@@ -114,6 +122,8 @@ function createPlatform({
   payments.registerProvider(new OrangeMoneyProvider({ clock, secrets }, providerOptions('ORANGE')));
   payments.registerProvider(new MyZakaProvider({ clock, secrets }, providerOptions('MYZAKA')));
   payments.registerProvider(new SmegaProvider({ clock, secrets }, providerOptions('SMEGA')));
+  // PayPal — the diaspora card/remittance rail (Phase 3, WS1).
+  payments.registerProvider(new PayPalProvider({ clock, secrets }, providerOptions('PAYPAL')));
 
   // Canonical split template (§9.3) available to the admin explorer.
   ledger.registerSplitTemplate({
@@ -229,6 +239,79 @@ function createPlatform({
 
   platform.backups = new BackupService({ clock });
   platform.ops = new OpsService({ store, clock, bus, audit, platform });
+
+  // ── Phase 3: configurable workflow engine (WS4) ────────────────────
+  platform.workflows = new WorkflowService({
+    store, clock, identity, audit, bus, notifications,
+  });
+  // Action handlers bridge the engine to real domain services — the
+  // business logic stays where it is; the engine only orchestrates.
+  platform.workflows.registerHandler('identity.grant_l2', (instance, step, ctx) =>
+    identity.endorseWardResidency(ctx.user_ref, ctx.ward_ref, ctx.endorser_ref)
+  );
+  platform.workflows.registerHandler('heritage.elevate', (instance, step, ctx) =>
+    heritage.validate(ctx.item_ref, ctx.custodian_ref, { decision: 'elevate' })
+  );
+  platform.workflows.registerHandler('governance.grant_seat', (instance, step, ctx) =>
+    governance.grantSeat(ctx.council_id, { kind: ctx.kind, holderRef: ctx.holder_ref }, ctx.actor_ref)
+  );
+  platform.workflows.registerHandler('governance.freeze_seat', (instance, step, ctx) =>
+    governance.freezeSeat(ctx.seat_id, ctx.reason || 'succession contested', ctx.actor_ref)
+  );
+  platform.workflows.registerHandler('kgetsi.release_milestone', (instance, step, ctx) => {
+    // The engine's dual-approval gate carries the two distinct approvers;
+    // record them at the kgetsi layer (defence in depth — the domain
+    // service still enforces its own invariant) then release.
+    const gate = instance.step_states.find((s) => s.step_id === 'dual_approval');
+    const approvers = (gate ? gate.approvals : [])
+      .filter((a) => a.decision === 'approve')
+      .map((a) => a.approver_ref);
+    for (const approver of approvers) {
+      try {
+        kgetsi.approveMilestone(ctx.campaign_id, ctx.milestone_id, approver);
+      } catch (e) {
+        if (e.code !== 'STATE_CONFLICT') throw e; // already recorded — fine
+      }
+    }
+    return kgetsi.releaseMilestone(ctx.campaign_id, ctx.milestone_id, ctx.actor_ref, {
+      destAccountId: ctx.dest_account_id,
+      idempotencyKey: `wf:${instance.id}:${step.id}`,
+    });
+  });
+  platform.workflows.registerHandler('letlole.execute_resolution', (instance, step, ctx) => ctx);
+  platform.workflows.registerHandler('governance.open_election', (instance, step, ctx) => {
+    const election = governance.openElection(ctx.council_id, ctx.seat_description, ctx.actor_ref);
+    return { context: { election_id: election.id }, election_id: election.id };
+  });
+  platform.workflows.registerHandler('governance.close_election', (instance, step, ctx) =>
+    governance.closeElection(ctx.election_id, ctx.actor_ref, ctx.eligible || 0)
+  );
+  platform.workflows.registerHandler('governance.resolve_dispute', (instance, step, ctx) =>
+    governance.resolveDispute(ctx.dispute_id, ctx.resolution || 'resolved via workflow', ctx.actor_ref)
+  );
+  for (const definition of SEED_WORKFLOWS) {
+    platform.workflows.defineWorkflow(definition, 'system:bootstrap');
+  }
+
+  // ── Phase 3: plugin architecture (WS5) ─────────────────────────────
+  platform.plugins = new PluginManager({
+    store, clock, audit, platform,
+    signingSecret: process.env.MOTSE_PLUGIN_SECRET || `${secret}-plugins`,
+  });
+
+  // ── Phase 3: AI evaluation (WS9) + security scorecard (WS8) ────────
+  platform.aiEvaluator = new AiEvaluator({ ai: platform.ai, clock, audit });
+  platform.securityScorecard = new SecurityScorecard({ platform, clock });
+
+  // ── Phase 3: developer platform (WS12) ─────────────────────────────
+  platform.developer = new DeveloperService({
+    store, clock, audit, bus, secrets,
+    rateLimiterFactory: (opts) => new RateLimiter({ clock, ...opts }),
+  });
+
+  // ── Phase 3: localization (WS13) — Setswana-first (§4) ─────────────
+  platform.i18n = new I18n();
+  notifications.bindI18n(platform.i18n, identity);
 
   // Built last: sees every registered event schema (see module docs).
   platform.metrics = new Metrics();

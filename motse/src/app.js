@@ -146,6 +146,60 @@ function createApp(platform = createPlatform(), options = {}) {
   app.use('/v1/admin', createAdminRouter(platform, { auth: (...a) => auth(...a), bootstrapToken }));
   app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin', 'portal.html')));
 
+  app.get('/developers', (req, res) => res.sendFile(path.join(__dirname, 'developer', 'portal.html')));
+
+  // ── Developer platform (Phase 3, WS12) ─────────────────────────────
+  // App management is member-authed (an L1+ owner registers apps).
+  app.post('/v1/developer/apps', auth, run((req) =>
+    platform.developer.createApp(req.actor, {
+      name: req.body.name,
+      scopes: req.body.scopes,
+      rateLimitPerMin: req.body.rate_limit_per_min,
+    })
+  ));
+  app.get('/v1/developer/apps', auth, run((req) => platform.developer.listApps(req.actor)));
+  app.post('/v1/developer/apps/:id/revoke', auth, run((req) =>
+    platform.developer.revokeApp(req.params.id, req.actor)
+  ));
+  app.get('/v1/developer/apps/:id/usage', auth, run((req) =>
+    platform.developer.usageFor(req.params.id)
+  ));
+  // Webhook subscriptions are member-authed (the app owner subscribes).
+  app.post('/v1/developer/subscriptions', auth, run((req) => {
+    const app_ = platform.developer.apps.get(req.body.app_id);
+    if (!app_ || app_.owner_ref !== req.actor) {
+      throw new MotseError('PERMISSION_DENIED', 'Not your app');
+    }
+    return platform.developer.subscribe(req.body.app_id, {
+      eventTypes: req.body.event_types,
+      url: req.body.url,
+    });
+  }));
+  // Public developer API — authenticated by API key + scope, rate-limited.
+  const apiKeyAuth = (scope) => (req, res, next) => {
+    try {
+      req.developerApp = platform.developer.authenticate(req.get('X-Api-Key'), scope);
+      next();
+    } catch (e) {
+      next(e);
+    }
+  };
+  app.get('/v1/partner/campaigns/:id/ledger', apiKeyAuth('public:read'), run((req) =>
+    platform.kgetsi.publicLedger(req.params.id)
+  ));
+  app.get('/v1/partner/search', apiKeyAuth('public:read'), run((req) =>
+    platform.search.search(req.query.q, { limit: Number(req.query.limit) || 20 })
+  ));
+  app.get('/v1/partner/heritage', apiKeyAuth('heritage:read'), run((req) =>
+    paginate(platform.heritage.publicSearchIndex(), {
+      pageToken: req.query.page_token, pageSize: req.query.page_size,
+    })
+  ));
+
+  // ── Plugin routes (Phase 3, WS5): /v1/ext/<prefix>/… ──────────────
+  // Authenticated, then delegated to enabled plugins' sandboxed routers.
+  app.use('/v1/ext', auth, (req, res, next) => platform.plugins.router(req, res, next));
+
   // ── Identity (§5) ──────────────────────────────────────────────────
   app.post('/v1/identity/otp', run((req) => platform.identity.requestOtp(req.body.msisdn)));
   app.post('/v1/identity/otp/verify', run((req) => {
@@ -442,11 +496,33 @@ function createApp(platform = createPlatform(), options = {}) {
       provider: req.body.provider,
       msisdn: req.body.msisdn,
       amountMinor: req.body.amount_minor,
+      currency: req.body.currency, // multi-currency (WS1/WS2); defaults BWP
       destAccountId: req.body.dest_account_id,
       purposeRef: req.body.purpose_ref,
       actorRef: req.actor,
       idempotencyKey: req.idemKey,
     })
+  ));
+  app.get('/v1/payments/providers', run(() => ({
+    providers: platform.payments.capabilityMatrix(),
+  })));
+  app.get('/v1/payments/select', run((req) => ({
+    provider: platform.payments.selectProvider({
+      currency: req.query.currency,
+      country: req.query.country,
+      needs: req.query.needs ? String(req.query.needs).split(',') : [],
+    }),
+  })));
+  // PayPal order lifecycle (WS1): create → (authorize) → capture.
+  app.post('/v1/payments/paypal/orders/:id/capture', auth, run((req) => {
+    const provider = platform.payments.provider('paypal');
+    const webhook = provider.captureOrder(req.params.id);
+    // The capture emits the operator's signed webhook; process it through
+    // the same verified path as any other provider callback.
+    return platform.payments.processWebhook('paypal', webhook.rawBody, webhook.headers);
+  }));
+  app.post('/v1/payments/paypal/orders/:id/authorize', auth, run((req) =>
+    platform.payments.provider('paypal').authorizeOrder(req.params.id)
   ));
   app.post('/v1/payments/payouts', auth, run((req) => {
     // Untrusted devices (root/jailbreak signals) lose payout privileges
@@ -469,6 +545,7 @@ function createApp(platform = createPlatform(), options = {}) {
   app.post('/v1/payments/intents/:id/refund', auth, run((req) =>
     platform.payments.refund({
       intentId: req.params.id,
+      amountMinor: req.body.amount_minor, // omit for a full refund; partial needs capability
       actorRef: req.actor,
       idempotencyKey: req.idemKey,
     })
@@ -600,6 +677,16 @@ function createApp(platform = createPlatform(), options = {}) {
   ));
   app.get('/v1/lelapa/circles/:id/events', auth, run((req) =>
     platform.lelapa.familyEvents(req.params.id, req.actor)
+  ));
+
+  // Community feedback (Phase 3, WS3): members contribute to their pilot.
+  app.post('/v1/pilots/:id/feedback', auth, run((req) =>
+    platform.pilots.submitFeedback(req.params.id, {
+      userRef: req.actor,
+      category: req.body.category,
+      message: req.body.message,
+      rating: req.body.rating,
+    })
   ));
 
   // ── Progressive Web App (Phase 2, WS2) ─────────────────────────────

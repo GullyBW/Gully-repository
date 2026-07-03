@@ -179,6 +179,149 @@ class OpsService {
     };
   }
 
+  // ── Operations Center: one unified view (Phase 3, WS10) ────────────
+
+  /**
+   * The single pane the brief asks for: infrastructure, payments, fraud,
+   * ledger, governance, notifications, analytics, queues, offline sync,
+   * pilots, AI, support and security — each summarised with a status.
+   */
+  operationsCenter() {
+    const p = this.platform;
+    const tb = p.ledger.trialBalance();
+    const readiness = p.monitoring.readiness();
+    const scorecard = p.securityScorecard ? p.securityScorecard.generate() : null;
+    const status = (ok) => (ok ? 'ok' : 'attention');
+    return {
+      generated_at: this.clock.nowIso(),
+      overall: readiness.ready && tb.balanced && this.listIncidents({ state: 'open' }).length === 0
+        ? 'healthy' : 'degraded',
+      panels: {
+        infrastructure: {
+          status: status(readiness.ready),
+          readiness,
+          uptime_days: Math.round(((this.clock.nowMs() - this.startedAtMs) / 86400000) * 100) / 100,
+        },
+        payments: {
+          status: status(p.payments.retryQueue.deadLetters.length === 0),
+          providers: p.payments.providers.size,
+          intents_by_state: countBy(p.payments.intents.find(), 'state'),
+          retry_depth: p.payments.retryQueue.depth(),
+          dead_letters: p.payments.retryQueue.deadLetters.length,
+        },
+        fraud: {
+          status: status(p.fraud.openReviews().length === 0),
+          open_reviews: p.fraud.openReviews().length,
+        },
+        ledger: {
+          status: status(tb.balanced),
+          trial_balance: tb,
+          postings: p.ledger.postings.count(),
+          rejections: p.ledger.rejections.count(),
+        },
+        governance: {
+          status: status(p.governance.disputes.count((d) => d.state === 'open') === 0),
+          open_disputes: p.governance.disputes.count((d) => d.state === 'open'),
+          frozen_seats: p.governance.seats.count((s) => s.state === 'frozen'),
+        },
+        notifications: {
+          status: 'ok',
+          delivery: p.notifications.deliveryStats(),
+        },
+        // analytics, pilots, developer, ai, security are always built by
+        // the container, so no optional guards are needed here.
+        analytics: { status: 'ok', dau_today: p.analytics.activity().dau_today },
+        queues: {
+          status: status(p.payments.retryQueue.depth() < 100),
+          payment_retry: p.payments.retryQueue.depth(),
+          webhook_deliveries_pending: p.developer.deliveries.count(
+            (d) => d.state === 'pending' || d.state === 'failed'
+          ),
+        },
+        offline_sync: {
+          status: 'ok',
+          mutations_applied: p.sync.applied.size,
+        },
+        pilots: {
+          status: 'ok',
+          total: p.pilots.list().length,
+          live: p.pilots.list().filter((x) => x.stage === 'live').length,
+        },
+        ai: {
+          status: 'ok',
+          capabilities: [...p.ai.providers.keys()],
+        },
+        support: {
+          status: 'ok',
+          open_requests: p.pilots.feedback.count((f) => f.category === 'support' && f.state === 'open'),
+        },
+        security: {
+          status: status(scorecard.grade === 'A' || scorecard.grade === 'B'),
+          grade: scorecard.grade,
+          score: scorecard.score,
+        },
+      },
+    };
+  }
+
+  /** Live diagnostics: a deep probe on demand (WS10). */
+  diagnostics() {
+    const p = this.platform;
+    return {
+      generated_at: this.clock.nowIso(),
+      ledger: {
+        trial_balance: p.ledger.trialBalance(),
+        accounts: p.ledger.accounts.count(),
+        recent_rejections: p.ledger.rejections.find().slice(-5),
+      },
+      payments: {
+        dead_letters: p.payments.retryQueue.deadLetters,
+        stuck_intents: p.payments.intents
+          .find((i) => ['pending_provider', 'retrying'].includes(i.state))
+          .map((i) => ({ id: i.id, provider: i.provider, state: i.state })),
+      },
+      security: {
+        high_events: p.assurance ? p.assurance.listEvents({ severity: 'high' }).slice(-5) : [],
+        active_holds: p.assurance ? p.assurance.report().active_holds : 0,
+      },
+      incidents: this.listIncidents({ state: 'open' }),
+      readiness: p.monitoring.readiness(),
+    };
+  }
+
+  // ── Maintenance scheduling (WS10) ──────────────────────────────────
+
+  scheduleMaintenance(startsAtIso, endsAtIso, message, actor) {
+    this._scheduledMaintenance = {
+      starts_at: startsAtIso,
+      ends_at: endsAtIso,
+      message: message || null,
+      scheduled_by: actor,
+      scheduled_at: this.clock.nowIso(),
+    };
+    this.audit.append(actor, 'ops.maintenance_scheduled', 'platform:motse', null, {
+      starts_at: startsAtIso, ends_at: endsAtIso,
+    });
+    return this._scheduledMaintenance;
+  }
+
+  /** Scheduler tick: flip maintenance mode on/off at the scheduled edges. */
+  applyScheduledMaintenance() {
+    const sched = this._scheduledMaintenance;
+    if (!sched) return { changed: false };
+    const now = this.clock.nowIso();
+    if (!this.maintenance.on && now >= sched.starts_at && now < sched.ends_at) {
+      this.setMaintenance(true, sched.message, 'system:scheduler');
+      return { changed: true, on: true };
+    }
+    if (this.maintenance.on && now >= sched.ends_at) {
+      this.setMaintenance(false, null, 'system:scheduler');
+      this._scheduledMaintenance = null;
+      return { changed: true, on: false };
+    }
+    return { changed: false };
+  }
+
   // ── Health & capacity reports ──────────────────────────────────────
 
   healthReport() {
@@ -231,6 +374,12 @@ class OpsService {
       next_architecture_review_at_users: Math.max(users * 5, 250),
     };
   }
+}
+
+function countBy(rows, field) {
+  const out = {};
+  for (const row of rows) out[row[field]] = (out[row[field]] || 0) + 1;
+  return out;
 }
 
 module.exports = { OpsService };

@@ -433,6 +433,14 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   ));
   router.get('/pilots/:id/health', run((req) => platform.pilots.health(req.params.id)));
   router.get('/pilots/:id/report', run((req) => platform.pilots.report(req.params.id)));
+  router.get('/pilots/:id/dashboard', run((req) => platform.pilots.liveDashboard(req.params.id)));
+  router.post('/pilots/:id/morafe', run((req) =>
+    platform.pilots.enrollMorafe(req.params.id, req.body.morafe_ref, req.actor)
+  ));
+  router.post('/pilots/:id/rollback', run((req) =>
+    platform.pilots.rollback(req.params.id, req.actor, req.body.reason)
+  ));
+  router.get('/pilots/:id/feedback', run((req) => platform.pilots.feedbackFor(req.params.id)));
   router.get('/flags', run(() => platform.flags.list()));
   router.post('/flags/:key', run((req) => {
     if (req.body.define) {
@@ -484,6 +492,11 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.post('/ops/maintenance', run((req) =>
     platform.ops.setMaintenance(req.body.on, req.body.message, req.actor)
   ));
+  router.get('/ops/center', run(() => platform.ops.operationsCenter())); // WS10 unified view
+  router.get('/ops/diagnostics', run(() => platform.ops.diagnostics()));
+  router.post('/ops/maintenance/schedule', run((req) =>
+    platform.ops.scheduleMaintenance(req.body.starts_at, req.body.ends_at, req.body.message, req.actor)
+  ));
   router.get('/ops/config', run(() => platform.ops.configView()));
   router.get('/ops/health-report', run(() => platform.ops.healthReport()));
   router.get('/ops/capacity', run(() => platform.ops.capacityReport()));
@@ -496,6 +509,58 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   }));
   router.get('/ops/backups', run(() => platform.backups.list()));
   router.post('/ops/backups/:id/verify', run((req) => platform.backups.verify(req.params.id)));
+
+  // ── Phase 3: developer platform oversight (WS12) ───────────────────
+  router.get('/developer/apps', run(() =>
+    platform.developer.apps.find().map((a) => {
+      const { key_hash, webhook_secret, ...safe } = a;
+      return safe;
+    })
+  ));
+  router.get('/developer/subscriptions', run(() => platform.developer.subscriptions.find()));
+  router.get('/developer/deliveries', run((req) =>
+    paginate(platform.developer.deliveries.find(), {
+      pageToken: req.query.page_token, pageSize: req.query.page_size,
+    })
+  ));
+  router.post('/developer/deliveries/retry', run(() => platform.developer.retryFailedDeliveries()));
+
+  // ── Phase 3: AI evaluation (WS9) + security scorecard (WS8) ────────
+  router.get('/ai/evaluation', run((req) => platform.aiEvaluator.evaluate(req.actor)));
+  router.get('/security/scorecard', run(() => platform.securityScorecard.generate()));
+
+  // ── Phase 3: plugin management (WS5) ───────────────────────────────
+  router.get('/plugins', run(() => platform.plugins.list()));
+  router.post('/plugins/:name/enable', run((req) => platform.plugins.enable(req.params.name, req.actor)));
+  router.post('/plugins/:name/disable', run((req) => platform.plugins.disable(req.params.name, req.actor)));
+
+  // ── Phase 3: workflow engine (WS4) ─────────────────────────────────
+  router.get('/workflows', run(() => platform.workflows.listDefinitions()));
+  router.post('/workflows', run((req) => platform.workflows.defineWorkflow(req.body, req.actor)));
+  router.get('/workflows/instances', run((req) =>
+    paginate(
+      platform.workflows.instances.find((i) => (req.query.state ? i.state === req.query.state : true)),
+      { pageToken: req.query.page_token, pageSize: req.query.page_size }
+    )
+  ));
+  router.get('/workflows/instances/:id', run((req) => platform.workflows.get(req.params.id)));
+  router.post('/workflows/:key/start', run((req) =>
+    platform.workflows.start(req.params.key, {
+      context: req.body.context || {},
+      objectRef: req.body.object_ref,
+      actor: req.actor,
+    })
+  ));
+  router.post('/workflows/instances/:id/steps/:stepId/decide', run((req) =>
+    platform.workflows.decide(req.params.id, req.params.stepId, req.actor, {
+      decision: req.body.decision,
+      note: req.body.note,
+    })
+  ));
+  router.post('/workflows/instances/:id/steps/:stepId/delegate', run((req) =>
+    platform.workflows.delegate(req.params.id, req.params.stepId, req.actor, req.body.to_ref, req.actor)
+  ));
+  router.post('/workflows/tick', run(() => platform.workflows.tick()));
 
   // ── Phase 2: integrations (WS9) ────────────────────────────────────
   router.get('/integrations', run(() => platform.integrations.describe()));

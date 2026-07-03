@@ -1,0 +1,17 @@
+# Blue/Green production track (Phase 3, WS13). The "green" release runs
+# alongside "blue" under a separate Helm release name; traffic cuts over
+# at the ingress once green is verified. Rollback = point the ingress
+# back at blue (still running). Combine with canary weights for a
+# staged cut (5% → 50% → 100%).
+#
+#   helm upgrade motse-green deploy/motse/helm/motse \
+#     -f values-prod.yaml -f values-prod-green.yaml --set image.tag=<sha>
+replicas: 3
+autoscaling: { enabled: true, minReplicas: 3, maxReplicas: 20, targetCPUUtilization: 65 }
+ingress:
+  enabled: true
+  host: green.api.motse.bw # verification host; promote by swapping the prod host
+  className: gce
+config:
+  NODE_ENV: production
+  MOTSE_LOG_LEVEL: info

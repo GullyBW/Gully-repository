@@ -125,6 +125,24 @@ class NotificationService {
     this._ledgerAccounts = accountsCollection;
   }
 
+  /**
+   * Localization (Phase 3, WS13). Once bound, notify() accepts an
+   * optional titleKey/params and renders the title in the recipient's
+   * language (Setswana-first). Fully backward compatible: callers that
+   * pass a literal `title` are unaffected.
+   */
+  bindI18n(i18n, identity) {
+    this._i18n = i18n;
+    this._i18nIdentity = identity;
+  }
+
+  _localizeTitle(userRef, { title, titleKey, params }) {
+    if (!titleKey || !this._i18n) return title;
+    const user = this._i18nIdentity ? this._i18nIdentity.users.get(userRef) : null;
+    const locale = this._i18n.localeFor(user);
+    return this._i18n.t(titleKey, { locale, params: params || {} });
+  }
+
   // ── Preferences ────────────────────────────────────────────────────
 
   setPreference(userRef, category, channels) {
@@ -168,9 +186,11 @@ class NotificationService {
 
   // ── Dispatch ───────────────────────────────────────────────────────
 
-  notify(userRef, { category, title, body, ref, collapseKey }) {
+  notify(userRef, { category, title, titleKey, params, body, ref, collapseKey }) {
     const pref = this._prefsFor(userRef, category);
     const exempt = EXEMPT_CATEGORIES.has(category);
+    const resolvedTitle = this._localizeTitle(userRef, { title, titleKey, params });
+    title = resolvedTitle;
     const notification = this.inbox.insert({
       id: id('ntf'),
       user_ref: userRef,

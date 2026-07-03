@@ -29,6 +29,7 @@ class PilotService {
   constructor({ store, clock, identity, kgotla, flags, audit, bus, analytics = null }) {
     this.pilots = store.collection('pilots');
     this.villages = store.collection('pilot_villages');
+    this.feedback = store.collection('pilot_feedback');
     this.clock = clock;
     this.identity = identity;
     this.kgotla = kgotla;
@@ -55,6 +56,7 @@ class PilotService {
       district,
       stage: 'planned',
       ward_refs: [],
+      morafe_refs: [],
       admins: [],
       flag_profile: { ...flagProfile }, // key -> value applied per enrolled ward
       created_by: actor,
@@ -144,6 +146,73 @@ class PilotService {
     return updated;
   }
 
+  /**
+   * Enroll a whole morafe (Phase 3, WS3): apply the flag profile at
+   * morafe scope so every member of that people sees the pilot's
+   * modules regardless of which ward they live in.
+   */
+  enrollMorafe(pilotId, morafeRef, actor) {
+    const pilot = this.get(pilotId);
+    const morafeRefs = pilot.morafe_refs || [];
+    if (morafeRefs.includes(morafeRef)) return pilot;
+    const updated = this.pilots.update(pilotId, { morafe_refs: [...morafeRefs, morafeRef] });
+    for (const [key, value] of Object.entries(pilot.flag_profile)) {
+      this.flags.set(key, `morafe:${morafeRef}`, value, actor);
+    }
+    this.audit.append(actor, 'pilot.morafe_enrolled', `pilot:${pilotId}`, null, { morafe_ref: morafeRef });
+    return updated;
+  }
+
+  /**
+   * Rollback (Phase 3, WS3): unwind a pilot — remove every flag override
+   * it set at ward/morafe scope and move the pilot to 'paused'. The
+   * community's data is untouched; only the rollout is reversed. This is
+   * the safety valve the brief asks for when a pilot goes wrong.
+   */
+  rollback(pilotId, actor, reason) {
+    const pilot = this.get(pilotId);
+    for (const wardRef of pilot.ward_refs) {
+      for (const key of Object.keys(pilot.flag_profile)) {
+        this.flags.unset(key, `ward:${wardRef}`, actor);
+      }
+    }
+    for (const morafeRef of pilot.morafe_refs || []) {
+      for (const key of Object.keys(pilot.flag_profile)) {
+        this.flags.unset(key, `morafe:${morafeRef}`, actor);
+      }
+    }
+    const updated = this.pilots.update(pilotId, {
+      stage: 'paused',
+      rolled_back: { at: this.clock.nowIso(), by: actor, reason: reason || null },
+      stage_history: [...pilot.stage_history, { stage: 'paused', at: this.clock.nowIso(), by: actor, note: 'rollback' }],
+    });
+    this.audit.append(actor, 'pilot.rolled_back', `pilot:${pilotId}`, { stage: pilot.stage }, {
+      stage: 'paused',
+      reason,
+    });
+    this.bus.publish('pilot.stage.changed', { pilot_id: pilotId, stage: 'paused' });
+    return updated;
+  }
+
+  /** Community feedback collection (Phase 3, WS3). */
+  submitFeedback(pilotId, { userRef, category = 'general', message, rating }) {
+    this.get(pilotId);
+    return this.feedback.insert({
+      id: id('fbk'),
+      pilot_id: pilotId,
+      user_ref: userRef || null,
+      category, // general | bug | request | support
+      message,
+      rating: rating || null,
+      state: category === 'support' ? 'open' : 'received',
+      created_at: this.clock.nowIso(),
+    });
+  }
+
+  feedbackFor(pilotId) {
+    return this.feedback.find((f) => f.pilot_id === pilotId);
+  }
+
   /** Assign a pilot administrator: L3 + pilot_admin(pilot:X) role. */
   assignAdmin(pilotId, userRef, actor) {
     const pilot = this.get(pilotId);
@@ -179,6 +248,72 @@ class PilotService {
       letsema_participants: letsemas.reduce((s, l) => s + l.participants.length, 0),
       notices: notices.length,
       flags: Object.keys(pilot.flag_profile),
+    };
+  }
+
+  /**
+   * Live pilot dashboard (Phase 3, WS3): the seven operational metrics
+   * the brief names, computed across the pilot's wards.
+   */
+  liveDashboard(pilotId) {
+    const pilot = this.get(pilotId);
+    const wardSet = new Set(pilot.ward_refs);
+    const residents = this.identity.users.find((u) => wardSet.has(u.ward_ref));
+    const residentIds = new Set(residents.map((u) => u.id));
+
+    const verified = residents.filter((u) => u.level !== 'L0' && u.level !== 'L1').length;
+    const phoneVerified = residents.filter((u) => u.level !== 'L0').length;
+
+    // Donations & bookings by pilot members.
+    const p = this.analytics ? this.analytics.platform : null;
+    let donations = 0;
+    let bookings = 0;
+    let paymentSuccess = null;
+    if (p) {
+      donations = p.kgetsi.campaigns
+        .find()
+        .reduce(
+          (sum, c) =>
+            sum +
+            (p.ledger.postingsFor(`campaign:${c.id}`) || []).filter((post) =>
+              post.entries.some((e) => {
+                const acct = p.ledger.accounts.get(e.account_id);
+                return acct && residentIds.has(acct.owner_ref);
+              })
+            ).length,
+          0
+        );
+      bookings = p.loeto.bookings.find((b) => residentIds.has(b.guest_ref)).length;
+      const memberIntents = p.payments.intents.find((i) => residentIds.has(i.actor_ref));
+      const completed = memberIntents.filter((i) => i.state === 'completed').length;
+      paymentSuccess = memberIntents.length
+        ? Math.round((completed / memberIntents.length) * 100)
+        : null;
+    }
+    const support = this.feedback.find(
+      (f) => f.pilot_id === pilotId && f.category === 'support'
+    );
+
+    return {
+      pilot_id: pilotId,
+      stage: pilot.stage,
+      registration_completion: {
+        residents: residents.length,
+        phone_verified: phoneVerified,
+        completion_pct: residents.length ? Math.round((phoneVerified / residents.length) * 100) : 0,
+      },
+      identity_verification_rate: {
+        verified_l2_plus: verified,
+        rate_pct: residents.length ? Math.round((verified / residents.length) * 100) : 0,
+      },
+      donation_activity: { contributions: donations },
+      booking_activity: { bookings },
+      offline_sync: { mutations_applied: p ? p.sync.applied.size : 0 },
+      payment_success: { success_pct: paymentSuccess },
+      support_requests: {
+        total: support.length,
+        open: support.filter((f) => f.state === 'open').length,
+      },
     };
   }
 

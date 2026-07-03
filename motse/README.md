@@ -7,12 +7,35 @@ platform primitives that every module consumes — a **verified identity graph**
 engine**.
 
 ```bash
-npm run motse:test       # 20 suites / 193 tests
-npm run motse:coverage   # coverage gates on new components (95/95/90)
-npm run motse:start      # :4100 — /v1 API, /admin portal, /app PWA, /metrics
-npm run motse:bench      # in-process performance benchmark
-npm run motse:load       # HTTP load test against a running server
+npm run motse:test         # 30 suites / 291 tests
+npm run motse:coverage     # Phase-1/2 coverage gate (95/95/90)
+npm run motse:coverage:p3  # Phase-3 coverage gate (95/95/90)
+npm run motse:start        # :4100 — /v1 API, /admin, /app PWA, /developers, /metrics
+npm run motse:bench        # in-process performance benchmark
+npm run motse:load         # HTTP load test against a running server
+npm run motse:resilience   # load & resilience simulation (10k/50k/100k)
+npm run motse:ai-eval      # AI quality report (thresholded)
+npm run motse:security-scan / motse:secret-scan   # dependency + secret scans
+npm run motse:openapi      # regenerate sdk/openapi.json
 ```
+
+## Phase 3 — production readiness, PayPal & extensibility
+
+| Workstream | Where | Notes |
+| --- | --- | --- |
+| PayPal + capability-based payments | `src/payments/paypal.provider.js`, `base.provider.js` | orders/authorize/capture, partial refunds, chargebacks, multi-currency FX→BWP; capability discovery ([PAYPAL](docs/PAYPAL.md)) |
+| Configurable workflow engine | `src/workflow/` | 8 seeded flows as data; N-of-M, parallel, timeouts, escalation, delegation ([WORKFLOW](docs/WORKFLOW.md)) |
+| Plugin architecture | `src/plugins/` | signed, permission-sandboxed, hot enable/disable, `/v1/ext/*` ([PLUGINS](docs/PLUGINS.md)) |
+| Live pilot framework | `src/pilot/` | morafe enrollment, rollback, feedback, 7-metric live dashboard ([PILOTS](docs/PILOTS.md)) |
+| AI evaluation framework | `src/ai/evaluation/` | gold datasets, thresholded quality reports ([AI](docs/AI.md)) |
+| Security assurance + scorecards | `src/security/scorecard.js`, `scripts/secret-scan.js` | graded runtime scorecard, pen-test suite, secret/dependency scans |
+| Operations Center | `src/ops/ops.service.js` | unified 13-panel view, diagnostics, maintenance scheduling |
+| Load & resilience testing | `scripts/resilience-test.js` | user-scale + spikes + provider failure + failover, ledger-integrity asserted |
+| Public SDK + developer platform | `sdk/`, `src/developer/` | JS/TS SDK, OpenAPI, API-key apps, signed webhooks ([SDK](sdk/README.md)) |
+| National rollout | `deploy/motse/terraform/multiregion.tf`, Helm blue/green, `src/i18n/` | multi-region, blue/green, canary, localization ([NATIONAL-ROLLOUT](docs/NATIONAL-ROLLOUT.md)) |
+| Flutter CI validation | `.github/workflows/motse-flutter.yml` | analyze + test + build + compatibility report |
+
+Coverage on Phase-3 components: 98.9% statements / 90.3% branches / 99.8% lines.
 
 ## Phase 2 — national-platform readiness
 

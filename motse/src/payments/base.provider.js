@@ -33,6 +33,17 @@ class PaymentProvider {
       c2b: true, // customer-to-business collections
       b2c: true, // business-to-customer payouts
       refunds: true,
+      // Phase 3 (WS2): the full capability matrix. Botswana mobile-money
+      // defaults; providers override what they actually support.
+      partial_refunds: false,
+      recurring: false,
+      subscriptions: false,
+      escrow: false, // provider-side escrow (Motse's own escrow is the Ledger's)
+      multi_currency: false,
+      webhooks: true,
+      chargebacks: false,
+      currencies: ['BWP'],
+      countries: ['BW'],
       ...options.capabilities,
     };
     // Webhook signing secret for this provider (rotated via SecretManager).
@@ -43,6 +54,53 @@ class PaymentProvider {
     this.sandboxTxns = new Map(); // provider_ref -> txn
     this.sandboxBalanceMinor = 100000000; // float the operator holds for us
     this.faults = { failNextInitiate: 0, omitFromStatement: new Set() };
+  }
+
+  // ── Capability discovery (Phase 3, WS2) ────────────────────────────
+  // Business logic asks; it never assumes. Adding a provider is a new
+  // subclass + registration — no service changes.
+
+  supportsRefunds() { return !!this.capabilities.refunds; }
+  supportsPartialRefunds() { return !!this.capabilities.partial_refunds; }
+  supportsRecurringPayments() { return !!this.capabilities.recurring; }
+  supportsSubscriptions() { return !!this.capabilities.subscriptions; }
+  supportsEscrow() { return !!this.capabilities.escrow; }
+  supportsMultiCurrency() { return !!this.capabilities.multi_currency; }
+  supportsPayouts() { return !!this.capabilities.b2c; }
+  supportsWebhooks() { return !!this.capabilities.webhooks; }
+  supportsChargebacks() { return !!this.capabilities.chargebacks; }
+  supportedCurrencies() { return [...this.capabilities.currencies]; }
+  supportedCountries() { return [...this.capabilities.countries]; }
+
+  /** One row of the capability matrix (admin/config surfaces). */
+  describeCapabilities() {
+    return {
+      provider: this.name,
+      mode: this.live ? 'live' : 'sandbox',
+      refunds: this.supportsRefunds(),
+      partial_refunds: this.supportsPartialRefunds(),
+      recurring: this.supportsRecurringPayments(),
+      subscriptions: this.supportsSubscriptions(),
+      escrow: this.supportsEscrow(),
+      multi_currency: this.supportsMultiCurrency(),
+      payouts: this.supportsPayouts(),
+      webhooks: this.supportsWebhooks(),
+      chargebacks: this.supportsChargebacks(),
+      currencies: this.supportedCurrencies(),
+      countries: this.supportedCountries(),
+    };
+  }
+
+  /**
+   * FX into the ledger's BWP minor units. The Ledger stays single-
+   * currency (thebe); multi-currency providers convert at a declared
+   * rate that is stored on the intent for auditability.
+   */
+  fxToBwpMinor(amountMinor, currency) {
+    if (!currency || currency === 'BWP') return { bwpMinor: amountMinor, rate: 1 };
+    const rate = (this.fxRates || {})[currency];
+    if (!rate) throw err('INVALID_ARGUMENT', `${this.name} has no FX rate for ${currency}`);
+    return { bwpMinor: Math.round(amountMinor * rate), rate };
   }
 
   // ── Contract ───────────────────────────────────────────────────────
@@ -66,10 +124,30 @@ class PaymentProvider {
     if (!original || original.type !== 'collection' || original.state !== 'completed') {
       throw err('STATE_CONFLICT', 'Refund requires a completed collection at the provider');
     }
+    // Partial-refund rules live HERE, capability-gated (WS2): a partial
+    // amount needs the capability; cumulative refunds never exceed the
+    // original.
+    const alreadyRefunded = [...this.sandboxTxns.values()]
+      .filter(
+        (t) =>
+          t.type === 'refund' &&
+          t.original_provider_ref === originalProviderRef &&
+          t.state !== 'failed'
+      )
+      .reduce((s, t) => s + t.amount_minor, 0);
+    if (amountMinor < original.amount_minor - alreadyRefunded) {
+      this._requireCapability('partial_refunds');
+    }
+    if (amountMinor > original.amount_minor - alreadyRefunded) {
+      throw err('STATE_CONFLICT', 'Refund exceeds the remaining refundable amount', {
+        refundable_minor: original.amount_minor - alreadyRefunded,
+      });
+    }
     return this._sandboxInitiate({
       type: 'refund',
       msisdn: original.msisdn,
       amountMinor,
+      currency: original.currency,
       ref,
       original_provider_ref: originalProviderRef,
     });
@@ -109,7 +187,12 @@ class PaymentProvider {
       if (txn.state !== 'completed') continue;
       if (txn.completed_at && txn.completed_at.slice(0, 10) !== day) continue;
       if (this.faults.omitFromStatement.has(txn.provider_ref)) continue;
-      lines.push({ ref: txn.ref, amount_minor: txn.amount_minor, type: txn.type });
+      lines.push({
+        ref: txn.ref,
+        amount_minor: txn.amount_minor,
+        currency: txn.currency || 'BWP',
+        type: txn.type,
+      });
     }
     return lines;
   }
@@ -146,12 +229,35 @@ class PaymentProvider {
       type,
       msisdn,
       amount_minor: amountMinor,
+      currency: extra.currency || 'BWP',
       ref,
       state: 'pending',
       created_at: this.clock.nowIso(),
       ...extra,
     });
     return { provider_ref: providerRef, state: 'pending' };
+  }
+
+  /**
+   * Sandbox: the card network raises a chargeback on a completed
+   * collection (capability-gated). Emits a signed webhook the platform
+   * treats as a dispute → ledger reversal + fraud review.
+   */
+  sandboxChargeback(providerRef, { nonce, reasonCode = 'FRAUD' } = {}) {
+    this._requireCapability('chargebacks');
+    const txn = this.sandboxTxns.get(providerRef);
+    if (!txn || txn.type !== 'collection' || txn.state !== 'completed') {
+      throw err('STATE_CONFLICT', 'Chargebacks apply to completed collections');
+    }
+    txn.state = 'charged_back';
+    return this._signWebhook(
+      {
+        ...this._webhookBody(txn, 'chargeback'),
+        event: 'chargeback',
+        reason_code: reasonCode,
+      },
+      { nonce }
+    );
   }
 
   /**
@@ -172,7 +278,11 @@ class PaymentProvider {
     if (txn.type === 'collection' && outcome === 'success') {
       this.sandboxBalanceMinor += txn.amount_minor;
     }
-    const body = this._webhookBody(txn, outcome);
+    return this._signWebhook(this._webhookBody(txn, outcome), { nonce });
+  }
+
+  /** Sign any sandbox webhook body exactly as the operator would. */
+  _signWebhook(body, { nonce } = {}) {
     const rawBody = JSON.stringify(body);
     const timestamp = this.clock.nowMs();
     const theNonce = nonce || crypto.randomBytes(8).toString('hex');
