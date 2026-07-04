@@ -175,6 +175,14 @@ class MotseClient {
   /** Gateway discovery (brands, currencies, selection order). */
   cardGateways() { return this._request('GET', '/v1/cards/gateways'); }
 
+  // ── Governed DPI planes (Phase 6) ────────────────────────────────
+  /** The caller's own identity assertion (Identity Plane). */
+  identityAssertion() { return this._request('GET', '/v1/identity/assertion'); }
+  /** Governed AI retrieval — policy-filtered, provenance-signed results. */
+  aiRetrieve(query, { purpose, tenant } = {}) {
+    return this._request('POST', '/v1/ai/retrieve', { query, purpose, tenant });
+  }
+
   // ── QR Code Platform (Phase 5) ───────────────────────────────────
   generateQr({ kind, tenant, subjectRef, ref, amountMinor, currency, expiresInMs, singleUse, dynamic, visibility, requiredRole, requiredLevel, data, restricted } = {}) {
     return this._request('POST', '/v1/qr', {

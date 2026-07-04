@@ -728,6 +728,23 @@ function createApp(platform = createPlatform(), options = {}) {
     return platform.qr.revoke(req.actor, req.params.id, req.body.reason);
   }));
 
+  // ── Phase 6: governed DPI planes ───────────────────────────────────
+  // The caller's own identity assertion (Identity Plane — assertions only).
+  app.get('/v1/identity/assertion', auth, run((req) =>
+    platform.identityPlane.assert(req.actor, { deviceId: req.get('X-Device-Id') })
+  ));
+  // Governed AI retrieval — every result is policy-filtered + provenance-signed.
+  app.post('/v1/ai/retrieve', authOptional, run((req) =>
+    platform.aiGateway.retrieve({
+      subject: req.actor || null,
+      tenant: req.body.tenant,
+      query: req.body.query,
+      purpose: req.body.purpose,
+      deviceId: req.get('X-Device-Id'),
+      correlationId: req.traceId,
+    })
+  ));
+
   // ── Notifications ──────────────────────────────────────────────────
   app.get('/v1/notifications', auth, run((req) =>
     paginate(platform.notifications.inboxFor(req.actor).reverse(), {

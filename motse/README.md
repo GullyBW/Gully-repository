@@ -19,6 +19,18 @@ npm run motse:security-scan / motse:secret-scan   # dependency + secret scans
 npm run motse:openapi      # regenerate sdk/openapi.json
 ```
 
+## Phase 6 — four governed DPI planes (in progress)
+
+| Workstream | Where | Notes |
+| --- | --- | --- |
+| Identity Plane + Policy Decision Kernel | `src/governance/identity.plane.js`, `policy.kernel.js` | assertions-only identity; central deterministic deny-by-default authorization, audited + event-sourced ([GOVERNED-PLANES](docs/GOVERNED-PLANES.md)) |
+| Governed AI Retrieval Gateway + Data Product Plane | `src/governance/ai.gateway.js`, `data.product.plane.js` | per-document policy-filtered AI retrieval (no raw-store access); projections-only, signed data products |
+| Provenance + Audit Graph + Cells + Certification | `src/governance/{provenance,audit.graph,cell.registry,certification}.js` | tamper-evident signed outputs; cross-plane forensic graph; cell-based sovereign isolation; on-demand signed compliance report |
+
+Coverage on the governed planes: 99.1% statements / 93.4% branches / 100% lines
+(`npm run motse:coverage:p6`). 33 new tests; all existing suites stay green
+(454 Motse + 131 Tirelo).
+
 ## Phase 5 — digital public infrastructure (in progress)
 
 Delivered so far — the foundation the remaining Phase-5 workstreams build on:

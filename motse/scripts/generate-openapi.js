@@ -73,7 +73,10 @@ function needsAuth(p) {
     (p.startsWith('/v1/cards') && p !== '/v1/cards/gateways') ||
     // QR generation / listing / pay / revoke are member-auth; verify and
     // decode are public (a scanner may be anonymous, the token self-authenticates).
-    (p.startsWith('/v1/qr') && p !== '/v1/qr/verify' && p !== '/v1/qr/decode')
+    (p.startsWith('/v1/qr') && p !== '/v1/qr/verify' && p !== '/v1/qr/decode') ||
+    // Identity assertion is member-auth; governed AI retrieval is optional-auth
+    // (anonymous callers see only public corpus content via per-doc policy).
+    p === '/v1/identity/assertion'
   );
 }
 

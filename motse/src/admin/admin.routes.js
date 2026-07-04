@@ -668,6 +668,36 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.post('/qr/:id/revoke', run((req) => platform.qr.revoke(req.actor, req.params.id, req.body.reason)));
   router.post('/qr/bulk', run((req) => ({ codes: platform.qr.bulkGenerate(req.actor, req.body.items || []) })));
 
+  // ── Phase 6: governed DPI planes ───────────────────────────────────
+  // Policy Decision Kernel — evaluate a decision (ops/testing).
+  router.post('/policy/decide', run((req) => platform.policy.decide({
+    assertion: platform.identityPlane.assert(req.body.subject || null, { tenant: req.body.tenant }),
+    tenant: req.body.tenant,
+    action: req.body.action,
+    resource: req.body.resource || null,
+    riskScore: req.body.risk_score || 0,
+    context: { correlationId: req.traceId },
+  })));
+  // Cross-plane audit graph (forensic tracing + compliance rollup).
+  router.get('/audit/graph/:correlationId', run((req) => platform.auditGraph.trace(req.params.correlationId)));
+  router.get('/audit/planes', run(() => platform.auditGraph.summary()));
+  // Data Product Plane (projections/analytics only — authorized + signed).
+  router.get('/data-products', run(() => platform.dataProducts.list()));
+  router.get('/data-products/:name', run((req) =>
+    platform.dataProducts.read(req.params.name, { subject: req.actor, correlationId: req.traceId })
+  ));
+  // Governed AI corpus ingestion (classified content).
+  router.post('/ai/corpus', run((req) => platform.aiGateway.addDocument(req.actor, {
+    tenant: req.body.tenant, classification: req.body.classification,
+    requiredRole: req.body.required_role, requiredLevel: req.body.required_level,
+    requiredMorafe: req.body.required_morafe, title: req.body.title, content: req.body.content,
+  })));
+  // Cell-based sovereign topology.
+  router.get('/cells', run(() => platform.cells.describe()));
+  router.get('/cells/:id/contract', run((req) => platform.cells.contract(req.params.id)));
+  // DPI Certification Mode — signed, reproducible compliance report.
+  router.post('/certification/run', run(() => platform.certification.run()));
+
   return router;
 }
 

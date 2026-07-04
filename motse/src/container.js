@@ -40,6 +40,14 @@ const { GATEWAY_CLASSES } = require('./payments/gateways/adapters');
 const { EventStore } = require('./events/event.store');
 const { ProjectionRegistry, SEED_PROJECTIONS } = require('./events/projections');
 const { QrService } = require('./qr/qr.service');
+const { IdentityPlane } = require('./governance/identity.plane');
+const { PolicyKernel } = require('./governance/policy.kernel');
+const { Provenance } = require('./governance/provenance');
+const { GovernedAiGateway } = require('./governance/ai.gateway');
+const { DataProductPlane } = require('./governance/data.product.plane');
+const { AuditGraph } = require('./governance/audit.graph');
+const { CellRegistry } = require('./governance/cell.registry');
+const { Certification } = require('./governance/certification');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -280,6 +288,36 @@ function createPlatform({
     store, clock, secrets, audit, bus, fraud, analytics: platform.analytics,
     identity, payments, cards: platform.cards,
   });
+
+  // ── Phase 6: four governed DPI planes + provenance + audit graph ────
+  // Identity Plane exposes only assertions; the Policy Kernel is the sole
+  // decision point; the AI Gateway and Data Product Plane never touch raw
+  // stores; every governed output is provenance-signed and event-sourced.
+  platform.identityPlane = new IdentityPlane({ identity });
+  platform.policy = new PolicyKernel({ clock, audit, bus });
+  platform.provenance = new Provenance({ clock, secrets });
+  platform.aiGateway = new GovernedAiGateway({
+    store, clock, identityPlane: platform.identityPlane, policyKernel: platform.policy,
+    provenance: platform.provenance, audit, bus, analytics: platform.analytics,
+  });
+  platform.dataProducts = new DataProductPlane({
+    store, clock, identityPlane: platform.identityPlane, policyKernel: platform.policy,
+    provenance: platform.provenance, projections: platform.projections, bus,
+  });
+  platform.auditGraph = new AuditGraph({ eventStore });
+  platform.cells = new CellRegistry({ clock, audit, bus, policyKernel: platform.policy });
+  platform.cells.register({
+    id: process.env.MOTSE_CELL_ID || 'cell-0',
+    region: process.env.MOTSE_CELL_REGION || 'bw-central',
+    residency: process.env.MOTSE_CELL_RESIDENCY || 'bw',
+  });
+  platform.certification = new Certification({
+    clock, eventStore, ledger, auditGraph: platform.auditGraph, provenance: platform.provenance,
+  });
+  // Data products over existing CQRS projections (query-side, classified).
+  platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
+  platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });
+  platform.dataProducts.register({ name: 'qr_activity', classification: 'internal', description: 'QR generation/scan/revocation counts' });
 
   platform.assurance = new AssuranceService({ store, clock, identity, secrets, fraud, audit, bus });
   // Rotation automation: webhook secrets rotate quarterly by policy. The
