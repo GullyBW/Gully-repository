@@ -636,6 +636,38 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   // Card analytics (aggregates only — no PII, no card data).
   router.get('/cards/analytics', run(() => platform.analytics.cardAnalytics()));
 
+  // ── Phase 5: Event Store (WS2) ─────────────────────────────────────
+  router.get('/events', run((req) =>
+    paginate(
+      platform.eventStore.read({
+        stream: req.query.stream, type: req.query.type, tenant: req.query.tenant, until: req.query.until,
+      }),
+      { pageToken: req.query.page_token, pageSize: req.query.page_size }
+    )
+  ));
+  router.get('/events/stats', run(() => platform.eventStore.stats()));
+  router.get('/events/timetravel', run((req) =>
+    paginate(platform.eventStore.timeTravel(req.query.at, { stream: req.query.stream }), {
+      pageToken: req.query.page_token, pageSize: req.query.page_size,
+    })
+  ));
+
+  // ── Phase 5: CQRS projections (WS3) — dashboards read these ────────
+  router.get('/projections', run(() => platform.projections.list()));
+  router.get('/projections/:name', run((req) => platform.projections.view(req.params.name)));
+  router.post('/projections/:name/rebuild', run((req) => ({ state: platform.projections.rebuild(req.params.name) })));
+
+  // ── Phase 5: QR Code Platform (WS21) ───────────────────────────────
+  router.get('/qr', run((req) =>
+    paginate(platform.qr.list({ kind: req.query.kind, tenant: req.query.tenant, state: req.query.state }), {
+      pageToken: req.query.page_token, pageSize: req.query.page_size,
+    })
+  ));
+  router.get('/qr/report', run(() => platform.qr.report()));
+  router.get('/qr/:id/scans', run((req) => platform.qr.scanHistory(req.params.id)));
+  router.post('/qr/:id/revoke', run((req) => platform.qr.revoke(req.actor, req.params.id, req.body.reason)));
+  router.post('/qr/bulk', run((req) => ({ codes: platform.qr.bulkGenerate(req.actor, req.body.items || []) })));
+
   return router;
 }
 

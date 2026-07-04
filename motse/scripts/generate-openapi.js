@@ -70,7 +70,10 @@ function needsAuth(p) {
     p.startsWith('/v1/notifications') ||
     // Card endpoints are member-auth, except public gateway discovery and
     // the HMAC-verified webhook (which authenticates by signature).
-    (p.startsWith('/v1/cards') && p !== '/v1/cards/gateways')
+    (p.startsWith('/v1/cards') && p !== '/v1/cards/gateways') ||
+    // QR generation / listing / pay / revoke are member-auth; verify and
+    // decode are public (a scanner may be anonymous, the token self-authenticates).
+    (p.startsWith('/v1/qr') && p !== '/v1/qr/verify' && p !== '/v1/qr/decode')
   );
 }
 

@@ -19,6 +19,23 @@ npm run motse:security-scan / motse:secret-scan   # dependency + secret scans
 npm run motse:openapi      # regenerate sdk/openapi.json
 ```
 
+## Phase 5 — digital public infrastructure (in progress)
+
+Delivered so far — the foundation the remaining Phase-5 workstreams build on:
+
+| Workstream | Where | Notes |
+| --- | --- | --- |
+| Platform Event Store (WS2) | `src/events/event.store.js` | immutable log tapping the bus; replay, snapshots, upcasters (schema evolution), time-travel ([EVENTS-CQRS](docs/EVENTS-CQRS.md)) |
+| CQRS projections (WS3) | `src/events/projections.js` | materialized read models; live + backfill + rebuild; dashboards read these, not transactional tables |
+| QR Code Platform (WS21) | `src/qr/qr.service.js` | signed, time-limited, revocable QR across payments/identity/tourism/heritage/governance/trusts/learning/wallet; tamper/replay/permission + offline verify ([QR-PLATFORM](docs/QR-PLATFORM.md)) |
+
+Coverage on this Phase-5 slice: 98.4% statements / 91.5% branches / 99.6% lines
+(`npm run motse:coverage:p5`). 31 new tests; all existing suites stay green.
+Remaining Phase-5 workstreams (multi-tenancy, knowledge graph, GIS, identity
+wallet, universal search, AI copilot, zero-trust, workflow studio, observability,
+governance, compliance, MLOps, national integration, executive intelligence, DR)
+build on this event-sourced core and land incrementally.
+
 ## Phase 4 — native card payments & enterprise payment gateway
 
 | Workstream | Where | Notes |

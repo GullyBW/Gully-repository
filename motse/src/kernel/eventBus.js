@@ -17,11 +17,26 @@ class EventBus {
     this.log = []; // append-only event log — replay source
     this.schemas = new Map(); // type -> { version, requiredFields }
     this.subscribers = new Map(); // type -> [{ name, handler, seen:Set }]
+    this.taps = []; // synchronous observers of EVERY published event (Phase 5 Event Store)
   }
 
   /** Register an event schema. Publishing an unregistered type throws. */
   register(type, version, requiredFields = []) {
     this.schemas.set(type, { version, requiredFields });
+  }
+
+  /**
+   * Observe every published event, regardless of type (Phase 5). Used by
+   * the platform Event Store to persist the immutable log. Taps run after
+   * the event is appended to the log and before typed delivery; a tap must
+   * never throw (it is wrapped defensively so one tap cannot break publish).
+   */
+  tap(fn) {
+    this.taps.push(fn);
+    return () => {
+      const i = this.taps.indexOf(fn);
+      if (i >= 0) this.taps.splice(i, 1);
+    };
   }
 
   subscribe(type, name, handler) {
@@ -47,6 +62,13 @@ class EventBus {
       data,
     };
     this.log.push(event);
+    for (const tap of this.taps) {
+      try {
+        tap(event);
+      } catch (e) {
+        // A tap (e.g. the Event Store) must never break domain publishing.
+      }
+    }
     this._deliver(event);
     return event;
   }

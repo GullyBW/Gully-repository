@@ -680,6 +680,54 @@ function createApp(platform = createPlatform(), options = {}) {
     })
   ));
 
+  // ── Phase 5: QR Code Platform (WS21) ───────────────────────────────
+  // Generate a signed QR you own (identity/wallet/payment-request/…).
+  app.post('/v1/qr', auth, run((req) =>
+    platform.qr.generate(req.actor, {
+      kind: req.body.kind,
+      tenant: req.body.tenant,
+      subjectRef: req.body.subject_ref,
+      ref: req.body.ref,
+      amountMinor: req.body.amount_minor,
+      currency: req.body.currency,
+      expiresInMs: req.body.expires_in_ms,
+      singleUse: req.body.single_use,
+      dynamic: req.body.dynamic,
+      visibility: req.body.visibility,
+      requiredRole: req.body.required_role,
+      requiredLevel: req.body.required_level,
+      data: req.body.data,
+      restricted: req.body.restricted,
+    })
+  ));
+  // Verify a scanned QR (the scanner is the caller, if authenticated).
+  app.post('/v1/qr/verify', authOptional, run((req) =>
+    platform.qr.verify(req.body.token, {
+      scannerRef: req.actor || null,
+      tenant: req.body.tenant,
+      amountMinor: req.body.amount_minor,
+    })
+  ));
+  // Decode structure only (never trusted) — public.
+  app.post('/v1/qr/decode', run((req) => platform.qr.decode(req.body.token)));
+  // Pay by scanning a payment QR.
+  app.post('/v1/qr/pay', auth, run((req) =>
+    platform.qr.payWithQr(req.actor, req.body.token, {
+      provider: req.body.provider,
+      msisdn: req.body.msisdn,
+      cardId: req.body.card_id,
+      idempotencyKey: req.idemKey,
+    })
+  ));
+  app.get('/v1/qr', auth, run((req) => ({
+    codes: platform.qr.list().filter((c) => c.issued_by === req.actor),
+  })));
+  app.post('/v1/qr/:id/revoke', auth, run((req) => {
+    const code = platform.qr.get(req.params.id);
+    if (code.issued_by !== req.actor) throw new MotseError('PERMISSION_DENIED', 'Not your QR');
+    return platform.qr.revoke(req.actor, req.params.id, req.body.reason);
+  }));
+
   // ── Notifications ──────────────────────────────────────────────────
   app.get('/v1/notifications', auth, run((req) =>
     paginate(platform.notifications.inboxFor(req.actor).reverse(), {

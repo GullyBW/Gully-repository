@@ -175,6 +175,44 @@ class MotseClient {
   /** Gateway discovery (brands, currencies, selection order). */
   cardGateways() { return this._request('GET', '/v1/cards/gateways'); }
 
+  // ── QR Code Platform (Phase 5) ───────────────────────────────────
+  generateQr({ kind, tenant, subjectRef, ref, amountMinor, currency, expiresInMs, singleUse, dynamic, visibility, requiredRole, requiredLevel, data, restricted } = {}) {
+    return this._request('POST', '/v1/qr', {
+      kind, tenant, subject_ref: subjectRef, ref, amount_minor: amountMinor, currency,
+      expires_in_ms: expiresInMs, single_use: singleUse, dynamic, visibility,
+      required_role: requiredRole, required_level: requiredLevel, data, restricted,
+    });
+  }
+  verifyQr(token, { tenant, amountMinor } = {}) {
+    return this._request('POST', '/v1/qr/verify', { token, tenant, amount_minor: amountMinor });
+  }
+  decodeQr(token) { return this._request('POST', '/v1/qr/decode', { token }); }
+  payWithQr(token, { provider, msisdn, cardId } = {}) {
+    return this._request('POST', '/v1/qr/pay', { token, provider, msisdn, card_id: cardId });
+  }
+  myQrCodes() { return this._request('GET', '/v1/qr'); }
+  revokeQr(qrId, reason) { return this._request('POST', `/v1/qr/${qrId}/revoke`, { reason }); }
+
+  /**
+   * Offline QR verification (Node only): signature + expiry, no server
+   * round-trip. Revocation/replay still require an online `verifyQr`.
+   */
+  static verifyQrOffline(secret, token, nowMs = Date.now()) {
+    const crypto = require('crypto');
+    const parts = String(token).split('.');
+    if (parts.length !== 2) return { valid: false, reason: 'malformed' };
+    const [body, sig] = parts;
+    const expected = crypto.createHmac('sha256', secret).update(body).digest('hex');
+    let ok = false;
+    try { ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(sig))); } catch { ok = false; }
+    if (!ok) return { valid: false, reason: 'bad_signature' };
+    let p;
+    try { p = JSON.parse(Buffer.from(body.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')); }
+    catch { return { valid: false, reason: 'malformed' }; }
+    if (p.exp != null && nowMs > p.exp) return { valid: false, reason: 'expired' };
+    return { valid: true, qr_id: p.id, kind: p.k, amount_minor: p.amt, currency: p.cur };
+  }
+
   /**
    * Verify a gateway card-webhook signature (Node only). Gateways sign
    * `${timestamp}.${nonce}.${rawBody}` with the gateway secret; pass the

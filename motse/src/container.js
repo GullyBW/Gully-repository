@@ -37,6 +37,9 @@ const { CardPaymentProvider } = require('./payments/card.provider');
 const { CardService } = require('./payments/card.service');
 const { GatewayRegistry } = require('./payments/gateways/gateway.registry');
 const { GATEWAY_CLASSES } = require('./payments/gateways/adapters');
+const { EventStore } = require('./events/event.store');
+const { ProjectionRegistry, SEED_PROJECTIONS } = require('./events/projections');
+const { QrService } = require('./qr/qr.service');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -92,6 +95,9 @@ function createPlatform({
   const store = new Store();
   const clock = new Clock();
   const bus = new EventBus(clock);
+  // Phase 5 (WS2): the platform Event Store taps the bus BEFORE any domain
+  // service publishes, so the immutable log captures every event from boot.
+  const eventStore = new EventStore({ store, clock, bus });
   const idempotency = new IdempotencyRegistry(clock);
   const audit = new AuditLog(store, clock);
   const secrets = new SecretManager(clock);
@@ -192,6 +198,7 @@ function createPlatform({
     store,
     clock,
     bus,
+    eventStore,
     idempotency,
     audit,
     secrets,
@@ -262,6 +269,16 @@ function createPlatform({
   platform.cards = new CardService({
     store, clock, ledger, payments, provider: cardProvider, gateways,
     fraud, audit, bus, notifications, analytics: platform.analytics, replayGuard,
+  });
+
+  // ── Phase 5: CQRS projections (WS3) — dashboards read these views ───
+  platform.projections = new ProjectionRegistry({ store, clock, eventStore });
+  for (const projection of SEED_PROJECTIONS) platform.projections.register(projection);
+
+  // ── Phase 5: QR Code Platform (WS21) — signed, revocable, cross-domain
+  platform.qr = new QrService({
+    store, clock, secrets, audit, bus, fraud, analytics: platform.analytics,
+    identity, payments, cards: platform.cards,
   });
 
   platform.assurance = new AssuranceService({ store, clock, identity, secrets, fraud, audit, bus });
