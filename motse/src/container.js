@@ -48,6 +48,9 @@ const { DataProductPlane } = require('./governance/data.product.plane');
 const { AuditGraph } = require('./governance/audit.graph');
 const { CellRegistry } = require('./governance/cell.registry');
 const { Certification } = require('./governance/certification');
+const { OutboxService } = require('./persistence/outbox');
+const { createKv } = require('./distributed/kv');
+const { DistributedIdempotency, DistributedRateLimiter, DistributedLock } = require('./distributed/services');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -314,6 +317,23 @@ function createPlatform({
   platform.certification = new Certification({
     clock, eventStore, ledger, auditGraph: platform.auditGraph, provenance: platform.provenance,
   });
+
+  // ── Foundation F2/F3: transactional outbox + distributed runtime ────
+  // Outbox: atomic state+event commit with at-least-once relay (available
+  // to critical flows; existing bus.publish paths are unchanged).
+  platform.outbox = new OutboxService({ store, clock, bus });
+  // Distributed layer: in-memory today, Redis-backed when REDIS_URL is set —
+  // cross-pod idempotency, rate limiting and locks behind one KV interface.
+  platform.kv = createKv({ clock });
+  platform.distributed = {
+    idempotency: new DistributedIdempotency({ kv: platform.kv }),
+    rateLimiter: new DistributedRateLimiter({
+      kv: platform.kv, clock,
+      capacity: Number(process.env.MOTSE_RATE_CAPACITY || 300),
+      windowMs: Number(process.env.MOTSE_RATE_WINDOW_MS || 60000),
+    }),
+    lock: new DistributedLock({ kv: platform.kv }),
+  };
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
   platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });

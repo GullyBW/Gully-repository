@@ -1,0 +1,60 @@
+name: Foundation Stability Pipeline
+
+# Gates Foundation-layer correctness (F1 persistence/transactions, F2
+# transactional outbox, F3 Redis-backed distributed runtime) so no regression
+# reaches higher-level work. A Redis service is provisioned for future
+# REDIS_URL-backed runs; the default in-memory adapter keeps CI hermetic.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Module graph loads (typecheck)
+        run: npm run typecheck
+
+      - name: Root (Tirelo) unit + integration tests
+        run: npm test -- --runInBand
+
+      - name: Motse full suite (must stay green)
+        run: npm run motse:test
+
+      - name: Persistence + transaction validation (F1)
+        run: npm run test:persistence
+
+      - name: Transactional outbox consistency (F2)
+        run: npm run test:outbox
+
+      - name: Distributed runtime — idempotency / rate-limit / locks (F3)
+        run: npm run test:redis
+
+      - name: Foundation coverage gate (>=95/95/90)
+        run: npm run motse:coverage:foundation

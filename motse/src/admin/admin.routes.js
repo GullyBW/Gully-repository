@@ -698,6 +698,17 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   // DPI Certification Mode — signed, reproducible compliance report.
   router.post('/certification/run', run(() => platform.certification.run()));
 
+  // ── Foundation F2/F3: outbox + distributed runtime ─────────────────
+  router.get('/outbox', run(() => platform.outbox.stats()));
+  router.get('/outbox/dead-letters', run(() => platform.outbox.deadLetters()));
+  router.post('/outbox/drain', run(() => platform.outbox.drain()));
+  router.post('/outbox/dead-letters/:id/replay', run((req) => platform.outbox.replayDead(req.params.id)));
+  router.get('/distributed', run(() => ({
+    kv: platform.kv.constructor.name,
+    redis_backed: platform.kv.constructor.name === 'RedisKvAdapter',
+    services: ['idempotency', 'rateLimiter', 'lock'],
+  })));
+
   return router;
 }
 
