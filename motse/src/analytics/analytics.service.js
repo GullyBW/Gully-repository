@@ -1,6 +1,7 @@
 'use strict';
 
 const { sha256 } = require('../kernel/ids');
+const { INTERVALS } = require('../payments/card.service');
 
 /**
  * Analytics platform (Phase 2, WS5) — event-sourced aggregates only.
@@ -173,6 +174,108 @@ class AnalyticsService {
     return { bookings: bookings.length, by_state: byState };
   }
 
+  /**
+   * Card payment analytics (Phase 4, WS13) — aggregates only. Never a
+   * token, PAN, last4 or any card-identifying/personal data: brand,
+   * currency, gateway, aggregate amounts and rates are all it reports.
+   */
+  cardAnalytics() {
+    const cards = this.platform.cards;
+    if (!cards) return { enabled: false };
+    const intents = cards.intents.find();
+    const total = intents.length;
+    const byState = {};
+    const byBrand = {};
+    const byCurrency = {};
+    const byGateway = {};
+    let capturedMinor = 0;
+    let capturedCount = 0;
+    let refundedMinor = 0;
+    for (const i of intents) {
+      byState[i.state] = (byState[i.state] || 0) + 1;
+      byBrand[i.brand] = (byBrand[i.brand] || 0) + 1;
+      byCurrency[i.original_currency] = (byCurrency[i.original_currency] || 0) + 1;
+      byGateway[i.gateway] = (byGateway[i.gateway] || 0) + 1; // every intent is routed to a gateway
+      if (i.captured_minor > 0) {
+        capturedMinor += i.captured_minor;
+        capturedCount += 1;
+      }
+      refundedMinor += i.refunded_minor || 0;
+    }
+    // States that reached a successful authorization (approval numerator).
+    const approvedStates = [
+      'authorized', 'partially_captured', 'captured', 'partially_refunded', 'refunded', 'charged_back',
+    ];
+    const approved = approvedStates.reduce((s, st) => s + (byState[st] || 0), 0);
+    const declined = (byState.declined || 0) + (byState.failed || 0);
+    const chargedBack = byState.charged_back || 0;
+    const refundedCount = (byState.refunded || 0) + (byState.partially_refunded || 0);
+    const rate = (n) => (total ? Math.round((n / total) * 1000) / 10 : 0);
+
+    // Gateway success (from the failover routing log) + health/latency.
+    // Reached only when the card stack is wired, so the registry is present.
+    const gwStats = {};
+    for (const entry of this.platform.gateways.routingLog) {
+      const g = gwStats[entry.gateway] || (gwStats[entry.gateway] = { ok: 0, failover: 0, rejected: 0 });
+      g[entry.outcome === 'ok' ? 'ok' : entry.outcome === 'failover' ? 'failover' : 'rejected'] += 1;
+    }
+    const gateways = this.platform.gateways.healthAll().map((h) => {
+      const s = gwStats[h.gateway] || { ok: 0, failover: 0, rejected: 0 };
+      const attempts = s.ok + s.failover + s.rejected;
+      return {
+        gateway: h.gateway,
+        healthy: h.healthy,
+        mode: h.mode,
+        avg_latency_ms: h.avg_latency_ms,
+        intents: byGateway[h.gateway] || 0,
+        success_pct: attempts ? Math.round((s.ok / attempts) * 100) : null,
+        failovers: s.failover,
+      };
+    });
+
+    // Monthly recurring revenue: active subscriptions normalised to a
+    // monthly figure and converted to BWP (aggregate money, no PII).
+    const MONTH = 30 * 24 * 3600 * 1000;
+    let mrrMinor = 0;
+    let activeSubs = 0;
+    for (const s of cards.subscriptions.find((x) => x.state === 'active' || x.state === 'past_due')) {
+      activeSubs += 1;
+      const cycle = INTERVALS[s.interval] || MONTH;
+      const bwp = this.platform.cardProvider.fxToBwpMinor(s.amount_minor, s.currency).bwpMinor;
+      mrrMinor += Math.round((bwp * MONTH) / cycle);
+    }
+
+    const settlements = cards.settlements.find();
+    const lastSettlement = settlements[settlements.length - 1] || null;
+    // Card-specific fraud detections (review queue, card checks only).
+    const cardChecks = new Set([
+      'card_testing', 'bin_abuse', 'duplicate_card', 'high_risk_country', 'repeated_chargebacks', 'suspicious_refund',
+    ]);
+    const fraudDetections = this.platform.fraud.reviews.count((r) => cardChecks.has(r.check));
+
+    return {
+      intents: total,
+      by_state: byState,
+      approval_rate_pct: rate(approved),
+      decline_rate_pct: rate(declined),
+      chargeback_rate_pct: rate(chargedBack),
+      refund_rate_pct: rate(refundedCount),
+      abandoned_checkout: byState.requires_action || 0,
+      auth_failures: declined,
+      avg_transaction_value_minor: capturedCount ? Math.round(capturedMinor / capturedCount) : 0,
+      captured_total_minor: capturedMinor,
+      refunded_total_minor: refundedMinor,
+      brand_usage: byBrand,
+      currency_usage: byCurrency,
+      gateways,
+      recurring: { active_subscriptions: activeSubs, monthly_recurring_revenue_minor: mrrMinor },
+      settlement: lastSettlement
+        ? { last_run: lastSettlement.ran_at, matched: lastSettlement.matched, variance_minor: lastSettlement.variance_minor }
+        : null,
+      fraud_detections: fraudDetections,
+    };
+  }
+
   topSearchTerms(limit = 10) {
     return [...this.searchTerms.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -192,6 +295,8 @@ class AnalyticsService {
       provider_success_rates: this.providerSuccessRates(),
       escrow_completion: this.escrowCompletion(),
       tourism: this.tourism(),
+      cards: this.cardAnalytics(), // Phase 4 (WS13) — aggregates only
+
       heritage: {
         published_today: this._day(today).events.get('heritage.published') || 0,
         validated_today: this._day(today).events.get('heritage.validated') || 0,

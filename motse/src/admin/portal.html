@@ -583,6 +583,79 @@ views.ops = async (m) => {
     toast(v.valid ? 'Backup VERIFIED — all checksums match' : 'Backup INVALID: ' + v.failures.join(','), !v.valid); };});
 };
 
+// ── Phase 4: card payments operations (WS11) ─────────────────────────
+views.cards = async (m) => {
+  const [a, gateways, intents, disputes] = await Promise.all([
+    api('/v1/admin/cards/analytics'), api('/v1/admin/cards/gateways'),
+    api('/v1/admin/cards/intents?page_size=50'), api('/v1/admin/cards/disputes')]);
+  m.innerHTML = `
+    <div class="row">
+      <button class="act subtle" id="probe">Probe gateways</button>
+      <button class="act subtle" id="recon">Run reconciliation</button>
+      <button class="act subtle" id="billing">Run subscription billing</button>
+    </div>
+    <div class="cards">
+      <div class="card ok"><div class="n">${a.approval_rate_pct}%</div><div class="l">Approval rate (${a.intents} intents)</div></div>
+      <div class="card ${a.decline_rate_pct>20?'warn':''}"><div class="n">${a.decline_rate_pct}%</div><div class="l">Decline rate · ${a.auth_failures} auth failures</div></div>
+      <div class="card ${a.chargeback_rate_pct?'bad':'ok'}"><div class="n">${a.chargeback_rate_pct}%</div><div class="l">Chargeback rate</div></div>
+      <div class="card"><div class="n">${a.refund_rate_pct}%</div><div class="l">Refund rate</div></div>
+      <div class="card"><div class="n">${bwp(a.avg_transaction_value_minor)}</div><div class="l">Avg transaction</div></div>
+      <div class="card"><div class="n">${bwp(a.recurring.monthly_recurring_revenue_minor)}</div><div class="l">MRR · ${a.recurring.active_subscriptions} active subs</div></div>
+      <div class="card ${a.abandoned_checkout?'warn':''}"><div class="n">${a.abandoned_checkout}</div><div class="l">Abandoned checkouts</div></div>
+      <div class="card ${a.fraud_detections?'warn':''}"><div class="n">${a.fraud_detections}</div><div class="l">Card fraud detections</div></div>
+    </div>
+    <h2>Gateway status &amp; failover</h2>
+    ${table(gateways.gateways, [
+      { h:'Gateway', f:(g)=>esc(g.gateway) },
+      { h:'Health', f:(g)=>g.healthy?pill('healthy','ok'):pill('degraded','bad') },
+      { h:'Mode', f:(g)=>esc(g.mode) },
+      { h:'Latency', f:(g)=>g.avg_latency_ms+'ms', num:true },
+      { h:'Brands', f:(g)=>esc((g.supported_brands||[]).join(', ')) },
+      { h:'', f:(g)=>`<button class="act subtle" data-gw="${esc(g.gateway)}" data-h="${g.healthy}">${g.healthy?'Mark degraded':'Restore'}</button>` }])}
+    <p class="hint">Selection order: ${esc(gateways.order.join(' → '))} · max ${gateways.max_attempts} attempts</p>
+    <h2>Brand &amp; currency mix</h2>
+    <pre>${esc(JSON.stringify({ brand_usage:a.brand_usage, currency_usage:a.currency_usage, by_state:a.by_state }, null, 2))}</pre>
+    <h2>Transaction explorer</h2>
+    <div class="row">
+      <select id="stateF"><option value="">Any state</option>${['authorized','captured','partially_captured','refunded','partially_refunded','charged_back','declined','requires_action'].map(s=>`<option>${s}</option>`).join('')}</select>
+      <button class="act" id="filterGo">Filter</button>
+    </div>
+    <div id="intentsOut"></div>
+    <h2>Open disputes</h2>
+    ${table(disputes, [
+      { h:'Dispute', f:(d)=>`<span class="mono">${esc(d.id)}</span>` },
+      { h:'Intent', f:(d)=>`<span class="mono">${esc(d.intent_id)}</span>` },
+      { h:'Reason', f:(d)=>esc(d.reason_code) },
+      { h:'Amount', f:(d)=>bwp(d.amount_minor), num:true },
+      { h:'State', f:(d)=>statePill(d.state) },
+      { h:'', f:(d)=>`<button class="act" data-win="${esc(d.id)}">Won</button> <button class="act danger" data-lose="${esc(d.id)}">Lost</button>` }])}`;
+
+  const renderIntents = (rows) => {
+    $('#intentsOut').innerHTML = table(rows, [
+      { h:'Intent', f:(i)=>`<span class="mono">${esc(i.id)}</span>` },
+      { h:'Brand', f:(i)=>esc(i.brand) },
+      { h:'Gateway', f:(i)=>esc(i.gateway) },
+      { h:'Amount', f:(i)=>bwp(i.amount_minor)+(i.original_currency!=='BWP'?` (${esc(i.original_currency)})`:''), num:true },
+      { h:'Captured', f:(i)=>bwp(i.captured_minor), num:true },
+      { h:'Refunded', f:(i)=>bwp(i.refunded_minor), num:true },
+      { h:'State', f:(i)=>statePill(i.state) },
+      { h:'', f:(i)=>['captured','partially_captured','partially_refunded'].includes(i.state)?`<button class="act subtle" data-refund="${esc(i.id)}">Refund</button> <button class="act danger" data-cb="${esc(i.id)}">Chargeback</button>`:'' }]);
+    $('#intentsOut').querySelectorAll('[data-refund]').forEach(b=>{ b.onclick=()=>act(`/v1/admin/cards/intents/${b.dataset.refund}/refund`, { amount_minor: Number(prompt('Refund amount in minor units (blank = full)'))||undefined, reason:'admin' }, ()=>views.cards(m)); });
+    $('#intentsOut').querySelectorAll('[data-cb]').forEach(b=>{ b.onclick=()=>act(`/v1/admin/cards/intents/${b.dataset.cb}/chargeback`, { reason_code: prompt('Chargeback reason code?')||'FRAUD' }, ()=>views.cards(m)); });
+  };
+  renderIntents(intents.items);
+  $('#filterGo').onclick = async () => {
+    const out = await api(`/v1/admin/cards/intents?state=${$('#stateF').value}&page_size=50`);
+    renderIntents(out.items);
+  };
+  $('#probe').onclick = () => act('/v1/admin/cards/gateways/probe', {}, ()=>views.cards(m));
+  $('#recon').onclick = () => act('/v1/admin/cards/reconcile', {}, ()=>views.cards(m));
+  $('#billing').onclick = () => act('/v1/admin/cards/subscriptions/run-billing', {}, ()=>views.cards(m));
+  m.querySelectorAll('[data-gw]').forEach(b=>{ b.onclick=()=>act(`/v1/admin/cards/gateways/${b.dataset.gw}/health`, { healthy: b.dataset.h!=='true' }, ()=>views.cards(m)); });
+  m.querySelectorAll('[data-win]').forEach(b=>{ b.onclick=()=>act(`/v1/admin/cards/disputes/${b.dataset.win}/resolve`, { outcome:'won' }, ()=>views.cards(m)); });
+  m.querySelectorAll('[data-lose]').forEach(b=>{ b.onclick=()=>act(`/v1/admin/cards/disputes/${b.dataset.lose}/resolve`, { outcome:'lost' }, ()=>views.cards(m)); });
+};
+
 async function act(path, body, after) {
   try { await api(path, { method:'POST', body }); toast('Done.'); if (after) after(); }
   catch (e) { toast(e.message, true); }
@@ -591,7 +664,7 @@ async function act(path, body, after) {
 // ── Shell ────────────────────────────────────────────────────────────
 const SECTIONS = [
   ['dashboard','Dashboard'], ['identity','Identity'], ['governance','Governance'],
-  ['ledger','Ledger'], ['heritage','Heritage'], ['finance','Finance'],
+  ['ledger','Ledger'], ['heritage','Heritage'], ['finance','Finance'], ['cards','Cards'],
   ['audit','Audit'], ['security','Security'],
   ['pilots','Pilots'], ['analytics','Analytics'], ['ops','Ops'],
 ];

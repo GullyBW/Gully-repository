@@ -399,6 +399,57 @@ const views = {
       </div>`;
   },
 
+  async cards(m) {
+    const [cards, intents, subs] = await Promise.all([
+      api('/v1/cards'), api('/v1/cards/intents'), api('/v1/cards/subscriptions'),
+    ]);
+    m.innerHTML = `
+      <div class="card"><h3>Saved cards</h3>
+        <p class="dim">Card details are entered in your bank's secure field — Motse stores only a token, never your card number, CVV or PIN.</p>
+        ${cards.cards.map((c) => `<div class="li"><div><b>${esc(c.display)}</b>${c.is_default ? ' <span class="pill ok">default</span>' : ''}
+          <div class="dim">${esc(c.nickname)} · exp ${esc(String(c.exp_month || '—'))}/${esc(String(c.exp_year || '—'))} · ${esc(c.gateway)}</div></div>
+          <div>${c.is_default ? '' : `<button class="act subtle" data-default="${esc(c.id)}">Default</button>`} <button class="act subtle" data-del="${esc(c.id)}">Remove</button></div></div>`).join('')
+          || '<p class="dim">No saved cards yet.</p>'}
+        <div class="row" style="margin-top:8px">
+          <select id="cbrand"><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="amex">Amex</option><option value="discover">Discover</option></select>
+          <input id="clast4" placeholder="last 4" maxlength="4" size="4">
+          <input id="cexpM" placeholder="MM" maxlength="2" size="2">
+          <input id="cexpY" placeholder="YYYY" maxlength="4" size="4">
+          <button class="act" id="addCard">Add card</button>
+        </div>
+      </div>
+      <div class="card"><h3>Card payments</h3>
+        ${intents.intents.map((i) => `<div class="li"><div><b>${bwp(i.amount_minor)}</b>${i.original_currency !== 'BWP' ? ` <span class="dim">(${esc(i.original_currency)})</span>` : ''}
+          <div class="dim">${esc(i.brand)} · ${esc(i.gateway)} · ${esc((i.created_at || '').slice(0, 16))}</div></div>
+          <div><span class="pill ${['captured', 'refunded'].includes(i.state) ? 'ok' : i.state === 'declined' ? 'bad' : 'warn'}">${esc(i.state)}</span></div></div>`).join('')
+          || '<p class="dim">No card payments yet.</p>'}
+      </div>
+      <div class="card"><h3>Subscriptions</h3>
+        ${subs.subscriptions.map((s) => `<div class="li"><div><b>${esc(s.plan)}</b> · ${bwp(s.amount_minor)}/${esc(s.interval)}
+          <div class="dim">${esc(s.state)} · ${s.charges} charges</div></div>
+          <div>${s.state === 'active' ? `<button class="act subtle" data-pause="${esc(s.id)}">Pause</button>` : s.state === 'paused' ? `<button class="act subtle" data-resume="${esc(s.id)}">Resume</button>` : ''} ${['active', 'paused', 'past_due'].includes(s.state) ? `<button class="act subtle" data-cancel="${esc(s.id)}">Cancel</button>` : ''}</div></div>`).join('')
+          || '<p class="dim">No subscriptions.</p>'}
+      </div>`;
+    $('#addCard').onclick = async () => {
+      try {
+        // A real integration collects the PAN in the gateway's hosted field
+        // (an iframe we never see) and gets back this opaque reference; the
+        // card number never reaches this app or the Motse API.
+        const hostedFieldRef = 'hf_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now());
+        await api('/v1/cards', { method: 'POST', body: {
+          hosted_field_ref: hostedFieldRef, brand: $('#cbrand').value, last4: $('#clast4').value,
+          exp_month: Number($('#cexpM').value) || undefined, exp_year: Number($('#cexpY').value) || undefined,
+        } });
+        toast('Card saved'); views.cards(m);
+      } catch (e) { toast(e.message, true); }
+    };
+    m.querySelectorAll('[data-default]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/${b.dataset.default}/default`, { method: 'POST', body: {} }); views.cards(m); }; });
+    m.querySelectorAll('[data-del]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/${b.dataset.del}`, { method: 'DELETE', body: {} }); toast('Card removed'); views.cards(m); }; });
+    m.querySelectorAll('[data-pause]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/subscriptions/${b.dataset.pause}/pause`, { method: 'POST', body: {} }); views.cards(m); }; });
+    m.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/subscriptions/${b.dataset.resume}/resume`, { method: 'POST', body: {} }); views.cards(m); }; });
+    m.querySelectorAll('[data-cancel]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/subscriptions/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} }); views.cards(m); }; });
+  },
+
   async alerts(m) {
     const notes = await api('/v1/notifications?page_size=30');
     m.innerHTML = notes.items.map((n) => `
@@ -419,7 +470,7 @@ const views = {
 const SECTIONS = [
   ['home', 'Gae', '⌂'], ['heritage', 'Ditso', '♪'], ['kgetsi', 'Kgetsi', '⬢'],
   ['loeto', 'Loeto', '➤'], ['lelapa', 'Lelapa', '☰'], ['puo', 'Puo', '✎'],
-  ['wallet', 'Wallet', '◈'], ['alerts', 'Alerts', '!'],
+  ['wallet', 'Wallet', '◈'], ['cards', 'Cards', '▭'], ['alerts', 'Alerts', '!'],
 ];
 function nav(active) {
   $('#nav').innerHTML = SECTIONS.map(([k, label, icon]) =>

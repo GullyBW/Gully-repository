@@ -115,7 +115,7 @@ describe('Security assurance (WS6)', () => {
     w.p.clock.advance(91 * 24 * 3600 * 1000);
     const rotated = w.p.assurance.runRotation('test');
     expect(rotated.map((r) => r.name).sort()).toEqual([
-      'webhook:myzaka', 'webhook:orange_money', 'webhook:paypal', 'webhook:smega',
+      'webhook:card', 'webhook:myzaka', 'webhook:orange_money', 'webhook:paypal', 'webhook:smega',
     ]);
     expect(w.p.secrets.current('webhook:orange_money').version).toBe(2);
     // Immediately after rotation, nothing is due again.
@@ -130,7 +130,7 @@ describe('Security assurance (WS6)', () => {
     const report = w.p.assurance.report();
     expect(report.events.by_severity.high).toBe(1);
     expect(report.active_holds).toBe(0); // the 24h hold expired with the jump
-    expect(report.rotation.overdue.length).toBe(4); // 4 payment providers
+    expect(report.rotation.overdue.length).toBe(5); // 5 payment providers (+ card, Phase 4)
     expect(report.recommendations).toEqual(
       expect.arrayContaining([
         'Review high-severity events and active holds',

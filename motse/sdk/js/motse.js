@@ -117,6 +117,81 @@ class MotseClient {
   }
   notifications() { return this._request('GET', '/v1/notifications'); }
   flags() { return this._request('GET', '/v1/flags'); }
+
+  // ── Cards (Phase 4) ──────────────────────────────────────────────
+  // Card data never touches the SDK: the app tokenizes with the gateway's
+  // hosted fields and passes only the opaque reference + display metadata.
+  listCards() { return this._request('GET', '/v1/cards'); }
+  saveCard({ hostedFieldRef, brand, last4, expMonth, expYear, nickname, gateway, networkToken } = {}) {
+    return this._request('POST', '/v1/cards', {
+      hosted_field_ref: hostedFieldRef, brand, last4,
+      exp_month: expMonth, exp_year: expYear, nickname, gateway, network_token: networkToken,
+    });
+  }
+  updateCard(cardId, { nickname, expMonth, expYear } = {}) {
+    return this._request('PATCH', `/v1/cards/${cardId}`, { nickname, exp_month: expMonth, exp_year: expYear });
+  }
+  setDefaultCard(cardId) { return this._request('POST', `/v1/cards/${cardId}/default`); }
+  replaceCardToken(cardId, { hostedFieldRef, last4, expMonth, expYear } = {}) {
+    return this._request('POST', `/v1/cards/${cardId}/replace-token`, {
+      hosted_field_ref: hostedFieldRef, last4, exp_month: expMonth, exp_year: expYear,
+    });
+  }
+  deleteCard(cardId) { return this._request('DELETE', `/v1/cards/${cardId}`); }
+
+  createCardIntent({ amountMinor, currency, destAccountId, cardId, token, brand, ref, country } = {}) {
+    return this._request('POST', '/v1/cards/intents', {
+      amount_minor: amountMinor, currency, dest_account_id: destAccountId,
+      card_id: cardId, token, brand, ref, country,
+    });
+  }
+  completeCard3ds(intentId, success = true) {
+    return this._request('POST', `/v1/cards/intents/${intentId}/3ds`, { success });
+  }
+  captureCard(intentId, amountMinor) {
+    return this._request('POST', `/v1/cards/intents/${intentId}/capture`, { amount_minor: amountMinor });
+  }
+  voidCard(intentId) { return this._request('POST', `/v1/cards/intents/${intentId}/void`); }
+  refundCard(intentId, amountMinor, reason) {
+    return this._request('POST', `/v1/cards/intents/${intentId}/refund`, { amount_minor: amountMinor, reason });
+  }
+  cardIntents() { return this._request('GET', '/v1/cards/intents'); }
+  cardIntent(intentId) { return this._request('GET', `/v1/cards/intents/${intentId}`); }
+
+  createSubscription({ cardId, amountMinor, currency, destAccountId, interval, plan, graceDays } = {}) {
+    return this._request('POST', '/v1/cards/subscriptions', {
+      card_id: cardId, amount_minor: amountMinor, currency, dest_account_id: destAccountId,
+      interval, plan, grace_days: graceDays,
+    });
+  }
+  subscriptions() { return this._request('GET', '/v1/cards/subscriptions'); }
+  pauseSubscription(id) { return this._request('POST', `/v1/cards/subscriptions/${id}/pause`); }
+  resumeSubscription(id) { return this._request('POST', `/v1/cards/subscriptions/${id}/resume`); }
+  cancelSubscription(id) { return this._request('POST', `/v1/cards/subscriptions/${id}/cancel`); }
+  changeSubscription(id, { amountMinor, plan } = {}) {
+    return this._request('PATCH', `/v1/cards/subscriptions/${id}`, { amount_minor: amountMinor, plan });
+  }
+
+  /** Gateway discovery (brands, currencies, selection order). */
+  cardGateways() { return this._request('GET', '/v1/cards/gateways'); }
+
+  /**
+   * Verify a gateway card-webhook signature (Node only). Gateways sign
+   * `${timestamp}.${nonce}.${rawBody}` with the gateway secret; pass the
+   * three header values and the raw body exactly as received.
+   */
+  static verifyCardWebhook(secret, { timestamp, nonce, rawBody }, signature) {
+    const crypto = require('crypto');
+    const expected = crypto
+      .createHmac('sha256', secret)
+      .update(`${timestamp}.${nonce}.${rawBody}`)
+      .digest('hex');
+    try {
+      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(signature)));
+    } catch {
+      return false;
+    }
+  }
 }
 
 class MotsePartner {

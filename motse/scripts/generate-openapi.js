@@ -67,7 +67,10 @@ function needsAuth(p) {
     p.startsWith('/v1/lelapa') ||
     p.startsWith('/v1/puo/progress') ||
     p.startsWith('/v1/payments/payouts') ||
-    p.startsWith('/v1/notifications')
+    p.startsWith('/v1/notifications') ||
+    // Card endpoints are member-auth, except public gateway discovery and
+    // the HMAC-verified webhook (which authenticates by signature).
+    (p.startsWith('/v1/cards') && p !== '/v1/cards/gateways')
   );
 }
 

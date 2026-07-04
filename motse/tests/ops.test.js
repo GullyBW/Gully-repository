@@ -77,7 +77,7 @@ describe('Config viewer, health and capacity reports (WS10)', () => {
   test('configView is complete and redacted — secret values never appear', () => {
     const w = world();
     const config = w.p.ops.configView();
-    expect(config.payment_providers).toHaveLength(4); // + PayPal (Phase 3)
+    expect(config.payment_providers).toHaveLength(5); // + PayPal (Phase 3), + card (Phase 4)
     expect(config.payment_providers[0].mode).toBe('sandbox');
     expect(config.flags.length).toBeGreaterThan(0);
     expect(config.ai_capabilities).toEqual(

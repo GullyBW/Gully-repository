@@ -33,6 +33,10 @@ const {
   SmegaProvider,
 } = require('./payments/providers');
 const { PayPalProvider } = require('./payments/paypal.provider');
+const { CardPaymentProvider } = require('./payments/card.provider');
+const { CardService } = require('./payments/card.service');
+const { GatewayRegistry } = require('./payments/gateways/gateway.registry');
+const { GATEWAY_CLASSES } = require('./payments/gateways/adapters');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -124,6 +128,24 @@ function createPlatform({
   payments.registerProvider(new SmegaProvider({ clock, secrets }, providerOptions('SMEGA')));
   // PayPal — the diaspora card/remittance rail (Phase 3, WS1).
   payments.registerProvider(new PayPalProvider({ clock, secrets }, providerOptions('PAYPAL')));
+
+  // ── Phase 4: native card payments (WS1–WS10) ───────────────────────
+  // The card provider depends ONLY on a GatewayRegistry, never on a
+  // concrete gateway. Gateways, their brand/currency profiles and the
+  // failover order are pure configuration (MOTSE_GATEWAY_ORDER), so a new
+  // acquirer is a subclass + registration — nothing above changes.
+  const gatewayOrder = (process.env.MOTSE_GATEWAY_ORDER || 'stripe,adyen,braintree,peach,dpo,paygate')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const gateways = new GatewayRegistry({ clock, maxAttempts: 3 });
+  for (const name of gatewayOrder) {
+    const GatewayClass = GATEWAY_CLASSES[name];
+    if (!GatewayClass) continue; // unknown gateway in config → skipped
+    gateways.register(new GatewayClass({ clock, secrets }, gatewayOptions(name)));
+  }
+  const cardProvider = new CardPaymentProvider({ clock, secrets }, { gateways });
+  payments.registerProvider(cardProvider);
 
   // Canonical split template (§9.3) available to the admin explorer.
   ledger.registerSplitTemplate({
@@ -231,8 +253,21 @@ function createPlatform({
   });
   platform.pilots.bindAnalytics(platform.analytics);
 
+  // ── Phase 4: card lifecycle orchestrator (WS5–WS10) ────────────────
+  // Sits beside Ledger/Escrow; the Ledger stays the single source of
+  // financial truth (CardService only posts through it). Built here so it
+  // sees analytics + notifications; registers its own card fraud checks.
+  platform.gateways = gateways;
+  platform.cardProvider = cardProvider;
+  platform.cards = new CardService({
+    store, clock, ledger, payments, provider: cardProvider, gateways,
+    fraud, audit, bus, notifications, analytics: platform.analytics, replayGuard,
+  });
+
   platform.assurance = new AssuranceService({ store, clock, identity, secrets, fraud, audit, bus });
-  // Rotation automation: webhook secrets rotate quarterly by policy.
+  // Rotation automation: webhook secrets rotate quarterly by policy. The
+  // card provider joins the same loop (webhook:card); gateway webhook
+  // secrets rotate through the card admin surface (WS10/WS11).
   for (const providerName of platform.payments.providers.keys()) {
     platform.assurance.setRotationPolicy(`webhook:${providerName}`, 90);
   }
@@ -340,6 +375,26 @@ function providerOptions(prefix) {
         },
       }
     : {};
+}
+
+/**
+ * Gateway credentials come from env (MOTSE_GATEWAY_<NAME>_API_KEY); absent
+ * → sandbox mode. Optional brand/currency overrides let an operator narrow
+ * a gateway's routing profile without a code change (WS1/WS2).
+ */
+function gatewayOptions(name) {
+  const prefix = `MOTSE_GATEWAY_${name.toUpperCase()}`;
+  const key = process.env[`${prefix}_API_KEY`];
+  const brands = process.env[`${prefix}_BRANDS`];
+  const currencies = process.env[`${prefix}_CURRENCIES`];
+  const options = {};
+  if (key) {
+    options.live = true;
+    options.credentials = { apiKey: key, apiSecret: process.env[`${prefix}_API_SECRET`] || null };
+  }
+  if (brands) options.supportedBrands = brands.split(',').map((s) => s.trim()).filter(Boolean);
+  if (currencies) options.supportedCurrencies = currencies.split(',').map((s) => s.trim()).filter(Boolean);
+  return options;
 }
 
 module.exports = { createPlatform };

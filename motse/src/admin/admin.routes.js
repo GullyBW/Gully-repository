@@ -578,6 +578,64 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
     platform.integrations.get('gis').geocode(req.query.name)
   ));
 
+  // ── Phase 4: card payments operations portal (WS11) ────────────────
+  // Transaction Explorer (redacted — never a token/PAN).
+  router.get('/cards/intents', run((req) =>
+    paginate(
+      platform.cards.listIntents({ state: req.query.state, gateway: req.query.gateway }),
+      { pageToken: req.query.page_token, pageSize: req.query.page_size }
+    )
+  ));
+  router.get('/cards/intents/:id', run((req) => platform.cards.intentDetail(req.params.id)));
+  // Merchant operations: capture / void / refund.
+  router.post('/cards/intents/:id/capture', run((req) =>
+    platform.cards.capture(req.params.id, { amountMinor: req.body.amount_minor, actorRef: req.actor })
+  ));
+  router.post('/cards/intents/:id/void', run((req) =>
+    platform.cards.voidAuthorization(req.params.id, { actorRef: req.actor })
+  ));
+  // Refund Manager.
+  router.post('/cards/intents/:id/refund', run((req) =>
+    platform.cards.refund(req.params.id, {
+      amountMinor: req.body.amount_minor, reason: req.body.reason, actorRef: req.actor,
+    })
+  ));
+  // Chargeback intake (also arrives via signed webhook).
+  router.post('/cards/intents/:id/chargeback', run((req) =>
+    platform.cards.processChargeback(req.params.id, { reasonCode: req.body.reason_code, actorRef: req.actor })
+  ));
+  // Dispute Management.
+  router.get('/cards/disputes', run(() => platform.cards.openDisputes()));
+  router.post('/cards/disputes/:id/evidence', run((req) =>
+    platform.cards.submitDisputeEvidence(req.params.id, req.body.evidence_refs, req.actor)
+  ));
+  router.post('/cards/disputes/:id/resolve', run((req) =>
+    platform.cards.resolveDispute(req.params.id, req.body.outcome, req.actor)
+  ));
+  // Settlement & reconciliation.
+  router.post('/cards/reconcile', run((req) => platform.cards.reconcile(req.body.date)));
+  router.get('/cards/settlements', run(() => platform.cards.settlements.find()));
+  // Subscriptions: run the billing scheduler on demand.
+  router.post('/cards/subscriptions/run-billing', run(() => platform.cards.runBilling()));
+  // Gateway status / health / failover dashboard.
+  router.get('/cards/gateways', run(() => platform.gateways.describe()));
+  router.post('/cards/gateways/order', run((req) => {
+    platform.gateways.setOrder(req.body.order);
+    return platform.gateways.describe();
+  }));
+  router.post('/cards/gateways/probe', run(() => platform.gateways.probe()));
+  router.post('/cards/gateways/:name/health', run((req) => {
+    platform.gateways.get(req.params.name).setHealthy(req.body.healthy !== false);
+    return platform.gateways.get(req.params.name).health();
+  }));
+  // Provider configuration + capability matrix.
+  router.get('/cards/config', run(() => ({
+    provider: platform.cardProvider.describeCapabilities(),
+    gateways: platform.cards.gatewayCapabilities(),
+  })));
+  // Card analytics (aggregates only — no PII, no card data).
+  router.get('/cards/analytics', run(() => platform.analytics.cardAnalytics()));
+
   return router;
 }
 

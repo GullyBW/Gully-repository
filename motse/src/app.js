@@ -559,6 +559,127 @@ function createApp(platform = createPlatform(), options = {}) {
     })
   ));
 
+  // ── Phase 4: native card payments (WS11/WS12/WS14) ─────────────────
+  // Customer wallet — saved cards (token-only, masked display). No route
+  // anywhere accepts a PAN/CVV: the client tokenizes via the gateway's
+  // hosted fields and posts only the opaque reference + display metadata.
+  app.get('/v1/cards', auth, run((req) => ({ cards: platform.cards.listCards(req.actor) })));
+  app.post('/v1/cards', auth, run((req) =>
+    platform.cards.saveCard(req.actor, {
+      hostedFieldRef: req.body.hosted_field_ref,
+      brand: req.body.brand,
+      last4: req.body.last4,
+      expMonth: req.body.exp_month,
+      expYear: req.body.exp_year,
+      nickname: req.body.nickname,
+      gateway: req.body.gateway,
+      networkToken: req.body.network_token,
+    })
+  ));
+  app.patch('/v1/cards/:id', auth, run((req) =>
+    platform.cards.updateCard(req.actor, req.params.id, {
+      nickname: req.body.nickname,
+      expMonth: req.body.exp_month,
+      expYear: req.body.exp_year,
+    })
+  ));
+  app.post('/v1/cards/:id/default', auth, run((req) =>
+    platform.cards.setDefaultCard(req.actor, req.params.id)
+  ));
+  app.post('/v1/cards/:id/replace-token', auth, run((req) =>
+    platform.cards.replaceToken(req.actor, req.params.id, {
+      hostedFieldRef: req.body.hosted_field_ref,
+      last4: req.body.last4,
+      expMonth: req.body.exp_month,
+      expYear: req.body.exp_year,
+    })
+  ));
+  app.delete('/v1/cards/:id', auth, run((req) => platform.cards.deleteCard(req.actor, req.params.id)));
+
+  // Card payment intents — create → (3-D Secure) → capture / void / refund.
+  app.post('/v1/cards/intents', auth, run((req) =>
+    platform.cards.createIntent(req.actor, {
+      amountMinor: req.body.amount_minor,
+      currency: req.body.currency,
+      destAccountId: req.body.dest_account_id,
+      cardId: req.body.card_id,
+      token: req.body.token,
+      brand: req.body.brand,
+      ref: req.body.ref,
+      deviceId: req.get('X-Device-Id'),
+      country: req.body.country,
+      idempotencyKey: req.idemKey,
+    })
+  ));
+  app.post('/v1/cards/intents/:id/3ds', auth, run((req) =>
+    platform.cards.complete3DS(req.params.id, { success: req.body.success !== false })
+  ));
+  app.post('/v1/cards/intents/:id/capture', auth, run((req) =>
+    platform.cards.capture(req.params.id, {
+      amountMinor: req.body.amount_minor, // omit for a full capture
+      idempotencyKey: req.idemKey,
+      actorRef: req.actor,
+    })
+  ));
+  app.post('/v1/cards/intents/:id/void', auth, run((req) =>
+    platform.cards.voidAuthorization(req.params.id, { actorRef: req.actor })
+  ));
+  app.post('/v1/cards/intents/:id/refund', auth, run((req) =>
+    platform.cards.refund(req.params.id, {
+      amountMinor: req.body.amount_minor, // omit for a full refund
+      idempotencyKey: req.idemKey,
+      actorRef: req.actor,
+      reason: req.body.reason,
+    })
+  ));
+  app.get('/v1/cards/intents', auth, run((req) => ({ intents: platform.cards.intentsFor(req.actor) })));
+  app.get('/v1/cards/intents/:id', auth, run((req) => platform.cards.myIntent(req.actor, req.params.id)));
+
+  // Subscriptions & recurring (WS7).
+  app.post('/v1/cards/subscriptions', auth, run((req) =>
+    platform.cards.createSubscription(req.actor, {
+      cardId: req.body.card_id,
+      amountMinor: req.body.amount_minor,
+      currency: req.body.currency,
+      destAccountId: req.body.dest_account_id,
+      interval: req.body.interval,
+      plan: req.body.plan,
+      graceDays: req.body.grace_days,
+    })
+  ));
+  app.get('/v1/cards/subscriptions', auth, run((req) => ({
+    subscriptions: platform.cards.listSubscriptions(req.actor),
+  })));
+  app.post('/v1/cards/subscriptions/:id/pause', auth, run((req) =>
+    platform.cards.pauseSubscription(req.actor, req.params.id)
+  ));
+  app.post('/v1/cards/subscriptions/:id/resume', auth, run((req) =>
+    platform.cards.resumeSubscription(req.actor, req.params.id)
+  ));
+  app.post('/v1/cards/subscriptions/:id/cancel', auth, run((req) =>
+    platform.cards.cancelSubscription(req.actor, req.params.id)
+  ));
+  app.patch('/v1/cards/subscriptions/:id', auth, run((req) =>
+    platform.cards.changePlan(req.actor, req.params.id, {
+      amountMinor: req.body.amount_minor,
+      plan: req.body.plan,
+    })
+  ));
+
+  // Gateway capability discovery (WS14 SDK) — public read, no secrets.
+  app.get('/v1/cards/gateways', run(() => platform.cards.gatewayCapabilities()));
+
+  // Secure card webhooks (WS10) — HMAC-verified per gateway. Path sits
+  // under /payments/webhooks/ so the gateway idempotency exemption and
+  // raw-body capture both apply; verification happens in CardService.
+  app.post('/v1/payments/webhooks/cards/:gateway', run((req) =>
+    platform.cards.processWebhook(req.params.gateway, req.rawBody, {
+      'x-motse-signature': req.get('X-Motse-Signature'),
+      'x-motse-timestamp': req.get('X-Motse-Timestamp'),
+      'x-motse-nonce': req.get('X-Motse-Nonce'),
+    })
+  ));
+
   // ── Notifications ──────────────────────────────────────────────────
   app.get('/v1/notifications', auth, run((req) =>
     paginate(platform.notifications.inboxFor(req.actor).reverse(), {

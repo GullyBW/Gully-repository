@@ -19,6 +19,18 @@ npm run motse:security-scan / motse:secret-scan   # dependency + secret scans
 npm run motse:openapi      # regenerate sdk/openapi.json
 ```
 
+## Phase 4 — native card payments & enterprise payment gateway
+
+| Workstream | Where | Notes |
+| --- | --- | --- |
+| CardPaymentProvider (WS1) | `src/payments/card.provider.js` | full `PaymentProvider` contract; Visa/MC/Amex/Discover + future networks by config ([CARD-PAYMENTS](docs/CARD-PAYMENTS.md)) |
+| Gateway abstraction + failover (WS2) | `src/payments/gateways/` | Stripe/Adyen/Braintree/Peach/DPO/PayGate adapters, configurable order, automatic failover |
+| Card lifecycle (WS3–WS10) | `src/payments/card.service.js` | tokenize→3DS→authorize→capture/partial/void→refund→chargeback→dispute→settle→reconcile; token-only, PCI-safe |
+| Admin ops + wallet + analytics + SDK (WS11–WS14) | `src/admin/`, `src/pwa/`, `src/analytics/`, `sdk/` | Cards portal, wallet card management, PII-free card analytics, SDK card methods + OpenAPI |
+
+Coverage on Phase-4 components: 99.1% statements / 94.5% branches / 100% lines
+(`npm run motse:coverage:p4`). 101 new tests; all existing suites stay green.
+
 ## Phase 3 — production readiness, PayPal & extensibility
 
 | Workstream | Where | Notes |
