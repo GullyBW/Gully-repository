@@ -67,6 +67,13 @@ class MonitoringService {
     this.metrics.gaugeFn('motse_outbox_mutations_applied', () => p.sync.applied.size);
     this.metrics.gaugeFn('motse_users_total', () => p.identity.users.count());
     this.metrics.gaugeFn('motse_audit_events_total', () => p.audit.events.count());
+    // Foundation live gauges (Phase A) — clean absolute values for alerting:
+    // transactional-outbox backlog/dead-letters and the distributed adapter mode.
+    this.metrics.gaugeFn('motse_outbox_pending', () => (p.outbox ? p.outbox.stats().pending : 0));
+    this.metrics.gaugeFn('motse_outbox_dead', () => (p.outbox ? p.outbox.stats().dead : 0));
+    this.metrics.gaugeFn('motse_distributed_redis_backed', () =>
+      p.kv && p.kv.constructor.name === 'RedisKvAdapter' ? 1 : 0
+    );
   }
 
   /** Escrows funded but untouched for 30+ days — the §16 stuck monitor. */

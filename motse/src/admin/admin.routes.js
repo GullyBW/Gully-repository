@@ -714,6 +714,15 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.get('/observability/traces/:traceId', run((req) => platform.tracer.trace(req.params.traceId)));
   router.get('/observability/tracer', run(() => platform.tracer.stats()));
   router.get('/observability/health', run(() => platform.health.ready()));
+  // OTLP export bridge (Phase A): status + operator-triggered flush.
+  router.get('/observability/otel', run(() => platform.otel.stats()));
+  router.post('/observability/otel/flush', run(() => {
+    const payload = platform.otel.flush();
+    return {
+      flushed: payload ? payload.resourceSpans[0].scopeSpans[0].spans.length : 0,
+      ...platform.otel.stats(),
+    };
+  }));
 
   return router;
 }

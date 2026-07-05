@@ -59,8 +59,13 @@ jobs:
       - name: Foundation coverage gate (>=95/95/90)
         run: npm run motse:coverage:foundation
 
-      - name: Observability + health suites (Phase 2/3)
-        run: npm run motse:test -- tests/observability.test.js tests/health.test.js
+      - name: Observability + health suites (Phase 2/3/A)
+        run: npm run motse:test -- tests/observability.test.js tests/health.test.js tests/observability-stack.test.js
 
       - name: Observability coverage gate (>=95/95/90)
         run: npm run motse:coverage:observability
+
+      - name: Grafana dashboards regenerate cleanly (no drift)
+        run: |
+          node deploy/motse/observability/generate-dashboards.js
+          git diff --exit-code deploy/motse/observability/dashboards

@@ -52,6 +52,7 @@ const { OutboxService } = require('./persistence/outbox');
 const { createKv } = require('./distributed/kv');
 const { DistributedIdempotency, DistributedRateLimiter, DistributedLock } = require('./distributed/services');
 const { Tracer } = require('./observability/tracer');
+const { OtelSpanExporter } = require('./observability/otel.exporter');
 const { HealthService } = require('./observability/health.service');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
@@ -110,7 +111,10 @@ function createPlatform({
   // distributed layer are instrumented. Both default to no-ops if absent.
   const metrics = new Metrics();
   const clock = new Clock();
-  const tracer = new Tracer({ clock });
+  // OTLP export bridge (Phase A): OFF unless OTEL_EXPORTER_OTLP_ENDPOINT is set,
+  // in which case finished spans are batched to a Jaeger/Tempo/Collector.
+  const otel = new OtelSpanExporter({ clock });
+  const tracer = new Tracer({ clock, sink: (span) => otel.accept(span) });
   const store = new Store({ metrics });
   const bus = new EventBus(clock);
   // Phase 5 (WS2): the platform Event Store taps the bus BEFORE any domain
@@ -341,8 +345,9 @@ function createPlatform({
     }),
     lock: new DistributedLock({ kv: platform.kv, metrics }),
   };
-  // Observability handles on the platform (Phase 2/3).
+  // Observability handles on the platform (Phase 2/3/A).
   platform.tracer = tracer;
+  platform.otel = otel; // OTLP export bridge (stats + manual flush)
   platform.health = new HealthService({ platform, clock });
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
@@ -435,7 +440,17 @@ function createPlatform({
 
   // Built last: sees every registered event schema (see module docs).
   platform.metrics = metrics; // the shared registry threaded through the Foundation
-  platform.logger = new Logger({ clock, sink: logSink });
+  // Structured logs auto-enriched with the active trace context (Phase A):
+  // every line carries service + trace_id/span_id when emitted inside a span,
+  // so logs join traces in Loki/Elasticsearch/OpenSearch without call-site work.
+  platform.logger = new Logger({
+    clock,
+    sink: logSink,
+    context: () => {
+      const ctx = tracer.currentContext();
+      return ctx ? { trace_id: ctx.traceId, span_id: ctx.spanId } : {};
+    },
+  }).with({ service: process.env.OTEL_SERVICE_NAME || 'motse-core' });
   platform.monitoring = new MonitoringService({
     metrics: platform.metrics,
     logger: platform.logger,

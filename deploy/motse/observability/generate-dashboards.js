@@ -107,6 +107,44 @@ const DASHBOARDS = {
       ['SMS inbound (rps)', rate('motse_http_requests_total{route="/v1/gateway/sms/inbound"}')],
     ],
   },
+  // ── Foundation & Phase-2 observability (operationalized in Phase A) ──
+  foundation: {
+    title: 'Motse · Foundation — Transactions',
+    panels: [
+      ['Transaction rate (commit vs rollback, rps)',
+        'sum by (result) (rate(foundation_transaction_total[5m]))'],
+      ['Success rate (%)',
+        '100 * sum(rate(foundation_transaction_total{result="commit"}[5m])) / clamp_min(sum(rate(foundation_transaction_total[5m])), 1e-9)'],
+      ['Rollback frequency (rps)', rate('foundation_transaction_total{result="rollback"}')],
+      ['Commit latency p95 (ms)', p95('foundation_transaction_ms')],
+      ['Idempotency: first vs duplicate (rps)',
+        'sum by (result) (rate(foundation_idempotency_total[5m]))'],
+    ],
+  },
+  outbox: {
+    title: 'Motse · Foundation — Transactional Outbox',
+    panels: [
+      ['Publish throughput by type (rps)',
+        'sum by (type) (rate(foundation_outbox_published_total[5m]))'],
+      ['Publish latency p95 (ms)', p95('foundation_outbox_publish_ms')],
+      ['Retry rate (rps)', rate('foundation_outbox_retried_total')],
+      ['Dead-letter depth', 'motse_outbox_dead'],
+      ['Backlog (pending)', 'motse_outbox_pending'],
+    ],
+  },
+  distributed: {
+    title: 'Motse · Foundation — Distributed Runtime (Redis)',
+    panels: [
+      ['Lock acquisition (acquired vs contended, rps)',
+        'sum by (result) (rate(foundation_lock_total[5m]))'],
+      ['Lock contention rate (%)',
+        '100 * sum(rate(foundation_lock_total{result="contended"}[5m])) / clamp_min(sum(rate(foundation_lock_total[5m])), 1e-9)'],
+      ['Rate limiter: allowed vs limited (rps)',
+        'sum by (result) (rate(foundation_ratelimit_total[5m]))'],
+      ['Idempotency hits (duplicate, rps)', rate('foundation_idempotency_total{result="duplicate"}')],
+      ['KV adapter (0=in-memory, 1=redis)', 'motse_distributed_redis_backed'],
+    ],
+  },
 };
 
 function dashboard(key, spec) {

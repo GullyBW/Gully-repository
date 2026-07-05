@@ -52,6 +52,44 @@ groups:
         labels: { severity: sev3 }
         annotations:
           summary: "Escrows funded but untouched for 30+ days (§16 invariant monitor)"
+  - name: motse-foundation
+    rules:
+      - alert: TransactionFailureSpike
+        expr: |
+          sum(rate(foundation_transaction_total{result="rollback"}[5m]))
+            / clamp_min(sum(rate(foundation_transaction_total[5m])), 1e-9) > 0.05
+        for: 10m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Transaction rollback ratio above 5% over 5m — a domain flow is failing"
+      - alert: OutboxBacklogGrowing
+        expr: motse_outbox_pending > 1000
+        for: 10m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Transactional outbox backlog above 1000 pending — relay falling behind"
+      - alert: OutboxDeadLetterAccumulation
+        expr: motse_outbox_dead > 0
+        for: 5m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Outbox dead-letters present — events exhausted retries, operator replay needed"
+      - alert: LockContentionHigh
+        expr: |
+          sum(rate(foundation_lock_total{result="contended"}[5m]))
+            / clamp_min(sum(rate(foundation_lock_total[5m])), 1e-9) > 0.2
+        for: 10m
+        labels: { severity: sev3 }
+        annotations:
+          summary: "Distributed lock contention above 20% — a hot resource is serializing work"
+      - alert: RateLimitSaturation
+        expr: |
+          sum(rate(foundation_ratelimit_total{result="limited"}[5m]))
+            / clamp_min(sum(rate(foundation_ratelimit_total[5m])), 1e-9) > 0.5
+        for: 15m
+        labels: { severity: sev3 }
+        annotations:
+          summary: "Over half of rate-limit checks are throttled — capacity or abuse review"
   - name: motse-security
     rules:
       - alert: WebhookForgeryAttempts
