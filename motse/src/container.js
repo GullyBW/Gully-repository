@@ -51,6 +51,8 @@ const { Certification } = require('./governance/certification');
 const { OutboxService } = require('./persistence/outbox');
 const { createKv } = require('./distributed/kv');
 const { DistributedIdempotency, DistributedRateLimiter, DistributedLock } = require('./distributed/services');
+const { Tracer } = require('./observability/tracer');
+const { HealthService } = require('./observability/health.service');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -103,8 +105,13 @@ function createPlatform({
   logSink,
   notificationAdapters,
 } = {}) {
-  const store = new Store();
+  // Observability substrate (Phase 2): one metrics registry + one tracer,
+  // threaded through the Foundation so transactions, the outbox and the
+  // distributed layer are instrumented. Both default to no-ops if absent.
+  const metrics = new Metrics();
   const clock = new Clock();
+  const tracer = new Tracer({ clock });
+  const store = new Store({ metrics });
   const bus = new EventBus(clock);
   // Phase 5 (WS2): the platform Event Store taps the bus BEFORE any domain
   // service publishes, so the immutable log captures every event from boot.
@@ -321,19 +328,22 @@ function createPlatform({
   // ── Foundation F2/F3: transactional outbox + distributed runtime ────
   // Outbox: atomic state+event commit with at-least-once relay (available
   // to critical flows; existing bus.publish paths are unchanged).
-  platform.outbox = new OutboxService({ store, clock, bus });
+  platform.outbox = new OutboxService({ store, clock, bus, metrics, tracer });
   // Distributed layer: in-memory today, Redis-backed when REDIS_URL is set —
   // cross-pod idempotency, rate limiting and locks behind one KV interface.
   platform.kv = createKv({ clock });
   platform.distributed = {
-    idempotency: new DistributedIdempotency({ kv: platform.kv }),
+    idempotency: new DistributedIdempotency({ kv: platform.kv, metrics }),
     rateLimiter: new DistributedRateLimiter({
-      kv: platform.kv, clock,
+      kv: platform.kv, clock, metrics,
       capacity: Number(process.env.MOTSE_RATE_CAPACITY || 300),
       windowMs: Number(process.env.MOTSE_RATE_WINDOW_MS || 60000),
     }),
-    lock: new DistributedLock({ kv: platform.kv }),
+    lock: new DistributedLock({ kv: platform.kv, metrics }),
   };
+  // Observability handles on the platform (Phase 2/3).
+  platform.tracer = tracer;
+  platform.health = new HealthService({ platform, clock });
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
   platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });
@@ -424,7 +434,7 @@ function createPlatform({
   notifications.bindI18n(platform.i18n, identity);
 
   // Built last: sees every registered event schema (see module docs).
-  platform.metrics = new Metrics();
+  platform.metrics = metrics; // the shared registry threaded through the Foundation
   platform.logger = new Logger({ clock, sink: logSink });
   platform.monitoring = new MonitoringService({
     metrics: platform.metrics,

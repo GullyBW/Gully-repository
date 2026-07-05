@@ -76,10 +76,14 @@ class Collection {
   }
 }
 
+// A no-op metrics sink so the Store runs identically without observability.
+const NOOP_METRICS = { inc() {}, observe() {} };
+
 class Store {
-  constructor() {
+  constructor({ metrics } = {}) {
     this.collections = new Map();
     this._txn = null; // active Unit-of-Work: { journal: [] }
+    this.metrics = metrics || NOOP_METRICS; // optional F1 instrumentation
   }
 
   collection(name) {
@@ -98,14 +102,19 @@ class Store {
     if (this._txn) return fn(); // join the outer unit of work
     const txn = { journal: [] };
     this._txn = txn;
+    const started = Date.now();
     try {
       const result = fn();
       this._txn = null; // commit — discard the undo journal
+      this.metrics.inc('foundation_transaction_total', { result: 'commit' });
+      this.metrics.observe('foundation_transaction_ms', { result: 'commit' }, Date.now() - started);
       return result;
     } catch (e) {
       // Roll back: apply the inverse operations newest-first.
       for (let i = txn.journal.length - 1; i >= 0; i -= 1) txn.journal[i]();
       this._txn = null;
+      this.metrics.inc('foundation_transaction_total', { result: 'rollback' });
+      this.metrics.observe('foundation_transaction_ms', { result: 'rollback' }, Date.now() - started);
       throw e;
     }
   }

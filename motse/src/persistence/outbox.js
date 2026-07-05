@@ -3,6 +3,9 @@
 const { id } = require('../kernel/ids');
 const { err } = require('../kernel/errors');
 
+// No-op metrics sink so the outbox runs identically without observability.
+const NOOP_METRICS = { inc() {}, observe() {} };
+
 /**
  * Transactional Outbox (Foundation F2). Guarantees that a domain state
  * change and the events it emits commit atomically, and that events are
@@ -23,7 +26,7 @@ const { err } = require('../kernel/errors');
  * every published event carries a stable `outbox_id`).
  */
 class OutboxService {
-  constructor({ store, clock, bus, maxAttempts = 5 } = {}) {
+  constructor({ store, clock, bus, maxAttempts = 5, metrics = null, tracer = null } = {}) {
     this.store = store;
     this.clock = clock;
     this.bus = bus;
@@ -31,6 +34,8 @@ class OutboxService {
     this.dlq = store.collection('outbox_dlq');
     this.maxAttempts = maxAttempts;
     this._seq = 0;
+    this.metrics = metrics || NOOP_METRICS; // optional F2 instrumentation
+    this.tracer = tracer; // optional distributed tracing
   }
 
   /**
@@ -74,12 +79,20 @@ class OutboxService {
    * (published rows are skipped) — this is how a crashed relay recovers.
    */
   drain() {
+    const run = () => this._drain();
+    return this.tracer ? this.tracer.withSpan('outbox.drain', run) : run();
+  }
+
+  _drain() {
     const out = { published: 0, retried: 0, dead: 0 };
     const pending = this.outbox.find((r) => r.status === 'pending').sort((a, b) => a.seq - b.seq);
     for (const row of pending) {
+      const started = Date.now();
       try {
         this.bus.publish(row.type, { ...row.data, outbox_id: row.id });
         this.outbox.update(row.id, { status: 'published', published_at: this.clock.nowIso() });
+        this.metrics.inc('foundation_outbox_published_total', { type: row.type });
+        this.metrics.observe('foundation_outbox_publish_ms', {}, Date.now() - started);
         out.published += 1;
       } catch (e) {
         const attempts = row.attempts + 1;
@@ -89,13 +102,17 @@ class OutboxService {
             id: id('dlq'), outbox_id: row.id, type: row.type, data: row.data,
             error: e.message, at: this.clock.nowIso(),
           });
+          this.metrics.inc('foundation_outbox_dead_total', { type: row.type });
           out.dead += 1;
         } else {
           this.outbox.update(row.id, { status: 'pending', attempts });
+          this.metrics.inc('foundation_outbox_retried_total', { type: row.type });
           out.retried += 1;
         }
       }
     }
+    const s = this.stats();
+    this.metrics.observe('foundation_outbox_backlog', {}, s.pending); // gauge-as-sample
     return out;
   }
 

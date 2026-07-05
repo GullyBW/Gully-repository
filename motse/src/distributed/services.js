@@ -3,6 +3,9 @@
 const crypto = require('crypto');
 const { err } = require('../kernel/errors');
 
+// No-op metrics sink so the services run identically without observability.
+const NOOP_METRICS = { inc() {}, observe() {} };
+
 /**
  * Distributed runtime services (Foundation F3) built on the KV abstraction,
  * so they enforce correctly across pods when backed by Redis and behave
@@ -17,10 +20,11 @@ const { err } = require('../kernel/errors');
  * KV at Redis; the request path can then adopt these without further change.
  */
 class DistributedIdempotency {
-  constructor({ kv, ttlMs = 48 * 3600 * 1000, prefix = 'idem:' } = {}) {
+  constructor({ kv, ttlMs = 48 * 3600 * 1000, prefix = 'idem:', metrics = null } = {}) {
     this.kv = kv;
     this.ttlMs = ttlMs;
     this.prefix = prefix;
+    this.metrics = metrics || NOOP_METRICS;
   }
 
   /** Win the reservation for `key` (true iff this caller is the first). */
@@ -39,7 +43,11 @@ class DistributedIdempotency {
    */
   async runOnce(key, fn) {
     const won = await this.reserve(key);
-    if (!won) return { ran: false };
+    if (!won) {
+      this.metrics.inc('foundation_idempotency_total', { result: 'duplicate' });
+      return { ran: false };
+    }
+    this.metrics.inc('foundation_idempotency_total', { result: 'first' });
     try {
       const result = await fn();
       return { ran: true, result };
@@ -51,12 +59,13 @@ class DistributedIdempotency {
 }
 
 class DistributedRateLimiter {
-  constructor({ kv, clock, capacity = 300, windowMs = 60 * 1000, prefix = 'rl:' } = {}) {
+  constructor({ kv, clock, capacity = 300, windowMs = 60 * 1000, prefix = 'rl:', metrics = null } = {}) {
     this.kv = kv;
     this.clock = clock || { nowMs: () => Date.now() };
     this.capacity = capacity;
     this.windowMs = windowMs;
     this.prefix = prefix;
+    this.metrics = metrics || NOOP_METRICS;
   }
 
   /**
@@ -70,8 +79,10 @@ class DistributedRateLimiter {
     const key = `${this.prefix}${identity}:${windowStart}`;
     const count = await this.kv.incrBy(key, cost, this.windowMs);
     const remaining = Math.max(0, this.capacity - count);
+    const allowed = count <= this.capacity;
+    this.metrics.inc('foundation_ratelimit_total', { result: allowed ? 'allowed' : 'limited' });
     return {
-      allowed: count <= this.capacity,
+      allowed,
       remaining,
       limit: this.capacity,
       reset_ms: windowStart + this.windowMs - now,
@@ -80,10 +91,11 @@ class DistributedRateLimiter {
 }
 
 class DistributedLock {
-  constructor({ kv, ttlMs = 10 * 1000, prefix = 'lock:' } = {}) {
+  constructor({ kv, ttlMs = 10 * 1000, prefix = 'lock:', metrics = null } = {}) {
     this.kv = kv;
     this.ttlMs = ttlMs;
     this.prefix = prefix;
+    this.metrics = metrics || NOOP_METRICS;
   }
 
   /** Acquire `name` with a fencing token; true iff acquired. */
@@ -107,6 +119,7 @@ class DistributedLock {
    */
   async withLock(name, fn, { token = crypto.randomBytes(8).toString('hex'), ttlMs = this.ttlMs } = {}) {
     const acquired = await this.acquire(name, token, ttlMs);
+    this.metrics.inc('foundation_lock_total', { result: acquired ? 'acquired' : 'contended' });
     if (!acquired) throw err('STATE_CONFLICT', `lock ${name} is held`);
     try {
       return await fn();

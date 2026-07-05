@@ -709,6 +709,12 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
     services: ['idempotency', 'rateLimiter', 'lock'],
   })));
 
+  // ── Phase 2/3: observability (tracing + health) ────────────────────
+  router.get('/observability/traces', run((req) => platform.tracer.recent(Number(req.query.limit) || 20)));
+  router.get('/observability/traces/:traceId', run((req) => platform.tracer.trace(req.params.traceId)));
+  router.get('/observability/tracer', run(() => platform.tracer.stats()));
+  router.get('/observability/health', run(() => platform.health.ready()));
+
   return router;
 }
 

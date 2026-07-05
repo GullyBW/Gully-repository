@@ -45,12 +45,30 @@ function createApp(platform = createPlatform(), options = {}) {
     })
   );
 
-  // Trace ids end-to-end (§16 observability).
+  // Trace ids end-to-end (§16 observability). Honour an inbound W3C
+  // traceparent for cross-service propagation, else mint a trace id.
   app.use((req, res, next) => {
-    req.traceId = req.get('X-Trace-Id') || id('trc');
+    const tp = platform.tracer && platform.tracer.constructor.parseTraceparent(req.get('traceparent'));
+    req.traceId = (tp && tp.traceId) || req.get('X-Trace-Id') || id('trc');
     res.set('X-Trace-Id', req.traceId);
     next();
   });
+  // Distributed tracing (Phase 2): a root span per request that child spans
+  // (transactions, outbox drains, …) nest under via AsyncLocalStorage.
+  if (platform.tracer) {
+    app.use((req, res, next) => {
+      const span = platform.tracer.startSpan(`HTTP ${req.method}`, {
+        traceId: req.traceId,
+        attributes: { 'http.method': req.method, 'http.target': req.path },
+      });
+      res.set('traceparent', platform.tracer.constructor.formatTraceparent(req.traceId, span.span_id));
+      res.on('finish', () => {
+        span.setAttribute('http.status_code', res.statusCode);
+        span.end({ error: res.statusCode >= 500 ? new Error(`http_${res.statusCode}`) : null });
+      });
+      platform.tracer.runInContext({ traceId: req.traceId, spanId: span.span_id }, () => next());
+    });
+  }
   // Request metrics + structured logs (§16).
   app.use(platform.monitoring.httpMiddleware());
   // Analytics ingestion + API-abuse telemetry (Phase 2): pure counters
@@ -132,6 +150,13 @@ function createApp(platform = createPlatform(), options = {}) {
   app.get('/health/ready', (req, res) => {
     const readiness = platform.monitoring.readiness();
     res.status(readiness.ready ? 200 : 503).json(readiness);
+  });
+  // Kubernetes liveness (cheap, restarts the pod on failure).
+  app.get('/health/live', (req, res) => res.json(platform.health.live()));
+  // Foundation-aware readiness (removes the pod from rotation without restart).
+  app.get('/health/full', (req, res) => {
+    const r = platform.health.ready();
+    res.status(r.ready ? 200 : 503).json(r);
   });
   app.get('/metrics', (req, res) => {
     res.set('Content-Type', 'text/plain; version=0.0.4');

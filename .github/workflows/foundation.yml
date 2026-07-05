@@ -58,3 +58,9 @@ jobs:
 
       - name: Foundation coverage gate (>=95/95/90)
         run: npm run motse:coverage:foundation
+
+      - name: Observability + health suites (Phase 2/3)
+        run: npm run motse:test -- tests/observability.test.js tests/health.test.js
+
+      - name: Observability coverage gate (>=95/95/90)
+        run: npm run motse:coverage:observability
