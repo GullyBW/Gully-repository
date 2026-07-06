@@ -763,6 +763,33 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.get('/resilience', run(() => platform.resilience.stats()));
   router.post('/resilience/breakers/:name/reset', run((req) => platform.resilience.breaker(req.params.name).reset()));
 
+  // ── Mission 6: distributed configuration platform ──────────────────
+  router.get('/config', run(() => ({ keys: platform.config.list(), stats: platform.config.stats() })));
+  router.get('/config/:key/history', run((req) => platform.config.history(req.params.key)));
+  router.put('/config/:key', run((req) =>
+    platform.config.set(req.params.key, req.body.value, {
+      actor: req.actor, reason: req.body.reason,
+      activateAt: req.body.activate_at, expireAt: req.body.expire_at,
+    })
+  ));
+  router.post('/config/:key/rollout', run((req) =>
+    platform.config.rollout(req.params.key, req.body.value, Number(req.body.percent), { salt: req.body.salt, actor: req.actor })
+  ));
+  router.post('/config/:key/target', run((req) =>
+    platform.config.target(req.params.key, req.body.subject, req.body.value, { actor: req.actor })
+  ));
+  router.post('/config/:key/rollback', run((req) =>
+    platform.config.rollback(req.params.key, Number(req.body.rev), { actor: req.actor })
+  ));
+  router.post('/config/snapshots', run((req) => platform.config.snapshot(req.body.label, { actor: req.actor })));
+  router.post('/config/snapshots/:label/restore', run((req) => platform.config.restore(req.params.label, { actor: req.actor })));
+  router.post('/config/kill-switch', run((req) => platform.config.killSwitch(req.body.on !== false, { actor: req.actor })));
+  router.post('/config/safe-mode', run((req) => platform.config.safeMode(req.body.on !== false, { actor: req.actor })));
+
+  // ── Mission 9: predictive capacity planning ─────────────────────────
+  router.get('/capacity', run(() => platform.capacity.forecast()));
+  router.post('/capacity/sample', run(() => platform.capacity.record()));
+
   // ── Mission 4: unified operations overview (one call, whole platform) ─
   router.get('/overview', run(async () => {
     await platform.dependencies.checkAll();
@@ -786,7 +813,9 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
       },
       resilience: platform.resilience.stats(),
       runtime: platform.runtime.snapshot(),
-      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime'],
+      config: platform.config.stats(),
+      capacity: platform.capacity.forecast(),
+      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity'],
     };
   }));
 

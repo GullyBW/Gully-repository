@@ -157,6 +157,15 @@ const DASHBOARDS = {
       ['Self-heal actions (rps)', 'sum by (result) (rate(motse_selfheal_total[5m]))'],
     ],
   },
+  config: {
+    title: 'Motse · Configuration Platform',
+    panels: [
+      ['Config changes by op (rps)', 'sum by (op) (rate(motse_config_changes_total[5m]))'],
+      ['Total config changes (1h)', 'sum(increase(motse_config_changes_total[1h]))'],
+      ['Kill switch active (1=on)', 'motse_config_kill_switch'],
+      ['Safe mode active (1=on)', 'motse_config_safe_mode'],
+    ],
+  },
   runtime: {
     title: 'Motse · Runtime Intelligence (Node)',
     panels: [

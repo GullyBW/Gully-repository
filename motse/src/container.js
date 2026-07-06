@@ -56,8 +56,10 @@ const { OtelSpanExporter } = require('./observability/otel.exporter');
 const { HealthService } = require('./observability/health.service');
 const { DependencyHealthEngine } = require('./observability/dependency.health');
 const { RuntimeIntelligence } = require('./observability/runtime.intelligence');
+const { CapacityPlanner } = require('./observability/capacity.planner');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { Resilience } = require('./resilience');
+const { ConfigService } = require('./config/config.service');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -449,6 +451,61 @@ function createPlatform({
     dependency: 'telemetry_exporter',
     action: async () => ({ flushed: !!platform.otel.flush() }),
   });
+  // Mission 6: distributed configuration platform. Typed, validated,
+  // versioned runtime knobs that live-APPLY into the running resilience/
+  // observability subsystems with ZERO restart. Each `apply` mutates the
+  // already-constructed object (all knobs are plain mutable fields).
+  platform.config = new ConfigService({ clock, audit, bus, metrics });
+  const posInt = (v) => (Number.isInteger(v) && v > 0) || 'must be a positive integer';
+  const ratio01 = (v) => (v >= 0 && v <= 1) || 'must be between 0 and 1';
+  platform.config.register('resilience.redis.breaker.failureThreshold', {
+    type: 'number', defaultValue: 5, validate: posInt, emergencyManaged: true, safeValue: 3,
+    description: 'Failures in the rolling window before the Redis circuit opens',
+    apply: (v) => { platform.resilience.breaker('redis').failureThreshold = v; },
+  });
+  platform.config.register('resilience.redis.breaker.cooldownMs', {
+    type: 'number', defaultValue: 10000, validate: posInt,
+    description: 'Redis breaker open→half-open cooldown (ms)',
+    apply: (v) => { platform.resilience.breaker('redis').cooldownMs = v; },
+  });
+  platform.config.register('resilience.redis.bulkhead.maxConcurrent', {
+    type: 'number', defaultValue: 50, validate: posInt, emergencyManaged: true, safeValue: 20,
+    description: 'Max concurrent Redis operations (bulkhead)',
+    apply: (v) => { platform.resilience.bulkhead('redis').maxConcurrent = v; },
+  });
+  platform.config.register('resilience.loadShedding.maxInFlight', {
+    type: 'number', defaultValue: 500, validate: posInt, emergencyManaged: true, safeValue: 150,
+    description: 'In-flight request cap before shedding normal traffic',
+    apply: (v) => { platform.resilience.shedder.maxInFlight = v; },
+  });
+  platform.config.register('resilience.loadShedding.lagThresholdMs', {
+    type: 'number', defaultValue: 500, validate: posInt,
+    description: 'Event-loop lag (ms) that triggers load shedding',
+    apply: (v) => { platform.resilience.shedder.lagThresholdMs = v; },
+  });
+  platform.config.register('resilience.retry.budgetRatio', {
+    type: 'number', defaultValue: 0.1, validate: ratio01,
+    description: 'Retry budget as a fraction of first-attempt calls',
+    apply: (v) => { for (const b of platform.resilience.budgets.values()) b.ratio = v; },
+  });
+  platform.config.register('health.probe.timeoutMs', {
+    type: 'number', defaultValue: 1500, validate: posInt,
+    description: 'Dependency health-probe timeout (ms)',
+    apply: (v) => { platform.dependencies.timeoutMs = v; },
+  });
+  platform.config.register('telemetry.otel.batchSize', {
+    type: 'number', defaultValue: 128, validate: posInt,
+    description: 'OTLP exporter span batch size',
+    apply: (v) => { platform.otel.batchSize = v; },
+  });
+  platform.config.register('events.outbox.maxAttempts', {
+    type: 'number', defaultValue: 5, validate: posInt,
+    description: 'Outbox delivery attempts before dead-lettering',
+    apply: (v) => { platform.outbox.maxAttempts = v; },
+  });
+  // Mission 9: predictive capacity planning over the runtime-intelligence
+  // history + event-platform/store growth. Records on a cadence (health cycle).
+  platform.capacity = new CapacityPlanner({ clock, platform });
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
   platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });

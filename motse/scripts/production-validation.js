@@ -624,6 +624,44 @@ async function main() {
     report.scenarios.runtime = platform.runtime.snapshot().current;
   }
 
+  // ════ W12 · Distributed config applied live (Mission 6) ════
+  section('W12 live configuration');
+  {
+    const breaker = platform.resilience.breaker('redis');
+    const before = breaker.failureThreshold;
+    platform.config.set('resilience.redis.breaker.failureThreshold', before + 7, { actor: 'validator', reason: 'W12' });
+    check('config change applies to the running system with zero restart', before + 7, breaker.failureThreshold, breaker.failureThreshold === before + 7);
+    // Validation rejects an out-of-range value.
+    let rejected = false;
+    try { platform.config.set('resilience.redis.breaker.failureThreshold', -1); } catch { rejected = true; }
+    check('config validation rejects an invalid value', 'rejected', rejected ? 'rejected' : 'accepted', rejected === true);
+    // Emergency kill switch drives managed knobs to safe values, reversibly.
+    const shedBefore = platform.resilience.shedder.maxInFlight;
+    platform.config.killSwitch(true, { actor: 'validator' });
+    const safe = platform.resilience.shedder.maxInFlight;
+    platform.config.killSwitch(false, { actor: 'validator' });
+    check('kill switch forces a safe value then restores', `${safe}<${shedBefore} then restore`, `${safe} then ${platform.resilience.shedder.maxInFlight}`, safe < shedBefore && platform.resilience.shedder.maxInFlight === shedBefore);
+    // Snapshot → change → restore round-trips.
+    platform.config.snapshot('w12-baseline', { actor: 'validator' });
+    platform.config.set('resilience.redis.breaker.failureThreshold', 42);
+    platform.config.restore('w12-baseline', { actor: 'validator' });
+    check('config snapshot restore reverts changes', before + 7, breaker.failureThreshold, breaker.failureThreshold === before + 7);
+    report.scenarios.config = platform.config.stats();
+  }
+
+  // ════ W13 · Predictive capacity planning (Mission 9) ════
+  section('W13 capacity planning');
+  {
+    for (let i = 0; i < 10; i += 1) { platform.runtime.sample(); platform.capacity.record(); }
+    const forecast = platform.capacity.forecast();
+    check('capacity forecast produces multi-horizon projections', true, !!forecast.projections.heap.forecast, !!(forecast.projections.heap.forecast && forecast.projections.heap.forecast['365d'] !== undefined));
+    check('every projection carries a confidence + assumptions', true,
+      forecast.projections.heap.confidence != null && Array.isArray(forecast.projections.heap.assumptions),
+      forecast.projections.heap.confidence != null && forecast.projections.heap.assumptions.length > 0);
+    check('capacity report yields at least one recommendation', '>=1', forecast.recommendations.length, forecast.recommendations.length >= 1);
+    report.scenarios.capacity = { samples: forecast.samples, recommendations: forecast.recommendations.length };
+  }
+
   // ════ Integrity + verdict ════
   section('final integrity');
   check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);

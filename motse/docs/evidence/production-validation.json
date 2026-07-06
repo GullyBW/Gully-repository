@@ -1,6 +1,6 @@
 {
   "mode": "full",
-  "started_at": "2026-07-06T20:58:12.912Z",
+  "started_at": "2026-07-06T21:21:18.520Z",
   "node": "v22.22.2",
   "scenarios": {
     "duplicate_requests": {
@@ -9,34 +9,34 @@
       "winners": 1
     },
     "sustained_load": {
-      "requests": 10462,
-      "rps": 1744,
-      "p50_ms": 12.51,
-      "p95_ms": 19,
-      "p99_ms": 21.97,
+      "requests": 10629,
+      "rps": 1772,
+      "p50_ms": 12.55,
+      "p95_ms": 18.92,
+      "p99_ms": 23.35,
       "statuses": {
-        "200": 5550,
-        "429": 4912
+        "200": 5592,
+        "429": 5037
       },
       "error_5xx": 0,
-      "throttled_429": 4912
+      "throttled_429": 5037
     },
     "log_correlation": {
-      "http_log_lines": 10491,
-      "correlated": 10491
+      "http_log_lines": 10658,
+      "correlated": 10658
     },
     "transaction_volume": {
       "txns": 20000,
       "commits": 18000,
       "rollbacks": 2000,
-      "throughput_per_s": 152696,
-      "us_per_txn": 6.5
+      "throughput_per_s": 195960,
+      "us_per_txn": 5.1
     },
     "outbox_reliability": {
       "backlog_peak": 1100,
-      "backlog_recovery_ms": 11.9,
+      "backlog_recovery_ms": 14,
       "dead_peak": 50,
-      "dlq_replay_ms": 5.6
+      "dlq_replay_ms": 1.6
     },
     "contention": {
       "locks": 200,
@@ -49,7 +49,7 @@
     },
     "chaos": {
       "outage_ops_failed": 10,
-      "recovery_ms": 0.05,
+      "recovery_ms": 0.04,
       "kv_stats": {
         "calls": 20,
         "faults": 12,
@@ -60,19 +60,19 @@
       "spans": 20000,
       "exported": 20000,
       "dropped": 0,
-      "spans_per_s": 88312,
-      "broken_collector_500_spans_ms": 5
+      "spans_per_s": 95599,
+      "broken_collector_500_spans_ms": 4.7
     },
     "overhead": {
-      "txn_bare_us": 1.23,
-      "txn_instrumented_us": 2.15,
-      "txn_added_us": 0.92,
-      "txn_overhead_pct": 74.4,
-      "outbox_bare_us": 9.42,
-      "outbox_instrumented_us": 21.49,
-      "outbox_added_us": 12.08,
-      "outbox_overhead_pct": 128.2,
-      "heap_growth_mb": 99.7
+      "txn_bare_us": 1.12,
+      "txn_instrumented_us": 1.79,
+      "txn_added_us": 0.67,
+      "txn_overhead_pct": 60,
+      "outbox_bare_us": 8.95,
+      "outbox_instrumented_us": 19.83,
+      "outbox_added_us": 10.89,
+      "outbox_overhead_pct": 121.7,
+      "heap_growth_mb": 103.6
     },
     "resilience": {
       "breaker": "validated",
@@ -82,21 +82,36 @@
       "load_shedding": "validated"
     },
     "runtime": {
-      "at": "2026-07-06T20:58:19.861Z",
-      "at_ms": 1783371499861,
-      "heap_used_bytes": 40986496,
-      "heap_total_bytes": 128430080,
+      "at": "2026-07-06T21:21:25.381Z",
+      "at_ms": 1783372885381,
+      "heap_used_bytes": 41346272,
+      "heap_total_bytes": 132362240,
       "heap_limit_bytes": 8640266240,
-      "external_bytes": 2396886,
-      "rss_bytes": 204767232,
+      "external_bytes": 2392362,
+      "rss_bytes": 208338944,
       "array_buffers_bytes": 27259,
-      "heap_utilization": 0.004743661232364988,
-      "event_loop_utilization": 0.9836903931945532,
+      "heap_utilization": 0.004785300689993553,
+      "event_loop_utilization": 0.982316648705679,
       "event_loop_delay_p99_ms": 0,
       "event_loop_delay_mean_ms": 0,
       "gc_count": 0,
       "gc_total_ms": 0,
-      "active_handles": 27
+      "active_handles": 25
+    },
+    "config": {
+      "keys": 9,
+      "revisions": 3,
+      "snapshots": [
+        "w12-baseline"
+      ],
+      "kill_switch": false,
+      "safe_mode": false,
+      "scheduled": [],
+      "rollouts": []
+    },
+    "capacity": {
+      "samples": 1709,
+      "recommendations": 3
     }
   },
   "checks": [
@@ -132,8 +147,8 @@
     },
     {
       "name": "metrics count HTTP requests exactly",
-      "expected": "10462",
-      "observed": "10462",
+      "expected": "10629",
+      "observed": "10629",
       "pass": true
     },
     {
@@ -151,7 +166,7 @@
     {
       "name": "rate limiting engages under anonymous burst (429s observed)",
       "expected": ">0",
-      "observed": "4912",
+      "observed": "5037",
       "pass": true
     },
     {
@@ -168,8 +183,8 @@
     },
     {
       "name": "100% of request logs correlate (trace_id + service)",
-      "expected": "10491",
-      "observed": "10491",
+      "expected": "10658",
+      "observed": "10658",
       "pass": true
     },
     {
@@ -469,13 +484,13 @@
     {
       "name": "transaction instrumentation cost within budget",
       "expected": "<=15µs/txn",
-      "observed": "0.92µs",
+      "observed": "0.67µs",
       "pass": true
     },
     {
       "name": "outbox instrumentation cost within budget",
       "expected": "<=75µs/op",
-      "observed": "12.08µs",
+      "observed": "10.89µs",
       "pass": true
     },
     {
@@ -548,6 +563,48 @@
       "name": "the live process is NOT falsely flagged as leaking",
       "expected": "clean",
       "observed": "clean",
+      "pass": true
+    },
+    {
+      "name": "config change applies to the running system with zero restart",
+      "expected": "12",
+      "observed": "12",
+      "pass": true
+    },
+    {
+      "name": "config validation rejects an invalid value",
+      "expected": "rejected",
+      "observed": "rejected",
+      "pass": true
+    },
+    {
+      "name": "kill switch forces a safe value then restores",
+      "expected": "150<500 then restore",
+      "observed": "150 then 500",
+      "pass": true
+    },
+    {
+      "name": "config snapshot restore reverts changes",
+      "expected": "12",
+      "observed": "12",
+      "pass": true
+    },
+    {
+      "name": "capacity forecast produces multi-horizon projections",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "every projection carries a confidence + assumptions",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "capacity report yields at least one recommendation",
+      "expected": ">=1",
+      "observed": "3",
       "pass": true
     },
     {
@@ -746,6 +803,6 @@
     }
   ],
   "recommendations": [],
-  "finished_at": "2026-07-06T20:58:19.866Z",
+  "finished_at": "2026-07-06T21:21:25.398Z",
   "verdict": "PASS"
 }

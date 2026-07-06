@@ -49,6 +49,10 @@ class HealthService {
     if (this.platform.resilience && this.platform.resilience.healer) {
       await this.platform.resilience.healer.evaluate();
     }
+    // Mission 6/9: advance scheduled config changes and record a capacity
+    // growth sample on the same cadence (no extra timer).
+    if (this.platform.config) this.platform.config.tick();
+    if (this.platform.capacity) this.platform.capacity.record();
     const base = this.ready();
     return {
       ...base,
