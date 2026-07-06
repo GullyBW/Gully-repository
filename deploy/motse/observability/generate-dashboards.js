@@ -132,6 +132,20 @@ const DASHBOARDS = {
       ['Backlog (pending)', 'motse_outbox_pending'],
     ],
   },
+  ratelimit: {
+    title: 'Motse · Adaptive Rate Limiting',
+    panels: [
+      ['Decisions by class (rps)',
+        'sum by (class) (rate(motse_ratelimit_adaptive_total{result="allowed"}[5m]))'],
+      ['Rejections by class (rps)',
+        'sum by (class) (rate(motse_ratelimit_adaptive_total{result=~"limited|banned"}[5m]))'],
+      ['Rejection ratio by class (%)',
+        '100 * sum by (class) (rate(motse_ratelimit_adaptive_total{result=~"limited|banned"}[5m])) / clamp_min(sum by (class) (rate(motse_ratelimit_adaptive_total[5m])), 1e-9)'],
+      ['Ban decisions (rps)', 'sum(rate(motse_ratelimit_adaptive_total{result="banned"}[5m]))'],
+      ['Saturation trend (limited, 1h window)',
+        'sum by (class) (increase(motse_ratelimit_adaptive_total{result="limited"}[1h]))'],
+    ],
+  },
   distributed: {
     title: 'Motse · Foundation — Distributed Runtime (Redis)',
     panels: [

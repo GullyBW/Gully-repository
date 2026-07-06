@@ -142,16 +142,17 @@ async function main() {
   // ahead of authentication, so the load phase exhausts this host's bucket
   // for authenticated callers too (see recommendation below).
   section('W7 cross-boundary trace propagation');
+  // The operator session is reused by W1's adaptive-rate-limit check.
+  const { sandbox_code } = platform.identity.requestOtp('+26771009999');
+  const { user: opsUser, session: opsSession } = platform.identity.verifyOtp('+26771009999', sandbox_code, { deviceId: 'validator' });
+  platform.identity.grantInstitutional(opsUser.id, { institution: 'Validation' }, 'system:bootstrap');
+  platform.identity.grantRole(opsUser.id, 'platform_admin', 'platform', 'system:bootstrap');
   {
-    const { sandbox_code } = platform.identity.requestOtp('+26771009999');
-    const { user, session } = platform.identity.verifyOtp('+26771009999', sandbox_code, { deviceId: 'validator' });
-    platform.identity.grantInstitutional(user.id, { institution: 'Validation' }, 'system:bootstrap');
-    platform.identity.grantRole(user.id, 'platform_admin', 'platform', 'system:bootstrap');
     const traceId = 'ab'.repeat(16);
     const res = await httpRequest(base, 'POST', '/v1/admin/outbox/drain', {
       headers: {
         traceparent: `00-${traceId}-${'e'.repeat(16)}-01`,
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${opsSession.access_token}`,
         'X-Device-Id': 'validator',
         'Idempotency-Key': 'validate-drain-1',
       },
@@ -236,11 +237,12 @@ async function main() {
     check('every response carries trace headers', 0, missingTraceHeaders, missingTraceHeaders === 0);
     check('zero 5xx under sustained load', 0, fiveHundreds, fiveHundreds === 0);
     check('rate limiting engages under anonymous burst (429s observed)', '>0', s.throttled_429, s.throttled_429 > 0);
-    if (s.throttled_429 > 0) {
-      report.recommendations.push(
-        'FINDING: the /v1 token bucket runs before authentication and keys by client IP for unauthenticated requests, so authenticated users behind a shared egress IP (NAT/proxy) inherit the anonymous bucket once it is exhausted. Consider a post-auth second bucket keyed by actor, or exempting authenticated traffic from the IP bucket.'
-      );
-    }
+    // Mission 2 regression guard: the anonymous bucket is now exhausted, yet
+    // an authenticated caller must ride its own class quota (finding 2 fixed).
+    const authedDuringThrottle = await httpRequest(base, 'GET', '/v1/wallet/accounts', {
+      headers: { Authorization: `Bearer ${opsSession.access_token}`, 'X-Device-Id': 'validator' },
+    });
+    check('authenticated caller unaffected by exhausted anonymous bucket (M2)', 200, authedDuringThrottle.status, authedDuringThrottle.status === 200);
 
     // Trace completeness on sampled requests (sent last so the ring buffer still holds them).
     let complete = 0;
@@ -406,15 +408,12 @@ async function main() {
     }
     check('operations fail closed during KV outage (no silent success)', 10, failuresDuringOutage, failuresDuringOutage === 10);
 
-    // GAP PROBE: does readiness see the outage? (documented, not asserted-fixed)
+    // Mission 1 regression guard: active dependency probes must surface the
+    // outage in readiness (the pre-fix engine left readiness green here).
+    await platform.dependencies.checkAll();
     const readyDuringOutage = platform.health.ready();
-    if (readyDuringOutage.checks.distributed.healthy) {
-      report.recommendations.push(
-        'GAP: HealthService "distributed" check verifies the KV adapter exists but not that it responds — a Redis outage leaves readiness green. Add an active KV ping (setNx/del round-trip with timeout) as a readiness check.'
-      );
-      // eslint-disable-next-line no-console
-      console.log('  GAP recorded: readiness stays green during a KV outage (recommendation logged)');
-    }
+    check('readiness detects the KV outage via dependency probes (M1)', 'not ready', readyDuringOutage.ready ? 'ready' : 'not ready', readyDuringOutage.ready === false);
+    check('redis dependency reports failed during outage (M1)', 'failed', platform.dependencies.summary().redis, platform.dependencies.summary().redis === 'failed');
 
     const tUp = performance.now();
     chaosKv.up();
@@ -431,6 +430,10 @@ async function main() {
     chaosKv.restart(new InMemoryKvAdapter({ clock: platform.clock }));
     const reRun = await platform.distributed.idempotency.runOnce('pre-restart', () => 'x');
     check('restart data loss degrades to at-least-once (documented boundary)', 'ran again', reRun.ran ? 'ran again' : 'blocked', reRun.ran === true);
+    // Recovery path: two clean probe cycles walk failed → recovering → healthy.
+    await platform.dependencies.checkAll();
+    await platform.dependencies.checkAll();
+    check('dependency state recovers after the outage ends (M1)', 'healthy', platform.dependencies.summary().redis, platform.dependencies.summary().redis === 'healthy');
     report.scenarios.chaos = { outage_ops_failed: failuresDuringOutage, recovery_ms: outageRecoveryMs, kv_stats: chaosKv.stats() };
     // eslint-disable-next-line no-console
     console.log(`  recovery after outage: ${outageRecoveryMs}ms`);
@@ -511,9 +514,14 @@ async function main() {
     const obBareUs = obBare * 1000 / OB_N;
     const txnBudgetUs = +Math.max(15, txnBareUs * 0.25).toFixed(1);
     const obBudgetUs = +Math.max(75, obBareUs * 0.25).toFixed(1);
-    report.recommendations.push(
-      `FINDING: OutboxService._drain() scans the whole outbox collection on every drain while published rows accumulate unbounded (bare op measured ${obBareUs.toFixed(0)}µs at ${OB_N + 500} rows vs ~115µs cold). Before high-volume production, index pending rows by status and/or prune or archive published rows.`
-    );
+    // Mission 3 regression guard: the pending index holds drain cost flat as
+    // published rows accumulate (pre-fix: ~866µs/op at 5.5k rows).
+    check('outbox drain cost stays flat with published-row accumulation (M3)', '<300µs/op', `${obBareUs.toFixed(0)}µs`, obBareUs < 300);
+    if (obBareUs >= 300) {
+      report.recommendations.push(
+        `REGRESSION: outbox bare op cost measured ${obBareUs.toFixed(0)}µs at ${OB_N + 500} rows — the pending index should hold this flat; investigate.`
+      );
+    }
     report.scenarios.overhead = {
       txn_bare_us: +(bare * 1000 / N).toFixed(2),
       txn_instrumented_us: +(instrumented * 1000 / N).toFixed(2),

@@ -54,6 +54,8 @@ const { DistributedIdempotency, DistributedRateLimiter, DistributedLock } = requ
 const { Tracer } = require('./observability/tracer');
 const { OtelSpanExporter } = require('./observability/otel.exporter');
 const { HealthService } = require('./observability/health.service');
+const { DependencyHealthEngine } = require('./observability/dependency.health');
+const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -349,6 +351,75 @@ function createPlatform({
   platform.tracer = tracer;
   platform.otel = otel; // OTLP export bridge (stats + manual flush)
   platform.health = new HealthService({ platform, clock });
+  // Mission 1: active dependency probes with a per-dependency state machine.
+  // The KV probe does a REAL round-trip (validation W6 showed existence-only
+  // checks leave readiness green through a Redis outage). Probes read
+  // platform.* at probe time, so runtime swaps (chaos, failover) are seen.
+  platform.dependencies = new DependencyHealthEngine({ clock })
+    .register('redis', {
+      probe: async () => {
+        const key = `health:probe:${clock.nowMs()}:${Math.random().toString(36).slice(2, 8)}`;
+        await platform.kv.setNx(key, '1', 5000);
+        await platform.kv.del(key);
+        return { detail: platform.kv.constructor.name };
+      },
+      impact: 'cross-pod idempotency, rate limiting and locks fail closed',
+    })
+    .register('event_bus', {
+      probe: async () => {
+        if (bus.schemas.size === 0) throw new Error('no event schemas registered');
+        return { detail: `${bus.schemas.size} schemas` };
+      },
+      impact: 'no domain events flow; projections and notifications stall',
+    })
+    .register('event_store', {
+      probe: async () => ({ detail: `${eventStore.stats().total} events` }),
+      impact: 'audit/event-sourced views stop advancing',
+    })
+    .register('outbox_relay', {
+      probe: async () => {
+        const s = platform.outbox.stats();
+        if (s.pending >= 10000) throw new Error(`backlog ${s.pending} — relay stuck`);
+        return { degraded: s.dead > 0, reason: s.dead > 0 ? `${s.dead} dead letters` : null, detail: `pending ${s.pending}` };
+      },
+      impact: 'staged domain events are not delivered',
+    })
+    .register('telemetry_exporter', {
+      probe: async () => ({
+        degraded: platform.otel.enabled && platform.otel.dropped > 0,
+        reason: platform.otel.dropped > 0 ? `${platform.otel.dropped} spans dropped` : null,
+        detail: platform.otel.enabled ? 'exporting' : 'export disabled',
+      }),
+      critical: false,
+      impact: 'traces stop reaching the collector (requests unaffected)',
+    })
+    .register('workers', {
+      probe: async () => {
+        const dead = platform.payments ? platform.payments.retryQueue.deadLetters.length : 0;
+        return { degraded: dead > 0, reason: dead > 0 ? `${dead} payment dead letters` : null, detail: 'payment retry worker' };
+      },
+      critical: false,
+      impact: 'payment retries queue up for manual review',
+    })
+    .register('storage', {
+      probe: async () => ({ detail: `${store.collections.size} collections` }),
+      impact: 'all reads/writes fail',
+    })
+    .register('external_apis', {
+      probe: async () => ({ detail: platform.payments ? `${platform.payments.providers.size} payment providers` : 'n/a' }),
+      critical: false,
+      impact: 'collections/payouts to mobile-money operators degrade',
+    });
+  // Readiness consumes CACHED dependency states synchronously; /health/full
+  // and the admin surface refresh them via checkAll().
+  platform.health.register('dependencies', () => {
+    const v = platform.dependencies.verdict();
+    return { healthy: v.healthy, degraded: v.degraded, detail: v.attention.length ? v.attention.join(', ') : 'all healthy' };
+  });
+  // Mission 2: identity-aware adaptive rate limiting. Anonymous traffic is
+  // DELEGATED to platform.rateLimiter (read per-request), so existing
+  // anonymous semantics — and runtime limiter swaps — are preserved exactly.
+  platform.rateLimiterAdaptive = new AdaptiveRateLimiter({ platform, clock, metrics });
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
   platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });

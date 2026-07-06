@@ -203,6 +203,7 @@ describe('Operational config integrity', () => {
     'foundation_idempotency_total', 'foundation_ratelimit_total', 'foundation_lock_total',
     'motse_outbox_pending', 'motse_outbox_dead', 'motse_distributed_redis_backed',
     'motse_http_requests_total', 'motse_http_request_duration_ms', 'motse_ledger_trial_balance_minor',
+    'motse_ratelimit_adaptive_total',
   ];
 
   // Prometheus histogram series render as base_bucket/_sum/_count; normalise
@@ -225,9 +226,10 @@ describe('Operational config integrity', () => {
     platform.outbox.run(({ stage }) => stage('probe.ok', { n: 1 })); // published + publish_ms
     platform.outbox.run(({ stage }) => stage('probe.bad', { n: 1 })); // attempt 1 → retried
     platform.outbox.drain(); // attempt 2 → dead-lettered
-    // One HTTP request so the RED middleware series render too.
+    // HTTP requests so the RED middleware + adaptive limiter series render too.
     const { app } = createApp(platform);
     await request(app).get('/health/live');
+    await request(app).get('/v1/kgetsi/campaigns');
     const text = platform.metrics.render();
     for (const name of EMITTED) {
       expect(text.includes(name)).toBe(true);
@@ -235,7 +237,7 @@ describe('Operational config integrity', () => {
   });
 
   test('the Foundation dashboards parse and reference only emitted app metrics', () => {
-    for (const key of ['foundation', 'outbox', 'distributed']) {
+    for (const key of ['foundation', 'outbox', 'distributed', 'ratelimit']) {
       const dash = JSON.parse(fs.readFileSync(path.join(DEPLOY, 'dashboards', `${key}.json`), 'utf8'));
       expect(dash.uid).toBe(`motse-${key}`);
       const exprs = dash.panels.map((p) => p.targets[0].expr).join(' ');

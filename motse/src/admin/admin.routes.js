@@ -20,6 +20,12 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   const run = (handler) => (req, res, next) => {
     try {
       const result = handler(req, res);
+      // Async handlers (dependency probes, …) resolve before serialization;
+      // sync handlers behave exactly as before.
+      if (result && typeof result.then === 'function') {
+        result.then((r) => { if (r !== undefined && !res.headersSent) res.json(r); }).catch(next);
+        return;
+      }
       if (result !== undefined && !res.headersSent) res.json(result);
     } catch (e) {
       next(e);
@@ -723,6 +729,50 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
       ...platform.otel.stats(),
     };
   }));
+
+  // ── Mission 1: dependency health diagnostics (admin — full detail) ──
+  router.get('/dependencies', run(() => platform.dependencies.checkAll()));
+  router.get('/dependencies/cached', run(() => platform.dependencies.diagnostics()));
+  router.post('/dependencies/:name/check', run((req) => platform.dependencies.check(req.params.name)));
+  router.post('/dependencies/:name/maintenance', run((req) =>
+    platform.dependencies.setMaintenance(req.params.name, req.body.on !== false, req.body.reason)
+  ));
+
+  // ── Mission 2: adaptive rate-limit control surface ──────────────────
+  router.get('/ratelimit', run((req) => platform.rateLimiterAdaptive.stats({ top: Number(req.query.top) || 10 })));
+  router.post('/ratelimit/bans', run((req) =>
+    platform.rateLimiterAdaptive.ban(req.body.key, req.body.ttl_ms || 15 * 60 * 1000, req.body.reason)
+  ));
+  router.post('/ratelimit/unban', run((req) => platform.rateLimiterAdaptive.unban(req.body.key)));
+  router.post('/ratelimit/quota', run((req) =>
+    platform.rateLimiterAdaptive.setQuota(req.body.class, {
+      capacity: req.body.capacity,
+      refillPerSecond: req.body.refill_per_second,
+    })
+  ));
+  router.post('/ratelimit/override', run((req) =>
+    platform.rateLimiterAdaptive.setOverride(Number(req.body.multiplier))
+  ));
+
+  // ── Mission 3: event-platform operations (retention + replay) ───────
+  router.post('/outbox/prune', run((req) =>
+    platform.outbox.prune({ olderThanMs: req.body.older_than_ms, keepLast: req.body.keep_last })
+  ));
+  router.post('/outbox/replay', run((req) =>
+    platform.outbox.replayWhere({
+      type: req.body.type,
+      since: req.body.since,
+      until: req.body.until,
+      correlationId: req.body.correlation_id,
+      limit: req.body.limit,
+    })
+  ));
+  router.get('/outbox/archive', run((req) =>
+    paginate(platform.outbox.archive.find(), {
+      pageToken: req.query.page_token,
+      pageSize: req.query.page_size,
+    })
+  ));
 
   return router;
 }

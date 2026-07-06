@@ -36,6 +36,21 @@ class HealthService {
     };
   }
 
+  /**
+   * Deep readiness (Mission 1): actively re-probe every registered
+   * dependency, then compose the standard readiness view plus the
+   * public-safe dependency state summary. Used by /health/full; the
+   * synchronous ready() below keeps serving cached states.
+   */
+  async readyFull() {
+    if (this.platform.dependencies) await this.platform.dependencies.checkAll();
+    const base = this.ready();
+    return {
+      ...base,
+      dependencies: this.platform.dependencies ? this.platform.dependencies.summary() : {},
+    };
+  }
+
   /** Readiness — aggregate all checks; ready iff none is unhealthy. */
   ready() {
     const checks = {};

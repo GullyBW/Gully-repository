@@ -73,19 +73,28 @@ function createApp(platform = createPlatform(), options = {}) {
   app.use(platform.monitoring.httpMiddleware());
   // Analytics ingestion + API-abuse telemetry (Phase 2): pure counters
   // on response finish; abuse blocks read like rate limiting.
+  // Mission 2: abuse is keyed by the SAME soft-classified identity as the
+  // adaptive limiter — an abusive shared IP (NAT) no longer blocks valid
+  // authenticated users behind it, and an abusive account is blocked by
+  // account, not by whichever IP it rotates through.
+  const abuseIdentity = (req) => {
+    const c = platform.rateLimiterAdaptive.classify(req);
+    return c.cls === 'anonymous' ? (req.actor || req.ip || 'anonymous') : c.key;
+  };
   app.use((req, res, next) => {
-    const abuseKey = req.actor || req.ip || 'anonymous';
-    if (req.path.startsWith('/v1') && platform.assurance.isBlocked(abuseKey)) {
+    if (req.path.startsWith('/v1') && platform.assurance.isBlocked(abuseIdentity(req))) {
       return next(new MotseError('RATE_LIMITED', 'Temporarily blocked for API abuse'));
     }
     res.on('finish', () => {
       platform.analytics.recordRequest(req.originalUrl.split('?')[0], req.actor, res.statusCode);
-      platform.assurance.recordApiOutcome(req.actor || req.ip || 'anonymous', res.statusCode);
+      platform.assurance.recordApiOutcome(abuseIdentity(req), res.statusCode);
     });
     return next();
   });
-  // Rate limiting / API throttling (§13.1) — token bucket per identity.
-  app.use('/v1', platform.rateLimiter.middleware());
+  // Rate limiting / API throttling (§13.1) — adaptive, identity-aware
+  // (Mission 2): authenticated users, API keys and admins get class-keyed
+  // quotas; anonymous traffic delegates to platform.rateLimiter unchanged.
+  app.use('/v1', platform.rateLimiterAdaptive.middleware());
   // Maintenance mode (Phase 2, WS10): member mutations pause; reads,
   // health, operator webhooks and the admin surface stay available.
   app.use('/v1', platform.ops.maintenanceMiddleware());
@@ -153,10 +162,13 @@ function createApp(platform = createPlatform(), options = {}) {
   });
   // Kubernetes liveness (cheap, restarts the pod on failure).
   app.get('/health/live', (req, res) => res.json(platform.health.live()));
-  // Foundation-aware readiness (removes the pod from rotation without restart).
-  app.get('/health/full', (req, res) => {
-    const r = platform.health.ready();
-    res.status(r.ready ? 200 : 503).json(r);
+  // Foundation-aware readiness (removes the pod from rotation without
+  // restart). Mission 1: actively re-probes every dependency, and the
+  // response includes the public-safe dependency state summary.
+  app.get('/health/full', (req, res, next) => {
+    platform.health.readyFull()
+      .then((r) => res.status(r.ready ? 200 : 503).json(r))
+      .catch(next);
   });
   app.get('/metrics', (req, res) => {
     res.set('Content-Type', 'text/plain; version=0.0.4');
