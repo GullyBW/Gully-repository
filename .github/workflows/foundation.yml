@@ -68,6 +68,9 @@ jobs:
       - name: Enterprise missions coverage gate (>=95/95/90)
         run: npm run motse:coverage:enterprise
 
+      - name: Resilience + runtime coverage gate (>=95/95/90)
+        run: npm run motse:coverage:resilience
+
       - name: Grafana dashboards regenerate cleanly (no drift)
         run: |
           node deploy/motse/observability/generate-dashboards.js

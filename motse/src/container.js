@@ -55,7 +55,9 @@ const { Tracer } = require('./observability/tracer');
 const { OtelSpanExporter } = require('./observability/otel.exporter');
 const { HealthService } = require('./observability/health.service');
 const { DependencyHealthEngine } = require('./observability/dependency.health');
+const { RuntimeIntelligence } = require('./observability/runtime.intelligence');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
+const { Resilience } = require('./resilience');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -420,6 +422,33 @@ function createPlatform({
   // DELEGATED to platform.rateLimiter (read per-request), so existing
   // anonymous semantics — and runtime limiter swaps — are preserved exactly.
   platform.rateLimiterAdaptive = new AdaptiveRateLimiter({ platform, clock, metrics });
+  // Mission 5: runtime intelligence — Node heap/GC/event-loop telemetry with
+  // predictive insights. Opt-in sampling (started by the server, not by the
+  // container, so tests/imports don't spin a timer). Registered as a
+  // dependency and used as the load-shedder's event-loop-lag signal.
+  platform.runtime = new RuntimeIntelligence({ clock, metrics });
+  platform.dependencies.register('event_loop', {
+    probe: async () => {
+      const lag = platform.runtime.loopLagMs();
+      return { degraded: lag > 100, reason: lag > 100 ? `event-loop p99 ${lag}ms` : null, detail: `p99 ${lag}ms` };
+    },
+    critical: false,
+    impact: 'request latency rises; sustained stalls shed load',
+  });
+  // Mission 8: resilience — circuit breakers, bulkheads, retries, load
+  // shedding, self-healing. The shedder reads the runtime's event-loop lag;
+  // the self-healer reacts to dependency-state transitions.
+  platform.resilience = new Resilience({ clock, metrics });
+  platform.resilience.shedder.lagProvider = () => platform.runtime.loopLagMs();
+  platform.resilience.attachHealer({ dependencies: platform.dependencies, logger: null });
+  platform.resilience.healer.register('drain_outbox_on_relay_recovery', {
+    dependency: 'outbox_relay',
+    action: async () => platform.outbox.drain(),
+  });
+  platform.resilience.healer.register('flush_spans_on_exporter_recovery', {
+    dependency: 'telemetry_exporter',
+    action: async () => ({ flushed: !!platform.otel.flush() }),
+  });
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
   platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });

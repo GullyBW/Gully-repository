@@ -539,6 +539,91 @@ async function main() {
     check('outbox instrumentation cost within budget', `<=${obBudgetUs}µs/op`, `${obAddedUs}µs`, obAddedUs <= obBudgetUs);
   }
 
+  // ════ W10 · Resilience patterns under chaos (Mission 8) ════
+  section('W10 resilience patterns under chaos');
+  {
+    const { CircuitBreaker } = require('../src/resilience/circuit.breaker');
+    const { Bulkhead } = require('../src/resilience/bulkhead');
+    const { withRetry, withDeadline, RetryBudget } = require('../src/resilience/retry');
+    const clk = { nowMs: () => Date.now() };
+
+    // Circuit breaker over a downed KV: trips, then spares the dependency.
+    const chaosKv = new ChaosKv(new InMemoryKvAdapter({ clock: platform.clock })).down();
+    const cb = new CircuitBreaker({ clock: clk, failureThreshold: 5, cooldownMs: 40, metrics: platform.metrics });
+    let raw = 0;
+    for (let i = 0; i < 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cb.exec(() => chaosKv.get('k')).catch(() => {});
+    }
+    const openState = cb.state;
+    const callsAtOpen = chaosKv.stats().calls;
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cb.exec(() => { raw += 1; return chaosKv.get('k'); }).catch(() => {});
+    }
+    check('breaker trips open under sustained dependency failure', 'open', openState, openState === 'open');
+    check('open breaker spares the dead dependency (fast-fail, no calls)', callsAtOpen, chaosKv.stats().calls, chaosKv.stats().calls === callsAtOpen);
+    // Recovery: dependency healthy + cooldown → half-open probe closes.
+    chaosKv.up();
+    await new Promise((r) => { setTimeout(r, 60); });
+    const recovered = await cb.exec(() => chaosKv.get('k')).then(() => true).catch(() => false);
+    check('breaker closes after the dependency recovers', 'closed', cb.state, recovered && cb.state === 'closed');
+
+    // Bulkhead isolation: overflow is rejected, the pool never exceeds its cap.
+    const bh = new Bulkhead({ name: 'redis', maxConcurrent: 5, maxQueue: 5, metrics: platform.metrics });
+    let rejected = 0;
+    const slow = () => new Promise((r) => { setTimeout(r, 30); });
+    await Promise.all(Array.from({ length: 30 }, () => bh.exec(slow).catch((e) => { if (e.code === 'UNAVAILABLE') rejected += 1; })));
+    check('bulkhead sheds overflow instead of cascading', '>0 rejected', rejected, rejected > 0 && bh.stats().peak_active <= 5);
+
+    // Adaptive retry + budget: recovers a transient blip; budget caps a storm.
+    const budget = new RetryBudget({ ratio: 0.2, minRetries: 2, clock: clk });
+    let tries = 0;
+    const retried = await withRetry(async () => { tries += 1; if (tries < 3) throw new Error('blip'); return 'ok'; },
+      { attempts: 5, baseMs: 1, budget, metrics: platform.metrics });
+    check('adaptive retry recovers a transient failure', 'ok', retried, retried === 'ok');
+
+    // Timeout budget: a hung dependency is abandoned, not awaited forever.
+    const hung = new Promise(() => {});
+    const deadlineHit = await withDeadline(hung, 20).then(() => false).catch((e) => e.code === 'UNAVAILABLE');
+    check('timeout budget abandons a hung call', 'deadline', deadlineHit ? 'deadline' : 'hung', deadlineHit === true);
+
+    // Load shedding: over the in-flight cap, normal paths shed, critical pass.
+    const { LoadShedder } = require('../src/resilience/load.shed');
+    const shed = new LoadShedder({ maxInFlight: 2, metrics: platform.metrics });
+    const mw = shed.middleware();
+    const fakeRes = () => ({ on() {}, writableFinished: true });
+    let shedCount = 0; let critPass = 0;
+    for (let i = 0; i < 5; i += 1) mw({ path: '/v1/search' }, fakeRes(), (e) => { if (e) shedCount += 1; });
+    mw({ path: '/health/live' }, fakeRes(), (e) => { if (!e) critPass += 1; });
+    mw({ path: '/v1/admin/overview' }, fakeRes(), (e) => { if (!e) critPass += 1; });
+    check('load shedder sheds normal traffic over the cap', '>0 shed', shedCount, shedCount > 0);
+    check('load shedder never sheds critical paths', 2, critPass, critPass === 2);
+    void raw;
+  }
+
+  // ════ W11 · Runtime intelligence detects synthetic pressure (Mission 5) ════
+  section('W11 runtime intelligence');
+  {
+    const s = platform.runtime.sample();
+    check('runtime sampler reports live heap + event-loop metrics', 'heap>0', s.heap_used_bytes > 0 ? 'heap>0' : 'none', s.heap_used_bytes > 0 && typeof s.event_loop_utilization === 'number');
+    check('runtime metrics reach the shared registry', true, platform.metrics.render().includes('motse_runtime_heap_used_bytes'), platform.metrics.render().includes('motse_runtime_heap_used_bytes'));
+    // Feed a synthetic leaking window into a private instance to prove the
+    // predictive detector fires (the live process should NOT be leaking).
+    const { RuntimeIntelligence } = require('../src/observability/runtime.intelligence');
+    const probe = new RuntimeIntelligence({ clock: { nowMs: () => Date.now(), nowIso: () => new Date().toISOString() }, sampleMs: 60000 });
+    for (let i = 0; i < 8; i += 1) {
+      const used = 850_000_000 + i * 5_000_000;
+      probe.samples.push({ at_ms: i * 60000, heap_used_bytes: used, heap_limit_bytes: 1_000_000_000, heap_utilization: used / 1e9, event_loop_delay_p99_ms: 2, event_loop_utilization: 0.2, active_handles: 10 });
+    }
+    const leak = probe.insights().some((x) => x.kind === 'memory_leak_suspected');
+    check('runtime detector flags a leaking heap trend', 'leak', leak ? 'leak' : 'none', leak === true);
+    const liveLeak = platform.runtime.insights().some((x) => x.kind === 'memory_leak_suspected');
+    check('the live process is NOT falsely flagged as leaking', 'clean', liveLeak ? 'FLAGGED' : 'clean', liveLeak === false);
+    report.scenarios.resilience = { breaker: 'validated', bulkhead: 'validated', retry: 'validated', deadline: 'validated', load_shedding: 'validated' };
+    report.scenarios.runtime = platform.runtime.snapshot().current;
+  }
+
   // ════ Integrity + verdict ════
   section('final integrity');
   check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);

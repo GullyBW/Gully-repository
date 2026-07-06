@@ -1,6 +1,6 @@
 {
   "mode": "full",
-  "started_at": "2026-07-06T16:16:35.956Z",
+  "started_at": "2026-07-06T20:58:12.912Z",
   "node": "v22.22.2",
   "scenarios": {
     "duplicate_requests": {
@@ -9,34 +9,34 @@
       "winners": 1
     },
     "sustained_load": {
-      "requests": 7864,
-      "rps": 1311,
-      "p50_ms": 17.46,
-      "p95_ms": 23.78,
-      "p99_ms": 27.06,
+      "requests": 10462,
+      "rps": 1744,
+      "p50_ms": 12.51,
+      "p95_ms": 19,
+      "p99_ms": 21.97,
       "statuses": {
-        "200": 4194,
-        "429": 3670
+        "200": 5550,
+        "429": 4912
       },
       "error_5xx": 0,
-      "throttled_429": 3670
+      "throttled_429": 4912
     },
     "log_correlation": {
-      "http_log_lines": 7893,
-      "correlated": 7893
+      "http_log_lines": 10491,
+      "correlated": 10491
     },
     "transaction_volume": {
       "txns": 20000,
       "commits": 18000,
       "rollbacks": 2000,
-      "throughput_per_s": 185520,
-      "us_per_txn": 5.4
+      "throughput_per_s": 152696,
+      "us_per_txn": 6.5
     },
     "outbox_reliability": {
       "backlog_peak": 1100,
-      "backlog_recovery_ms": 14.7,
+      "backlog_recovery_ms": 11.9,
       "dead_peak": 50,
-      "dlq_replay_ms": 2.9
+      "dlq_replay_ms": 5.6
     },
     "contention": {
       "locks": 200,
@@ -49,7 +49,7 @@
     },
     "chaos": {
       "outage_ops_failed": 10,
-      "recovery_ms": 0.1,
+      "recovery_ms": 0.05,
       "kv_stats": {
         "calls": 20,
         "faults": 12,
@@ -60,19 +60,43 @@
       "spans": 20000,
       "exported": 20000,
       "dropped": 0,
-      "spans_per_s": 68540,
-      "broken_collector_500_spans_ms": 6.1
+      "spans_per_s": 88312,
+      "broken_collector_500_spans_ms": 5
     },
     "overhead": {
-      "txn_bare_us": 1.46,
-      "txn_instrumented_us": 2.35,
-      "txn_added_us": 0.88,
-      "txn_overhead_pct": 60.5,
-      "outbox_bare_us": 11.59,
-      "outbox_instrumented_us": 25.35,
-      "outbox_added_us": 13.76,
-      "outbox_overhead_pct": 118.8,
-      "heap_growth_mb": 66.7
+      "txn_bare_us": 1.23,
+      "txn_instrumented_us": 2.15,
+      "txn_added_us": 0.92,
+      "txn_overhead_pct": 74.4,
+      "outbox_bare_us": 9.42,
+      "outbox_instrumented_us": 21.49,
+      "outbox_added_us": 12.08,
+      "outbox_overhead_pct": 128.2,
+      "heap_growth_mb": 99.7
+    },
+    "resilience": {
+      "breaker": "validated",
+      "bulkhead": "validated",
+      "retry": "validated",
+      "deadline": "validated",
+      "load_shedding": "validated"
+    },
+    "runtime": {
+      "at": "2026-07-06T20:58:19.861Z",
+      "at_ms": 1783371499861,
+      "heap_used_bytes": 40986496,
+      "heap_total_bytes": 128430080,
+      "heap_limit_bytes": 8640266240,
+      "external_bytes": 2396886,
+      "rss_bytes": 204767232,
+      "array_buffers_bytes": 27259,
+      "heap_utilization": 0.004743661232364988,
+      "event_loop_utilization": 0.9836903931945532,
+      "event_loop_delay_p99_ms": 0,
+      "event_loop_delay_mean_ms": 0,
+      "gc_count": 0,
+      "gc_total_ms": 0,
+      "active_handles": 27
     }
   },
   "checks": [
@@ -108,8 +132,8 @@
     },
     {
       "name": "metrics count HTTP requests exactly",
-      "expected": "7864",
-      "observed": "7864",
+      "expected": "10462",
+      "observed": "10462",
       "pass": true
     },
     {
@@ -127,7 +151,7 @@
     {
       "name": "rate limiting engages under anonymous burst (429s observed)",
       "expected": ">0",
-      "observed": "3670",
+      "observed": "4912",
       "pass": true
     },
     {
@@ -144,8 +168,8 @@
     },
     {
       "name": "100% of request logs correlate (trace_id + service)",
-      "expected": "7893",
-      "observed": "7893",
+      "expected": "10491",
+      "observed": "10491",
       "pass": true
     },
     {
@@ -439,19 +463,91 @@
     {
       "name": "outbox drain cost stays flat with published-row accumulation (M3)",
       "expected": "<300µs/op",
-      "observed": "12µs",
+      "observed": "9µs",
       "pass": true
     },
     {
       "name": "transaction instrumentation cost within budget",
       "expected": "<=15µs/txn",
-      "observed": "0.88µs",
+      "observed": "0.92µs",
       "pass": true
     },
     {
       "name": "outbox instrumentation cost within budget",
       "expected": "<=75µs/op",
-      "observed": "13.76µs",
+      "observed": "12.08µs",
+      "pass": true
+    },
+    {
+      "name": "breaker trips open under sustained dependency failure",
+      "expected": "open",
+      "observed": "open",
+      "pass": true
+    },
+    {
+      "name": "open breaker spares the dead dependency (fast-fail, no calls)",
+      "expected": "5",
+      "observed": "5",
+      "pass": true
+    },
+    {
+      "name": "breaker closes after the dependency recovers",
+      "expected": "closed",
+      "observed": "closed",
+      "pass": true
+    },
+    {
+      "name": "bulkhead sheds overflow instead of cascading",
+      "expected": ">0 rejected",
+      "observed": "20",
+      "pass": true
+    },
+    {
+      "name": "adaptive retry recovers a transient failure",
+      "expected": "ok",
+      "observed": "ok",
+      "pass": true
+    },
+    {
+      "name": "timeout budget abandons a hung call",
+      "expected": "deadline",
+      "observed": "deadline",
+      "pass": true
+    },
+    {
+      "name": "load shedder sheds normal traffic over the cap",
+      "expected": ">0 shed",
+      "observed": "3",
+      "pass": true
+    },
+    {
+      "name": "load shedder never sheds critical paths",
+      "expected": "2",
+      "observed": "2",
+      "pass": true
+    },
+    {
+      "name": "runtime sampler reports live heap + event-loop metrics",
+      "expected": "heap>0",
+      "observed": "heap>0",
+      "pass": true
+    },
+    {
+      "name": "runtime metrics reach the shared registry",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "runtime detector flags a leaking heap trend",
+      "expected": "leak",
+      "observed": "leak",
+      "pass": true
+    },
+    {
+      "name": "the live process is NOT falsely flagged as leaking",
+      "expected": "clean",
+      "observed": "clean",
       "pass": true
     },
     {
@@ -650,6 +746,6 @@
     }
   ],
   "recommendations": [],
-  "finished_at": "2026-07-06T16:16:42.869Z",
+  "finished_at": "2026-07-06T20:58:19.866Z",
   "verdict": "PASS"
 }

@@ -56,6 +56,7 @@ const CODES = {
   STATE_CONFLICT: { status: 409, retryable: false, message: 'Operation not valid in the current state' },
   RATE_LIMITED: { status: 429, retryable: true, message: 'Too many requests' },
   MAINTENANCE: { status: 503, retryable: true, message: 'Platform is in maintenance mode' },
+  UNAVAILABLE: { status: 503, retryable: true, message: 'Temporarily unavailable; rejected to protect the platform' },
   INTERNAL: { status: 500, retryable: true, message: 'Internal error' },
 };
 

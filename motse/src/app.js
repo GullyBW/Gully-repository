@@ -69,6 +69,11 @@ function createApp(platform = createPlatform(), options = {}) {
       platform.tracer.runInContext({ traceId: req.traceId, spanId: span.span_id }, () => next());
     });
   }
+  // Load shedding (Mission 8): reject NORMAL traffic when overloaded
+  // (in-flight cap or event-loop stall) while critical paths — health,
+  // metrics, admin control plane, operator webhooks — always pass. Sits
+  // ahead of the work so shed requests cost almost nothing.
+  app.use(platform.resilience.shedder.middleware());
   // Request metrics + structured logs (§16).
   app.use(platform.monitoring.httpMiddleware());
   // Analytics ingestion + API-abuse telemetry (Phase 2): pure counters

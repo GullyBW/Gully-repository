@@ -44,6 +44,11 @@ class HealthService {
    */
   async readyFull() {
     if (this.platform.dependencies) await this.platform.dependencies.checkAll();
+    // Mission 8: self-healing follows detection — recovery actions fire on the
+    // dependency-state transitions the probe cycle just observed.
+    if (this.platform.resilience && this.platform.resilience.healer) {
+      await this.platform.resilience.healer.evaluate();
+    }
     const base = this.ready();
     return {
       ...base,

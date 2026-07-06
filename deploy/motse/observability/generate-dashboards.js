@@ -146,6 +146,29 @@ const DASHBOARDS = {
         'sum by (class) (increase(motse_ratelimit_adaptive_total{result="limited"}[1h]))'],
     ],
   },
+  resilience: {
+    title: 'Motse · Resilience Patterns',
+    panels: [
+      ['Circuit breaker outcomes (rps)', 'sum by (name, result) (rate(motse_breaker_total[5m]))'],
+      ['Short-circuits — fast failures saved (rps)', rate('motse_breaker_total{result="short_circuited"}')],
+      ['Bulkhead rejections by compartment (rps)', 'sum by (name) (rate(motse_bulkhead_total{result="rejected"}[5m]))'],
+      ['Retries by outcome (rps)', 'sum by (result) (rate(motse_retry_total[5m]))'],
+      ['Load shed vs passed (rps)', 'sum by (result) (rate(motse_loadshed_total[5m]))'],
+      ['Self-heal actions (rps)', 'sum by (result) (rate(motse_selfheal_total[5m]))'],
+    ],
+  },
+  runtime: {
+    title: 'Motse · Runtime Intelligence (Node)',
+    panels: [
+      ['Heap used vs limit (bytes)', 'motse_runtime_heap_used_bytes'],
+      ['Heap utilization', 'motse_runtime_heap_utilization'],
+      ['RSS (bytes)', 'motse_runtime_rss_bytes'],
+      ['Event-loop utilization', 'motse_runtime_event_loop_utilization'],
+      ['Event-loop delay p99 (ms)', 'motse_runtime_event_loop_delay_p99_ms'],
+      ['GC pause p95 (ms)', p95('motse_runtime_gc_pause_ms')],
+      ['Active handles', 'motse_runtime_active_handles'],
+    ],
+  },
   distributed: {
     title: 'Motse · Foundation — Distributed Runtime (Redis)',
     panels: [

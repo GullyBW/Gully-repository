@@ -754,6 +754,42 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
     platform.rateLimiterAdaptive.setOverride(Number(req.body.multiplier))
   ));
 
+  // ── Mission 5: runtime intelligence (heap/GC/event-loop + insights) ─
+  router.get('/runtime', run(() => platform.runtime.snapshot()));
+  router.get('/runtime/insights', run(() => platform.runtime.insights()));
+  router.post('/runtime/sample', run(() => platform.runtime.sample()));
+
+  // ── Mission 8: resilience control plane (breakers/bulkheads/shedding) ─
+  router.get('/resilience', run(() => platform.resilience.stats()));
+  router.post('/resilience/breakers/:name/reset', run((req) => platform.resilience.breaker(req.params.name).reset()));
+
+  // ── Mission 4: unified operations overview (one call, whole platform) ─
+  router.get('/overview', run(async () => {
+    await platform.dependencies.checkAll();
+    return {
+      system: {
+        service: 'motse-core',
+        version: process.env.MOTSE_VERSION || 'dev',
+        node: process.version,
+        uptime_s: Math.round(process.uptime()),
+        started_at: platform.health.live().at,
+      },
+      health: {
+        ready: platform.health.ready().ready,
+        dependencies: platform.dependencies.summary(),
+        attention: platform.dependencies.verdict().attention,
+      },
+      event_platform: platform.outbox.stats(),
+      distributed: {
+        kv: platform.kv.constructor.name,
+        rate_limiting: platform.rateLimiterAdaptive.stats({ top: 3 }),
+      },
+      resilience: platform.resilience.stats(),
+      runtime: platform.runtime.snapshot(),
+      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime'],
+    };
+  }));
+
   // ── Mission 3: event-platform operations (retention + replay) ───────
   router.post('/outbox/prune', run((req) =>
     platform.outbox.prune({ olderThanMs: req.body.older_than_ms, keepLast: req.body.keep_last })
