@@ -1,0 +1,629 @@
+{
+  "mode": "full",
+  "started_at": "2026-07-06T06:06:23.125Z",
+  "node": "v22.22.2",
+  "scenarios": {
+    "duplicate_requests": {
+      "concurrent": 50,
+      "executed": 1,
+      "winners": 1
+    },
+    "sustained_load": {
+      "requests": 8558,
+      "rps": 1426,
+      "p50_ms": 15.33,
+      "p95_ms": 23,
+      "p99_ms": 27.22,
+      "statuses": {
+        "200": 4620,
+        "429": 3938
+      },
+      "error_5xx": 0,
+      "throttled_429": 3938
+    },
+    "log_correlation": {
+      "http_log_lines": 8586,
+      "correlated": 8586
+    },
+    "transaction_volume": {
+      "txns": 20000,
+      "commits": 18000,
+      "rollbacks": 2000,
+      "throughput_per_s": 190661,
+      "us_per_txn": 5.2
+    },
+    "outbox_reliability": {
+      "backlog_peak": 1100,
+      "backlog_recovery_ms": 14.8,
+      "dead_peak": 50,
+      "dlq_replay_ms": 26.3
+    },
+    "contention": {
+      "locks": 200,
+      "acquired": 1,
+      "contended": 199,
+      "contention_ratio": 0.99,
+      "rl_takes": 2000,
+      "limited": 1700,
+      "limited_ratio": 0.85
+    },
+    "chaos": {
+      "outage_ops_failed": 10,
+      "recovery_ms": 0.08,
+      "kv_stats": {
+        "calls": 15,
+        "faults": 11,
+        "down": false
+      }
+    },
+    "exporter": {
+      "spans": 20000,
+      "exported": 20000,
+      "dropped": 0,
+      "spans_per_s": 75983,
+      "broken_collector_500_spans_ms": 5.9
+    },
+    "overhead": {
+      "txn_bare_us": 1.38,
+      "txn_instrumented_us": 2.2,
+      "txn_added_us": 0.82,
+      "txn_overhead_pct": 59.6,
+      "outbox_bare_us": 865.74,
+      "outbox_instrumented_us": 914.83,
+      "outbox_added_us": 49.09,
+      "outbox_overhead_pct": 5.7,
+      "heap_growth_mb": 81.7
+    }
+  },
+  "checks": [
+    {
+      "name": "admin drain returns 200 under trace",
+      "expected": "200",
+      "observed": "200",
+      "pass": true
+    },
+    {
+      "name": "child span nests under the HTTP root (same trace, parent link)",
+      "expected": "root→child",
+      "observed": "root→child",
+      "pass": true
+    },
+    {
+      "name": "response traceparent preserves the inbound trace id",
+      "expected": "abababababababababababababababab",
+      "observed": "abababababababababababababababab",
+      "pass": true
+    },
+    {
+      "name": "HTTP duplicate is replayed, not re-executed",
+      "expected": "Idempotent-Replay=true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "exactly-once under 50 concurrent duplicates",
+      "expected": "1",
+      "observed": "1",
+      "pass": true
+    },
+    {
+      "name": "metrics count HTTP requests exactly",
+      "expected": "8558",
+      "observed": "8558",
+      "pass": true
+    },
+    {
+      "name": "every response carries trace headers",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "zero 5xx under sustained load",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "rate limiting engages under anonymous burst (429s observed)",
+      "expected": ">0",
+      "observed": "3938",
+      "pass": true
+    },
+    {
+      "name": "sampled traces are complete (root span, status, duration)",
+      "expected": "25",
+      "observed": "25",
+      "pass": true
+    },
+    {
+      "name": "100% of request logs correlate (trace_id + service)",
+      "expected": "8586",
+      "observed": "8586",
+      "pass": true
+    },
+    {
+      "name": "tracer ring buffer stays bounded",
+      "expected": "<=2000",
+      "observed": "2000",
+      "pass": true
+    },
+    {
+      "name": "commit counter is exact",
+      "expected": "18000",
+      "observed": "18000",
+      "pass": true
+    },
+    {
+      "name": "rollback counter is exact",
+      "expected": "2000",
+      "observed": "2000",
+      "pass": true
+    },
+    {
+      "name": "rolled-back rows are absent",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ rollback-storm",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "backlog gauge matches reality",
+      "expected": "1100",
+      "observed": "1100",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ backlog-growth",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "backlog drains to zero after consumer recovery",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "dead letters accumulate when retries exhaust",
+      "expected": "50",
+      "observed": "50",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ dlq-accumulation",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "operator replay clears the DLQ",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "mutual exclusion held (exactly one winner per wave)",
+      "expected": ">=1 acquired",
+      "observed": "1",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ contention-burst",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ contention-burst",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "operations fail closed during KV outage (no silent success)",
+      "expected": "10",
+      "observed": "10",
+      "pass": true
+    },
+    {
+      "name": "first operation after outage succeeds (no lingering state)",
+      "expected": "ran",
+      "observed": "ran",
+      "pass": true
+    },
+    {
+      "name": "a transient blip is retryable without duplicate execution",
+      "expected": "failed then ran",
+      "observed": "failed then ran",
+      "pass": true
+    },
+    {
+      "name": "restart data loss degrades to at-least-once (documented boundary)",
+      "expected": "ran again",
+      "observed": "ran again",
+      "pass": true
+    },
+    {
+      "name": "exporter ships every span (zero dropped, healthy transport)",
+      "expected": "20000",
+      "observed": "20000",
+      "pass": true
+    },
+    {
+      "name": "a dead collector never breaks span creation (drops counted)",
+      "expected": "500 dropped, no throw",
+      "observed": "500 dropped",
+      "pass": true
+    },
+    {
+      "name": "transaction instrumentation cost within budget",
+      "expected": "<=15µs/txn",
+      "observed": "0.82µs",
+      "pass": true
+    },
+    {
+      "name": "outbox instrumentation cost within budget",
+      "expected": "<=216.4µs/op",
+      "observed": "49.09µs",
+      "pass": true
+    },
+    {
+      "name": "ledger trial balance held through every scenario",
+      "expected": "balanced",
+      "observed": "balanced",
+      "pass": true
+    },
+    {
+      "name": "platform ready after all fault injection",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    }
+  ],
+  "alert_evaluation": [
+    {
+      "phase": "rollback-storm",
+      "alert": "TransactionFailureSpike",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "OutboxBacklogGrowing",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "LockContentionHigh",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "RateLimitSaturation",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    }
+  ],
+  "recommendations": [
+    "FINDING: the /v1 token bucket runs before authentication and keys by client IP for unauthenticated requests, so authenticated users behind a shared egress IP (NAT/proxy) inherit the anonymous bucket once it is exhausted. Consider a post-auth second bucket keyed by actor, or exempting authenticated traffic from the IP bucket.",
+    "GAP: HealthService \"distributed\" check verifies the KV adapter exists but not that it responds — a Redis outage leaves readiness green. Add an active KV ping (setNx/del round-trip with timeout) as a readiness check.",
+    "FINDING: OutboxService._drain() scans the whole outbox collection on every drain while published rows accumulate unbounded (bare op measured 866µs at 5500 rows vs ~115µs cold). Before high-volume production, index pending rows by status and/or prune or archive published rows."
+  ],
+  "finished_at": "2026-07-06T06:06:38.791Z",
+  "verdict": "PASS"
+}

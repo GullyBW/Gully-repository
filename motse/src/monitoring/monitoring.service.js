@@ -74,6 +74,9 @@ class MonitoringService {
     this.metrics.gaugeFn('motse_distributed_redis_backed', () =>
       p.kv && p.kv.constructor.name === 'RedisKvAdapter' ? 1 : 0
     );
+    // Telemetry must itself be observable: spans the OTLP exporter dropped
+    // (validated in production-validation W8; the SLO holds this at zero).
+    this.metrics.gaugeFn('motse_otel_dropped_spans', () => (p.otel ? p.otel.dropped : 0));
   }
 
   /** Escrows funded but untouched for 30+ days — the §16 stuck monitor. */

@@ -61,6 +61,15 @@ class Metrics {
     return series ? series.get(Metrics.labelKey(labels)) || 0 : 0;
   }
 
+  /** Sum of a counter across ALL label series (e.g. total http requests). */
+  counterTotal(name) {
+    const series = this.counters.get(name);
+    if (!series) return 0;
+    let total = 0;
+    for (const value of series.values()) total += value;
+    return total;
+  }
+
   /** Prometheus text exposition format. */
   render() {
     const lines = [];

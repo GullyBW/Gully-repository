@@ -69,3 +69,14 @@ jobs:
         run: |
           node deploy/motse/observability/generate-dashboards.js
           git diff --exit-code deploy/motse/observability/dashboards
+
+      - name: SLO assets regenerate cleanly (no drift from slo.yaml)
+        run: |
+          node deploy/motse/observability/generate-slo-assets.js
+          git diff --exit-code deploy/motse/observability/dashboards/slo.json deploy/motse/observability/prometheus-slo-alerts.yaml
+
+      - name: Production validation smoke (telemetry truth + fault injection)
+        run: npm run motse:validate:smoke
+
+      - name: Repository secret scan
+        run: node motse/scripts/secret-scan.js
