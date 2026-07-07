@@ -190,6 +190,20 @@ const DASHBOARDS = {
       ['Forecast accuracy (0..1)', 'motse_forecast_accuracy'],
     ],
   },
+  executive: {
+    title: 'Motse · Executive Operational Intelligence',
+    panels: [
+      ['Operational confidence (0..1)', 'motse_executive_operational_confidence'],
+      ['Business value at risk (minor units)', 'motse_executive_value_at_risk_minor'],
+      ['Customers affected', 'motse_executive_customers_affected'],
+      ['Open operational risks', 'motse_executive_open_risks'],
+      ['Data confidence — telemetry vs ledger (0..1)', 'motse_reconciliation_data_confidence'],
+      ['Recommendation operator trust (0..1)', 'motse_recommendation_trust_score'],
+      ['Governance compliance (0..1)', 'motse_governance_compliance_score'],
+      ['Forecast accuracy (0..1)', 'motse_forecast_accuracy'],
+      ['DR recovery confidence (0..1)', 'motse_dr_recovery_confidence'],
+    ],
+  },
   reconciliation: {
     title: 'Motse · Business Outcome Validation & Recommendation Effectiveness',
     panels: [

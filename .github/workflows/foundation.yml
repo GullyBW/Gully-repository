@@ -86,6 +86,9 @@ jobs:
       - name: Business reconciliation + recommendation effectiveness gate (>=95/95/90)
         run: npm run motse:coverage:reconciliation
 
+      - name: Executive operational intelligence gate (>=95/95/90)
+        run: npm run motse:coverage:executive
+
       - name: Grafana dashboards regenerate cleanly (no drift)
         run: |
           node deploy/motse/observability/generate-dashboards.js

@@ -1,6 +1,6 @@
 {
   "mode": "smoke",
-  "started_at": "2026-07-07T12:48:29.800Z",
+  "started_at": "2026-07-07T13:16:33.981Z",
   "node": "v22.22.2",
   "scenarios": {
     "duplicate_requests": {
@@ -9,34 +9,34 @@
       "winners": 1
     },
     "sustained_load": {
-      "requests": 1983,
-      "rps": 992,
-      "p50_ms": 6.68,
-      "p95_ms": 15.23,
-      "p99_ms": 22.8,
+      "requests": 2559,
+      "rps": 1280,
+      "p50_ms": 5.96,
+      "p95_ms": 8.34,
+      "p99_ms": 10.32,
       "statuses": {
-        "200": 1300,
-        "429": 683
+        "200": 1583,
+        "429": 976
       },
       "error_5xx": 0,
-      "throttled_429": 683
+      "throttled_429": 976
     },
     "log_correlation": {
-      "http_log_lines": 2012,
-      "correlated": 2012
+      "http_log_lines": 2588,
+      "correlated": 2588
     },
     "transaction_volume": {
       "txns": 2000,
       "commits": 1800,
       "rollbacks": 200,
-      "throughput_per_s": 101283,
-      "us_per_txn": 9.9
+      "throughput_per_s": 192819,
+      "us_per_txn": 5.2
     },
     "outbox_reliability": {
       "backlog_peak": 1100,
-      "backlog_recovery_ms": 34.1,
+      "backlog_recovery_ms": 15.4,
       "dead_peak": 30,
-      "dlq_replay_ms": 1.8
+      "dlq_replay_ms": 1.2
     },
     "contention": {
       "locks": 60,
@@ -60,19 +60,19 @@
       "spans": 5000,
       "exported": 5000,
       "dropped": 0,
-      "spans_per_s": 43368,
-      "broken_collector_500_spans_ms": 13.6
+      "spans_per_s": 87145,
+      "broken_collector_500_spans_ms": 4.8
     },
     "overhead": {
-      "txn_bare_us": 2.89,
-      "txn_instrumented_us": 2.42,
-      "txn_added_us": -0.47,
-      "txn_overhead_pct": -16.2,
-      "outbox_bare_us": 15.4,
-      "outbox_instrumented_us": 32.32,
-      "outbox_added_us": 16.92,
-      "outbox_overhead_pct": 109.8,
-      "heap_growth_mb": 26.8
+      "txn_bare_us": 0.99,
+      "txn_instrumented_us": 2,
+      "txn_added_us": 1.01,
+      "txn_overhead_pct": 102.3,
+      "outbox_bare_us": 12.28,
+      "outbox_instrumented_us": 23.09,
+      "outbox_added_us": 10.81,
+      "outbox_overhead_pct": 88,
+      "heap_growth_mb": 38.1
     },
     "resilience": {
       "breaker": "validated",
@@ -82,16 +82,16 @@
       "load_shedding": "validated"
     },
     "runtime": {
-      "at": "2026-07-07T12:48:32.748Z",
-      "at_ms": 1783428512748,
-      "heap_used_bytes": 41533192,
-      "heap_total_bytes": 92876800,
+      "at": "2026-07-07T13:16:36.653Z",
+      "at_ms": 1783430196653,
+      "heap_used_bytes": 53512544,
+      "heap_total_bytes": 83611648,
       "heap_limit_bytes": 8640266240,
-      "external_bytes": 2284779,
-      "rss_bytes": 165429248,
-      "array_buffers_bytes": 59131,
-      "heap_utilization": 0.004806934282617662,
-      "event_loop_utilization": 0.9513305525754308,
+      "external_bytes": 2290401,
+      "rss_bytes": 148258816,
+      "array_buffers_bytes": 64753,
+      "heap_utilization": 0.006193390633296041,
+      "event_loop_utilization": 0.9461389836304235,
       "event_loop_delay_p99_ms": 0,
       "event_loop_delay_mean_ms": 0,
       "gc_count": 0,
@@ -110,7 +110,7 @@
       "rollouts": []
     },
     "capacity": {
-      "samples": 362,
+      "samples": 470,
       "recommendations": 3
     },
     "governance": {
@@ -137,7 +137,7 @@
     "disaster_recovery": {
       "passed": 7,
       "scenarios": 7,
-      "rto_max_ms": 36.78,
+      "rto_max_ms": 13.75,
       "confidence": 1
     },
     "business": {
@@ -155,7 +155,7 @@
       "rollback_rate": 1
     },
     "forecast_accuracy": {
-      "overall_accuracy_pct": 83.305,
+      "overall_accuracy_pct": 85.6,
       "trustworthy": true
     },
     "business_reconciliation": {
@@ -170,6 +170,18 @@
       "trust": 0.5,
       "incidents_prevented": 1,
       "recalibrated_confidence": 0.74
+    },
+    "executive_intelligence": {
+      "operational_confidence": 0.8859,
+      "components": [
+        "data_confidence",
+        "operational_health",
+        "governance_compliance",
+        "forecast_accuracy",
+        "recommendation_trust",
+        "dr_readiness"
+      ],
+      "open_risks": 2
     }
   },
   "checks": [
@@ -205,8 +217,8 @@
     },
     {
       "name": "metrics count HTTP requests exactly",
-      "expected": "1983",
-      "observed": "1983",
+      "expected": "2559",
+      "observed": "2559",
       "pass": true
     },
     {
@@ -224,7 +236,7 @@
     {
       "name": "rate limiting engages under anonymous burst (429s observed)",
       "expected": ">0",
-      "observed": "683",
+      "observed": "976",
       "pass": true
     },
     {
@@ -241,8 +253,8 @@
     },
     {
       "name": "100% of request logs correlate (trace_id + service)",
-      "expected": "2012",
-      "observed": "2012",
+      "expected": "2588",
+      "observed": "2588",
       "pass": true
     },
     {
@@ -536,19 +548,19 @@
     {
       "name": "outbox drain cost stays flat with published-row accumulation (M3)",
       "expected": "<300µs/op",
-      "observed": "15µs",
+      "observed": "12µs",
       "pass": true
     },
     {
       "name": "transaction instrumentation cost within budget",
       "expected": "<=15µs/txn",
-      "observed": "-0.47µs",
+      "observed": "1.01µs",
       "pass": true
     },
     {
       "name": "outbox instrumentation cost within budget",
       "expected": "<=75µs/op",
-      "observed": "16.92µs",
+      "observed": "10.81µs",
       "pass": true
     },
     {
@@ -834,6 +846,24 @@
       "pass": true
     },
     {
+      "name": "operational confidence blends only sourced, measured components",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "the executive briefing answers the seven leadership questions",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "the briefing fuses business validation + recommendation quality domains",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
       "name": "ledger trial balance held through every scenario",
       "expected": "balanced",
       "observed": "balanced",
@@ -1029,6 +1059,6 @@
     }
   ],
   "recommendations": [],
-  "finished_at": "2026-07-07T12:48:32.950Z",
+  "finished_at": "2026-07-07T13:16:36.774Z",
   "verdict": "PASS"
 }

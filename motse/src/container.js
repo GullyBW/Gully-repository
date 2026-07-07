@@ -63,6 +63,7 @@ const { GovernanceAnalytics } = require('./observability/governance.analytics');
 const { ForecastAccuracy } = require('./observability/forecast.accuracy');
 const { BusinessReconciliation } = require('./observability/business.reconciliation');
 const { RecommendationEffectiveness } = require('./observability/recommendation.effectiveness');
+const { ExecutiveIntelligence } = require('./observability/executive.intelligence');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { Resilience } = require('./resilience');
 const { ConfigService } = require('./config/config.service');
@@ -666,6 +667,11 @@ function createPlatform({
   // measurable products (accepted/rejected/outcomes) and recalibrates future
   // confidence from the measured track record. Persists to the platform Store.
   platform.recommendationEffectiveness = new RecommendationEffectiveness({ store, metrics, clock });
+  // FINAL Phase 3: executive operational intelligence — fuses every analytics
+  // surface (business, health, governance, forecast, recommendation quality,
+  // business validation, DR) into one executive briefing that answers the seven
+  // leadership questions, with a single sourced operational-confidence score.
+  platform.executive = new ExecutiveIntelligence({ platform, clock, metrics });
 
   return platform;
 }

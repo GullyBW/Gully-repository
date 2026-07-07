@@ -863,6 +863,33 @@ async function main() {
     };
   }
 
+  // ════ W22 · Executive operational intelligence (FINAL Phase 3) ════
+  section('W22 executive operational intelligence');
+  {
+    const exec = platform.executive.report();
+    // Every confidence component must cite a source (no unsupported numbers).
+    const sourced = exec.operational_confidence_detail.components.every((c) => typeof c.source === 'string' && c.source.length > 0);
+    check('operational confidence blends only sourced, measured components', true,
+      sourced && exec.operational_confidence != null, sourced && exec.operational_confidence != null);
+    // The briefing answers all seven executive questions.
+    const b = exec.briefing;
+    const answersSeven = !!(b.what_happened && b.why && b.who_was_affected && b.business_value_affected_minor != null
+      && b.recommended_action && ('recommendation_confidence' in b) && b.if_nothing_is_done);
+    check('the executive briefing answers the seven leadership questions', true, answersSeven, answersSeven);
+    // After W20 injected/observed activity + W21 recorded outcomes, the fused
+    // view must expose recommendation quality and business validation as domains.
+    check('the briefing fuses business validation + recommendation quality domains', true,
+      exec.domains.business_validation.available && exec.domains.recommendation_quality.available,
+      exec.domains.business_validation.available && exec.domains.recommendation_quality.available);
+    // eslint-disable-next-line no-console
+    console.log(`  operational confidence ${exec.operational_confidence} · open risks ${exec.risks.length} · value at risk ${b.business_value_affected_minor} minor`);
+    report.scenarios.executive_intelligence = {
+      operational_confidence: exec.operational_confidence,
+      components: exec.operational_confidence_detail.components.map((c) => c.name),
+      open_risks: exec.risks.length,
+    };
+  }
+
   // ════ Integrity + verdict ════
   section('final integrity');
   check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);
