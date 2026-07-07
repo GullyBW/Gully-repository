@@ -50,21 +50,26 @@ different bounded contexts, trust zones, and permission regimes throughout the b
 > confidential-reporting data never crosses into public transparency except as verified,
 > aggregated, anonymized statistics or through a lawful, governed disclosure process.
 
-### 0.3 Delivery contract — Discovery Phase first, then stop
+### 0.3 Delivery contract — phased, with checkpoints
 
-Per both engagement briefs, the **Discovery Phase must be completed and validated before any
-architecture, engineering spec, or roadmap is produced.** This blueprint produces the full
-Discovery Phase, then **stops at a Confirmation Checkpoint.**
+Per the engagement briefs, Discovery was completed and **validated at the Confirmation
+Checkpoint** (answers recorded in `12-ratified-decisions.md`). The Design Phase was then produced
+in the **ratified D-11 order** and now **pauses at the Design Approval Gate** before Governance
+and engineering work items.
 
 | Phase | Deliverables | Status |
 |-------|--------------|--------|
-| **DISCOVERY (this delivery)** | 01 Assumptions Register · 02 Justice-System Problem Analysis · 03 Stakeholder Analysis · 04 Functional Gap Analysis · 05 Service Blueprint · 06 Domain Model · 07 Capability Map · 08 Threat Model (STRIDE + LINDDUN) · 09 Trust Model · 10 Risk Register → **11 Confirmation Checkpoint** | **DELIVERED — awaiting confirmation** |
-| DESIGN — Governance & Trust | Executive Summary · Governance Framework (as a software subsystem) · Trust Architecture | Blocked on Discovery confirmation |
-| DESIGN — Security & Data | Zero-Trust Security Architecture · Cryptographic & Key-Management Strategy · Trust-Boundary & Data-Flow diagrams · Encryption/Secrets strategy · Incident Response & BCP | Blocked |
-| DESIGN — System & Domain | System Architecture (22 services) · Per-service specs (responsibilities/APIs/data-ownership/failure-modes/scaling) · DDD contexts · Event catalog · CQRS · API contracts/OpenAPI · Schemas/ERDs · Sequence diagrams · State machines · Permission matrices | Blocked |
-| DESIGN — Product & Workflow | Functional & Non-Functional Requirements · UX/UI Strategy · Verification Workflow · AI Decision-Support (bounded) · Evidence Management | Blocked |
-| DESIGN — Legal, Compliance, Risk | Legal & Ethical Framework · Compliance mapping · Comparative Analysis · Botswana Adaptation · full Risk Register maintenance | Blocked |
-| DELIVERY | Technology Stack · Monitoring & Transparency · Sustainability & Funding · **GitHub Epics/Features/Stories/Tasks** · Test plans & acceptance criteria · Sprint & milestone roadmap · Future Roadmap · Final Recommendations | Blocked |
+| **DISCOVERY** | 01 Assumptions · 02 Problem Analysis · 03 Stakeholders · 04 Gap Analysis · 05 Service Blueprint · 06 Domain Model · 07 Capability Map · 08 Threat Model · 09 Trust Model · 10 Risk Register · 11 Checkpoint | **✅ DELIVERED & CONFIRMED** |
+| **CHECKPOINT** | 12 Ratified Decisions (D-01…D-11) | **✅ RATIFIED** |
+| **DESIGN** (`design/`, D-11 order) | 01 Enterprise Reference Arch · 02 Data Arch · 03 Integration Arch · 04 Security Arch · 05 AI Arch · 06 Observability Arch · 07 DevSecOps Arch · 15 DDRs → **Design Approval Gate** | **✅ DELIVERED — awaiting approval** |
+| GOVERNANCE & SPECS | Governance Framework (operational subsystem) · per-context implementation specs (APIs/OpenAPI/schemas/events/failure modes/monitoring) · sequence diagrams · state machines · permission matrices | Blocked on Design approval |
+| ENGINEERING | **GitHub Epics/Features/Stories/Tasks** · acceptance criteria · test plans · IaC modules · CI/CD definitions · runbooks — **MVP slice first** | Blocked |
+| REMAINING CATALOGUE | Executive Summary · Legal & Ethical · Compliance · Comparative Analysis · Botswana Adaptation · Technology Stack · Sustainability & Funding · Implementation & Future Roadmap · Final Recommendations | Blocked |
+
+> **⛔ Approval gates.** The blueprint pauses at defined gates (Discovery Checkpoint ✅, Design
+> Approval Gate ⟵ current) rather than emitting everything at once. This is intentional: each
+> phase depends on decisions only the client can ratify. The Discovery-stop text below reflects
+> the earlier state and is retained for provenance.
 
 > **⛔ Confirmation Checkpoint.** The blueprint **stops** at the end of Discovery
 > (`11-discovery-confirmation-checkpoint.md`). Everything downstream is contingent on your

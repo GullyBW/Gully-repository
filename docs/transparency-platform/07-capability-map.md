@@ -128,7 +128,20 @@ uncovered capabilities.**
   support, appeals, digital archive migration — the deepest institutional and separation-of-
   powers integration, sequenced last and co-designed with the Judiciary.
 
-## 7.5 Definition-of-Done
+## 7.5 Cross-cutting architectural capabilities (ratified D-10)
+
+These five span multiple contexts and are woven through the Design phase rather than owned by a
+single service. Defined in `12-ratified-decisions.md §12.1`; homes shown here.
+
+| Capability | Maturity | L2 sub-capabilities | Homes (Design docs) |
+|-----------|----------|---------------------|---------------------|
+| **Constitutional Architecture** | ● | Three-zone isolation · directional audited APIs · machine-checkable no-shared-DB invariants | ERA · Data · Security |
+| **Digital Chain of Custody** | ● | Hash + trusted timestamp · append-only custody ledger · external anchoring · integrity re-verify on access | Data · Security |
+| **Interoperability Standards** | ◐ | Standards profile · versioned API contracts · identifier scheme · conformance test suite | Integration |
+| **Public Trust Index** | ◐ | Trust input pipeline · methodology transparency · aggregate/non-attributable publication | Observability · Analytics |
+| **Justice Analytics** | ◐ | Privacy-preserving aggregation · disclosure control (k-anon/DP) · purpose limitation | Data · Observability |
+
+## 7.6 Definition-of-Done
 
 - [x] L0 domains and L1→L2 capabilities defined across the whole justice value chain.
 - [x] Each capability mapped to owning context/service, maturity, and root problem.

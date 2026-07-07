@@ -1,5 +1,13 @@
 # 01 — Assumptions Register
 
+> **⚑ Checkpoint update (2026-07-07).** Several high-impact assumptions have been **ratified as
+> architectural decisions** at the Confirmation Checkpoint — see `12-ratified-decisions.md §12.2`.
+> Notably: A-ORG-01/A-GOV-01 (independent operator + oversight) → **Decided (D-01)**; A-JUS-01/03
+> (separation of powers) → **adopted as architecture (D-06)**; A-JUS-02 (integrate not replace) →
+> **confirmed (D-07)**; A-AI-01 (AI assistive-only) → **hard constraint (D-09)**. Ratification
+> fixes the *direction*; it does **not** discharge the requirement for qualified legal/judicial/
+> governance validation before deployment.
+
 > **Why this comes first.** Every architectural, cryptographic, and governance decision in
 > the later batches rests on assumptions about Botswana's law, infrastructure,
 > institutions, funding, and threat environment. If an assumption is wrong, the decisions

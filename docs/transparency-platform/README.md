@@ -33,12 +33,33 @@ while protecting the rights, safety, and dignity of everyone involved.
 | 10 | [Risk Register](./10-risk-register.md) | 24 owner-assigned risks; 4 Critical, 13 High |
 | 11 | [Discovery Validation → ⛔ Confirmation Checkpoint](./11-discovery-confirmation-checkpoint.md) | Summary + **11 questions to answer before the Design phase** |
 
+## Checkpoint (ratified)
+
+| # | Document | Contents |
+|---|----------|----------|
+| 12 | [Ratified Decisions](./12-ratified-decisions.md) | Checkpoint answers D-01…D-11 as authoritative decisions; five cross-cutting capabilities (D-10); assumption status updates |
+
+## Design Phase (delivered — awaiting approval)
+
+Produced in the ratified **D-11** order; pauses at a Design Approval Gate before Governance and
+engineering work items. See [`design/`](./design/00-design-index.md).
+
+| # | Document | Focus |
+|---|----------|-------|
+| 01 | [Enterprise Reference Architecture](./design/01-enterprise-reference-architecture.md) | Layered model · Constitutional Architecture (3 zones) · deployment-model comparison + hybrid justification · MVP slice |
+| 02 | [Data Architecture](./design/02-data-architecture.md) | Zone-isolated stores · minimization · per-field policy · Digital Chain of Custody · Justice Analytics |
+| 03 | [Integration Architecture](./design/03-integration-architecture.md) | Event backbone · standards-based external APIs · Interoperability Standards · ACLs |
+| 04 | [Security Architecture](./design/04-security-architecture.md) | Zero Trust · IAM · threshold crypto/KMS/HSM · metadata-resistant intake · IR/DR/BCP |
+| 05 | [AI Architecture](./design/05-ai-architecture.md) | Assistive-only · human-in-loop · out of decision path · self-hosted sensitive models |
+| 06 | [Observability Architecture](./design/06-observability-architecture.md) | Metrics/logs/traces · SIEM/SecOps · tamper-evident audit · Public Trust Index |
+| 07 | [DevSecOps Architecture](./design/07-devsecops-architecture.md) | Secure SDLC · SLSA/SBOM/reproducible builds · IaC · security-gated CI/CD · autonomy boundary |
+
 ## What happens next
 
-The Design & Delivery program (Governance & Trust → Zero-Trust Security & Data → System &
-Domain design + 22 service specs → Product & Workflow → Legal/Compliance → Technology, GitHub
-epics, roadmap) is **blocked pending your answers at the
-[Confirmation Checkpoint](./11-discovery-confirmation-checkpoint.md#112-the-decisions-that-shape-everything-downstream).**
+After you approve the Design Phase (or flag DDR changes), the next batch is **Governance
+Framework**, then **per-context implementation specs + OpenAPI/schemas**, then **GitHub Epics/
+Stories for the MVP** — see the **Design Approval Gate** at the end of
+[`design/07`](./design/07-devsecops-architecture.md#-design-approval-gate-ratified-d-11).
 
 ## Design commitments carried through every section
 
