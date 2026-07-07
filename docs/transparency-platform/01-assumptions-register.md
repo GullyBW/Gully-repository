@@ -82,6 +82,33 @@ amendments, or enforcement practice.
 
 ---
 
+## 6b. Justice-Institutional Assumptions (ecosystem scope)
+
+> Added when scope expanded from confidential reporting to the full National Justice
+> Transparency & Integrity Platform. These concern Botswana's justice institutions,
+> separation of powers, and the state of existing systems. **All A-JUS-* items are
+> hypotheses requiring validation with the named institutions and Botswana legal/judicial
+> advisors — none is asserted as established fact.**
+
+| ID | Assumption | Confidence | Impact if wrong | Validation |
+|----|-----------|-----------|-----------------|-----------|
+| **A-JUS-01** ⚑ | Botswana's justice sector comprises distinct arms under **separation of powers**: the **Judiciary** (Magistrates' Courts, High Court, Court of Appeal, and **Customary Courts / dikgotla**), the **executive** law-enforcement/investigation bodies (**Botswana Police Service**, **DCEC**, **DIS**, **Botswana Prison/Rehabilitation Service**), the **Directorate of Public Prosecutions (DPP)**, and independent oversight (**Ombudsman**, judicial oversight, **Law Society of Botswana**). Each arm's data must be owned by that arm, not silently shared. | Medium | The trust model and data-ownership architecture are directly derived from this; if the institutional map is materially different, §09 Trust Model and access design must be reworked. | Botswana legal/judicial advisors; institutional confirmation. |
+| **A-JUS-02** ⚑ | The platform must **interoperate with, not blindly replace,** whatever case-management, records, and evidence systems these institutions already operate (which may range from paper-based to partial digital). NJTIP is an integration/transparency/integrity layer plus new capabilities, not a rip-and-replace of court IT. | Low–Medium | If institutions expect full replacement, scope, cost, and risk balloon; if they forbid integration, the value proposition shrinks to citizen-facing modes only. | Institutional systems audit; MoUs. |
+| **A-JUS-03** ⚑ | **Judicial independence** requires that adjudication data and workflows are controlled by the Judiciary and are **not** accessible to the executive (police/DCEC/DIS) or to the platform operator, except through lawful, audited, case-appropriate channels. | Medium | Central to legitimacy; violating it would make the platform constitutionally and politically untenable. Drives strict inter-arm trust boundaries. | Judicial advisors; constitutional review. |
+| **A-JUS-04** | **Open-justice** principles apply to court proceedings (hearings/judgments generally public) subject to statutory exceptions (juveniles, sexual offences, protected witnesses, national security, sealed matters). Public transparency outputs must respect these exceptions automatically. | Medium | The public Transparency Dashboard's publication rules and redaction logic depend on this; wrong = unlawful disclosure or over-suppression. | Legal counsel; court rules review. |
+| **A-JUS-05** ⚑ | Institutions will **participate**: authorized recipients act on routed reports; courts/prosecutors/defenders will adopt workspaces; oversight bodies will use oversight tooling. Adoption is voluntary-to-mandated and not guaranteed. | Low | Without participation the platform becomes citizen-facing theater; drives a phased, incentive-aware rollout and honest success metrics. | Change-management strategy; institutional buy-in. |
+| **A-JUS-06** | A **dual legal system** operates: received/common law courts **and** customary law administered through dikgotla under traditional leaders (Kgosis). Many citizens first encounter justice at the customary level. | Medium–High | Accessibility, language, domain model, and case taxonomy must accommodate customary justice, not just formal courts; omitting it excludes much of the population. | Cultural/legal advisors; Kgosi engagement. |
+| **A-JUS-07** | Digital **evidence and records produced by the platform** can be integrated into existing court records/registries in a legally recognized form (chain of custody, admissibility per A-LEG-05). | Low–Medium | Evidence Management and archive integration must adapt to registry rules; may require registrar-controlled interfaces. | Registrars; digital forensics; legal. |
+| **A-JUS-08** | The Judiciary/DPP/police have or can obtain **authority and mandate** to place case metadata into a shared transparency layer without breaching statutory confidentiality, sub judice, or witness-protection rules. | Low | Determines how much case-visibility (Mode 3/4) is lawful; wrong = severe legal exposure. | Legal counsel; statutory review. |
+
+## 6c. AI-Specific Assumptions
+
+| ID | Assumption | Confidence | Impact if wrong | Validation |
+|----|-----------|-----------|-----------------|-----------|
+| **A-AI-01** | AI is used **only** for assistive tasks (translation EN↔Setswana and other languages, categorization, duplicate detection, PII detection/redaction suggestion, summarization, workflow prioritization) and **never** for legal determinations, guilt/innocence, or replacing a human decision. | High | If AI is expected to adjudicate or score guilt, the design is rejected on rights/fairness grounds; this is a hard constraint, not a preference. | Governance/ethics review. |
+| **A-AI-02** | AI outputs affecting people are **explainable, auditable, human-reviewed, and contestable**; models can be run in a privacy-preserving manner (no sensitive data sent to third-party endpoints that could retain or leak it). | Medium | Drives model hosting (self-hosted/on-prem for sensitive paths), audit logging of AI use, and appeal rights. ⚠️ COST: self-hosting models is more expensive than API calls. 🔒 | AI systems + privacy review. |
+| **A-AI-03** | Setswana (and minority-language) NLP quality is **imperfect**; translation/redaction will make errors and must be treated as advisory, with human verification for anything consequential. | Medium–High | Prevents over-reliance; drives human-in-the-loop and error-handling design. | Linguistic evaluation. |
+
 ## 7. Assumption dependency notes (what breaks what)
 
 - If **A-GOV-01** (genuine independent oversight) or **A-ORG-01** (independent operator)
@@ -96,16 +123,27 @@ amendments, or enforcement practice.
   is adjudicated (Batch 2/3).
 - If **A-FIN-01/02** (funding) fail, **independence** fails, because the cheapest funder
   is often the institution being scrutinized.
+- If **A-JUS-01/03** (separation of powers, judicial independence) is mis-mapped, the whole
+  **Trust Model (§09)** and inter-arm data-ownership design are wrong. These are the
+  ecosystem-scope equivalents of A-ORG-01/A-GOV-01.
+- If **A-JUS-02** (integrate, not replace) is wrong in either direction, **System
+  Architecture scope, cost, and delivery risk** change by an order of magnitude.
+- If **A-JUS-05** (institutional participation) fails, Modes 2–4 (investigation,
+  adjudication, transparency) cannot function; only Mode 1 (citizen reporting) survives, and
+  even it becomes a "black hole" (R-1).
+- If **A-AI-01** (AI assistive-only) is not accepted, the design is rejected outright on
+  rights/fairness grounds.
 
 ## 8. Definition-of-Done for this section
 
-- [x] Assumptions documented across all six categories (legal, technical, governance,
-  operational, financial, organizational).
+- [x] Assumptions documented across all categories (legal, technical, governance,
+  operational, financial, organizational, **justice-institutional, AI**).
 - [x] Each assumption carries confidence, impact-if-wrong, and a validation owner.
 - [x] High-impact assumptions (⚑) are flagged for the Confirmation Checkpoint.
-- [x] Dependency notes identify which assumptions are load-bearing for later batches.
-- **Required specialist review:** Botswana legal counsel (all A-LEG-*), governance/
-  political-economy advisor (A-GOV-*), telecom/infrastructure analyst (A-TEC-*),
-  finance/FX (A-FIN-*).
+- [x] Dependency notes identify which assumptions are load-bearing for later phases.
+- **Required specialist review:** Botswana legal counsel (all A-LEG-*, A-JUS-04/07/08),
+  judicial/constitutional advisor (A-JUS-01/03), institutional-systems analyst (A-JUS-02/05),
+  cultural/customary-law advisor (A-JUS-06), governance/political-economy advisor (A-GOV-*),
+  telecom/infrastructure analyst (A-TEC-*), finance/FX (A-FIN-*), AI/privacy (A-AI-*).
 
 *Next: `02-threat-model-stride-linddun.md`.*

@@ -1,158 +1,135 @@
-# Botswana National Transparency & Integrity Platform
+# Botswana National Justice Transparency & Integrity Platform (NJTIP)
 ## Enterprise Architecture & Governance Blueprint — Master Index
 
-**Document status:** DRAFT — Batch 1 of the phased engagement (Foundations)
+**Document status:** DRAFT — Discovery Phase (produced; stops at a Confirmation Checkpoint)
 **Classification:** Internal / Restricted (contains threat model and adversary analysis)
 **Primary currency:** Botswana Pula (BWP), USD secondary
-**Owner:** (to be assigned — proposed Independent Oversight Trust, see Governance Framework §6)
+**Owner:** (to be assigned — proposed Independent Oversight Trust; see Trust Model §09 and Governance batch)
 **Last updated:** 2026-07-07
 
-> **Working name.** This blueprint refers to the platform as **BNTIP** (Botswana National
-> Transparency & Integrity Platform) for brevity. The name is a placeholder; a public-facing
-> brand should be chosen with communications and legal advisors and is deliberately *not*
-> fixed here (see Assumptions Register, A-ORG-04).
+> **Scope note — program, not app.** This blueprint designs an **entire National Justice
+> Transparency & Integrity Platform (NJTIP)** for Botswana: a modular ecosystem spanning
+> confidential reporting, investigation, prosecution, adjudication support, corrections,
+> oversight, and public transparency. **Confidential whistleblowing is one bounded context
+> within it, not the whole platform.** Working name **NJTIP** is a placeholder (A-ORG-04).
+>
+> This supersedes and *expands* the earlier confidential-reporting-only framing. The
+> Assumptions Register and Threat Model from that earlier pass have been broadened to the
+> full justice ecosystem; nothing is discarded.
 
 ---
 
-### 0.1 Purpose of this document
+### 0.1 Purpose
 
-This is the top-level index and reading guide for the BNTIP Enterprise Architecture &
-Governance Blueprint. The blueprint is an **implementation-ready** design for a
-secure, privacy-preserving national platform that lets citizens confidentially report
-suspected corruption, misconduct, abuse of office, maladministration, and related
-integrity issues within Botswana's justice sector, with a designed path to expand into a
-full National Transparency Platform covering all public institutions.
+An **implementation-ready** Enterprise Architecture & Governance Blueprint for a national
+justice-sector digital public infrastructure that improves transparency, accountability,
+integrity, accessibility, fairness, due process, case visibility, citizen trust, evidence
+integrity, and inter-agency collaboration — while protecting the rights, safety, and dignity
+of everyone involved and upholding constitutional principles, human rights, and procedural
+fairness.
 
-The blueprint is intended to serve, without rework, as the foundation for:
-software architecture, security assessment, legal and privacy review, governance
-planning, funding proposals, GitHub epics and milestones, and human-supervised
-AI-assisted development.
+Intended to serve, without rework, as the foundation for: software architecture, security
+assessment, legal/privacy review, governance planning, funding proposals, **GitHub epics/
+features/stories/tasks**, OpenAPI/DB migrations/IaC, milestones, and human-supervised
+AI-assisted implementation.
 
-### 0.2 How this document is produced (delivery contract)
+### 0.2 The four justice modes — kept strictly separate (a first-class design rule)
 
-This blueprint is deliberately produced in **batches**, not in a single pass. The design
-mandate (Part C §3 of the engagement brief) requires that the **Threat Model be validated
-by the client before any architecture, governance model, technology recommendation, or
-roadmap is produced.** Accordingly:
+The platform draws a hard line between four modes with different actors, trust models, and
+legal postures. Conflating them is the classic failure mode of "justice tech." They map to
+different bounded contexts, trust zones, and permission regimes throughout the blueprint:
 
-| Batch | Sections | Status |
-|-------|----------|--------|
-| **1 — Foundations (this batch)** | Master Index · Assumptions Register · Threat Model (STRIDE + LINDDUN) · Threat Model Validation → **Confirmation Checkpoint** | **DELIVERED — awaiting your confirmation** |
-| 2 — Governance & Trust | Executive Summary · Governance Framework · Trust Architecture | Blocked on Batch-1 confirmation |
-| 3 — Security & System Architecture | Security Architecture · Cryptographic Design · Data Flow · System Architecture · Database Design · Evidence Management | Blocked |
-| 4 — Product & Workflow | Problem Analysis · Stakeholder Analysis · Functional & Non-Functional Requirements · UX/UI Strategy · Verification Workflow · AI Integration | Blocked |
-| 5 — Legal, Compliance & Risk | Legal & Ethical Framework · Compliance · Risk Register · Comparative Analysis · Botswana Adaptation | Blocked |
-| 6 — Delivery & Sustainability | Technology Stack · Monitoring & Transparency · Sustainability & Funding · Implementation Roadmap · Future Roadmap · Final Recommendations | Blocked |
+| Mode | Who acts | Trust posture | Public visibility |
+|------|----------|---------------|-------------------|
+| **1. Confidential reporting** | Anonymous citizen | Maximum anonymity; **operator in threat model** | None (aggregate stats only) |
+| **2. Investigation** | Identified, authorized investigators | Least privilege, dual control, full audit | None |
+| **3. Adjudication** | Courts, prosecutors, defenders, judicial officers | Due process, separation of powers, defensibility | Per court rules (open-justice) |
+| **4. Public transparency** | Everyone | Read-only, verified, aggregated, non-attributable | Full, by design |
 
-> **⛔ Confirmation Checkpoint.** The blueprint **stops** at the end of Batch 1. Every
-> section from Batch 2 onward is contingent on your validation of the assumptions and
-> threat model in this batch. See `03-threat-model-validation-checkpoint.md` for the
-> specific decisions requested of you. Do not treat later batches as pending "somewhere in
-> the background" — they are intentionally not written until you confirm, because they
-> depend on choices only you can ratify.
+> **Rule:** no allegation is assumed true; unverified reports never surface as fact; and
+> confidential-reporting data never crosses into public transparency except as verified,
+> aggregated, anonymized statistics or through a lawful, governed disclosure process.
 
-### 0.3 Documents in this batch
+### 0.3 Delivery contract — Discovery Phase first, then stop
+
+Per both engagement briefs, the **Discovery Phase must be completed and validated before any
+architecture, engineering spec, or roadmap is produced.** This blueprint produces the full
+Discovery Phase, then **stops at a Confirmation Checkpoint.**
+
+| Phase | Deliverables | Status |
+|-------|--------------|--------|
+| **DISCOVERY (this delivery)** | 01 Assumptions Register · 02 Justice-System Problem Analysis · 03 Stakeholder Analysis · 04 Functional Gap Analysis · 05 Service Blueprint · 06 Domain Model · 07 Capability Map · 08 Threat Model (STRIDE + LINDDUN) · 09 Trust Model · 10 Risk Register → **11 Confirmation Checkpoint** | **DELIVERED — awaiting confirmation** |
+| DESIGN — Governance & Trust | Executive Summary · Governance Framework (as a software subsystem) · Trust Architecture | Blocked on Discovery confirmation |
+| DESIGN — Security & Data | Zero-Trust Security Architecture · Cryptographic & Key-Management Strategy · Trust-Boundary & Data-Flow diagrams · Encryption/Secrets strategy · Incident Response & BCP | Blocked |
+| DESIGN — System & Domain | System Architecture (22 services) · Per-service specs (responsibilities/APIs/data-ownership/failure-modes/scaling) · DDD contexts · Event catalog · CQRS · API contracts/OpenAPI · Schemas/ERDs · Sequence diagrams · State machines · Permission matrices | Blocked |
+| DESIGN — Product & Workflow | Functional & Non-Functional Requirements · UX/UI Strategy · Verification Workflow · AI Decision-Support (bounded) · Evidence Management | Blocked |
+| DESIGN — Legal, Compliance, Risk | Legal & Ethical Framework · Compliance mapping · Comparative Analysis · Botswana Adaptation · full Risk Register maintenance | Blocked |
+| DELIVERY | Technology Stack · Monitoring & Transparency · Sustainability & Funding · **GitHub Epics/Features/Stories/Tasks** · Test plans & acceptance criteria · Sprint & milestone roadmap · Future Roadmap · Final Recommendations | Blocked |
+
+> **⛔ Confirmation Checkpoint.** The blueprint **stops** at the end of Discovery
+> (`11-discovery-confirmation-checkpoint.md`). Everything downstream is contingent on your
+> validation of the assumptions, problem framing, scope, and threat model. Later phases are
+> intentionally *not* written until you confirm — because they depend on scope and
+> separation-of-powers decisions only you can ratify.
+
+### 0.4 Documents in the Discovery Phase
 
 | # | File | What it contains |
 |---|------|------------------|
-| 00 | `00-master-index.md` | This index; reading guide; delivery contract; coverage map |
-| 01 | `01-assumptions-register.md` | Every explicit and implicit assumption (legal, technical, governance, operational, financial, organizational) that shapes the design, with confidence, impact-if-wrong, and validation owner |
-| 02 | `02-threat-model-stride-linddun.md` | Assets, threat actors, trust assumptions, and the formal STRIDE (security) + LINDDUN (privacy/anonymity) threat catalogue with risk ratings, mitigations, residual risk, and architectural implications |
-| 03 | `03-threat-model-validation-checkpoint.md` | Summary of highest-priority risks and highest-impact assumptions; the formal Confirmation Checkpoint and the explicit questions you must answer before Batch 2 |
+| 00 | `00-master-index.md` | This index; four-modes rule; delivery contract; conventions |
+| 01 | `01-assumptions-register.md` | All assumptions (legal, technical, governance, operational, financial, organizational, **justice-institutional**) with confidence, impact-if-wrong, validation owner |
+| 02 | `02-justice-system-problem-analysis.md` | Root-cause problem trees for systemic justice-sector challenges; Botswana-specific claims flagged for validation |
+| 03 | `03-stakeholder-analysis.md` | Every stakeholder: role, needs, interactions, permissions posture, risks-to/risks-from, incentives, design implications (no invented opinions) |
+| 04 | `04-functional-gap-analysis.md` | Current (assumed) vs desired capabilities → gaps → owning component |
+| 05 | `05-service-blueprint.md` | Layered service blueprints for key journeys (front-stage/back-stage/support/evidence/fail points) |
+| 06 | `06-domain-model.md` | DDD bounded contexts, context map, aggregates, ubiquitous language, event-catalog seed |
+| 07 | `07-capability-map.md` | Business capability map (L1/L2) across the justice value chain, mapped to services |
+| 08 | `08-threat-model-stride-linddun.md` | Assets, actors, trust assumptions; 30+ STRIDE + LINDDUN threats spanning all four modes |
+| 09 | `09-trust-model.md` | Trust zones/boundaries, separation-of-powers data ownership, roots of trust, split-trust, AI trust bounds |
+| 10 | `10-risk-register.md` | Consolidated program + security + privacy + delivery risk register |
+| 11 | `11-discovery-confirmation-checkpoint.md` | Discovery summary, top risks, high-impact assumptions, decisions requested → **STOP** |
 
-### 0.4 Coverage map — 26-item catalogue → delivery batches
+### 0.5 Cross-cutting conventions
 
-The engagement brief (Part F) requires 26 sections. This map shows where each is
-delivered so nothing is silently dropped.
+- **DDR (Design Decision Record).** Every major decision (from the Design phases on) uses:
+  `DDR ID · Context · Problem · Decision · Alternatives Considered · Threats Mitigated
+  (STRIDE/LINDDUN IDs) · Privacy Implications · Legal Implications · Trade-offs · Future
+  Review Trigger`.
+- **Threat IDs.** STRIDE: `S/T/R/I/D/E-*`. LINDDUN: `L/ID/NR/DT/DD/U/NC-*`. Stable, referenced downstream.
+- **Assumption IDs.** `A-LEG-*`, `A-TEC-*`, `A-GOV-*`, `A-OPS-*`, `A-FIN-*`, `A-ORG-*`, `A-JUS-*` (justice-institutional).
+- **Risk rating.** L×I (1–5 each) → Low 1–5 / Medium 6–11 / High 12–19 / Critical 20–25. Impact scored **safety- and rights-first**.
+- **Honesty markers.** `⚠️ COST:` names a cost we accept for safety/rights; `🔒 HUMAN-EXPERT-REVIEW-REQUIRED` marks anonymity-, cryptography-, evidence-integrity-, metadata-, and AI-decision-support subsystems that must never be autonomously built.
+- **Quality gate (per section):** maps decisions to STRIDE + LINDDUN; states residual risks; documents assumptions; identifies legal/privacy/security review needs; includes measurable success criteria.
 
-| Catalogue item | Delivered in |
-|----------------|--------------|
-| 1. Executive Summary | Batch 2 |
-| 2. Problem Analysis | Batch 4 |
-| 3. Stakeholder Analysis | Batch 4 |
-| 4. Governance Framework | Batch 2 |
-| 5. Functional Requirements | Batch 4 |
-| 6. Non-Functional Requirements | Batch 4 |
-| 7. UX/UI Strategy | Batch 4 |
-| 8. Security Architecture | Batch 3 |
-| 9. Cryptographic Design | Batch 3 |
-| 10. Data Flow Architecture | Batch 3 |
-| 11. System Architecture | Batch 3 |
-| 12. Database Design | Batch 3 |
-| 13. Evidence Management | Batch 3 |
-| 14. Verification Workflow | Batch 4 |
-| 15. AI Integration | Batch 4 |
-| 16. Legal & Ethical Framework | Batch 5 |
-| 17. Compliance | Batch 5 |
-| 18. Risk Register | Batch 5 |
-| 19. Comparative Analysis | Batch 5 |
-| 20. Botswana Adaptation | Batch 5 |
-| 21. Technology Stack | Batch 6 |
-| 22. Monitoring & Transparency | Batch 6 |
-| 23. Sustainability & Funding | Batch 6 |
-| 24. Implementation Roadmap | Batch 6 |
-| 25. Future Roadmap | Batch 6 |
-| 26. Final Recommendations | Batch 6 |
-| — Assumptions Register (Part C §1) | **Batch 1** |
-| — Threat Model STRIDE+LINDDUN (Part C §2) | **Batch 1** |
-| — Threat Model Validation (Part C §3) | **Batch 1** |
-| — DDRs (Part C §4) | Embedded in Batches 2–6 at each decision point |
+### 0.6 Non-negotiable constraints (carried into every section)
 
-### 0.5 Cross-cutting conventions used throughout the blueprint
+1. **Safety, privacy, fairness, and due process are never traded for convenience.**
+2. **The four justice modes stay separated** (§0.2). No allegation is assumed true.
+3. **The platform operator is inside the threat model** for confidential reporting — no
+   single party can de-anonymize a reporter.
+4. **Separation of powers is reflected in data ownership** — the judiciary owns adjudication
+   data; the executive owns investigation data; oversight bodies own their own records; no
+   arm silently reads another's (Trust Model §09).
+5. **Human decision-makers are never replaced by AI.** AI assists (translation, categorization,
+   duplicate detection, PII redaction, summarization, prioritization); it never determines
+   guilt, innocence, or any legal outcome.
+6. **Data minimization by default** — every stored field carries purpose, legal basis,
+   retention, encryption level, access policy, deletion policy (enforced from the Data batch).
+7. **Compliance by default · privacy/security by design · zero trust · least privilege ·
+   defense in depth · legal defensibility · auditability.**
 
-- **DDR (Design Decision Record).** Every major architectural, cryptographic, and
-  governance decision is captured in a DDR using the Part C §4 template and is mapped to
-  the specific STRIDE/LINDDUN threats it mitigates. DDRs begin in Batch 2.
-- **Threat IDs.** Security threats are `S-*` (Spoofing), `T-*` (Tampering), `R-*`
-  (Repudiation), `I-*` (Information disclosure), `D-*` (Denial of service), `E-*`
-  (Elevation of privilege). Privacy threats are `L-*` (Linking), `ID-*` (Identifying),
-  `NR-*` (Non-repudiation), `DT-*` (Detecting), `DD-*` (Data disclosure), `U-*`
-  (Unawareness), `NC-*` (Non-compliance). These IDs are stable and are referenced by
-  every downstream design decision.
-- **Assumption IDs.** `A-LEG-*`, `A-TEC-*`, `A-GOV-*`, `A-OPS-*`, `A-FIN-*`, `A-ORG-*`.
-- **Risk rating scale.** Likelihood × Impact on a 5-point scale each → severity band
-  (Low / Medium / High / Critical). Defined in `02-threat-model-stride-linddun.md §2.4`.
-- **Honesty markers.** Where anonymity and operational convenience conflict, the blueprint
-  resolves for anonymity and **names the cost** inline with a `⚠️ COST:` marker.
-  Subsystems that must not be autonomously built are marked
-  `🔒 HUMAN-EXPERT-REVIEW-REQUIRED`.
+### 0.7 What this blueprint explicitly does not promise (honesty)
 
-### 0.6 Non-negotiable design constraints (carried into every section)
-
-1. **Reporter safety is the highest priority**, above operational convenience, cost, and
-   feature richness.
-2. **The platform operator is inside the threat model.** No single organization,
-   administrator, or operator may independently compromise reporter anonymity.
-3. **Confidential reporting is separated from public disclosure.** The platform routes
-   reports to authorized recipients; it does **not** publish individually identifying
-   allegations. Public output is limited to verified, aggregated, anonymized,
-   non-attributable statistics unless disclosure is lawfully authorized.
-4. **Human verification over automated judgment.** AI assists; it never determines guilt,
-   innocence, or the truth of an allegation. All substantive decisions require human
-   review.
-5. **Evidence integrity is preserved** from submission through case closure.
-6. **Compliance by default**, **privacy by design**, **security by design**, **zero
-   trust**, **least privilege**, **defense in depth**.
-
-### 0.7 What this blueprint explicitly does not promise
-
-Stated up front and expanded in the Security Limitations section (Batch 3):
-
-- It **cannot** protect a reporter whose own device is compromised (malware, spyware,
-  forensic seizure, shoulder-surfing).
-- It **cannot** prevent a reporter from voluntarily self-identifying or being identified
-  through the *content* of what they report (a report only three people could have made
-  identifies its author regardless of cryptography).
-- It **cannot** defeat physical coercion of a reporter, an operator, or a governance
-  member.
-- It **cannot** guarantee anonymity against a global passive network adversary who can
-  observe all traffic into and out of the country simultaneously; it can only raise the
-  cost and narrow the window.
-- It **cannot** substitute for qualified Botswana legal counsel; every legal statement in
-  this blueprint is flagged as requiring confirmation by an admitted Botswana attorney
-  before deployment.
+- It cannot protect a reporter whose own device is compromised, nor prevent content-based
+  self-identification, nor defeat physical coercion, nor beat a global passive network
+  adversary (see `08-* §2.8`).
+- It cannot substitute for qualified Botswana legal, judicial, or policy review — every such
+  statement is flagged for expert validation.
+- It cannot, by itself, fix institutional or political dysfunction; it is an enabler of
+  transparency and due process, not a guarantor of them.
+- It does not assume any allegation is true and does not publish individually identifying
+  allegations.
 
 ---
 
-*Next: read `01-assumptions-register.md`, then `02-threat-model-stride-linddun.md`, then
-`03-threat-model-validation-checkpoint.md` and respond at the Confirmation Checkpoint.*
+*Read `01` → `10` in order, then respond at the Confirmation Checkpoint in `11`.*

@@ -1,16 +1,30 @@
-# 02 — Formal Threat Model (STRIDE + LINDDUN)
+# 08 — Formal Threat Model (STRIDE + LINDDUN)
 
 > This is the **load-bearing** artifact of the whole blueprint. Per the design mandate,
 > **every** subsequent architecture and governance decision must reference the STRIDE
 > and/or LINDDUN threat(s) it addresses. Nothing downstream is built until this model is
-> validated at the Confirmation Checkpoint (`03-*`).
+> validated at the Confirmation Checkpoint (`11-*`).
 >
 > STRIDE covers **security** threats (Spoofing, Tampering, Repudiation, Information
 > disclosure, Denial of service, Elevation of privilege). LINDDUN covers **privacy &
 > anonymity** threats (Linking, Identifying, Non-repudiation, Detecting, Data disclosure,
-> Unawareness, Non-compliance). For a whistleblower platform, **LINDDUN is not secondary —
-> it is co-equal with STRIDE**, because loss of anonymity can be fatal in the literal
-> sense.
+> Unawareness, Non-compliance). For this platform, **LINDDUN is co-equal with STRIDE**,
+> because loss of anonymity can be fatal in the literal sense.
+
+> **⚑ Scope note — two trust zones.** This model now spans the whole justice ecosystem, which
+> contains **two fundamentally different trust zones** that must never be conflated:
+>
+> - **Zone R — Confidential Reporting (Mode 1):** anonymous citizens; **maximum anonymity**;
+>   the operator is inside the threat model; reporters get **deniability/repudiability**.
+>   Sections 2.1–2.9 (the original core) cover this zone in depth.
+> - **Zone O — Identified Official Workflows (Modes 2–4):** investigators, prosecutors,
+>   defenders, judicial officers, oversight — **known, accountable actors**; the priorities
+>   are **integrity, due process, separation of powers, least privilege, and
+>   non-repudiation** (the opposite of Zone R's reporter deniability).
+>
+> A control that is right for one zone can be *wrong* for the other (e.g., device attestation
+> aids Zone O accountability but destroys Zone R deniability — NR-1). **Section 2.10 adds the
+> ecosystem/Zone-O threats** on top of the Zone-R core below.
 
 ---
 
@@ -410,20 +424,142 @@ These are not defects to be "fixed later" — they are the honestly-stated bound
 software can do, and they shape the UX (U-1), governance (A-GOV-01), and legal (NC-2)
 requirements downstream.
 
-## 2.9 Definition-of-Done for this section
+## 2.9 Ecosystem / Zone-O threats (Modes 2–4: identified official workflows)
 
-- [x] Assets ranked by consequence, threat actors enumerated with capability/motivation,
-  trust assumptions stated.
-- [x] Full STRIDE catalogue with L×I risk ratings, mitigations, residual risk, and
-  architectural implications.
-- [x] Full LINDDUN catalogue with the same rigor, treating anonymity threats as co-equal.
-- [x] Threat→asset coverage matrix and an explicit residual-risk statement.
-- [x] Anonymity-critical threats flagged 🔒 HUMAN-EXPERT-REVIEW-REQUIRED and cost/honesty
-  tensions marked ⚠️.
-- **Required specialist review:** cryptography engineer (I-1, I-2, T-1, T-3, L-1, ID-1),
-  privacy engineer (all LINDDUN), digital forensics (T-1, T-2, evidence), Botswana legal
-  counsel (NC-1, NC-2, I-1), governance advisor (E-1, A-GOV-01), safety-critical UX
-  writer (U-1, U-2).
+These add to (do not replace) the Zone-R core above. New assets in play: **A5 case data**,
+**A11 adjudication integrity** (correctness/independence of the judicial record), **A12
+cross-agency data-sharing surface**, **A13 AI-assistance integrity** (bias/manipulation of
+assistive models), **A14 due-process fairness** (equality of arms, defence access). New/
+amplified actors: **TA-1** now also as an insider *within* investigation/prosecution/courts;
+**TA-2** insider across any arm; **TA-10 external litigant/party** seeking improper access to
+the other side's data.
 
-*Next: `03-threat-model-validation-checkpoint.md` — this is where the blueprint stops and
-asks you to confirm before proceeding.*
+### Spoofing / Authentication (Zone O)
+**S-5 — Impersonation of an official to write to case/adjudication data.**
+· Assets: A5, A11 · L3 × I5 = **15 High** · Mitigations: phishing-resistant MFA (FIDO2) for
+all officials; per-arm identity federation; step-up + dual control for high-impact writes
+(orders, sealing, disclosure); every write audited (T-2) · Residual: coerced legitimate
+official → dual control + anomaly detection · **Implication:** Zone-O identity is as strict as
+Zone-R is anonymous — opposite requirement, same rigor.
+
+### Tampering / Integrity (Zone O)
+**T-5 — Case-fixing: unauthorized alteration of case status, orders, or judgments.**
+· Assets: A11, A10 · L3 × I5 = **15 High** · Mitigations: judiciary-owned write zone
+(A-JUS-03); append-only, hash-chained case-event log; four-eyes on sensitive transitions;
+immutable judgments once delivered; external anchoring of the judicial event digest ·
+Residual: collusion within the judiciary + registrar · **Implication:** adjudication integrity
+gets the same tamper-evidence as evidence custody (T-1/T-2).
+
+**T-6 — Improper sealing/unsealing to hide or expose a matter.**
+· Assets: A11, A14, privacy · L2 × I4 = **8 Medium** · Mitigations: sealing as an audited,
+reason-coded, authority-checked action; oversight visibility of sealing *rates* (not contents)
+· Residual: authorized-but-improper sealing · **Implication:** sealing is a governed action,
+not a silent flag.
+
+**T-7 — Manipulation of AI-assistance to bias triage/prioritization/redaction.**
+· Assets: A13, A14 · L2 × I4 = **8 Medium** · Mitigations: AI is advisory only (A-AI-01);
+human-in-the-loop for anything consequential; model/version pinning; audit of AI inputs/
+outputs; bias evaluation; no AI in the write path of a decision · Residual: subtle bias in
+advisory output · **Implication:** AI integrity and explainability are controls, and AI is
+architecturally kept out of decisions. 🔒 HUMAN-EXPERT-REVIEW-REQUIRED.
+
+### Repudiation (Zone O)
+**R-3 — An official denies an action (issued order, made disclosure, accessed a record).**
+· Assets: A7, A11 · L3 × I4 = **12 High** · Mitigations: non-repudiable, signed, audited
+official actions (the deliberate inverse of reporter deniability, NR-1) · Residual: covered by
+T-2 · **Implication:** Zone O is **non-repudiation-positive**; Zone R is **non-repudiation-
+negative**. The two must not share an identity/audit model.
+
+### Information Disclosure (Zone O)
+**I-6 — Cross-arm over-reach: one arm reads another's data without lawful basis** (executive
+reading judiciary internals, or vice-versa). · Assets: A11, A12, separation of powers · L3 ×
+I5 = **15 High** · Mitigations: arm-owned data zones; no central pool; access only via
+purpose-bound, audited events/APIs behind ACLs; ABAC enforcing arm + matter + role · Residual:
+lawful-but-broad access grants · **Implication:** separation of powers is an **access-control
+invariant**, encoded in IAM, not a policy aspiration (A-JUS-03).
+
+**I-7 — Improper party access: a litigant/defendant accesses the other side's protected data
+or a victim/witness's protected details.** · Assets: A14, witness safety · L3 × I5 = **15
+High** · Mitigations: matter-scoped ABAC; disclosure limited to lawfully disclosable subset;
+witness-protection redaction; open-justice exceptions (A-JUS-04) · Residual: lawful disclosure
+that still endangers a witness · **Implication:** disclosure is a scoped projection, never raw
+record access; witness protection is a first-class redaction rule.
+
+**I-8 — Re-identification from "aggregated" transparency data** (small cells, linkage). ·
+Assets: A1, privacy of parties · L3 × I5 = **15 High** · Mitigations: k-anonymity / minimum
+cell thresholds; suppression; differential-privacy-style noise where appropriate; governance
+sign-off on each published dataset · Residual: linkage with external datasets ·
+**Implication:** disclosure control is an engineered gate on the Transparency boundary (J5,
+L-1/ID-1).
+
+### Denial of Service (Zone O)
+**D-4 — Loss of availability of justice-critical services** (scheduling, case status,
+evidence access at hearing time). · Assets: A8, due process · L3 × I4 = **12 High** ·
+Mitigations: HA design, graceful degradation, offline/read-only fallback for court operations,
+tested DR/RTO/RPO · Residual: sustained infrastructure failure · **Implication:** availability
+NFRs for Zone O are due-process requirements, not just SRE targets.
+
+### Elevation of Privilege (Zone O)
+**E-3 — Insider escalates to case-fixing or cross-arm access.**
+· Assets: A5, A11, A12 · L3 × I5 = **15 High** · Mitigations: zero standing privilege; JIT +
+dual control for sensitive writes; SoD so no single role can both investigate and adjudicate,
+or both disclose and seal; anomaly detection · Residual: multi-party collusion ·
+**Implication:** the Zone-R "de-anonymization requires collusion" principle has a Zone-O twin:
+"case-fixing requires collusion across separated duties."
+
+### LINDDUN (Zone O additions)
+**L-2 — Linking a person across investigation, prosecution, adjudication, and corrections to
+build an unauthorized profile.** · Assets: A12, privacy · L3 × I4 = **12 High** ·
+Mitigations: purpose limitation; per-context identifiers with governed linkage; audit of
+cross-context correlation; data minimization in events · Residual: authorized-but-excessive
+linkage · **Implication:** cross-arm linkage is deliberate, governed, and audited — not a
+default of "one big case record."
+
+**DD-3 — Function creep of official data into surveillance or unrelated use.**
+· Assets: privacy, A10 · L3 × I4 = **12 High** · Mitigations: purpose limitation enforced in
+IAM/policy engine; new uses require DPIA + governance approval; expansion to new domains gated
+· Residual: governance capture · **Implication:** the same DD-2 discipline extends to official
+data; especially critical as the platform scales to new domains.
+
+**NC-3 — Publishing/handling that breaches open-justice exceptions** (juveniles, sexual
+offences, protected witnesses, sealed/national-security matters). · Assets: A14, legal
+standing · L3 × I5 = **15 High** · Mitigations: exception-aware publication engine; default-
+deny publication; registrar-controlled sealing; legal review of publication rules (A-JUS-04)
+· Residual: mis-coded exception · **Implication:** open-justice compliance is automated and
+default-deny, with human/legal oversight.
+
+### Zone-O asset/threat additions summary
+| Asset | Threats |
+|-------|---------|
+| A5 Case data | S-5, T-5, I-6, E-3, L-2 |
+| A11 Adjudication integrity | T-5, T-6, R-3, I-6, E-3 |
+| A12 Cross-agency surface | I-6, E-3, L-2, DD-3 |
+| A13 AI-assistance integrity | T-7 |
+| A14 Due-process fairness | T-6, I-7, NC-3 |
+
+### Zone-O residual risks (added to §2.8)
+8. **Collusion across separated duties** (E-3, T-5) — SoD raises the bar to multi-party
+   collusion but cannot make it impossible.
+9. **Lawful-but-improper action** (T-6, L-2, I-7) — authorized actors misusing legitimate
+   access; mitigated by audit + oversight, not prevented.
+10. **Institutional non-participation** (A-JUS-05) — if arms don't adopt, Zone O degrades to a
+    partial system; a program risk more than a technical one (see `10-risk-register.md`).
+
+## 2.10 Definition-of-Done for this section
+
+- [x] Assets ranked by consequence; threat actors enumerated with capability/motivation;
+  trust assumptions stated; **two trust zones (R and O) distinguished**.
+- [x] Full STRIDE + LINDDUN catalogue for Zone R with L×I ratings, mitigations, residual risk,
+  and architectural implications.
+- [x] **Ecosystem/Zone-O threats added** (S-5, T-5..T-7, R-3, I-6..I-8, D-4, E-3, L-2, DD-3,
+  NC-3) with the deliberate reporter-deniability vs official-non-repudiation asymmetry made
+  explicit.
+- [x] Threat→asset coverage matrices and an explicit, expanded residual-risk statement.
+- [x] Anonymity-, crypto-, evidence-, metadata-, and AI-critical threats flagged 🔒; cost/
+  honesty tensions marked ⚠️.
+- **Required specialist review:** cryptography engineer (I-1, I-2, T-1, T-3, T-5, L-1, ID-1),
+  privacy engineer (all LINDDUN, I-8), digital forensics (T-1, T-2, T-5, evidence), Botswana
+  legal/judicial counsel (NC-1..NC-3, I-1, I-6, A-JUS-03/04), governance advisor (E-1, E-3,
+  A-GOV-01), AI systems/ethics (T-7, A-AI-*), safety-critical UX writer (U-1, U-2).
+
+*Next: `09-trust-model.md`.*
