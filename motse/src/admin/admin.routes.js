@@ -829,6 +829,13 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.get('/intelligence', run(() => platform.opsIntel.advise()));
   router.post('/intelligence/sample', run(() => platform.opsIntel.record()));
 
+  // ── Analytics Phase 1: governance analytics ─────────────────────────
+  router.get('/governance/analytics', run(() => platform.governanceAnalytics.report()));
+  router.get('/governance/analytics/recommendations', run(() => platform.governanceAnalytics.recommend()));
+
+  // ── Analytics Phase 2: forecast accuracy validation ─────────────────
+  router.get('/forecast/accuracy', run(() => platform.forecastAccuracy.report()));
+
   // ── Mission 4: unified operations overview (one call, whole platform) ─
   router.get('/overview', run(async () => {
     await platform.dependencies.checkAll();
@@ -858,7 +865,9 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
       disaster_recovery: platform.dr.latestReport(),
       business: platform.business.executiveView(),
       intelligence: platform.opsIntel.advise().recommendations.slice(0, 5),
-      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr', 'business'],
+      governance_analytics: (() => { const r = platform.governanceAnalytics.report(); return { compliance_score: r.compliance_score, operational_maturity_score: r.operational_maturity_score, rollback_rate: r.rollback.rate, total_changes: r.total_changes }; })(),
+      forecast_accuracy: platform.forecastAccuracy.report().overall_accuracy_pct,
+      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr', 'business', 'governance'],
     };
   }));
 

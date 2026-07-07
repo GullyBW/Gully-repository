@@ -59,6 +59,8 @@ const { RuntimeIntelligence } = require('./observability/runtime.intelligence');
 const { CapacityPlanner } = require('./observability/capacity.planner');
 const { BusinessObservability } = require('./observability/business.observability');
 const { OperationalIntelligence } = require('./observability/operational.intelligence');
+const { GovernanceAnalytics } = require('./observability/governance.analytics');
+const { ForecastAccuracy } = require('./observability/forecast.accuracy');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { Resilience } = require('./resilience');
 const { ConfigService } = require('./config/config.service');
@@ -527,6 +529,12 @@ function createPlatform({
   // Phase 2 / Mission 10: continuous disaster-recovery validation over the
   // real BackupService + ChaosKv. Nothing runs until validateAll()/run().
   platform.dr = new DrValidator({ platform, backups: platform.backups, clock, metrics });
+  // Analytics Phase 1: governance analytics — turns the governance change
+  // records into KPIs, compliance/maturity scores, and process recommendations.
+  platform.governanceAnalytics = new GovernanceAnalytics({ governance: platform.configGovernance, config: platform.config, metrics, clock });
+  // Analytics Phase 2: forecast-accuracy validation — backtests the capacity
+  // planner's own history to measure whether its predictions hold up.
+  platform.forecastAccuracy = new ForecastAccuracy({ planner: platform.capacity, metrics, clock });
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
   platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });

@@ -760,6 +760,38 @@ async function main() {
     report.scenarios.operational_intelligence = { recommendations_under_stress: advice.recommendations.length };
   }
 
+  // ════ W18 · Governance analytics (Analytics Phase 1) ════
+  section('W18 governance analytics');
+  {
+    // W14 already produced a governed change (applied + rolled back). Analyse it.
+    const rep = platform.governanceAnalytics.report();
+    check('governance records become quantified analytics', true, rep.total_changes >= 1 && typeof rep.compliance_score === 'number', rep.total_changes >= 1 && typeof rep.compliance_score === 'number');
+    check('compliance + maturity scores are computed in range', true,
+      rep.compliance_score >= 0 && rep.compliance_score <= 1 && rep.operational_maturity_score >= 0 && rep.operational_maturity_score <= 1,
+      rep.compliance_score >= 0 && rep.compliance_score <= 1 && rep.operational_maturity_score >= 0 && rep.operational_maturity_score <= 1);
+    const recs = platform.governanceAnalytics.recommend();
+    check('governance recommendations are evidence-backed', true,
+      recs.recommendations.every((r) => r.evidence && typeof r.confidence === 'number' && r.remediation),
+      recs.recommendations.every((r) => r.evidence && typeof r.confidence === 'number' && r.remediation));
+    report.scenarios.governance_analytics = { total_changes: rep.total_changes, compliance: rep.compliance_score, maturity: rep.operational_maturity_score, rollback_rate: rep.rollback.rate };
+  }
+
+  // ════ W19 · Forecast accuracy validation (Analytics Phase 2) ════
+  section('W19 forecast accuracy');
+  {
+    // The capacity planner recorded history across W13 + the health cycles.
+    for (let i = 0; i < 6; i += 1) { platform.runtime.sample(); platform.capacity.record(); }
+    const acc = platform.forecastAccuracy.report();
+    check('forecast accuracy is measured by backtesting the planner history', true, acc.overall_accuracy_pct != null, acc.overall_accuracy_pct != null);
+    check('per-field backtests report accuracy + trend correctness', true,
+      Object.values(acc.fields).some((f) => !f.insufficient_data && typeof f.accuracy === 'number'),
+      Object.values(acc.fields).some((f) => !f.insufficient_data && typeof f.accuracy === 'number'));
+    check('the recommendation gate reflects measured accuracy', true, typeof acc.recommendation_gate.trustworthy === 'boolean', typeof acc.recommendation_gate.trustworthy === 'boolean');
+    // eslint-disable-next-line no-console
+    console.log(`  overall forecast accuracy ${acc.overall_accuracy_pct}% · trustworthy ${acc.recommendation_gate.trustworthy} · calibrated ${acc.calibration.well_calibrated}`);
+    report.scenarios.forecast_accuracy = { overall_accuracy_pct: acc.overall_accuracy_pct, trustworthy: acc.recommendation_gate.trustworthy };
+  }
+
   // ════ Integrity + verdict ════
   section('final integrity');
   check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);

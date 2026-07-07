@@ -80,6 +80,9 @@ jobs:
       - name: Business observability + operational intelligence gate (>=95/95/90)
         run: npm run motse:coverage:business
 
+      - name: Governance analytics + forecast accuracy gate (>=95/95/90)
+        run: npm run motse:coverage:analytics
+
       - name: Grafana dashboards regenerate cleanly (no drift)
         run: |
           node deploy/motse/observability/generate-dashboards.js

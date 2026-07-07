@@ -1,6 +1,6 @@
 {
   "uid": "motse-governance",
-  "title": "Motse · Governance",
+  "title": "Motse · Governance Analytics",
   "schemaVersion": 39,
   "tags": [
     "motse",
@@ -14,7 +14,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Seats frozen (Ring 3)",
+      "title": "Compliance score (0..1)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -28,14 +28,14 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(motse_domain_events_total{type=\"governance.seat.frozen\"}[5m]))",
+          "expr": "motse_governance_compliance_score",
           "refId": "A"
         }
       ]
     },
     {
       "id": 2,
-      "title": "Disputes opened",
+      "title": "Operational maturity score (0..1)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -49,14 +49,14 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(motse_domain_events_total{type=\"governance.dispute.opened\"}[5m]))",
+          "expr": "motse_governance_maturity_score",
           "refId": "A"
         }
       ]
     },
     {
       "id": 3,
-      "title": "Disputes resolved",
+      "title": "Rollback rate",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -70,14 +70,14 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(motse_domain_events_total{type=\"governance.dispute.resolved\"}[5m]))",
+          "expr": "motse_governance_rollback_rate",
           "refId": "A"
         }
       ]
     },
     {
       "id": 4,
-      "title": "Audit events total",
+      "title": "Governance actions by event (1h)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -91,7 +91,49 @@
       },
       "targets": [
         {
-          "expr": "motse_audit_events_total",
+          "expr": "sum by (event) (increase(motse_config_governance_total[1h]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Emergency activations (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "sum by (type) (increase(motse_config_emergency_total[1h]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Forecast accuracy (0..1)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "motse_forecast_accuracy",
           "refId": "A"
         }
       ]

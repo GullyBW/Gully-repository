@@ -188,6 +188,7 @@ class ConfigService {
   killSwitch(on, { actor = 'system' } = {}) {
     this.killSwitchOn = !!on;
     this.metrics.setGauge('motse_config_kill_switch', {}, on ? 1 : 0);
+    if (on) this.metrics.inc('motse_config_emergency_total', { type: 'kill_switch' }); // activation count for analytics
     this._reapplyManaged();
     if (this.audit) this.audit.append(actor, 'config.kill_switch', 'config:global', { on: !on }, { on: !!on });
     return { kill_switch: this.killSwitchOn };
@@ -196,6 +197,7 @@ class ConfigService {
   safeMode(on, { actor = 'system' } = {}) {
     this.safeModeOn = !!on;
     this.metrics.setGauge('motse_config_safe_mode', {}, on ? 1 : 0);
+    if (on) this.metrics.inc('motse_config_emergency_total', { type: 'safe_mode' }); // activation count for analytics
     this._reapplyManaged();
     if (this.audit) this.audit.append(actor, 'config.safe_mode', 'config:global', { on: !on }, { on: !!on });
     return { safe_mode: this.safeModeOn };

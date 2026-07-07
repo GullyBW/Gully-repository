@@ -179,6 +179,17 @@ const DASHBOARDS = {
       ['Governance actions by risk (1h)', 'sum by (risk, event) (increase(motse_config_governance_total[1h]))'],
     ],
   },
+  governance: {
+    title: 'Motse · Governance Analytics',
+    panels: [
+      ['Compliance score (0..1)', 'motse_governance_compliance_score'],
+      ['Operational maturity score (0..1)', 'motse_governance_maturity_score'],
+      ['Rollback rate', 'motse_governance_rollback_rate'],
+      ['Governance actions by event (1h)', 'sum by (event) (increase(motse_config_governance_total[1h]))'],
+      ['Emergency activations (1h)', 'sum by (type) (increase(motse_config_emergency_total[1h]))'],
+      ['Forecast accuracy (0..1)', 'motse_forecast_accuracy'],
+    ],
+  },
   dr: {
     title: 'Motse · Disaster Recovery',
     panels: [
