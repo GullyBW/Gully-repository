@@ -1,134 +1,95 @@
 # Motse — Platform Implementation
 
 Reference implementation of **Motse — System & Engineering Documentation v1.0**: a
-ten-module civic, cultural, and financial platform for Botswana, organised around three
-platform primitives that every module consumes — a **verified identity graph**, a
-**unified money movement service (double-entry ledger)**, and a **governance/audit
-engine**.
+civic, cultural, and financial **Digital Public Infrastructure** platform for
+Botswana, organised around three platform primitives every module consumes — a
+**verified identity graph**, a **unified money-movement service (double-entry
+ledger)**, and a **governance/audit engine**.
+
+It has since grown into a full **enterprise operational platform**: transactions and
+distributed coordination, observability, runtime governance, disaster-recovery
+validation, and a **self-validating, continuously-learning intelligence layer** that
+reconciles its own telemetry against the ledger, measures the effectiveness of its
+own recommendations, briefs leadership, learns from outcomes, and fails CI when its
+evidence quality regresses.
+
+> **📖 Start with the [documentation hub](docs/README.md)** — it maps every doc by
+> layer. This README is the orientation; the hub is the map.
+
+**Status:** Motse **800** tests / 57 suites · Tirelo root **131** tests · chaos/
+production harness **119/119** · evidence-integrity gate **PASS** · **17 targeted
+coverage gates** each ≥95% statements / 95% lines / 90% branches — all green in CI.
 
 ```bash
-npm run motse:test         # 30 suites / 291 tests
-npm run motse:coverage     # Phase-1/2 coverage gate (95/95/90)
-npm run motse:coverage:p3  # Phase-3 coverage gate (95/95/90)
-npm run motse:start        # :4100 — /v1 API, /admin, /app PWA, /developers, /metrics
-npm run motse:bench        # in-process performance benchmark
-npm run motse:load         # HTTP load test against a running server
-npm run motse:resilience   # load & resilience simulation (10k/50k/100k)
-npm run motse:ai-eval      # AI quality report (thresholded)
-npm run motse:security-scan / motse:secret-scan   # dependency + secret scans
-npm run motse:openapi      # regenerate sdk/openapi.json
+npm run motse:start           # :4100 — /v1 API, /admin, /app PWA, /developers, /metrics
+npm run motse:test            # full Motse suite (57 suites / 800 tests)
+npm run motse:validate:smoke  # chaos/production-validation harness (119 checks)
+npm run motse:evidence        # evidence-integrity gate (every metric sourced, every rec evidenced)
+npm run motse:slo             # regenerate SLO dashboards + Prometheus alerts
+npm run motse:bench | :load | :resilience   # performance / load / resilience
 ```
 
-## Phase 6 — four governed DPI planes (in progress)
+---
 
-| Workstream | Where | Notes |
+## The platform, by layer
+
+Each layer is **additive** over the layer below, backward-compatible, read-only over
+the systems it observes, and independently tested to a ≥95/95/90 gate.
+
+### Foundation — correctness under load
+Unit-of-Work transactions with journaled rollback · Transactional Outbox
+(at-least-once, retention/replay) · immutable Event Store + CQRS projections ·
+distributed KV (in-memory → Redis) for idempotency, locks and rate limiting.
+→ [FOUNDATION](docs/FOUNDATION.md) · [EVENTS-CQRS](docs/EVENTS-CQRS.md)
+
+### Observability & resilience
+OpenTelemetry tracing + OTLP export · Prometheus metrics · structured logs
+correlated to traces · health/readiness · a 5-state dependency-health machine ·
+circuit breakers, bulkheads, adaptive retries, load shedding, self-healing · runtime
+(heap/GC/event-loop) intelligence.
+→ [OBSERVABILITY](docs/OBSERVABILITY.md) · [OBSERVABILITY-STACK](docs/OBSERVABILITY-STACK.md) · [RESILIENCE-RUNTIME](docs/RESILIENCE-RUNTIME.md) · [ENTERPRISE-MISSIONS](docs/ENTERPRISE-MISSIONS.md)
+
+### Operations, configuration & governance
+Typed, validated, **live-applied** runtime configuration · configuration governance
+(risk tiers, approval workflow, forensic change records) · rollback/snapshots ·
+predictive capacity planning · disaster-recovery validation (RTO/RPO) · four governed
+DPI planes (Identity, Policy Kernel, AI Gateway, Data Product) with provenance.
+→ [CONFIG-CAPACITY](docs/CONFIG-CAPACITY.md) · [GOVERNANCE-DR](docs/GOVERNANCE-DR.md) · [GOVERNED-PLANES](docs/GOVERNED-PLANES.md) · [OPERATIONS](docs/OPERATIONS.md)
+
+### Business & operational intelligence
+Business observability (value processed, customers reached, SLA per capability) ·
+evidence-based operational recommendations (trend-driven, not static thresholds) ·
+governance analytics (compliance/maturity, rollback rate) · forecast-accuracy
+validation by backtesting the capacity planner.
+→ [BUSINESS-INTELLIGENCE](docs/BUSINESS-INTELLIGENCE.md) · [GOVERNANCE-FORECAST-ANALYTICS](docs/GOVERNANCE-FORECAST-ANALYTICS.md)
+
+### Enterprise intelligence — the platform validates & improves itself
+| Capability | What it does | Doc |
 | --- | --- | --- |
-| Identity Plane + Policy Decision Kernel | `src/governance/identity.plane.js`, `policy.kernel.js` | assertions-only identity; central deterministic deny-by-default authorization, audited + event-sourced ([GOVERNED-PLANES](docs/GOVERNED-PLANES.md)) |
-| Governed AI Retrieval Gateway + Data Product Plane | `src/governance/ai.gateway.js`, `data.product.plane.js` | per-document policy-filtered AI retrieval (no raw-store access); projections-only, signed data products |
-| Provenance + Audit Graph + Cells + Certification | `src/governance/{provenance,audit.graph,cell.registry,certification}.js` | tamper-evident signed outputs; cross-plane forensic graph; cell-based sovereign isolation; on-demand signed compliance report |
+| **Business outcome validation** | Reconciles business telemetry against the **ledger** (authoritative record); every discrepancy carries root cause, financial exposure and remediation | [BUSINESS-VALIDATION-…](docs/BUSINESS-VALIDATION-RECOMMENDATION-EFFECTIVENESS.md) |
+| **Recommendation effectiveness** | Tracks recommendations as measurable products (precision/recall/ROI) and recalibrates confidence from outcomes | ↑ same |
+| **Executive intelligence** | One briefing answering what/why/who/value/recommended/confidence/what-if, with a single sourced operational-confidence score | [EXECUTIVE-…](docs/EXECUTIVE-OPERATIONAL-INTELLIGENCE.md) |
+| **Continuous learning** | Persists a knowledge base of measured signals; learns trends, a calibrated forecast-confidence multiplier, and an evidence-gated maturity score | [CONTINUOUS-LEARNING](docs/CONTINUOUS-LEARNING.md) |
+| **Evidence integrity** | CI gate that fails the build on dead metric references, unsupported recommendations/confidence, or ungoverned config | [EVIDENCE-INTEGRITY](docs/EVIDENCE-INTEGRITY.md) |
 
-Coverage on the governed planes: 99.1% statements / 93.4% branches / 100% lines
-(`npm run motse:coverage:p6`). 33 new tests; all existing suites stay green
-(454 Motse + 131 Tirelo).
+Validated end-to-end by the chaos/production harness ([PRODUCTION-VALIDATION](docs/PRODUCTION-VALIDATION.md)).
 
-## Phase 5 — digital public infrastructure (in progress)
+### The product (what all of the above operates)
+- **Administration portal** — `/admin` SPA + `/v1/admin` API: dashboard, identity,
+  councils/governance, ledger explorer, heritage administration, financial ops, audit
+  explorer, and the full analytics/executive/learning surfaces. → [ADMIN-PORTAL](docs/ADMIN-PORTAL.md)
+- **Payments** — Orange Money · MyZaka · Smega mobile money, PayPal remittance, and
+  native cards (gateway abstraction + failover, tokenization, 3DS, multi-currency,
+  dispute/settlement/reconciliation) behind one `PaymentProvider` contract.
+  → [PAYMENTS](docs/PAYMENTS.md) · [PAYPAL](docs/PAYPAL.md) · [CARD-PAYMENTS](docs/CARD-PAYMENTS.md)
+- **Domain modules** — `lelapa · kgotla · heritage · puo · mafelo · loeto · kgetsi ·
+  letlole · mmino` on the identity/ledger/governance primitives.
+- **Platform services** — PII-free analytics, AI provider interfaces + evaluation,
+  configurable workflows, signed plugins, the QR platform, pilots/flags, a public
+  SDK + OpenAPI, offline-first PWA/mobile, and national-rollout infrastructure.
+  → [ANALYTICS](docs/ANALYTICS.md) · [AI](docs/AI.md) · [WORKFLOW](docs/WORKFLOW.md) · [PLUGINS](docs/PLUGINS.md) · [QR-PLATFORM](docs/QR-PLATFORM.md) · [PILOTS](docs/PILOTS.md) · [MOBILE](docs/MOBILE.md) · [NATIONAL-ROLLOUT](docs/NATIONAL-ROLLOUT.md)
 
-Delivered so far — the foundation the remaining Phase-5 workstreams build on:
-
-| Workstream | Where | Notes |
-| --- | --- | --- |
-| Platform Event Store (WS2) | `src/events/event.store.js` | immutable log tapping the bus; replay, snapshots, upcasters (schema evolution), time-travel ([EVENTS-CQRS](docs/EVENTS-CQRS.md)) |
-| CQRS projections (WS3) | `src/events/projections.js` | materialized read models; live + backfill + rebuild; dashboards read these, not transactional tables |
-| QR Code Platform (WS21) | `src/qr/qr.service.js` | signed, time-limited, revocable QR across payments/identity/tourism/heritage/governance/trusts/learning/wallet; tamper/replay/permission + offline verify ([QR-PLATFORM](docs/QR-PLATFORM.md)) |
-
-Coverage on this Phase-5 slice: 98.4% statements / 91.5% branches / 99.6% lines
-(`npm run motse:coverage:p5`). 31 new tests; all existing suites stay green.
-Remaining Phase-5 workstreams (multi-tenancy, knowledge graph, GIS, identity
-wallet, universal search, AI copilot, zero-trust, workflow studio, observability,
-governance, compliance, MLOps, national integration, executive intelligence, DR)
-build on this event-sourced core and land incrementally.
-
-## Phase 4 — native card payments & enterprise payment gateway
-
-| Workstream | Where | Notes |
-| --- | --- | --- |
-| CardPaymentProvider (WS1) | `src/payments/card.provider.js` | full `PaymentProvider` contract; Visa/MC/Amex/Discover + future networks by config ([CARD-PAYMENTS](docs/CARD-PAYMENTS.md)) |
-| Gateway abstraction + failover (WS2) | `src/payments/gateways/` | Stripe/Adyen/Braintree/Peach/DPO/PayGate adapters, configurable order, automatic failover |
-| Card lifecycle (WS3–WS10) | `src/payments/card.service.js` | tokenize→3DS→authorize→capture/partial/void→refund→chargeback→dispute→settle→reconcile; token-only, PCI-safe |
-| Admin ops + wallet + analytics + SDK (WS11–WS14) | `src/admin/`, `src/pwa/`, `src/analytics/`, `sdk/` | Cards portal, wallet card management, PII-free card analytics, SDK card methods + OpenAPI |
-
-Coverage on Phase-4 components: 99.1% statements / 94.5% branches / 100% lines
-(`npm run motse:coverage:p4`). 101 new tests; all existing suites stay green.
-
-## Phase 3 — production readiness, PayPal & extensibility
-
-| Workstream | Where | Notes |
-| --- | --- | --- |
-| PayPal + capability-based payments | `src/payments/paypal.provider.js`, `base.provider.js` | orders/authorize/capture, partial refunds, chargebacks, multi-currency FX→BWP; capability discovery ([PAYPAL](docs/PAYPAL.md)) |
-| Configurable workflow engine | `src/workflow/` | 8 seeded flows as data; N-of-M, parallel, timeouts, escalation, delegation ([WORKFLOW](docs/WORKFLOW.md)) |
-| Plugin architecture | `src/plugins/` | signed, permission-sandboxed, hot enable/disable, `/v1/ext/*` ([PLUGINS](docs/PLUGINS.md)) |
-| Live pilot framework | `src/pilot/` | morafe enrollment, rollback, feedback, 7-metric live dashboard ([PILOTS](docs/PILOTS.md)) |
-| AI evaluation framework | `src/ai/evaluation/` | gold datasets, thresholded quality reports ([AI](docs/AI.md)) |
-| Security assurance + scorecards | `src/security/scorecard.js`, `scripts/secret-scan.js` | graded runtime scorecard, pen-test suite, secret/dependency scans |
-| Operations Center | `src/ops/ops.service.js` | unified 13-panel view, diagnostics, maintenance scheduling |
-| Load & resilience testing | `scripts/resilience-test.js` | user-scale + spikes + provider failure + failover, ledger-integrity asserted |
-| Public SDK + developer platform | `sdk/`, `src/developer/` | JS/TS SDK, OpenAPI, API-key apps, signed webhooks ([SDK](sdk/README.md)) |
-| National rollout | `deploy/motse/terraform/multiregion.tf`, Helm blue/green, `src/i18n/` | multi-region, blue/green, canary, localization ([NATIONAL-ROLLOUT](docs/NATIONAL-ROLLOUT.md)) |
-| Flutter CI validation | `.github/workflows/motse-flutter.yml` | analyze + test + build + compatibility report |
-
-Coverage on Phase-3 components: 98.9% statements / 90.3% branches / 99.8% lines.
-
-## Phase 2 — national-platform readiness
-
-| Workstream | Where | Verified |
-| --- | --- | --- |
-| Flutter app (offline-first, all modules) | [`mobile_flutter/`](mobile_flutter) | Dart contract tests; **needs `flutter analyze && flutter test` on adoption (no SDK here)** |
-| PWA (desktop/mobile/tablet) | `src/pwa/` → `/app` | Playwright browser run + jest |
-| Infrastructure as code | [`../deploy/motse/`](../deploy/motse) | CI builds+smokes the image; helm/terraform validate on adoption |
-| Observability | `deploy/motse/observability/` (10 Grafana dashboards + alert rules) | generator run; alerts reviewed |
-| Analytics (PII-free) | `src/analytics/` + portal Analytics tab | jest incl. a no-user-ids-in-output assertion |
-| Security assurance | `src/security/assurance.service.js` + Security tab | jest: ATO, impossible travel, SIM-swap, abuse, rotation |
-| Pilot management + flags | `src/pilot/` + Pilots tab | jest: stage gates, per-ward flag rollout, onboarding |
-| AI providers (through the safety gate) | `src/ai/providers/` | jest: real local providers + cloud adapters w/ fake transports |
-| Integrations (bank/gov-ID/GIS/email/WhatsApp/calendar) | `src/integrations/` | jest incl. notification bridging + ICS |
-| Ops tooling (incidents, maintenance, backups/DR, capacity) | `src/ops/` + Ops tab | jest incl. a full restore drill on a fresh platform |
-
-Docs: [MOBILE](docs/MOBILE.md) · [INFRASTRUCTURE](docs/INFRASTRUCTURE.md) ·
-[OPERATIONS (runbooks)](docs/OPERATIONS.md) · [ANALYTICS](docs/ANALYTICS.md) ·
-[PILOTS](docs/PILOTS.md) · [AI](docs/AI.md) · [SECURITY](docs/SECURITY.md) ·
-[API](docs/API.md) · [PAYMENTS](docs/PAYMENTS.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) ·
-[TESTING](docs/TESTING.md) · [ADMIN-PORTAL](docs/ADMIN-PORTAL.md)
-
-## Phase 1 — production readiness
-
-Built on top of the core platform (docs in [`docs/`](docs)):
-
-- **Administration portal** — `/admin` (self-contained SPA) + `/v1/admin` API:
-  dashboard, identity management, councils & governance (Ring-3 freezes, elections,
-  disputes), read-only ledger explorer, heritage administration (flagged queue,
-  consents, deletion receipts, audited restricted view), financial administration
-  (escrow monitoring, milestone queue, failed payouts, fraud reviews), audit
-  explorer with inclusion-proof verification and CSV export.
-  → [docs/ADMIN-PORTAL.md](docs/ADMIN-PORTAL.md)
-- **Botswana payments** — Orange Money, Mascom MyZaka, BeMobile Smega behind one
-  `PaymentProvider` contract: C2B, B2C, refunds (where supported), HMAC-signed
-  webhooks with replay/duplicate defences, retry queue with dead-lettering, daily
-  reconciliation with Sev-1 variance paging. Sandbox mode without credentials.
-  → [docs/PAYMENTS.md](docs/PAYMENTS.md)
-- **Notifications** — event-driven, five channels (in-app/SMS/push/email/WhatsApp
-  adapter slot), per-category preferences, quiet hours, civic-emergency exemption.
-- **Monitoring** — Prometheus `/metrics`, `/health/ready`, structured JSON logs
-  with trace ids, ledger/escrow/payment/queue/sync gauges.
-- **Security hardening** — rate limiting, secret rotation, webhook signing, replay
-  protection, fraud hooks, device trust, security headers, denial auditing, OWASP
-  review. → [docs/SECURITY.md](docs/SECURITY.md)
-- **Search** — event-maintained inverted index over all ten modules; restricted
-  content fails closed out of the index; member-scoped family search.
-- **AI foundation** — provider interfaces only (transcription, translation,
-  summarization, knowledge search, tagging, recommendations) behind a safety gate
-  that enforces `no_derivatives_no_training` before any provider sees content.
-
-Coverage on Phase-1 components: 91.7% statements / 95.1% lines.
+---
 
 ## Architecture
 
@@ -154,9 +115,14 @@ motse/src
 │                     restricted bucket class, no-training flag, 14/90-day deletion
 ├── modules/          lelapa · kgotla · heritage · puo · mafelo · loeto · kgetsi ·
 │                     letlole · mmino  (ten layers of the blueprint)
+├── observability/    tracing/health · dependency health · runtime/capacity ·
+│                     business/operational/governance analytics · forecast accuracy ·
+│                     reconciliation · recommendation effectiveness · executive
+│                     intelligence · continuous learning · evidence integrity
+├── resilience/ config/ ops/ governance/   enterprise operational platform
 ├── gateway/          USSD menu state machine + SMS keywords (P9 feature-phone parity)
 ├── sync/             offline outbox replay (ordered per aggregate, exactly-once)
-└── app.js            API gateway: auth, Idempotency-Key enforcement, problem details
+├── container.js      composition root (createPlatform) · app.js  API gateway
 ```
 
 Storage is behind the repository interface in `kernel/store.js` (in-memory here);
@@ -211,14 +177,23 @@ GET  /v1/public/campaigns/{id}/ledger | /v1/public/trusts/{id}/treasury
 GET  /v1/public/audit/{objectRef} | .../proof/{entryId}
 POST /v1/sync/outbox
 POST /v1/gateway/ussd/session | /v1/gateway/sms/inbound
+GET  /v1/admin/overview | /v1/admin/executive | /v1/admin/reconciliation | /v1/admin/learning
 ```
+
+## Engineering principles
+
+Every change is **additive · reversible · independently testable · measurable ·
+observable · explainable · evidence-driven · production-safe · backward-compatible.**
+Nothing weakens transaction guarantees, idempotency, governance, observability, or the
+CI quality gates; nothing ships a dashboard with an unsupported metric or a
+recommendation without evidence. See the [documentation hub](docs/README.md) for the
+full map and [TESTING](docs/TESTING.md) for the coverage-gate discipline.
 
 ## What is intentionally out of scope here
 
-Flutter/React clients, real GCP infrastructure (Terraform, Cloud Run, Pub/Sub,
-Firestore/Cloud SQL adapters), real mobile-money provider integrations, ASR
-transcription, and the search-index service. The seams for all of them exist: storage
-behind `kernel/store.js`, providers behind ledger clearing accounts + webhook-shaped
-methods, events behind the bus, and the SMS transport injectable on `SmsGateway`.
-
-*Build once. Amortize ten times. Betray no one's trust.*
+Real GCP infrastructure (Terraform apply, Cloud Run, Pub/Sub, Firestore/Cloud SQL
+adapters), real mobile-money provider integrations, ASR transcription, and the
+search-index service. The seams for all of them exist: storage behind
+`kernel/store.js`, providers behind ledger clearing accounts + webhook-shaped methods,
+events behind the bus, the SMS transport injectable on `SmsGateway`, and the KV layer
+swappable to Redis via `REDIS_URL`.
