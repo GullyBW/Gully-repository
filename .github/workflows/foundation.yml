@@ -92,6 +92,9 @@ jobs:
       - name: Continuous learning gate (>=95/95/90)
         run: npm run motse:coverage:learning
 
+      - name: Evidence integrity gate (>=95/95/90)
+        run: npm run motse:coverage:evidence
+
       - name: Grafana dashboards regenerate cleanly (no drift)
         run: |
           node deploy/motse/observability/generate-dashboards.js
@@ -104,6 +107,9 @@ jobs:
 
       - name: Production validation smoke (telemetry truth + fault injection)
         run: npm run motse:validate:smoke
+
+      - name: Evidence integrity gate (metric/dashboard/alert/recommendation/confidence/config)
+        run: npm run motse:evidence
 
       - name: Repository secret scan
         run: node motse/scripts/secret-scan.js
