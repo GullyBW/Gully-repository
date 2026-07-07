@@ -25,6 +25,7 @@
     "motse:coverage:enterprise": "jest --config motse/jest.config.js --runInBand --coverage --collectCoverageFrom='src/security/adaptive.rateLimiter.js' --collectCoverageFrom='src/observability/dependency.health.js' --coverageThreshold='{\"global\":{\"statements\":95,\"lines\":95,\"branches\":90}}' --rootDir=motse",
     "motse:coverage:resilience": "jest --config motse/jest.config.js --runInBand --coverage --collectCoverageFrom='src/resilience/**' --collectCoverageFrom='src/observability/runtime.intelligence.js' --coverageThreshold='{\"global\":{\"statements\":95,\"lines\":95,\"branches\":90}}' --rootDir=motse",
     "motse:coverage:config": "jest --config motse/jest.config.js --runInBand --coverage --collectCoverageFrom='src/config/**' --collectCoverageFrom='src/observability/capacity.planner.js' --coverageThreshold='{\"global\":{\"statements\":95,\"lines\":95,\"branches\":90}}' --rootDir=motse",
+    "motse:coverage:govdr": "jest --config motse/jest.config.js --runInBand --coverage --collectCoverageFrom='src/config/config.governance.js' --collectCoverageFrom='src/ops/dr.validator.js' --coverageThreshold='{\"global\":{\"statements\":95,\"lines\":95,\"branches\":90}}' --rootDir=motse",
     "motse:validate": "node motse/scripts/production-validation.js",
     "motse:validate:smoke": "node motse/scripts/production-validation.js --smoke",
     "motse:slo": "node deploy/motse/observability/generate-slo-assets.js",

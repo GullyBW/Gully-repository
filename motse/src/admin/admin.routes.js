@@ -786,9 +786,34 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.post('/config/kill-switch', run((req) => platform.config.killSwitch(req.body.on !== false, { actor: req.actor })));
   router.post('/config/safe-mode', run((req) => platform.config.safeMode(req.body.on !== false, { actor: req.actor })));
 
+  // ── Phase 1: configuration governance (approval workflow + risk) ────
+  router.get('/config/governance/policy', run(() => platform.configGovernance.policyReport()));
+  router.get('/config/governance/pending', run(() => platform.configGovernance.pending()));
+  router.get('/config/governance/history', run((req) => platform.configGovernance.history({ limit: Number(req.query.limit) || 100 })));
+  router.post('/config/governance/requests', run((req) =>
+    platform.configGovernance.request(req.body.key, req.body.value, {
+      actor: req.actor, justification: req.body.justification, expireAt: req.body.expire_at,
+    })
+  ));
+  router.post('/config/governance/requests/:id/approve', run((req) =>
+    platform.configGovernance.approve(req.params.id, req.actor, { note: req.body.note })
+  ));
+  router.post('/config/governance/requests/:id/reject', run((req) =>
+    platform.configGovernance.reject(req.params.id, req.actor, { reason: req.body.reason })
+  ));
+  router.post('/config/governance/requests/:id/rollback', run((req) =>
+    platform.configGovernance.rollbackChange(req.params.id, req.actor)
+  ));
+
   // ── Mission 9: predictive capacity planning ─────────────────────────
   router.get('/capacity', run(() => platform.capacity.forecast()));
   router.post('/capacity/sample', run(() => platform.capacity.record()));
+
+  // ── Phase 2 / Mission 10: disaster-recovery validation ──────────────
+  router.get('/dr/reports', run(() => ({ latest: platform.dr.latestReport(), count: platform.dr.reports.length })));
+  router.get('/dr/scenarios', run(() => platform.dr.scenarios()));
+  router.post('/dr/validate', run(() => platform.dr.validateAll()));
+  router.post('/dr/scenarios/:name', run((req) => platform.dr.run(req.params.name)));
 
   // ── Mission 4: unified operations overview (one call, whole platform) ─
   router.get('/overview', run(async () => {
@@ -814,8 +839,10 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
       resilience: platform.resilience.stats(),
       runtime: platform.runtime.snapshot(),
       config: platform.config.stats(),
+      config_governance: { pending: platform.configGovernance.pending().length, policy: platform.configGovernance.policy },
       capacity: platform.capacity.forecast(),
-      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity'],
+      disaster_recovery: platform.dr.latestReport(),
+      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr'],
     };
   }));
 

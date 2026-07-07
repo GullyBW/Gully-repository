@@ -662,6 +662,52 @@ async function main() {
     report.scenarios.capacity = { samples: forecast.samples, recommendations: forecast.recommendations.length };
   }
 
+  // ════ W14 · Configuration governance (Phase 1) ════
+  section('W14 configuration governance');
+  {
+    const g = platform.configGovernance;
+    // Two distinct operator admins for separation of duties.
+    const mkAdmin = (dev, msisdn) => {
+      const otp = platform.identity.requestOtp(msisdn);
+      const { user } = platform.identity.verifyOtp(msisdn, otp.sandbox_code, { deviceId: dev });
+      platform.identity.grantInstitutional(user.id, { institution: 'Ops' }, 'system:bootstrap');
+      platform.identity.grantRole(user.id, 'platform_admin', 'platform', 'system:bootstrap');
+      return user.id;
+    };
+    const gA = mkAdmin('gov-a', '+26773000001');
+    const gB = mkAdmin('gov-b', '+26773000002');
+    const gC = mkAdmin('gov-c', '+26773000003');
+    const breaker = platform.resilience.breaker('redis');
+    const base = breaker.failureThreshold;
+    const chg = g.request('resilience.redis.breaker.failureThreshold', base + 4, { actor: gA, justification: 'W14 governance drill' });
+    check('a critical config change is held pending (not applied)', 'pending', chg.status, chg.status === 'pending' && breaker.failureThreshold === base);
+    let selfBlocked = false;
+    try { g.approve(chg.id, gA); } catch { selfBlocked = true; }
+    check('separation of duties blocks proposer self-approval', 'blocked', selfBlocked ? 'blocked' : 'allowed', selfBlocked === true);
+    g.approve(chg.id, gB);
+    const applied = g.approve(chg.id, gC);
+    check('the change applies only after the approval chain completes', base + 4, breaker.failureThreshold, applied.status === 'applied' && breaker.failureThreshold === base + 4);
+    check('the applied change carries a full forensic record', true,
+      !!(applied.rollback_ref != null && applied.approvals.length === 2 && applied.affects.length > 0 && applied.justification),
+      applied.rollback_ref != null && applied.approvals.length === 2 && applied.affects.length > 0 && !!applied.justification);
+    const reverted = g.rollbackChange(applied.id, gA);
+    check('a governed change is reversible to its prior value', base, breaker.failureThreshold, reverted.status === 'rolled_back' && breaker.failureThreshold === base);
+    report.scenarios.governance = { history: g.history().length, policy: g.policy };
+  }
+
+  // ════ W15 · Disaster-recovery validation (Phase 2 / Mission 10) ════
+  section('W15 disaster recovery');
+  {
+    const dr = await platform.dr.validateAll();
+    check('every DR scenario recovers consistently', dr.scenarios, dr.passed, dr.passed === dr.scenarios);
+    check('RTO objective is met across all scenarios', 'met', dr.rto.met ? 'met' : 'MISSED', dr.rto.met === true);
+    check('RPO objective is met across all scenarios', 'met', dr.rpo.met ? 'met' : 'MISSED', dr.rpo.met === true);
+    check('recovery confidence is full', 1, dr.recovery_confidence, dr.recovery_confidence === 1);
+    // eslint-disable-next-line no-console
+    console.log(`  RTO max ${dr.rto.max_ms}ms · avg ${dr.rto.avg_ms}ms · confidence ${dr.recovery_confidence}`);
+    report.scenarios.disaster_recovery = { passed: dr.passed, scenarios: dr.scenarios, rto_max_ms: dr.rto.max_ms, confidence: dr.recovery_confidence };
+  }
+
   // ════ Integrity + verdict ════
   section('final integrity');
   check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);

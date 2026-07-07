@@ -1,10 +1,10 @@
 {
-  "uid": "motse-config",
-  "title": "Motse · Configuration Platform",
+  "uid": "motse-dr",
+  "title": "Motse · Disaster Recovery",
   "schemaVersion": 39,
   "tags": [
     "motse",
-    "config"
+    "dr"
   ],
   "time": {
     "from": "now-6h",
@@ -14,7 +14,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Config changes by op (rps)",
+      "title": "DR runs by scenario/result (rate)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -28,14 +28,14 @@
       },
       "targets": [
         {
-          "expr": "sum by (op) (rate(motse_config_changes_total[5m]))",
+          "expr": "sum by (scenario, result) (rate(motse_dr_runs_total[1h]))",
           "refId": "A"
         }
       ]
     },
     {
       "id": 2,
-      "title": "Total config changes (1h)",
+      "title": "Recovery confidence (0..1)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -49,14 +49,14 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(motse_config_changes_total[1h]))",
+          "expr": "motse_dr_recovery_confidence",
           "refId": "A"
         }
       ]
     },
     {
       "id": 3,
-      "title": "Kill switch active (1=on)",
+      "title": "RTO max across scenarios (ms)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -70,14 +70,14 @@
       },
       "targets": [
         {
-          "expr": "motse_config_kill_switch",
+          "expr": "motse_dr_rto_max_ms",
           "refId": "A"
         }
       ]
     },
     {
       "id": 4,
-      "title": "Safe mode active (1=on)",
+      "title": "Recovery duration p95 (ms)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -91,28 +91,7 @@
       },
       "targets": [
         {
-          "expr": "motse_config_safe_mode",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "title": "Governance actions by risk (1h)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "targets": [
-        {
-          "expr": "sum by (risk, event) (increase(motse_config_governance_total[1h]))",
+          "expr": "histogram_quantile(0.95, sum(rate(motse_dr_recovery_ms_bucket[5m])) by (le))",
           "refId": "A"
         }
       ]

@@ -164,6 +164,16 @@ const DASHBOARDS = {
       ['Total config changes (1h)', 'sum(increase(motse_config_changes_total[1h]))'],
       ['Kill switch active (1=on)', 'motse_config_kill_switch'],
       ['Safe mode active (1=on)', 'motse_config_safe_mode'],
+      ['Governance actions by risk (1h)', 'sum by (risk, event) (increase(motse_config_governance_total[1h]))'],
+    ],
+  },
+  dr: {
+    title: 'Motse · Disaster Recovery',
+    panels: [
+      ['DR runs by scenario/result (rate)', 'sum by (scenario, result) (rate(motse_dr_runs_total[1h]))'],
+      ['Recovery confidence (0..1)', 'motse_dr_recovery_confidence'],
+      ['RTO max across scenarios (ms)', 'motse_dr_rto_max_ms'],
+      ['Recovery duration p95 (ms)', p95('motse_dr_recovery_ms')],
     ],
   },
   runtime: {

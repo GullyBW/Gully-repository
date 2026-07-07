@@ -74,6 +74,9 @@ jobs:
       - name: Config + capacity coverage gate (>=95/95/90)
         run: npm run motse:coverage:config
 
+      - name: Governance + DR coverage gate (>=95/95/90)
+        run: npm run motse:coverage:govdr
+
       - name: Grafana dashboards regenerate cleanly (no drift)
         run: |
           node deploy/motse/observability/generate-dashboards.js

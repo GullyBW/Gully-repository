@@ -1,6 +1,6 @@
 {
   "mode": "full",
-  "started_at": "2026-07-06T21:21:18.520Z",
+  "started_at": "2026-07-07T07:48:03.086Z",
   "node": "v22.22.2",
   "scenarios": {
     "duplicate_requests": {
@@ -9,34 +9,34 @@
       "winners": 1
     },
     "sustained_load": {
-      "requests": 10629,
-      "rps": 1772,
-      "p50_ms": 12.55,
-      "p95_ms": 18.92,
-      "p99_ms": 23.35,
+      "requests": 9305,
+      "rps": 1551,
+      "p50_ms": 14.25,
+      "p95_ms": 22.32,
+      "p99_ms": 26.19,
       "statuses": {
-        "200": 5592,
-        "429": 5037
+        "200": 4975,
+        "429": 4330
       },
       "error_5xx": 0,
-      "throttled_429": 5037
+      "throttled_429": 4330
     },
     "log_correlation": {
-      "http_log_lines": 10658,
-      "correlated": 10658
+      "http_log_lines": 9334,
+      "correlated": 9334
     },
     "transaction_volume": {
       "txns": 20000,
       "commits": 18000,
       "rollbacks": 2000,
-      "throughput_per_s": 195960,
-      "us_per_txn": 5.1
+      "throughput_per_s": 199599,
+      "us_per_txn": 5
     },
     "outbox_reliability": {
       "backlog_peak": 1100,
-      "backlog_recovery_ms": 14,
+      "backlog_recovery_ms": 10.9,
       "dead_peak": 50,
-      "dlq_replay_ms": 1.6
+      "dlq_replay_ms": 5.1
     },
     "contention": {
       "locks": 200,
@@ -49,7 +49,7 @@
     },
     "chaos": {
       "outage_ops_failed": 10,
-      "recovery_ms": 0.04,
+      "recovery_ms": 0.07,
       "kv_stats": {
         "calls": 20,
         "faults": 12,
@@ -60,19 +60,19 @@
       "spans": 20000,
       "exported": 20000,
       "dropped": 0,
-      "spans_per_s": 95599,
-      "broken_collector_500_spans_ms": 4.7
+      "spans_per_s": 95923,
+      "broken_collector_500_spans_ms": 4.4
     },
     "overhead": {
-      "txn_bare_us": 1.12,
-      "txn_instrumented_us": 1.79,
-      "txn_added_us": 0.67,
-      "txn_overhead_pct": 60,
-      "outbox_bare_us": 8.95,
-      "outbox_instrumented_us": 19.83,
-      "outbox_added_us": 10.89,
-      "outbox_overhead_pct": 121.7,
-      "heap_growth_mb": 103.6
+      "txn_bare_us": 1.13,
+      "txn_instrumented_us": 1.96,
+      "txn_added_us": 0.83,
+      "txn_overhead_pct": 73.2,
+      "outbox_bare_us": 9.12,
+      "outbox_instrumented_us": 19.42,
+      "outbox_added_us": 10.3,
+      "outbox_overhead_pct": 113,
+      "heap_growth_mb": 85.1
     },
     "resilience": {
       "breaker": "validated",
@@ -82,16 +82,16 @@
       "load_shedding": "validated"
     },
     "runtime": {
-      "at": "2026-07-06T21:21:25.381Z",
-      "at_ms": 1783372885381,
-      "heap_used_bytes": 41346272,
-      "heap_total_bytes": 132362240,
+      "at": "2026-07-07T07:48:09.957Z",
+      "at_ms": 1783410489957,
+      "heap_used_bytes": 101939152,
+      "heap_total_bytes": 126365696,
       "heap_limit_bytes": 8640266240,
-      "external_bytes": 2392362,
-      "rss_bytes": 208338944,
-      "array_buffers_bytes": 27259,
-      "heap_utilization": 0.004785300689993553,
-      "event_loop_utilization": 0.982316648705679,
+      "external_bytes": 2352004,
+      "rss_bytes": 192245760,
+      "array_buffers_bytes": 125271,
+      "heap_utilization": 0.011798149405173885,
+      "event_loop_utilization": 0.9792357870284389,
       "event_loop_delay_p99_ms": 0,
       "event_loop_delay_mean_ms": 0,
       "gc_count": 0,
@@ -110,8 +110,35 @@
       "rollouts": []
     },
     "capacity": {
-      "samples": 1709,
+      "samples": 1595,
       "recommendations": 3
+    },
+    "governance": {
+      "history": 1,
+      "policy": {
+        "low": {
+          "approvals": 0,
+          "distinctApprover": false
+        },
+        "medium": {
+          "approvals": 0,
+          "distinctApprover": false
+        },
+        "high": {
+          "approvals": 1,
+          "distinctApprover": true
+        },
+        "critical": {
+          "approvals": 2,
+          "distinctApprover": true
+        }
+      }
+    },
+    "disaster_recovery": {
+      "passed": 7,
+      "scenarios": 7,
+      "rto_max_ms": 16.75,
+      "confidence": 1
     }
   },
   "checks": [
@@ -147,8 +174,8 @@
     },
     {
       "name": "metrics count HTTP requests exactly",
-      "expected": "10629",
-      "observed": "10629",
+      "expected": "9305",
+      "observed": "9305",
       "pass": true
     },
     {
@@ -166,7 +193,7 @@
     {
       "name": "rate limiting engages under anonymous burst (429s observed)",
       "expected": ">0",
-      "observed": "5037",
+      "observed": "4330",
       "pass": true
     },
     {
@@ -183,8 +210,8 @@
     },
     {
       "name": "100% of request logs correlate (trace_id + service)",
-      "expected": "10658",
-      "observed": "10658",
+      "expected": "9334",
+      "observed": "9334",
       "pass": true
     },
     {
@@ -484,13 +511,13 @@
     {
       "name": "transaction instrumentation cost within budget",
       "expected": "<=15µs/txn",
-      "observed": "0.67µs",
+      "observed": "0.83µs",
       "pass": true
     },
     {
       "name": "outbox instrumentation cost within budget",
       "expected": "<=75µs/op",
-      "observed": "10.89µs",
+      "observed": "10.3µs",
       "pass": true
     },
     {
@@ -605,6 +632,60 @@
       "name": "capacity report yields at least one recommendation",
       "expected": ">=1",
       "observed": "3",
+      "pass": true
+    },
+    {
+      "name": "a critical config change is held pending (not applied)",
+      "expected": "pending",
+      "observed": "pending",
+      "pass": true
+    },
+    {
+      "name": "separation of duties blocks proposer self-approval",
+      "expected": "blocked",
+      "observed": "blocked",
+      "pass": true
+    },
+    {
+      "name": "the change applies only after the approval chain completes",
+      "expected": "16",
+      "observed": "16",
+      "pass": true
+    },
+    {
+      "name": "the applied change carries a full forensic record",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "a governed change is reversible to its prior value",
+      "expected": "12",
+      "observed": "12",
+      "pass": true
+    },
+    {
+      "name": "every DR scenario recovers consistently",
+      "expected": "7",
+      "observed": "7",
+      "pass": true
+    },
+    {
+      "name": "RTO objective is met across all scenarios",
+      "expected": "met",
+      "observed": "met",
+      "pass": true
+    },
+    {
+      "name": "RPO objective is met across all scenarios",
+      "expected": "met",
+      "observed": "met",
+      "pass": true
+    },
+    {
+      "name": "recovery confidence is full",
+      "expected": "1",
+      "observed": "1",
       "pass": true
     },
     {
@@ -803,6 +884,6 @@
     }
   ],
   "recommendations": [],
-  "finished_at": "2026-07-06T21:21:25.398Z",
+  "finished_at": "2026-07-07T07:48:10.079Z",
   "verdict": "PASS"
 }

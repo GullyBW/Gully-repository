@@ -60,6 +60,8 @@ const { CapacityPlanner } = require('./observability/capacity.planner');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { Resilience } = require('./resilience');
 const { ConfigService } = require('./config/config.service');
+const { ConfigGovernance } = require('./config/config.governance');
+const { DrValidator } = require('./ops/dr.validator');
 const { NotificationService } = require('./notifications/notification.service');
 const { Metrics } = require('./monitoring/metrics');
 const { Logger } = require('./monitoring/logger');
@@ -506,6 +508,23 @@ function createPlatform({
   // Mission 9: predictive capacity planning over the runtime-intelligence
   // history + event-platform/store growth. Records on a cadence (health cycle).
   platform.capacity = new CapacityPlanner({ clock, platform });
+  // Phase 1: configuration governance — risk classification + policy-driven
+  // approval workflow in front of the config control plane. Critical/high
+  // knobs require an approval chain (proposer ≠ approver); low/medium apply
+  // immediately but are still recorded with full forensic change records.
+  platform.configGovernance = new ConfigGovernance({ config: platform.config, identity, clock, metrics });
+  platform.configGovernance.classify('resilience.redis.breaker.failureThreshold', { risk: 'critical', affects: ['redis', 'idempotency', 'locks'] });
+  platform.configGovernance.classify('resilience.redis.breaker.cooldownMs', { risk: 'critical', affects: ['redis'] });
+  platform.configGovernance.classify('resilience.redis.bulkhead.maxConcurrent', { risk: 'critical', affects: ['redis'] });
+  platform.configGovernance.classify('resilience.loadShedding.maxInFlight', { risk: 'critical', affects: ['gateway'] });
+  platform.configGovernance.classify('resilience.loadShedding.lagThresholdMs', { risk: 'critical', affects: ['gateway'] });
+  platform.configGovernance.classify('resilience.retry.budgetRatio', { risk: 'critical', affects: ['redis', 'outbox'] });
+  platform.configGovernance.classify('health.probe.timeoutMs', { risk: 'high', affects: ['readiness'] });
+  platform.configGovernance.classify('telemetry.otel.batchSize', { risk: 'high', affects: ['tracing'] });
+  platform.configGovernance.classify('events.outbox.maxAttempts', { risk: 'medium', affects: ['outbox'] });
+  // Phase 2 / Mission 10: continuous disaster-recovery validation over the
+  // real BackupService + ChaosKv. Nothing runs until validateAll()/run().
+  platform.dr = new DrValidator({ platform, backups: platform.backups, clock, metrics });
   // Data products over existing CQRS projections (query-side, classified).
   platform.dataProducts.register({ name: 'platform_activity', classification: 'internal', requiredRole: 'platform_admin', description: 'Curated platform event counters' });
   platform.dataProducts.register({ name: 'payments_summary', classification: 'restricted', requiredRole: 'platform_admin', description: 'Aggregate card settlement figures' });
