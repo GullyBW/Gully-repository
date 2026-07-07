@@ -836,6 +836,26 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   // ── Analytics Phase 2: forecast accuracy validation ─────────────────
   router.get('/forecast/accuracy', run(() => platform.forecastAccuracy.report()));
 
+  // ── FINAL Phase 1: business outcome validation (telemetry vs ledger) ─
+  router.get('/reconciliation', run(() => platform.reconciliation.reconcile()));
+
+  // ── FINAL Phase 2: recommendation effectiveness (measurable advisor) ─
+  router.get('/recommendations/effectiveness', run(() => platform.recommendationEffectiveness.effectiveness()));
+  router.get('/recommendations/calibration', run(() => platform.recommendationEffectiveness.recalibration()));
+  router.get('/recommendations/ledger', run(() => platform.recommendationEffectiveness.ledger()));
+  router.post('/recommendations/ingest', run(() => ({ ingested: platform.recommendationEffectiveness.ingestFromPlatform(platform).length })));
+  router.post('/recommendations/:id/accept', run((req) => platform.recommendationEffectiveness.accept(req.params.id, req.actor)));
+  router.post('/recommendations/:id/reject', run((req) => platform.recommendationEffectiveness.reject(req.params.id, req.actor, req.body.reason)));
+  router.post('/recommendations/:id/ignore', run((req) => platform.recommendationEffectiveness.ignore(req.params.id)));
+  router.post('/recommendations/:id/override', run((req) => platform.recommendationEffectiveness.override(req.params.id, req.actor, req.body.note)));
+  router.post('/recommendations/:id/resolve', run((req) => platform.recommendationEffectiveness.resolve(req.params.id, {
+    success: req.body.success,
+    false_positive: req.body.false_positive,
+    incident_prevented: req.body.incident_prevented,
+    financial_exposure_minor: req.body.financial_exposure_minor,
+    note: req.body.note,
+  })));
+
   // ── Mission 4: unified operations overview (one call, whole platform) ─
   router.get('/overview', run(async () => {
     await platform.dependencies.checkAll();
@@ -867,7 +887,9 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
       intelligence: platform.opsIntel.advise().recommendations.slice(0, 5),
       governance_analytics: (() => { const r = platform.governanceAnalytics.report(); return { compliance_score: r.compliance_score, operational_maturity_score: r.operational_maturity_score, rollback_rate: r.rollback.rate, total_changes: r.total_changes }; })(),
       forecast_accuracy: platform.forecastAccuracy.report().overall_accuracy_pct,
-      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr', 'business', 'governance'],
+      reconciliation: (() => { const r = platform.reconciliation.reconcile(); return { financial_accuracy: r.financial_accuracy, data_confidence: r.data_confidence, discrepancies: r.discrepancies.length, financial_exposure_minor: r.total_financial_exposure_minor }; })(),
+      recommendation_effectiveness: (() => { const r = platform.recommendationEffectiveness.effectiveness(); return { generated: r.generated, precision: r.precision, operator_trust_score: r.operator_trust_score, incidents_prevented: r.outcomes.incidents_prevented }; })(),
+      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr', 'business', 'governance', 'reconciliation'],
     };
   }));
 

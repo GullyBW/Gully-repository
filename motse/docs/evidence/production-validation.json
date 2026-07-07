@@ -1,6 +1,6 @@
 {
-  "mode": "full",
-  "started_at": "2026-07-07T08:53:57.990Z",
+  "mode": "smoke",
+  "started_at": "2026-07-07T12:48:29.800Z",
   "node": "v22.22.2",
   "scenarios": {
     "duplicate_requests": {
@@ -9,47 +9,47 @@
       "winners": 1
     },
     "sustained_load": {
-      "requests": 10317,
-      "rps": 1720,
-      "p50_ms": 13,
-      "p95_ms": 18.77,
-      "p99_ms": 20.97,
+      "requests": 1983,
+      "rps": 992,
+      "p50_ms": 6.68,
+      "p95_ms": 15.23,
+      "p99_ms": 22.8,
       "statuses": {
-        "200": 5459,
-        "429": 4858
+        "200": 1300,
+        "429": 683
       },
       "error_5xx": 0,
-      "throttled_429": 4858
+      "throttled_429": 683
     },
     "log_correlation": {
-      "http_log_lines": 10346,
-      "correlated": 10346
+      "http_log_lines": 2012,
+      "correlated": 2012
     },
     "transaction_volume": {
-      "txns": 20000,
-      "commits": 18000,
-      "rollbacks": 2000,
-      "throughput_per_s": 201497,
-      "us_per_txn": 5
+      "txns": 2000,
+      "commits": 1800,
+      "rollbacks": 200,
+      "throughput_per_s": 101283,
+      "us_per_txn": 9.9
     },
     "outbox_reliability": {
       "backlog_peak": 1100,
-      "backlog_recovery_ms": 16.6,
-      "dead_peak": 50,
-      "dlq_replay_ms": 1.9
+      "backlog_recovery_ms": 34.1,
+      "dead_peak": 30,
+      "dlq_replay_ms": 1.8
     },
     "contention": {
-      "locks": 200,
+      "locks": 60,
       "acquired": 1,
-      "contended": 199,
-      "contention_ratio": 0.99,
-      "rl_takes": 2000,
-      "limited": 1700,
-      "limited_ratio": 0.85
+      "contended": 59,
+      "contention_ratio": 0.98,
+      "rl_takes": 900,
+      "limited": 600,
+      "limited_ratio": 0.67
     },
     "chaos": {
       "outage_ops_failed": 10,
-      "recovery_ms": 0.04,
+      "recovery_ms": 0.06,
       "kv_stats": {
         "calls": 20,
         "faults": 12,
@@ -57,22 +57,22 @@
       }
     },
     "exporter": {
-      "spans": 20000,
-      "exported": 20000,
+      "spans": 5000,
+      "exported": 5000,
       "dropped": 0,
-      "spans_per_s": 93647,
-      "broken_collector_500_spans_ms": 4.5
+      "spans_per_s": 43368,
+      "broken_collector_500_spans_ms": 13.6
     },
     "overhead": {
-      "txn_bare_us": 0.99,
-      "txn_instrumented_us": 1.96,
-      "txn_added_us": 0.97,
-      "txn_overhead_pct": 97.7,
-      "outbox_bare_us": 9.37,
-      "outbox_instrumented_us": 20.41,
-      "outbox_added_us": 11.04,
-      "outbox_overhead_pct": 117.9,
-      "heap_growth_mb": 93.9
+      "txn_bare_us": 2.89,
+      "txn_instrumented_us": 2.42,
+      "txn_added_us": -0.47,
+      "txn_overhead_pct": -16.2,
+      "outbox_bare_us": 15.4,
+      "outbox_instrumented_us": 32.32,
+      "outbox_added_us": 16.92,
+      "outbox_overhead_pct": 109.8,
+      "heap_growth_mb": 26.8
     },
     "resilience": {
       "breaker": "validated",
@@ -82,21 +82,21 @@
       "load_shedding": "validated"
     },
     "runtime": {
-      "at": "2026-07-07T08:54:04.859Z",
-      "at_ms": 1783414444859,
-      "heap_used_bytes": 41862056,
-      "heap_total_bytes": 129740800,
+      "at": "2026-07-07T12:48:32.748Z",
+      "at_ms": 1783428512748,
+      "heap_used_bytes": 41533192,
+      "heap_total_bytes": 92876800,
       "heap_limit_bytes": 8640266240,
-      "external_bytes": 2416920,
-      "rss_bytes": 205668352,
-      "array_buffers_bytes": 27259,
-      "heap_utilization": 0.004844996072713611,
-      "event_loop_utilization": 0.9824789024845738,
+      "external_bytes": 2284779,
+      "rss_bytes": 165429248,
+      "array_buffers_bytes": 59131,
+      "heap_utilization": 0.004806934282617662,
+      "event_loop_utilization": 0.9513305525754308,
       "event_loop_delay_p99_ms": 0,
       "event_loop_delay_mean_ms": 0,
       "gc_count": 0,
       "gc_total_ms": 0,
-      "active_handles": 25
+      "active_handles": 11
     },
     "config": {
       "keys": 9,
@@ -110,7 +110,7 @@
       "rollouts": []
     },
     "capacity": {
-      "samples": 1745,
+      "samples": 362,
       "recommendations": 3
     },
     "governance": {
@@ -137,7 +137,7 @@
     "disaster_recovery": {
       "passed": 7,
       "scenarios": 7,
-      "rto_max_ms": 21.07,
+      "rto_max_ms": 36.78,
       "confidence": 1
     },
     "business": {
@@ -155,8 +155,21 @@
       "rollback_rate": 1
     },
     "forecast_accuracy": {
-      "overall_accuracy_pct": 94.5275,
+      "overall_accuracy_pct": 83.305,
       "trustworthy": true
+    },
+    "business_reconciliation": {
+      "data_confidence": 1,
+      "financial_accuracy": 1,
+      "discrepancy_detected": true,
+      "detected_exposure_minor": 3000
+    },
+    "recommendation_effectiveness": {
+      "precision": 0.5,
+      "recall": 0.5,
+      "trust": 0.5,
+      "incidents_prevented": 1,
+      "recalibrated_confidence": 0.74
     }
   },
   "checks": [
@@ -192,8 +205,8 @@
     },
     {
       "name": "metrics count HTTP requests exactly",
-      "expected": "10317",
-      "observed": "10317",
+      "expected": "1983",
+      "observed": "1983",
       "pass": true
     },
     {
@@ -211,7 +224,7 @@
     {
       "name": "rate limiting engages under anonymous burst (429s observed)",
       "expected": ">0",
-      "observed": "4858",
+      "observed": "683",
       "pass": true
     },
     {
@@ -228,8 +241,8 @@
     },
     {
       "name": "100% of request logs correlate (trace_id + service)",
-      "expected": "10346",
-      "observed": "10346",
+      "expected": "2012",
+      "observed": "2012",
       "pass": true
     },
     {
@@ -240,14 +253,14 @@
     },
     {
       "name": "commit counter is exact",
-      "expected": "18000",
-      "observed": "18000",
+      "expected": "1800",
+      "observed": "1800",
       "pass": true
     },
     {
       "name": "rollback counter is exact",
-      "expected": "2000",
-      "observed": "2000",
+      "expected": "200",
+      "observed": "200",
       "pass": true
     },
     {
@@ -342,8 +355,8 @@
     },
     {
       "name": "dead letters accumulate when retries exhaust",
-      "expected": "50",
-      "observed": "50",
+      "expected": "30",
+      "observed": "30",
       "pass": true
     },
     {
@@ -510,8 +523,8 @@
     },
     {
       "name": "exporter ships every span (zero dropped, healthy transport)",
-      "expected": "20000",
-      "observed": "20000",
+      "expected": "5000",
+      "observed": "5000",
       "pass": true
     },
     {
@@ -523,19 +536,19 @@
     {
       "name": "outbox drain cost stays flat with published-row accumulation (M3)",
       "expected": "<300µs/op",
-      "observed": "9µs",
+      "observed": "15µs",
       "pass": true
     },
     {
       "name": "transaction instrumentation cost within budget",
       "expected": "<=15µs/txn",
-      "observed": "0.97µs",
+      "observed": "-0.47µs",
       "pass": true
     },
     {
       "name": "outbox instrumentation cost within budget",
       "expected": "<=75µs/op",
-      "observed": "11.04µs",
+      "observed": "16.92µs",
       "pass": true
     },
     {
@@ -785,6 +798,42 @@
       "pass": true
     },
     {
+      "name": "business telemetry reconciles against the authoritative ledger",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "fundraising value is validated against the ledger (not just asserted)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "a telemetry undercount is caught with root cause + financial exposure",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "recommendations are tracked as measurable products (precision + recall)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "operator trust + ROI are computed from real outcomes",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "confidence recalibrates from historical evidence (shrinks toward hit-rate)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
       "name": "ledger trial balance held through every scenario",
       "expected": "balanced",
       "observed": "balanced",
@@ -980,6 +1029,6 @@
     }
   ],
   "recommendations": [],
-  "finished_at": "2026-07-07T08:54:05.022Z",
+  "finished_at": "2026-07-07T12:48:32.950Z",
   "verdict": "PASS"
 }

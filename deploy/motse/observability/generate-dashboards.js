@@ -190,6 +190,21 @@ const DASHBOARDS = {
       ['Forecast accuracy (0..1)', 'motse_forecast_accuracy'],
     ],
   },
+  reconciliation: {
+    title: 'Motse · Business Outcome Validation & Recommendation Effectiveness',
+    panels: [
+      ['Financial accuracy — telemetry vs ledger (0..1)', 'motse_reconciliation_financial_accuracy'],
+      ['Telemetry accuracy — event capture (0..1)', 'motse_reconciliation_telemetry_accuracy'],
+      ['Data confidence (0..1)', 'motse_reconciliation_data_confidence'],
+      ['Reconciliation success rate (0..1)', 'motse_reconciliation_success_rate'],
+      ['Open reconciliation discrepancies', 'motse_reconciliation_discrepancies'],
+      ['Recommendation precision (0..1)', 'motse_recommendation_precision'],
+      ['Recommendation recall (0..1)', 'motse_recommendation_recall'],
+      ['Operator trust score (0..1)', 'motse_recommendation_trust_score'],
+      ['Recommendations generated', 'motse_recommendation_generated'],
+      ['Incidents prevented (accepted recommendations)', 'motse_recommendation_incidents_prevented'],
+    ],
+  },
   dr: {
     title: 'Motse · Disaster Recovery',
     panels: [

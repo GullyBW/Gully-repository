@@ -81,7 +81,7 @@ class BusinessObservability {
     for (const [name, def] of Object.entries(CAPABILITIES)) {
       this.caps.set(name, {
         name, product: def.product, sla_target: def.sla_target,
-        success: 0, failure: 0, value_minor: 0,
+        success: 0, failure: 0, value_minor: 0, value_events: 0,
         customers: new Set(), recent_failures: [],
       });
     }
@@ -109,7 +109,12 @@ class BusinessObservability {
     const cap = this.caps.get(name);
     cap[outcome] += 1;
     const data = (event && event.data) || {};
-    if (carriesValue && typeof data.amount_minor === 'number') cap.value_minor += data.amount_minor;
+    if (carriesValue && typeof data.amount_minor === 'number') {
+      cap.value_minor += data.amount_minor;
+      // Count value-bearing events so a reconciler can compare the number of
+      // financial events telemetry saw against the authoritative ledger record.
+      cap.value_events += 1;
+    }
     const customer = data.user_ref || data.contributor_ref || data.actor_ref || event.actor;
     if (customer && cap.customers.size < this.maxCustomers) cap.customers.add(customer);
     if (outcome === 'failure') {
@@ -137,11 +142,25 @@ class BusinessObservability {
         failed: cap.failure,
         total,
         value_minor: cap.value_minor,
+        value_events: cap.value_events,
         customers: cap.customers.size,
         sla: round(this._sla(cap)),
         sla_target: cap.sla_target,
         sla_met: this._sla(cap) >= cap.sla_target,
       };
+    }
+    return out;
+  }
+
+  /**
+   * Per-capability count of VALUE-bearing events telemetry recorded (the events
+   * that carry `amount_minor`). A reconciler compares these against the
+   * authoritative ledger record to detect missing/duplicate financial events.
+   */
+  valueEventCounts() {
+    const out = {};
+    for (const cap of this.caps.values()) {
+      out[cap.name] = { value_events: cap.value_events, value_minor: cap.value_minor, customers: cap.customers.size };
     }
     return out;
   }

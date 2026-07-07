@@ -34,6 +34,7 @@ const { OtelSpanExporter } = require('../src/observability/otel.exporter');
 const { Metrics } = require('../src/monitoring/metrics');
 const { ChaosKv } = require('../src/distributed/chaos.kv');
 const { InMemoryKvAdapter } = require('../src/distributed/kv');
+const { BusinessReconciliation } = require('../src/observability/business.reconciliation');
 
 const SMOKE = process.argv.includes('--smoke');
 const CFG = SMOKE
@@ -790,6 +791,76 @@ async function main() {
     // eslint-disable-next-line no-console
     console.log(`  overall forecast accuracy ${acc.overall_accuracy_pct}% · trustworthy ${acc.recommendation_gate.trustworthy} · calibrated ${acc.calibration.well_calibrated}`);
     report.scenarios.forecast_accuracy = { overall_accuracy_pct: acc.overall_accuracy_pct, trustworthy: acc.recommendation_gate.trustworthy };
+  }
+
+  // ════ W20 · Business outcome validation (FINAL Phase 1) ════
+  section('W20 business outcome validation');
+  {
+    // W16 drove a real 7000 contribution into a campaign; the ledger is the
+    // authoritative record. Reconcile the business telemetry against it.
+    const recon = platform.reconciliation.reconcile();
+    check('business telemetry reconciles against the authoritative ledger', true,
+      recon.data_confidence === 1 && recon.discrepancies.length === 0,
+      recon.data_confidence === 1 && recon.discrepancies.length === 0);
+    check('fundraising value is validated against the ledger (not just asserted)', true,
+      recon.capabilities.fundraising.reconciled && recon.capabilities.fundraising.authoritative.value_minor >= 7000,
+      recon.capabilities.fundraising.reconciled && recon.capabilities.fundraising.authoritative.value_minor >= 7000);
+    // Prove the reconciler DETECTS a telemetry gap (not just always green): a
+    // fake ledger holds 3 contributions the telemetry under-counts by one.
+    const fakeLedger = {
+      postings: { find: () => [1, 2, 3].map(() => ({ purpose: 'escrow_fund', ref: 'campaign:x', entries: [{ account_id: 's', amount_minor: -3000 }, { account_id: 'e', amount_minor: 3000 }] })) },
+      payouts: { find: () => [] },
+    };
+    const gapBiz = { valueEventCounts: () => ({ fundraising: { value_events: 2, value_minor: 6000, customers: 2 } }) };
+    const gap = new BusinessReconciliation({ business: gapBiz, ledger: fakeLedger, clock: platform.clock }).reconcile();
+    const d = gap.discrepancies.find((x) => x.capability === 'fundraising');
+    check('a telemetry undercount is caught with root cause + financial exposure', true,
+      !!d && d.kind === 'missing_events' && d.financial_exposure_minor === 3000 && !!d.probable_root_cause && !!d.remediation,
+      !!d && d.kind === 'missing_events' && d.financial_exposure_minor === 3000 && !!d.probable_root_cause && !!d.remediation);
+    report.scenarios.business_reconciliation = {
+      data_confidence: recon.data_confidence,
+      financial_accuracy: recon.financial_accuracy,
+      discrepancy_detected: !!d,
+      detected_exposure_minor: d ? d.financial_exposure_minor : 0,
+    };
+  }
+
+  // ════ W21 · Recommendation effectiveness (FINAL Phase 2) ════
+  section('W21 recommendation effectiveness');
+  {
+    const re = platform.recommendationEffectiveness;
+    // A true positive: accepted, prevented a real incident with known exposure.
+    const tp = re.record({ source: 'operational_intelligence', signal: 'dependency_failure', confidence: 0.95 });
+    re.accept(tp.id, 'ops-oncall');
+    re.resolve(tp.id, { success: true, incident_prevented: true, financial_exposure_minor: 250000 });
+    // A false positive: raised, rejected, not a real problem.
+    const fp = re.record({ source: 'operational_intelligence', signal: 'retry_storm', confidence: 0.6 });
+    re.reject(fp.id, 'ops-oncall', 'transient blip');
+    re.resolve(fp.id, { false_positive: true });
+    // A false negative: a real incident nothing flagged (makes recall measurable).
+    re.recordMiss({ signal: 'disk_full', financial_exposure_minor: 5000 });
+    const eff = re.effectiveness();
+    check('recommendations are tracked as measurable products (precision + recall)', true,
+      eff.precision != null && eff.recall != null && eff.generated >= 2,
+      eff.precision != null && eff.recall != null && eff.generated >= 2);
+    check('operator trust + ROI are computed from real outcomes', true,
+      eff.operator_trust_score != null && eff.outcomes.incidents_prevented === 1 && eff.roi.financial_exposure_prevented_minor === 250000,
+      eff.operator_trust_score != null && eff.outcomes.incidents_prevented === 1 && eff.roi.financial_exposure_prevented_minor === 250000);
+    // Confidence recalibration: two resolved of the same signal (1 hit, 1 miss)
+    // must pull a fresh 0.9 prior down toward the observed 0.5 hit-rate.
+    const s1 = re.record({ source: 'operational_intelligence', signal: 'memory_pressure', confidence: 0.9 });
+    re.accept(s1.id); re.resolve(s1.id, { success: true });
+    const s2 = re.record({ source: 'operational_intelligence', signal: 'memory_pressure', confidence: 0.9 });
+    re.resolve(s2.id, { false_positive: true });
+    const calibrated = re.calibratedConfidence('memory_pressure', 0.9);
+    check('confidence recalibrates from historical evidence (shrinks toward hit-rate)', true,
+      calibrated < 0.9 && calibrated > 0.5, calibrated < 0.9 && calibrated > 0.5);
+    // eslint-disable-next-line no-console
+    console.log(`  precision ${eff.precision} · recall ${eff.recall} · trust ${eff.operator_trust_score} · memory_pressure confidence 0.9→${calibrated}`);
+    report.scenarios.recommendation_effectiveness = {
+      precision: eff.precision, recall: eff.recall, trust: eff.operator_trust_score,
+      incidents_prevented: eff.outcomes.incidents_prevented, recalibrated_confidence: calibrated,
+    };
   }
 
   // ════ Integrity + verdict ════

@@ -61,6 +61,8 @@ const { BusinessObservability } = require('./observability/business.observabilit
 const { OperationalIntelligence } = require('./observability/operational.intelligence');
 const { GovernanceAnalytics } = require('./observability/governance.analytics');
 const { ForecastAccuracy } = require('./observability/forecast.accuracy');
+const { BusinessReconciliation } = require('./observability/business.reconciliation');
+const { RecommendationEffectiveness } = require('./observability/recommendation.effectiveness');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { Resilience } = require('./resilience');
 const { ConfigService } = require('./config/config.service');
@@ -655,6 +657,15 @@ function createPlatform({
   // runtime/capacity/resilience/dependency/business telemetry. Records a
   // trend history on the health cycle; `advise()` composes recommendations.
   platform.opsIntel = new OperationalIntelligence({ platform, clock, metrics });
+  // FINAL Phase 1: business outcome validation — reconciles the business
+  // telemetry above against the LEDGER (the authoritative system of record) so
+  // every dashboard number is validated against the money, with per-discrepancy
+  // root cause, financial exposure and remediation. Read-only over both.
+  platform.reconciliation = new BusinessReconciliation({ business: platform.business, ledger, clock, metrics });
+  // FINAL Phase 2: recommendation effectiveness — tracks the advisors' output as
+  // measurable products (accepted/rejected/outcomes) and recalibrates future
+  // confidence from the measured track record. Persists to the platform Store.
+  platform.recommendationEffectiveness = new RecommendationEffectiveness({ store, metrics, clock });
 
   return platform;
 }
