@@ -17,6 +17,7 @@
 
 | Context | Type | Owns | Justice mode | Owning arm (data ownership) |
 |---------|------|------|--------------|-----------------------------|
+| **Citizen Services** | Supporting | Citizen-facing orchestration: info, intake routing to Mode-1/2/3 surfaces, case-tracking entry, help/guidance (formal + customary) | all (citizen edge) | Platform |
 | **Confidential Reporting** | Core | Anonymous reports, case codes, reporter threads | 1 | Independent operator (split-trust) |
 | **Investigation** | Core | Investigations, tasks, leads, investigator notes | 2 | Executive (police/DCEC/DIS) |
 | **Prosecution** | Core | Prosecution decisions, disclosure, charges | 2→3 | DPP |
@@ -32,12 +33,51 @@
 | **Notification** | Generic | Notification events, delivery, preferences | all | Platform |
 | **Secure Messaging** | Generic-critical | Message threads, keys, delivery (mode-appropriate) | 1/2/3 | Platform (E2E where required) |
 | **Audit** | Generic-critical | Append-only, anchored audit trail | all | Independent audit + platform |
+| **AI Assistance** | Supporting (bounded) | Assistive-model orchestration (translation, summarization, classification, dedup, PII redaction, prioritization); holds **no authoritative record** and sits **out of every decision write-path** | all (advisory) | Platform (self-hosted for sensitive paths) |
+| **Security Operations (SecOps)** | Generic-critical | Detection, SIEM, anomaly detection, incident response, SOC runbooks; consumes audit/telemetry, does not own case/report data | all | Platform + independent oversight |
 | **Digital Archive** | Supporting | Long-term records, retention, sealing | all | Registrar/records owners |
 
 > **Anti-Corruption Layer (ACL) note:** every integration with *existing* institutional
 > systems (A-JUS-02) sits behind an ACL that translates external models into our ubiquitous
 > language and prevents legacy models from leaking in. This isolates NJTIP from the
 > heterogeneity and quality of legacy court/police IT.
+
+### 6.1a Reconciliation with the brief's bounded-context taxonomy
+
+The brief lists ~18 illustrative contexts ("such as…"). All map to the model above; where the
+brief names something we had modeled as a *service/surface within* a context, it is now also
+named as a context for 1:1 alignment. Our model additionally separates a few the brief folds
+together (Investigation, Corrections, Customary Justice, Secure Messaging) — deliberately, to
+keep the four modes and three data zones clean.
+
+| Brief context | This model |
+|---------------|-----------|
+| Citizen Services | **Citizen Services** (added) |
+| Confidential Reporting | Confidential Reporting |
+| Evidence Management | Evidence |
+| Case Management | Spans Investigation + Prosecution + Adjudication case state (write models per arm) |
+| Court Administration | Adjudication (Court) — Court-Admin surface |
+| Prosecutor Services | Prosecution |
+| Public Defender Services | Defence |
+| Judicial Services | Adjudication (Court) — judicial write model |
+| Oversight | Oversight |
+| Governance | Governance |
+| Public Transparency | Transparency & Analytics (publication side) |
+| Identity and Access Management | Identity & Access (IAM) |
+| Audit | Audit |
+| Analytics | Transparency & Analytics (analytics side) |
+| Notifications | Notification |
+| Digital Archive | Digital Archive |
+| AI Assistance | **AI Assistance** (added) |
+| Security Operations | **Security Operations (SecOps)** (added) |
+| — (this model adds) | Investigation · Corrections · Customary Justice · Secure Messaging |
+
+> **Per-context full specifications** — responsibilities, API contracts, owned data, emitted/
+> consumed events, security controls, trust boundaries, failure modes, and monitoring
+> requirements — are the **first Design-phase deliverable** (one spec sheet per context), using
+> a fixed template. They are intentionally **not** produced here because the brief pauses the
+> engagement at the Discovery Confirmation Checkpoint (`11`); the aggregates (§6.3) and event
+> catalog (§6.4) are the Discovery-level precursors of those specs.
 
 ## 6.2 Context map (relationships)
 
@@ -166,7 +206,8 @@ crossing a context boundary.
 
 ## 6.6 Definition-of-Done
 
-- [x] Bounded contexts defined with type, ownership arm, and justice mode.
+- [x] Bounded contexts defined with type, ownership arm, and justice mode (incl. Citizen
+  Services, AI Assistance, SecOps) and reconciled 1:1 with the brief's taxonomy (§6.1a).
 - [x] Context map with DDD relationship patterns and separation-of-powers coloring.
 - [x] Core aggregates with example invariants that encode safety/separation rules.
 - [x] Event catalog seed with minimized, PII-free cross-context payloads.
