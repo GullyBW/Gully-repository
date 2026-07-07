@@ -708,6 +708,58 @@ async function main() {
     report.scenarios.disaster_recovery = { passed: dr.passed, scenarios: dr.scenarios, rto_max_ms: dr.rto.max_ms, confidence: dr.recovery_confidence };
   }
 
+  // ════ W16 · Business observability (Phase 1) ════
+  section('W16 business observability');
+  {
+    // Drive real business activity through the live app: a campaign + contributions.
+    const otpM = platform.identity.requestOtp('+26774000001');
+    const { user: opener } = platform.identity.verifyOtp('+26774000001', otpM.sandbox_code, { deviceId: 'biz' });
+    platform.identity.grantInstitutional(opener.id, { institution: 'VDC' }, 'system:bootstrap'); // L3 (can endorse)
+    const clearing = platform.payments.clearingAccountId('orange_money');
+    const wallet = platform.ledger.openAccount(opener.id, 'user_wallet');
+    platform.ledger.providerDeposit({ providerAccountId: clearing, destAccountId: wallet.id, amountMinor: 100000, providerTxRef: 'biz:seed', idempotencyKey: 'biz:seed' });
+    const campaign = platform.kgetsi.open(opener.id, { campaignClass: 'community', title: 'Business obs drill', targetMinor: 50000, milestones: [{ description: 'x', amount_minor: 50000 }] });
+    platform.kgetsi.endorse(campaign.id, opener.id, 'ok');
+    platform.kgetsi.goLive(campaign.id, opener.id);
+    platform.kgetsi.contribute(campaign.id, { sourceAccountId: wallet.id, amountMinor: 7000, contributorRef: opener.id, idempotencyKey: 'biz:c1' });
+    const snap = platform.business.snapshot();
+    check('domain events correlate into business capabilities', '>=1 contribution', snap.fundraising.completed, snap.fundraising.completed >= 1);
+    check('business value is tracked from event payloads', '>=7000', snap.fundraising.value_minor, snap.fundraising.value_minor >= 7000);
+    const exec = platform.business.executiveView();
+    check('executive view aggregates value + customer reach', true, exec.total_value_minor >= 7000 && exec.customers_reached >= 1, exec.total_value_minor >= 7000 && exec.customers_reached >= 1);
+    const impact = platform.business.impactOf('fundraising');
+    check('impactOf answers the customer-impact questions', true, impact != null && impact.product === 'Kgetsi Campaigns', impact != null && impact.product === 'Kgetsi Campaigns');
+    report.scenarios.business = { value_minor: exec.total_value_minor, events: exec.total_business_events, healthy: exec.capabilities_healthy };
+  }
+
+  // ════ W17 · Operational intelligence (Phase 2) ════
+  section('W17 operational intelligence');
+  {
+    // A healthy platform must NOT emit recommendations (no false positives).
+    // Use a FRESH platform — the harness one carries residual stress signals
+    // from earlier phases (that opsIntel correctly reports, not a false positive).
+    const calmPlatform = createPlatform();
+    for (let i = 0; i < 3; i += 1) calmPlatform.opsIntel.record();
+    const calm = calmPlatform.opsIntel.advise();
+    check('a healthy platform yields no false recommendations', 0, calm.recommendations.length, calm.recommendations.length === 0);
+    // Inject a failing dependency → a critical, evidence-backed recommendation.
+    const chaos = new ChaosKv(platform.kv);
+    platform.kv = chaos; platform.distributed.idempotency.kv = chaos; chaos.down();
+    await platform.dependencies.checkAll();
+    platform.opsIntel.record();
+    const advice = platform.opsIntel.advise();
+    const critical = advice.recommendations.find((r) => r.urgency === 'critical');
+    check('a real degradation produces an evidence-based recommendation', true, !!critical, !!critical);
+    check('recommendations carry evidence + confidence + business impact', true,
+      !!(critical && critical.evidence && critical.confidence > 0 && critical.business_impact && critical.rollback),
+      !!(critical && critical.evidence && critical.confidence > 0 && critical.business_impact && critical.rollback));
+    chaos.up();
+    // Walk the dependency state back to healthy so final readiness is clean.
+    await platform.dependencies.checkAll();
+    await platform.dependencies.checkAll();
+    report.scenarios.operational_intelligence = { recommendations_under_stress: advice.recommendations.length };
+  }
+
   // ════ Integrity + verdict ════
   section('final integrity');
   check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);

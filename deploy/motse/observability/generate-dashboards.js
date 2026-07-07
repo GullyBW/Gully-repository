@@ -157,6 +157,18 @@ const DASHBOARDS = {
       ['Self-heal actions (rps)', 'sum by (result) (rate(motse_selfheal_total[5m]))'],
     ],
   },
+  business: {
+    title: 'Motse · Business Observability',
+    panels: [
+      ['Business events by capability/outcome (rps)', 'sum by (capability, outcome) (rate(motse_business_events_total[5m]))'],
+      ['SLA compliance by capability', 'motse_business_sla'],
+      ['Value processed by capability (minor)', 'motse_business_value_minor'],
+      ['Failed business events (1h)', 'sum by (capability) (increase(motse_business_events_total{outcome="failure"}[1h]))'],
+      ['Success rate by capability (%)',
+        '100 * sum by (capability) (rate(motse_business_events_total{outcome="success"}[5m])) / clamp_min(sum by (capability) (rate(motse_business_events_total[5m])), 1e-9)'],
+      ['Open operational recommendations', 'motse_opsintel_recommendations'],
+    ],
+  },
   config: {
     title: 'Motse · Configuration Platform',
     panels: [

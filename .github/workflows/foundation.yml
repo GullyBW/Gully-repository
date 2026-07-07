@@ -77,6 +77,9 @@ jobs:
       - name: Governance + DR coverage gate (>=95/95/90)
         run: npm run motse:coverage:govdr
 
+      - name: Business observability + operational intelligence gate (>=95/95/90)
+        run: npm run motse:coverage:business
+
       - name: Grafana dashboards regenerate cleanly (no drift)
         run: |
           node deploy/motse/observability/generate-dashboards.js

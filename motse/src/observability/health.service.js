@@ -53,6 +53,9 @@ class HealthService {
     // growth sample on the same cadence (no extra timer).
     if (this.platform.config) this.platform.config.tick();
     if (this.platform.capacity) this.platform.capacity.record();
+    // Phase 2: record an operational-intelligence trend sample on the same
+    // cadence so recommendations reflect observed behaviour, not one reading.
+    if (this.platform.opsIntel) this.platform.opsIntel.record();
     const base = this.ready();
     return {
       ...base,

@@ -815,6 +815,20 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   router.post('/dr/validate', run(() => platform.dr.validateAll()));
   router.post('/dr/scenarios/:name', run((req) => platform.dr.run(req.params.name)));
 
+  // ── Phase 1: business observability (executive / ops / capability) ──
+  router.get('/business', run(() => platform.business.snapshot()));
+  router.get('/business/executive', run(() => platform.business.executiveView()));
+  router.get('/business/operations', run(() => platform.business.operationsView()));
+  router.get('/business/:capability/impact', run((req) => {
+    const impact = platform.business.impactOf(req.params.capability);
+    if (!impact) throw err('NOT_FOUND', `unknown capability ${req.params.capability}`);
+    return impact;
+  }));
+
+  // ── Phase 2: operational intelligence (evidence-based recommendations) ─
+  router.get('/intelligence', run(() => platform.opsIntel.advise()));
+  router.post('/intelligence/sample', run(() => platform.opsIntel.record()));
+
   // ── Mission 4: unified operations overview (one call, whole platform) ─
   router.get('/overview', run(async () => {
     await platform.dependencies.checkAll();
@@ -842,7 +856,9 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
       config_governance: { pending: platform.configGovernance.pending().length, policy: platform.configGovernance.policy },
       capacity: platform.capacity.forecast(),
       disaster_recovery: platform.dr.latestReport(),
-      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr'],
+      business: platform.business.executiveView(),
+      intelligence: platform.opsIntel.advise().recommendations.slice(0, 5),
+      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr', 'business'],
     };
   }));
 

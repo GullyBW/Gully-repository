@@ -57,6 +57,8 @@ const { HealthService } = require('./observability/health.service');
 const { DependencyHealthEngine } = require('./observability/dependency.health');
 const { RuntimeIntelligence } = require('./observability/runtime.intelligence');
 const { CapacityPlanner } = require('./observability/capacity.planner');
+const { BusinessObservability } = require('./observability/business.observability');
+const { OperationalIntelligence } = require('./observability/operational.intelligence');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { Resilience } = require('./resilience');
 const { ConfigService } = require('./config/config.service');
@@ -634,6 +636,17 @@ function createPlatform({
     bus,
     platform,
   });
+  // Phase 1: business observability — correlates the domain events every
+  // module already emits with business capabilities (payments, fundraising,
+  // heritage, civic, workflows, notifications), tracking success/failure,
+  // value processed, customers reached and SLA compliance. Built here (with
+  // MonitoringService) so it sees every registered schema; read-only over the
+  // bus, so it cannot affect domain behaviour.
+  platform.business = new BusinessObservability({ bus, metrics, clock });
+  // Phase 2: operational intelligence — an evidence-based advisor over the
+  // runtime/capacity/resilience/dependency/business telemetry. Records a
+  // trend history on the health cycle; `advise()` composes recommendations.
+  platform.opsIntel = new OperationalIntelligence({ platform, clock, metrics });
 
   return platform;
 }
