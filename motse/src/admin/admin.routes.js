@@ -859,6 +859,11 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
   // ── FINAL Phase 3: executive operational intelligence (one briefing) ─
   router.get('/executive', run(() => platform.executive.report()));
 
+  // ── FINAL Phase 4: continuous learning (knowledge base + learned model) ─
+  router.get('/learning', run(() => platform.continuousLearning.learn()));
+  router.get('/learning/knowledge', run(() => platform.continuousLearning.knowledge()));
+  router.post('/learning/observe', run(() => platform.continuousLearning.observe()));
+
   // ── Mission 4: unified operations overview (one call, whole platform) ─
   router.get('/overview', run(async () => {
     await platform.dependencies.checkAll();
@@ -893,7 +898,8 @@ function createAdminRouter(platform, { auth, bootstrapToken }) {
       reconciliation: (() => { const r = platform.reconciliation.reconcile(); return { financial_accuracy: r.financial_accuracy, data_confidence: r.data_confidence, discrepancies: r.discrepancies.length, financial_exposure_minor: r.total_financial_exposure_minor }; })(),
       recommendation_effectiveness: (() => { const r = platform.recommendationEffectiveness.effectiveness(); return { generated: r.generated, precision: r.precision, operator_trust_score: r.operator_trust_score, incidents_prevented: r.outcomes.incidents_prevented }; })(),
       executive: (() => { const r = platform.executive.report(); return { operational_confidence: r.operational_confidence, value_at_risk_minor: r.briefing.business_value_affected_minor, customers_affected: r.briefing.who_was_affected.customers_affected, open_risks: r.risks.length }; })(),
-      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr', 'business', 'governance', 'reconciliation', 'executive'],
+      continuous_learning: (() => { const r = platform.continuousLearning.learn(); return { samples: r.samples, learning_confidence: r.learning_confidence, learned_operational_maturity: r.learned_operational_maturity.score, improving: r.improving }; })(),
+      slo_dashboards: ['motse-slo', 'foundation', 'outbox', 'distributed', 'ratelimit', 'resilience', 'runtime', 'config', 'capacity', 'dr', 'business', 'governance', 'reconciliation', 'executive', 'learning'],
     };
   }));
 

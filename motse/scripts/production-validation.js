@@ -890,6 +890,37 @@ async function main() {
     };
   }
 
+  // ════ W23 · Continuous learning (FINAL Phase 4) ════
+  section('W23 continuous learning');
+  {
+    const cl = platform.continuousLearning;
+    // Build forecast history so the learned forecast-confidence multiplier activates.
+    for (let i = 0; i < 12; i += 1) { platform.runtime.sample(); platform.capacity.record(); }
+    // Observe the executive briefing several times to accumulate a knowledge base.
+    const before = cl.knowledge().length;
+    for (let i = 0; i < 5; i += 1) cl.observe();
+    const rep = cl.learn();
+    check('every observation becomes persisted knowledge', true,
+      cl.knowledge().length === before + 5 && rep.samples >= 5,
+      cl.knowledge().length === before + 5 && rep.samples >= 5);
+    check('the platform learns a maturity score + confidence trend from its own outcomes', true,
+      rep.learned_operational_maturity.score != null && typeof rep.trends.operational_confidence.direction === 'string',
+      rep.learned_operational_maturity.score != null && typeof rep.trends.operational_confidence.direction === 'string');
+    // Recommendation confidence is recalibrated from recorded outcomes (W21 fed it).
+    const model = rep.recommendation_confidence_model.find((s) => s.resolved > 0);
+    check('recommendation confidence is recalibrated from historical outcomes', true, !!model, !!model);
+    // The learned forecast multiplier only discounts — it never inflates confidence.
+    const mult = rep.learned_forecast_confidence.multiplier;
+    check('learned forecast confidence never inflates (multiplier <= 1 when present)', true,
+      mult == null || (mult >= 0 && mult <= 1), mult == null || (mult >= 0 && mult <= 1));
+    // eslint-disable-next-line no-console
+    console.log(`  learned maturity ${rep.learned_operational_maturity.score} · learning confidence ${rep.learning_confidence} · trend ${rep.improving}`);
+    report.scenarios.continuous_learning = {
+      samples: rep.samples, learned_operational_maturity: rep.learned_operational_maturity.score,
+      learning_confidence: rep.learning_confidence, forecast_multiplier: mult,
+    };
+  }
+
   // ════ Integrity + verdict ════
   section('final integrity');
   check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);

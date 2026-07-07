@@ -1,6 +1,6 @@
 {
   "mode": "smoke",
-  "started_at": "2026-07-07T13:16:33.981Z",
+  "started_at": "2026-07-07T13:28:09.798Z",
   "node": "v22.22.2",
   "scenarios": {
     "duplicate_requests": {
@@ -9,32 +9,32 @@
       "winners": 1
     },
     "sustained_load": {
-      "requests": 2559,
-      "rps": 1280,
-      "p50_ms": 5.96,
-      "p95_ms": 8.34,
-      "p99_ms": 10.32,
+      "requests": 2798,
+      "rps": 1399,
+      "p50_ms": 5.4,
+      "p95_ms": 7.81,
+      "p99_ms": 9.74,
       "statuses": {
-        "200": 1583,
-        "429": 976
+        "200": 1673,
+        "429": 1125
       },
       "error_5xx": 0,
-      "throttled_429": 976
+      "throttled_429": 1125
     },
     "log_correlation": {
-      "http_log_lines": 2588,
-      "correlated": 2588
+      "http_log_lines": 2827,
+      "correlated": 2827
     },
     "transaction_volume": {
       "txns": 2000,
       "commits": 1800,
       "rollbacks": 200,
-      "throughput_per_s": 192819,
+      "throughput_per_s": 191996,
       "us_per_txn": 5.2
     },
     "outbox_reliability": {
       "backlog_peak": 1100,
-      "backlog_recovery_ms": 15.4,
+      "backlog_recovery_ms": 14.8,
       "dead_peak": 30,
       "dlq_replay_ms": 1.2
     },
@@ -49,7 +49,7 @@
     },
     "chaos": {
       "outage_ops_failed": 10,
-      "recovery_ms": 0.06,
+      "recovery_ms": 0.05,
       "kv_stats": {
         "calls": 20,
         "faults": 12,
@@ -60,19 +60,19 @@
       "spans": 5000,
       "exported": 5000,
       "dropped": 0,
-      "spans_per_s": 87145,
-      "broken_collector_500_spans_ms": 4.8
+      "spans_per_s": 93328,
+      "broken_collector_500_spans_ms": 11.3
     },
     "overhead": {
-      "txn_bare_us": 0.99,
-      "txn_instrumented_us": 2,
-      "txn_added_us": 1.01,
-      "txn_overhead_pct": 102.3,
-      "outbox_bare_us": 12.28,
-      "outbox_instrumented_us": 23.09,
-      "outbox_added_us": 10.81,
-      "outbox_overhead_pct": 88,
-      "heap_growth_mb": 38.1
+      "txn_bare_us": 1.04,
+      "txn_instrumented_us": 2.42,
+      "txn_added_us": 1.37,
+      "txn_overhead_pct": 132,
+      "outbox_bare_us": 9.57,
+      "outbox_instrumented_us": 22,
+      "outbox_added_us": 12.43,
+      "outbox_overhead_pct": 129.9,
+      "heap_growth_mb": 39.3
     },
     "resilience": {
       "breaker": "validated",
@@ -82,16 +82,16 @@
       "load_shedding": "validated"
     },
     "runtime": {
-      "at": "2026-07-07T13:16:36.653Z",
-      "at_ms": 1783430196653,
-      "heap_used_bytes": 53512544,
-      "heap_total_bytes": 83611648,
+      "at": "2026-07-07T13:28:12.437Z",
+      "at_ms": 1783430892437,
+      "heap_used_bytes": 54930736,
+      "heap_total_bytes": 86495232,
       "heap_limit_bytes": 8640266240,
-      "external_bytes": 2290401,
-      "rss_bytes": 148258816,
-      "array_buffers_bytes": 64753,
-      "heap_utilization": 0.006193390633296041,
-      "event_loop_utilization": 0.9461389836304235,
+      "external_bytes": 2351023,
+      "rss_bytes": 151056384,
+      "array_buffers_bytes": 125375,
+      "heap_utilization": 0.006357528168020896,
+      "event_loop_utilization": 0.9455627625491203,
       "event_loop_delay_p99_ms": 0,
       "event_loop_delay_mean_ms": 0,
       "gc_count": 0,
@@ -110,7 +110,7 @@
       "rollouts": []
     },
     "capacity": {
-      "samples": 470,
+      "samples": 494,
       "recommendations": 3
     },
     "governance": {
@@ -137,7 +137,7 @@
     "disaster_recovery": {
       "passed": 7,
       "scenarios": 7,
-      "rto_max_ms": 13.75,
+      "rto_max_ms": 13.97,
       "confidence": 1
     },
     "business": {
@@ -155,7 +155,7 @@
       "rollback_rate": 1
     },
     "forecast_accuracy": {
-      "overall_accuracy_pct": 85.6,
+      "overall_accuracy_pct": 87.135,
       "trustworthy": true
     },
     "business_reconciliation": {
@@ -172,7 +172,7 @@
       "recalibrated_confidence": 0.74
     },
     "executive_intelligence": {
-      "operational_confidence": 0.8859,
+      "operational_confidence": 0.8882,
       "components": [
         "data_confidence",
         "operational_health",
@@ -182,6 +182,12 @@
         "dr_readiness"
       ],
       "open_risks": 2
+    },
+    "continuous_learning": {
+      "samples": 5,
+      "learned_operational_maturity": 0.6181,
+      "learning_confidence": 0.25,
+      "forecast_multiplier": 1
     }
   },
   "checks": [
@@ -217,8 +223,8 @@
     },
     {
       "name": "metrics count HTTP requests exactly",
-      "expected": "2559",
-      "observed": "2559",
+      "expected": "2798",
+      "observed": "2798",
       "pass": true
     },
     {
@@ -236,7 +242,7 @@
     {
       "name": "rate limiting engages under anonymous burst (429s observed)",
       "expected": ">0",
-      "observed": "976",
+      "observed": "1125",
       "pass": true
     },
     {
@@ -253,8 +259,8 @@
     },
     {
       "name": "100% of request logs correlate (trace_id + service)",
-      "expected": "2588",
-      "observed": "2588",
+      "expected": "2827",
+      "observed": "2827",
       "pass": true
     },
     {
@@ -548,19 +554,19 @@
     {
       "name": "outbox drain cost stays flat with published-row accumulation (M3)",
       "expected": "<300µs/op",
-      "observed": "12µs",
+      "observed": "10µs",
       "pass": true
     },
     {
       "name": "transaction instrumentation cost within budget",
       "expected": "<=15µs/txn",
-      "observed": "1.01µs",
+      "observed": "1.37µs",
       "pass": true
     },
     {
       "name": "outbox instrumentation cost within budget",
       "expected": "<=75µs/op",
-      "observed": "10.81µs",
+      "observed": "12.43µs",
       "pass": true
     },
     {
@@ -864,6 +870,30 @@
       "pass": true
     },
     {
+      "name": "every observation becomes persisted knowledge",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "the platform learns a maturity score + confidence trend from its own outcomes",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "recommendation confidence is recalibrated from historical outcomes",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "learned forecast confidence never inflates (multiplier <= 1 when present)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
       "name": "ledger trial balance held through every scenario",
       "expected": "balanced",
       "observed": "balanced",
@@ -1059,6 +1089,6 @@
     }
   ],
   "recommendations": [],
-  "finished_at": "2026-07-07T13:16:36.774Z",
+  "finished_at": "2026-07-07T13:28:12.593Z",
   "verdict": "PASS"
 }

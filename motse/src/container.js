@@ -64,6 +64,7 @@ const { ForecastAccuracy } = require('./observability/forecast.accuracy');
 const { BusinessReconciliation } = require('./observability/business.reconciliation');
 const { RecommendationEffectiveness } = require('./observability/recommendation.effectiveness');
 const { ExecutiveIntelligence } = require('./observability/executive.intelligence');
+const { ContinuousLearning } = require('./observability/continuous.learning');
 const { AdaptiveRateLimiter } = require('./security/adaptive.rateLimiter');
 const { Resilience } = require('./resilience');
 const { ConfigService } = require('./config/config.service');
@@ -672,6 +673,12 @@ function createPlatform({
   // business validation, DR) into one executive briefing that answers the seven
   // leadership questions, with a single sourced operational-confidence score.
   platform.executive = new ExecutiveIntelligence({ platform, clock, metrics });
+  // FINAL Phase 4: continuous learning — persists a time-series knowledge base of
+  // the platform's own measured confidence signals (observed from the executive
+  // briefing) and learns trends + adjustments from it: a forecast-confidence
+  // multiplier calibrated to measured accuracy and a learned operational-maturity
+  // score that rewards a well-evidenced, improving track record. Read-only.
+  platform.continuousLearning = new ContinuousLearning({ platform, store, clock, metrics });
 
   return platform;
 }

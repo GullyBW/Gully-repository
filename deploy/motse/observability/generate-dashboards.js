@@ -190,6 +190,16 @@ const DASHBOARDS = {
       ['Forecast accuracy (0..1)', 'motse_forecast_accuracy'],
     ],
   },
+  learning: {
+    title: 'Motse · Continuous Learning',
+    panels: [
+      ['Learned operational maturity (0..1)', 'motse_learning_operational_maturity'],
+      ['Learned forecast-confidence multiplier (0..1)', 'motse_learning_forecast_confidence'],
+      ['Learning confidence — evidence volume (0..1)', 'motse_learning_confidence'],
+      ['Knowledge-base observations', 'motse_learning_samples'],
+      ['Operational confidence being learned from (0..1)', 'motse_executive_operational_confidence'],
+    ],
+  },
   executive: {
     title: 'Motse · Executive Operational Intelligence',
     panels: [

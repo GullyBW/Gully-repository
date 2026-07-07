@@ -89,6 +89,9 @@ jobs:
       - name: Executive operational intelligence gate (>=95/95/90)
         run: npm run motse:coverage:executive
 
+      - name: Continuous learning gate (>=95/95/90)
+        run: npm run motse:coverage:learning
+
       - name: Grafana dashboards regenerate cleanly (no drift)
         run: |
           node deploy/motse/observability/generate-dashboards.js
