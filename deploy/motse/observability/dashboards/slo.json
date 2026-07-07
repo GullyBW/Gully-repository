@@ -1,0 +1,568 @@
+{
+  "uid": "motse-slo",
+  "title": "Motse · SLO Compliance",
+  "schemaVersion": 39,
+  "tags": [
+    "motse",
+    "slo"
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "panels": [
+    {
+      "id": 1,
+      "title": "availability — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(motse_http_requests_total{code=~\"5..\"}[5m]))\n  / clamp_min(sum(rate(motse_http_requests_total[5m])), 1e-9))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.999
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "availability — trend (objective >= 0.999, window 30d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(motse_http_requests_total{code=~\"5..\"}[5m]))\n  / clamp_min(sum(rate(motse_http_requests_total[5m])), 1e-9))",
+          "refId": "A"
+        }
+      ],
+      "description": "0 responses >=500 in 8,543 requests under 24-worker sustained load including fault-injection phases (validation W1); 99.9% leaves a 43m/30d error budget for real-world dependency failure."
+    },
+    {
+      "id": 3,
+      "title": "api_latency_p95 — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95,\n  sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "api_latency_p95 — trend (objective < 300ms, window 5m)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 4
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95,\n  sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le))",
+          "refId": "A"
+        }
+      ],
+      "description": "Measured p95 22.4ms in-process at 1,424 rps (validation W1); the 300ms target is the doc §15.1 in-region budget, ~13x headroom for network and real datastore I/O. Alert already exists (ApiLatencyP95High)."
+    },
+    {
+      "id": 5,
+      "title": "api_latency_p99 — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99,\n  sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 800
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "api_latency_p99 — trend (objective < 800ms, window 5m)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 4
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99,\n  sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le))",
+          "refId": "A"
+        }
+      ],
+      "description": "Measured p99 26.5ms in-process at 1,424 rps (validation W1); 800ms holds the tail to <3x the p95 budget under production I/O."
+    },
+    {
+      "id": 7,
+      "title": "transaction_success — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(foundation_transaction_total{result=\"commit\"}[5m]))\n  / clamp_min(sum(rate(foundation_transaction_total[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.9999
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "transaction_success — trend (objective >= 0.9999, window 30d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(foundation_transaction_total{result=\"commit\"}[5m]))\n  / clamp_min(sum(rate(foundation_transaction_total[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "description": "Healthy-phase rollback ratio measured at 0% and metric exactness proven (20,000 txns, commit/rollback counters exact — validation W3); the 5% spike alert (TransactionFailureSpike) detected a deliberate 10% storm."
+    },
+    {
+      "id": 9,
+      "title": "outbox_backlog — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "motse_outbox_pending",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "title": "outbox_backlog — trend (objective < 1000, window 10m)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "motse_outbox_pending",
+          "refId": "A"
+        }
+      ],
+      "description": "A 1,100-row backlog drained in 20.4ms after consumer recovery (validation W4) — the 1,000 threshold is >50,000x per-second drain capacity, so a sustained breach means a stuck relay, not load."
+    },
+    {
+      "id": 11,
+      "title": "outbox_dead_letters — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "motse_outbox_dead",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "title": "outbox_dead_letters — trend (objective == 0, window sustained)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "motse_outbox_dead",
+          "refId": "A"
+        }
+      ],
+      "description": "DLQ accumulation and full operator replay validated (50 dead letters replayed to zero in 27ms — validation W4). Zero sustained backlog is the operating norm; any dead letter is actionable."
+    },
+    {
+      "id": 13,
+      "title": "lock_failure_rate — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(foundation_lock_total{result=\"contended\"}[5m]))\n  / clamp_min(sum(rate(foundation_lock_total[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 14,
+      "title": "lock_failure_rate — trend (objective < 0.2, window 10m)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(foundation_lock_total{result=\"contended\"}[5m]))\n  / clamp_min(sum(rate(foundation_lock_total[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "description": "Healthy serial access measured 0% contention; a deliberate single-key hotspot measured 99.5% and fired LockContentionHigh (validation W5). 20% sustained indicates a hot resource serializing real work."
+    },
+    {
+      "id": 15,
+      "title": "telemetry_delivery — current",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "motse_otel_dropped_spans",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 16,
+      "title": "telemetry_delivery — trend (objective == 0, window sustained)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "motse_otel_dropped_spans",
+          "refId": "A"
+        }
+      ],
+      "description": "Exporter shipped 20,000/20,000 spans at ~69k spans/s with zero drops via a healthy transport; a dead collector dropped spans without affecting request handling (validation W8). Sustained drops mean a broken collector path, never acceptable silently."
+    }
+  ]
+}

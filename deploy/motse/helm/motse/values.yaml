@@ -1,0 +1,37 @@
+# Default values — overridden per environment (values-{dev,staging,prod}.yaml).
+image:
+  repository: europe-west1-docker.pkg.dev/PROJECT/motse/motse-core
+  tag: "" # pinned by CI
+  pullPolicy: IfNotPresent
+
+replicas: 3
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20 # 20× civic-alert peak model (doc §15.2)
+  targetCPUUtilization: 65
+
+resources:
+  requests: { cpu: 250m, memory: 256Mi }
+  limits: { cpu: "1", memory: 512Mi }
+
+ingress:
+  enabled: true
+  host: api.motse.bw
+  className: gce
+
+config:
+  NODE_ENV: production
+  MOTSE_LOG_LEVEL: info
+  MOTSE_RATE_CAPACITY: "300"
+  MOTSE_RATE_REFILL: "5"
+
+# Names of secrets in the external secret store; values NEVER live here.
+existingSecret: motse-secrets
+
+cronJobs:
+  retryDrain: { enabled: true, schedule: "* * * * *" }
+  reconcile: { enabled: true, schedule: "15 2 * * *" }
+  deletionSweep: { enabled: true, schedule: "0 3 * * *" }
+  backup: { enabled: true, schedule: "0 */6 * * *" }
+  secretRotation: { enabled: true, schedule: "0 4 * * 1" }

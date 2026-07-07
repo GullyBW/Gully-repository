@@ -1,0 +1,67 @@
+{{- $jobs := dict
+  "retry-drain" (dict "cfg" .Values.cronJobs.retryDrain "path" "/v1/admin/finance/retries/drain" "body" "")
+  "deletion-sweep" (dict "cfg" .Values.cronJobs.deletionSweep "path" "/v1/admin/heritage/deletion-sweep" "body" "")
+  "backup" (dict "cfg" .Values.cronJobs.backup "path" "/v1/admin/ops/backups" "body" "{\"note\":\"scheduled\"}")
+  "secret-rotation" (dict "cfg" .Values.cronJobs.secretRotation "path" "/v1/admin/security/rotation/run" "body" "")
+-}}
+{{- range $name, $job := $jobs }}
+{{- if $job.cfg.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+spec:
+  schedule: {{ $job.cfg.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: {{ $name }}
+              image: curlimages/curl:8.7.1
+              command: ["/bin/sh", "-c"]
+              args:
+                - >
+                  curl -sf -X POST http://{{ $.Release.Name }}-core{{ $job.path }}
+                  -H "Authorization: Bearer $OPS_TOKEN"
+                  -H "Content-Type: application/json"
+                  -H "Idempotency-Key: {{ $name }}-$POD_NAME"
+                  -H "X-Device-Id: ops-cron"
+                  {{- if $job.body }} -d '{{ $job.body }}'{{ end }}
+              env:
+                - { name: OPS_TOKEN, valueFrom: { secretKeyRef: { name: {{ $.Release.Name }}-ops, key: token } } }
+                - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+{{- end }}
+{{- end }}
+{{- if .Values.cronJobs.reconcile.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-reconcile
+spec:
+  schedule: {{ .Values.cronJobs.reconcile.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: reconcile
+              image: curlimages/curl:8.7.1
+              command: ["/bin/sh", "-c"]
+              args:
+                - >
+                  for p in orange_money myzaka smega; do
+                  curl -sf -X POST http://{{ .Release.Name }}-core/v1/admin/finance/reconcile
+                  -H "Authorization: Bearer $OPS_TOKEN" -H "Content-Type: application/json"
+                  -H "Idempotency-Key: reconcile-$POD_NAME-$p" -H "X-Device-Id: ops-cron"
+                  -d "{\"provider\":\"$p\"}"; done
+              env:
+                - { name: OPS_TOKEN, valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-ops, key: token } } }
+                - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+{{- end }}

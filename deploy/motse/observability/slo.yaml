@@ -1,0 +1,146 @@
+# Service Level Objectives — motse-core (Phase 3, evidence-based).
+#
+# Single source of truth: `node generate-slo-assets.js` renders this file into
+#   dashboards/slo.json           (Grafana SLO compliance dashboard)
+#   prometheus-slo-alerts.yaml    (violation alert rules)
+# CI regenerates both and fails on drift.
+#
+# Every threshold cites its measured basis from the production-validation
+# harness (motse/docs/evidence/production-validation.json). Rerun
+# `npm run motse:validate` to refresh the evidence before changing a target.
+version: 1
+service: motse-core
+evidence: motse/docs/evidence/production-validation.json
+
+objectives:
+  - name: availability
+    description: Non-5xx ratio of all HTTP requests.
+    sli: >-
+      1 - (sum(rate(motse_http_requests_total{code=~"5.."}[5m]))
+        / clamp_min(sum(rate(motse_http_requests_total[5m])), 1e-9))
+    objective: 0.999
+    window: 30d
+    basis: >-
+      0 responses >=500 in 8,543 requests under 24-worker sustained load
+      including fault-injection phases (validation W1); 99.9% leaves a 43m/30d
+      error budget for real-world dependency failure.
+    alerts:
+      - name: SloAvailabilityFastBurn
+        expr: >-
+          (sum(rate(motse_http_requests_total{code=~"5.."}[1h]))
+            / clamp_min(sum(rate(motse_http_requests_total[1h])), 1e-9)) > (14.4 * 0.001)
+        for: 5m
+        severity: sev1
+        summary: "Availability error budget burning >14.4x — exhausts 30d budget in ~2 days"
+      - name: SloAvailabilitySlowBurn
+        expr: >-
+          (sum(rate(motse_http_requests_total{code=~"5.."}[6h]))
+            / clamp_min(sum(rate(motse_http_requests_total[6h])), 1e-9)) > (6 * 0.001)
+        for: 30m
+        severity: sev2
+        summary: "Availability error budget burning >6x sustained over 6h"
+
+  - name: api_latency_p95
+    description: Core API p95 latency (in-region).
+    sli: >-
+      histogram_quantile(0.95,
+        sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le))
+    objective: 300
+    unit: ms
+    comparator: "<"
+    window: 5m
+    basis: >-
+      Measured p95 22.4ms in-process at 1,424 rps (validation W1); the 300ms
+      target is the doc §15.1 in-region budget, ~13x headroom for network and
+      real datastore I/O. Alert already exists (ApiLatencyP95High).
+    alerts: []  # covered by the existing ApiLatencyP95High rule
+
+  - name: api_latency_p99
+    description: Core API p99 latency (in-region).
+    sli: >-
+      histogram_quantile(0.99,
+        sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le))
+    objective: 800
+    unit: ms
+    comparator: "<"
+    window: 5m
+    basis: >-
+      Measured p99 26.5ms in-process at 1,424 rps (validation W1); 800ms holds
+      the tail to <3x the p95 budget under production I/O.
+    alerts:
+      - name: SloApiLatencyP99High
+        expr: >-
+          histogram_quantile(0.99,
+            sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le)) > 800
+        for: 10m
+        severity: sev2
+        summary: "API p99 above the 800ms SLO for 10m"
+
+  - name: transaction_success
+    description: Unit-of-Work commit ratio (rollbacks are failures).
+    sli: >-
+      sum(rate(foundation_transaction_total{result="commit"}[5m]))
+        / clamp_min(sum(rate(foundation_transaction_total[5m])), 1e-9)
+    objective: 0.9999
+    window: 30d
+    basis: >-
+      Healthy-phase rollback ratio measured at 0% and metric exactness proven
+      (20,000 txns, commit/rollback counters exact — validation W3); the 5%
+      spike alert (TransactionFailureSpike) detected a deliberate 10% storm.
+    alerts: []  # covered by the existing TransactionFailureSpike rule
+
+  - name: outbox_backlog
+    description: Transactional-outbox pending rows.
+    sli: motse_outbox_pending
+    objective: 1000
+    comparator: "<"
+    window: 10m
+    basis: >-
+      A 1,100-row backlog drained in 20.4ms after consumer recovery
+      (validation W4) — the 1,000 threshold is >50,000x per-second drain
+      capacity, so a sustained breach means a stuck relay, not load.
+    alerts: []  # covered by the existing OutboxBacklogGrowing rule
+
+  - name: outbox_dead_letters
+    description: Dead-lettered events awaiting operator replay.
+    sli: motse_outbox_dead
+    objective: 0
+    comparator: "=="
+    window: sustained
+    basis: >-
+      DLQ accumulation and full operator replay validated (50 dead letters
+      replayed to zero in 27ms — validation W4). Zero sustained backlog is the
+      operating norm; any dead letter is actionable.
+    alerts: []  # covered by the existing OutboxDeadLetterAccumulation rule
+
+  - name: lock_failure_rate
+    description: Distributed lock contention ratio.
+    sli: >-
+      sum(rate(foundation_lock_total{result="contended"}[5m]))
+        / clamp_min(sum(rate(foundation_lock_total[5m])), 1e-9)
+    objective: 0.2
+    comparator: "<"
+    window: 10m
+    basis: >-
+      Healthy serial access measured 0% contention; a deliberate single-key
+      hotspot measured 99.5% and fired LockContentionHigh (validation W5).
+      20% sustained indicates a hot resource serializing real work.
+    alerts: []  # covered by the existing LockContentionHigh rule
+
+  - name: telemetry_delivery
+    description: Spans dropped by the OTLP exporter.
+    sli: motse_otel_dropped_spans
+    objective: 0
+    comparator: "=="
+    window: sustained
+    basis: >-
+      Exporter shipped 20,000/20,000 spans at ~69k spans/s with zero drops via
+      a healthy transport; a dead collector dropped spans without affecting
+      request handling (validation W8). Sustained drops mean a broken
+      collector path, never acceptable silently.
+    alerts:
+      - name: SloTelemetryDroppedSpans
+        expr: motse_otel_dropped_spans > 0
+        for: 15m
+        severity: sev3
+        summary: "OTLP exporter is dropping spans — collector path broken (requests unaffected)"

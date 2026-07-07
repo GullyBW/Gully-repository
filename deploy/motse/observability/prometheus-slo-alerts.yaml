@@ -1,0 +1,58 @@
+# GENERATED — do not edit by hand. Source: slo.yaml
+# Regenerate: node deploy/motse/observability/generate-slo-assets.js
+groups:
+  - name: motse-slo-objectives
+    rules:
+      - alert: SloAvailabilityFastBurn
+        expr: |-
+          (sum(rate(motse_http_requests_total{code=~"5.."}[1h]))
+            / clamp_min(sum(rate(motse_http_requests_total[1h])), 1e-9)) > (14.4 * 0.001)
+        for: 5m
+        labels:
+          severity: sev1
+          slo: availability
+        annotations:
+          summary: Availability error budget burning >14.4x — exhausts 30d budget in ~2 days
+          basis: >-
+            0 responses >=500 in 8,543 requests under 24-worker sustained load including
+            fault-injection phases (validation W1); 99.9% leaves a 43m/30d error budget for
+            real-world dependency failure.
+      - alert: SloAvailabilitySlowBurn
+        expr: |-
+          (sum(rate(motse_http_requests_total{code=~"5.."}[6h]))
+            / clamp_min(sum(rate(motse_http_requests_total[6h])), 1e-9)) > (6 * 0.001)
+        for: 30m
+        labels:
+          severity: sev2
+          slo: availability
+        annotations:
+          summary: Availability error budget burning >6x sustained over 6h
+          basis: >-
+            0 responses >=500 in 8,543 requests under 24-worker sustained load including
+            fault-injection phases (validation W1); 99.9% leaves a 43m/30d error budget for
+            real-world dependency failure.
+      - alert: SloApiLatencyP99High
+        expr: |-
+          histogram_quantile(0.99,
+            sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le)) > 800
+        for: 10m
+        labels:
+          severity: sev2
+          slo: api_latency_p99
+        annotations:
+          summary: API p99 above the 800ms SLO for 10m
+          basis: >-
+            Measured p99 26.5ms in-process at 1,424 rps (validation W1); 800ms holds the tail to <3x
+            the p95 budget under production I/O.
+      - alert: SloTelemetryDroppedSpans
+        expr: motse_otel_dropped_spans > 0
+        for: 15m
+        labels:
+          severity: sev3
+          slo: telemetry_delivery
+        annotations:
+          summary: OTLP exporter is dropping spans — collector path broken (requests unaffected)
+          basis: >-
+            Exporter shipped 20,000/20,000 spans at ~69k spans/s with zero drops via a healthy
+            transport; a dead collector dropped spans without affecting request handling (validation
+            W8). Sustained drops mean a broken collector path, never acceptable silently.

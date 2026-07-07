@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-core
+  labels: { app: {{ .Release.Name }}-core }
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app: {{ .Release.Name }}-core }
+  template:
+    metadata:
+      labels: { app: {{ .Release.Name }}-core }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4100"
+        prometheus.io/path: /metrics
+        checksum/config: {{ .Values.config | toYaml | sha256sum }}
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1000 }
+      containers:
+        - name: motse-core
+          image: {{ include "motse.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 4100, name: http }]
+          envFrom:
+            - configMapRef: { name: {{ .Release.Name }}-config }
+            - secretRef: { name: {{ .Values.existingSecret }} }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{ .Values.resources | toYaml | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-core
+spec:
+  selector: { app: {{ .Release.Name }}-core }
+  ports: [{ port: 80, targetPort: http, name: http }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data: {{ .Values.config | toYaml | nindent 2 }}
+{{- if .Values.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-core
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: {{ .Release.Name }}-core }
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ .Values.autoscaling.targetCPUUtilization }} }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-core
+spec:
+  minAvailable: {{ sub .Values.autoscaling.minReplicas 1 | max 1 }}
+  selector:
+    matchLabels: { app: {{ .Release.Name }}-core }
+{{- end }}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-core
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.ingress.className }}
+spec:
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: {{ .Release.Name }}-core, port: { number: 80 } } }
+{{- end }}

@@ -1,0 +1,104 @@
+# Prometheus alert rules for Motse (Phase 2, WS4). Severities follow
+# the incident model (doc §16): sev1 pages immediately.
+groups:
+  - name: motse-money
+    rules:
+      - alert: LedgerImbalance
+        expr: motse_ledger_trial_balance_minor != 0
+        for: 1m
+        labels: { severity: sev1 }
+        annotations:
+          summary: "Ledger trial balance is nonzero — money incorrect (Sev-1, §16)"
+      - alert: ReconciliationVariance
+        expr: increase(motse_reconciliation_variance_total[1h]) > 0
+        labels: { severity: sev1 }
+        annotations:
+          summary: "Provider reconciliation variance detected (§9.2 — page now)"
+      - alert: PaymentDeadLetters
+        expr: motse_payment_dead_letters > 0
+        for: 5m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Payment dispatches dead-lettered — manual review queue growing"
+      - alert: PaymentSuccessRateLow
+        expr: |
+          sum(rate(motse_payments_total{outcome="completed"}[30m]))
+            / clamp_min(sum(rate(motse_payments_total[30m])), 1e-9) < 0.9
+        for: 15m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Payment success rate below 90% over 30m"
+  - name: motse-slo
+    rules:
+      - alert: ApiLatencyP95High
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(motse_http_request_duration_ms_bucket[5m])) by (le)) > 300
+        for: 10m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Core API p95 above the 300ms in-region SLO (§15.1)"
+      - alert: ErrorBudgetBurn
+        expr: |
+          sum(rate(motse_http_requests_total{code=~"5.."}[5m]))
+            / clamp_min(sum(rate(motse_http_requests_total[5m])), 1e-9) > 0.001
+        for: 10m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "5xx ratio burning the 99.9% error budget (§15.1) — freeze releases"
+      - alert: StuckEscrows
+        expr: motse_escrows_stuck > 0
+        for: 1h
+        labels: { severity: sev3 }
+        annotations:
+          summary: "Escrows funded but untouched for 30+ days (§16 invariant monitor)"
+  - name: motse-foundation
+    rules:
+      - alert: TransactionFailureSpike
+        expr: |
+          sum(rate(foundation_transaction_total{result="rollback"}[5m]))
+            / clamp_min(sum(rate(foundation_transaction_total[5m])), 1e-9) > 0.05
+        for: 10m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Transaction rollback ratio above 5% over 5m — a domain flow is failing"
+      - alert: OutboxBacklogGrowing
+        expr: motse_outbox_pending > 1000
+        for: 10m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Transactional outbox backlog above 1000 pending — relay falling behind"
+      - alert: OutboxDeadLetterAccumulation
+        expr: motse_outbox_dead > 0
+        for: 5m
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Outbox dead-letters present — events exhausted retries, operator replay needed"
+      - alert: LockContentionHigh
+        expr: |
+          sum(rate(foundation_lock_total{result="contended"}[5m]))
+            / clamp_min(sum(rate(foundation_lock_total[5m])), 1e-9) > 0.2
+        for: 10m
+        labels: { severity: sev3 }
+        annotations:
+          summary: "Distributed lock contention above 20% — a hot resource is serializing work"
+      - alert: RateLimitSaturation
+        expr: |
+          sum(rate(foundation_ratelimit_total{result="limited"}[5m]))
+            / clamp_min(sum(rate(foundation_ratelimit_total[5m])), 1e-9) > 0.5
+        for: 15m
+        labels: { severity: sev3 }
+        annotations:
+          summary: "Over half of rate-limit checks are throttled — capacity or abuse review"
+  - name: motse-security
+    rules:
+      - alert: WebhookForgeryAttempts
+        expr: increase(motse_webhooks_rejected_total{reason="bad_signature"}[15m]) > 5
+        labels: { severity: sev2 }
+        annotations:
+          summary: "Repeated webhook signature failures — possible forgery (§13.2)"
+      - alert: AuthzDenialSpike
+        expr: increase(motse_authz_denials_total[15m]) > 100
+        labels: { severity: sev3 }
+        annotations:
+          summary: "Authorization denial spike — probing or a broken client"

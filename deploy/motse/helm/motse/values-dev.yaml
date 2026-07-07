@@ -1,0 +1,15 @@
+# Development: single replica, permissive logging, sandbox providers.
+replicas: 1
+autoscaling: { enabled: false }
+ingress: { enabled: false }
+config:
+  NODE_ENV: development
+  MOTSE_LOG_LEVEL: debug
+  MOTSE_RATE_CAPACITY: "1000"
+  MOTSE_RATE_REFILL: "50"
+cronJobs:
+  retryDrain: { enabled: true, schedule: "*/5 * * * *" }
+  reconcile: { enabled: false }
+  deletionSweep: { enabled: false }
+  backup: { enabled: false }
+  secretRotation: { enabled: false }

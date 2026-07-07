@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motse Developers</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1a2129; --line:#2b3540; --text:#e6edf3; --dim:#8b98a5; --accent:#4f9cf9; --ok:#3fb950; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 24px; background:var(--panel); border-bottom:1px solid var(--line); }
+  main { max-width:820px; margin:0 auto; padding:24px; }
+  h1 { font-size:20px; } h2 { font-size:16px; margin:24px 0 8px; }
+  code, pre { font-family:ui-monospace,monospace; background:#0b0f14; border:1px solid var(--line); border-radius:6px; }
+  code { padding:1px 6px; font-size:13px; }
+  pre { padding:14px; overflow:auto; font-size:13px; margin:8px 0; }
+  a { color:var(--accent); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin:12px 0; }
+  table { width:100%; border-collapse:collapse; font-size:14px; margin:8px 0; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); }
+</style>
+</head>
+<body>
+<header><h1>Motse Developer Platform</h1></header>
+<main>
+  <p class="card">Build on Motse without touching the core. Register an application, get a
+  scoped API key, subscribe to public webhooks, and integrate the platform's
+  transparency data, search and heritage catalogue. Universities, NGOs, tourism operators
+  and government partners welcome.</p>
+
+  <h2>1. Register an application</h2>
+  <p>App management uses your member session (OTP login). Register with the scopes you need:</p>
+  <pre>POST /v1/developer/apps          (Bearer &lt;member token&gt;)
+{ "name": "Kalahari Tours", "scopes": ["public:read","events:subscribe"], "rate_limit_per_min": 300 }
+→ { "app": {...}, "api_key": "msk_…" }   // the key is shown ONCE — store it now</pre>
+
+  <h2>2. Call the public API with your key</h2>
+  <table>
+    <tr><th>Endpoint</th><th>Scope</th><th>Returns</th></tr>
+    <tr><td><code>GET /v1/partner/campaigns/{id}/ledger</code></td><td>public:read</td><td>Public campaign transparency ledger</td></tr>
+    <tr><td><code>GET /v1/partner/search?q=…</code></td><td>public:read</td><td>Public search</td></tr>
+    <tr><td><code>GET /v1/partner/heritage</code></td><td>heritage:read</td><td>Public heritage catalogue</td></tr>
+  </table>
+  <pre>curl -H "X-Api-Key: msk_…" https://api.motse.bw/v1/partner/campaigns/CMP/ledger</pre>
+  <p class="card">Rate limits are per-app. Restricted cultural content is <b>never</b> exposed
+  through partner endpoints or webhooks — that boundary is enforced server-side and cannot
+  be widened by a scope.</p>
+
+  <h2>3. Subscribe to webhooks</h2>
+  <pre>POST /v1/developer/subscriptions   (Bearer &lt;member token&gt;)
+{ "app_id": "app_…", "event_types": ["kgetsi.contribution.received","loeto.booking.settled"], "url": "https://you.example/webhooks" }</pre>
+  <p>Deliveries are signed with your app's <code>webhook_secret</code>. Verify with the SDK:</p>
+  <pre>const { MotsePartner } = require('@motse/sdk');
+if (!MotsePartner.verifyWebhook(secret, rawBody, req.headers['x-motse-signature'])) return res.sendStatus(401);</pre>
+
+  <h2>SDK</h2>
+  <p>JavaScript/TypeScript SDK at <code>sdk/js/motse.js</code> (zero-dependency, isomorphic).
+  Flutter clients: point <a href="/sdk/openapi.json">the OpenAPI spec</a> at
+  <code>openapi-generator</code>. Guides: Developer, Authentication, Webhook, Plugin — see
+  <a href="https://github.com/gullybw/gully-repository/tree/main/motse/docs">docs/</a>.</p>
+
+  <h2>Sandbox</h2>
+  <p>Every endpoint runs in sandbox mode against <code>api.staging.motse.bw</code> with
+  synthetic data — build and test before you touch production.</p>
+</main>
+</body>
+</html>

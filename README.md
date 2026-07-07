@@ -10,6 +10,11 @@ This repository contains:
   bookings, and a payment system with a **pluggable payment-gateway architecture**.
 - **`mobile/`** — the cross-platform mobile app (**Ionic + Angular**) that customers and
   providers use to register, book services and pay.
+- **`motse/`** — the **Motse platform** (separate product): a ten-module civic, cultural
+  and financial platform built from *Motse — System & Engineering Documentation v1.0*
+  (identity graph, double-entry ledger, governance/audit engine, USSD/SMS gateway,
+  offline-first sync). See [motse/README.md](motse/README.md). Run with
+  `npm run motse:test` / `npm run motse:start`.
 
 Built to match the project plan's stack.
 

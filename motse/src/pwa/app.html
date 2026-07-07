@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<link rel="manifest" href="/app/manifest.json">
+<title>Motse</title>
+<style>
+  /* Shared design language with the admin portal + Flutter app tokens. */
+  :root { --bg:#0f1419; --panel:#1a2129; --line:#2b3540; --text:#e6edf3; --dim:#8b98a5;
+          --accent:#4f9cf9; --ok:#3fb950; --warn:#d29922; --bad:#f85149; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding-bottom:64px; }
+  header { padding:14px 18px; background:var(--panel); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; position:sticky; top:0; z-index:5; }
+  header h1 { font-size:17px; }
+  header .lvl { margin-left:auto; }
+  main { padding:16px; max-width:760px; margin:0 auto; }
+  .pill { display:inline-block; padding:1px 10px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+  .pill.ok { color:var(--ok); border-color:var(--ok); } .pill.warn { color:var(--warn); border-color:var(--warn); }
+  .pill.bad { color:var(--bad); border-color:var(--bad); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card h3 { font-size:14px; margin-bottom:6px; }
+  .card .big { font-size:22px; font-weight:600; }
+  .dim { color:var(--dim); font-size:13px; }
+  .row { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; align-items:center; }
+  input, select { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font-size:15px; flex:1; min-width:0; }
+  button.act { background:var(--accent); color:#fff; border:none; border-radius:8px; padding:10px 16px; cursor:pointer; font-size:14px; }
+  button.act.subtle { background:var(--panel); border:1px solid var(--line); color:var(--text); }
+  nav { position:fixed; bottom:0; left:0; right:0; display:flex; background:var(--panel); border-top:1px solid var(--line); z-index:5; }
+  nav button { flex:1; background:none; border:none; color:var(--dim); padding:10px 4px 12px; font-size:11px; cursor:pointer; }
+  nav button.active { color:var(--accent); }
+  nav button .ico { display:block; font-size:18px; }
+  @media (min-width:900px) { /* desktop: side nav */
+    body { padding-bottom:0; padding-left:170px; }
+    nav { top:0; bottom:0; left:0; right:auto; width:170px; flex-direction:column; border-right:1px solid var(--line); border-top:none; justify-content:flex-start; }
+    nav button { flex:0 0 auto; text-align:left; padding:12px 16px; font-size:14px; display:flex; gap:10px; align-items:center; }
+    nav button .ico { display:inline; font-size:16px; }
+  }
+  #login { max-width:380px; margin:70px auto; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:26px; }
+  #login h1 { margin-bottom:6px; } #login p { margin-bottom:14px; }
+  #login input { width:100%; margin-bottom:10px; }
+  #toast { position:fixed; bottom:74px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--accent); padding:10px 16px; border-radius:10px; display:none; max-width:90vw; font-size:13px; z-index:10; }
+  #toast.bad { border-left-color:var(--bad); }
+  #offlineBar { display:none; background:var(--warn); color:#000; text-align:center; padding:4px 8px; font-size:12px; }
+  .li { display:flex; justify-content:space-between; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .li:last-child { border-bottom:none; }
+  .mono { font-family:ui-monospace,monospace; font-size:12px; color:var(--dim); }
+  progress { width:100%; height:8px; accent-color:var(--accent); }
+</style>
+</head>
+<body>
+<div id="offlineBar">Offline — actions queue and sync automatically (P1)</div>
+
+<div id="login">
+  <h1>Motse</h1>
+  <p class="dim">Le kae! Sign in with your phone number.</p>
+  <div id="step1">
+    <input id="msisdn" placeholder="+267 7X XXX XXX" autocomplete="tel">
+    <button class="act" id="btnOtp" style="width:100%">Send code</button>
+  </div>
+  <div id="step2" style="display:none">
+    <input id="otp" placeholder="6-digit code" inputmode="numeric">
+    <button class="act" id="btnVerify" style="width:100%">Sign in</button>
+    <p class="dim" id="sandboxHint"></p>
+  </div>
+</div>
+
+<div id="shell" style="display:none">
+  <header><h1 id="title">Motse</h1><span class="lvl" id="lvl"></span></header>
+  <main id="main"></main>
+  <nav id="nav"></nav>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+// ── Client core: tokens, device binding, idempotency, outbox ────────
+const DEVICE = localStorage.getItem('motse_device') ||
+  (localStorage.setItem('motse_device', 'pwa-' + Math.random().toString(36).slice(2)),
+   localStorage.getItem('motse_device'));
+let TOKEN = localStorage.getItem('motse_token');
+let REFRESH = localStorage.getItem('motse_refresh');
+let ME = localStorage.getItem('motse_me');
+
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const bwp = (m) => 'BWP ' + (Number(m || 0) / 100).toFixed(2);
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+
+function toast(msg, bad) {
+  const t = $('#toast');
+  t.textContent = msg; t.className = bad ? 'bad' : ''; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => { t.style.display = 'none'; }, 3800);
+}
+
+async function api(path, { method = 'GET', body, retry = true } = {}) {
+  const headers = { 'Content-Type': 'application/json', 'X-Device-Id': DEVICE };
+  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+  if (method !== 'GET') headers['Idempotency-Key'] = uuid();
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (res.status === 401 && retry && REFRESH) {
+    // Token refresh (rotating refresh tokens, §5.3).
+    const rr = await fetch('/v1/identity/sessions/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': uuid() },
+      body: JSON.stringify({ refresh_token: REFRESH }),
+    });
+    if (rr.ok) {
+      const session = await rr.json();
+      TOKEN = session.access_token; REFRESH = session.refresh_token;
+      localStorage.setItem('motse_token', TOKEN);
+      localStorage.setItem('motse_refresh', REFRESH);
+      return api(path, { method, body, retry: false });
+    }
+    logout(); throw new Error('Session expired — sign in again');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.domain_reason || data.message || res.statusText);
+  return data;
+}
+
+// ── Offline outbox: mirrors the backend replay protocol (§8) ────────
+function outbox() { return JSON.parse(localStorage.getItem('motse_outbox') || '[]'); }
+function saveOutbox(q) { localStorage.setItem('motse_outbox', JSON.stringify(q)); }
+
+/** Queue a replay-protocol mutation; flush now if online. */
+function queueMutation(command, aggregateRef, args) {
+  const q = outbox();
+  q.push({
+    id: uuid(),
+    aggregate_ref: aggregateRef,
+    seq: q.filter((m) => m.aggregate_ref === aggregateRef).length + 1,
+    command,
+    args: { ...args, idempotency_key: uuid() },
+  });
+  saveOutbox(q);
+  if (navigator.onLine) return flushOutbox();
+  toast('Saved offline — will sync when you reconnect');
+  return Promise.resolve(null);
+}
+
+async function flushOutbox() {
+  const q = outbox();
+  if (q.length === 0) return null;
+  try {
+    const out = await api('/v1/sync/outbox', { method: 'POST', body: { mutations: q } });
+    const conflicts = out.outcomes.filter((o) => o.status === 'conflict');
+    // Applied/duplicate/rejected are final; conflicts stay for the user.
+    saveOutbox(q.filter((m) => conflicts.some((c) => c.id === m.id)));
+    const applied = out.outcomes.filter((o) => o.status === 'applied').length;
+    if (applied > 0) toast(`Synced ${applied} queued action(s)`);
+    for (const c of conflicts) toast('Sync conflict — please review: ' + (c.card ? c.card.field : ''), true);
+    return out;
+  } catch (e) { return null; /* stay queued */ }
+}
+window.addEventListener('online', () => { $('#offlineBar').style.display = 'none'; flushOutbox(); });
+window.addEventListener('offline', () => { $('#offlineBar').style.display = 'block'; });
+
+// ── Auth ─────────────────────────────────────────────────────────────
+$('#btnOtp').onclick = async () => {
+  try {
+    const out = await api('/v1/identity/otp', { method: 'POST', body: { msisdn: $('#msisdn').value.trim() } });
+    $('#step1').style.display = 'none'; $('#step2').style.display = 'block';
+    if (out.sandbox_code) $('#sandboxHint').textContent = 'Sandbox code: ' + out.sandbox_code;
+    $('#otp').focus();
+  } catch (e) { toast(e.message, true); }
+};
+$('#btnVerify').onclick = async () => {
+  try {
+    const out = await api('/v1/identity/otp/verify', {
+      method: 'POST',
+      body: { msisdn: $('#msisdn').value.trim(), code: $('#otp').value.trim() },
+    });
+    TOKEN = out.session.access_token; REFRESH = out.session.refresh_token; ME = out.user.id;
+    localStorage.setItem('motse_token', TOKEN);
+    localStorage.setItem('motse_refresh', REFRESH);
+    localStorage.setItem('motse_me', ME);
+    boot(out.user);
+  } catch (e) { toast(e.message, true); }
+};
+function logout() {
+  TOKEN = REFRESH = ME = null;
+  ['motse_token', 'motse_refresh', 'motse_me'].forEach((k) => localStorage.removeItem(k));
+  $('#shell').style.display = 'none'; $('#login').style.display = 'block';
+}
+
+// ── Views ────────────────────────────────────────────────────────────
+const views = {
+  async home(m) {
+    const [me, accounts, notes, campaigns] = await Promise.all([
+      api('/v1/flags'), api('/v1/wallet/accounts'),
+      api('/v1/notifications?page_size=5'), api('/v1/kgetsi/campaigns?page_size=3'),
+    ]);
+    const balance = accounts.reduce((s, a) => s + a.balance_minor, 0);
+    m.innerHTML = `
+      <div class="card"><h3>Wallet</h3><div class="big">${bwp(balance)}</div>
+        <div class="dim">${accounts.length} account(s)</div></div>
+      <div class="card"><h3>Notifications</h3>
+        ${notes.items.length ? notes.items.map((n) => `
+          <div class="li"><div><b>${esc(n.title)}</b><div class="dim">${esc(n.body || '')}</div></div>
+          ${n.read ? '' : '<span class="pill warn">new</span>'}</div>`).join('') : '<p class="dim">All caught up.</p>'}
+      </div>
+      <div class="card"><h3>Community campaigns</h3>
+        ${campaigns.items.map((c) => `
+          <div class="li"><div><b>${esc(c.title)}</b><div class="dim">${esc(c.class)} · ${esc(c.state)}</div></div>
+          <div>${bwp(c.target_minor)}</div></div>`).join('') || '<p class="dim">None live right now.</p>'}
+      </div>
+      <div class="card"><h3>Feature flags active for you</h3>
+        <div class="dim mono">${esc(Object.entries(me).filter(([, v]) => v === true).map(([k]) => k).join(' · ') || 'none')}</div>
+      </div>`;
+  },
+
+  async heritage(m) {
+    m.innerHTML = `<div class="row"><input id="q" placeholder="Search stories, places, songs…">
+      <button class="act" id="go">Search</button></div><div id="out"></div>`;
+    const render = (items) => {
+      $('#out').innerHTML = items.length
+        ? items.map((r) => `<div class="card"><h3>${esc(r.title || r.name || r.id)}</h3>
+            <div class="dim">${esc(r.type)}${r.morafe_ref ? ' · ' + esc(r.morafe_ref) : ''}</div></div>`).join('')
+        : '<p class="dim">Nothing found. Restricted heritage never appears here.</p>';
+    };
+    $('#go').onclick = async () => {
+      try { render((await api('/v1/search?q=' + encodeURIComponent($('#q').value))).results); }
+      catch (e) { toast(e.message, true); }
+    };
+    const seed = await api('/v1/heritage/search?page_size=10');
+    render(seed.items.map((i) => ({ ...i, type: 'heritage' })));
+  },
+
+  async kgetsi(m) {
+    const campaigns = await api('/v1/kgetsi/campaigns?page_size=20');
+    m.innerHTML = campaigns.items.map((c) => `
+      <div class="card">
+        <h3>${esc(c.title)} <span class="pill ${c.state === 'live' ? 'ok' : 'warn'}">${esc(c.state)}</span></h3>
+        <div class="dim">${esc(c.class)} · target ${bwp(c.target_minor)}</div>
+        <div class="row">
+          <input type="number" min="1" placeholder="Pula" id="amt-${c.id}">
+          <button class="act" data-give="${esc(c.id)}">Give</button>
+          <button class="act subtle" data-ledger="${esc(c.id)}">Transparency ledger</button>
+        </div>
+        <div id="ledger-${c.id}"></div>
+      </div>`).join('') || '<p class="dim">No campaigns yet.</p>';
+    m.querySelectorAll('[data-give]').forEach((b) => {
+      b.onclick = async () => {
+        const pula = Number($(`#amt-${b.dataset.give}`).value);
+        if (!pula) return toast('Enter an amount', true);
+        const accounts = await api('/v1/wallet/accounts');
+        const wallet = accounts.find((a) => a.type === 'user_wallet');
+        if (!wallet) return toast('No wallet yet — top up first from Wallet', true);
+        await queueMutation('kgetsi.contribute', 'campaign:' + b.dataset.give, {
+          campaign_id: b.dataset.give,
+          source_account_id: wallet.id,
+          amount_minor: Math.round(pula * 100),
+        });
+        views.kgetsi(m);
+      };
+    });
+    m.querySelectorAll('[data-ledger]').forEach((b) => {
+      b.onclick = async () => {
+        const ledger = await api('/v1/public/campaigns/' + b.dataset.ledger + '/ledger');
+        $('#ledger-' + b.dataset.ledger).innerHTML = `
+          <div class="dim">funded ${bwp(ledger.funded_minor)} · released ${bwp(ledger.released_minor)}</div>
+          ${ledger.milestones.map((ms) => `<div class="li"><div>${esc(ms.description)}</div>
+            <div><progress value="${ms.state === 'released' || ms.state === 'receipted' ? 1 : ms.state === 'approved' ? 0.7 : ms.state === 'evidence_submitted' ? 0.4 : 0.1}"></progress>
+            <span class="dim">${esc(ms.state)} · ${ms.approvals}/2 approvals</span></div></div>`).join('')}`;
+      };
+    });
+  },
+
+  async loeto(m) {
+    const [experiences, bookings] = await Promise.all([
+      api('/v1/loeto/experiences?page_size=20'), api('/v1/loeto/bookings'),
+    ]);
+    m.innerHTML = `
+      ${experiences.items.map((x) => `
+        <div class="card"><h3>${esc(x.title)}</h3>
+          <div class="dim">${bwp(x.price_minor)} · ${x.rating.count ? `★ ${x.rating.average} (${x.rating.count})` : 'no reviews yet'}</div>
+          <div class="row"><button class="act" data-book="${esc(x.id)}">Book</button></div></div>`).join('')}
+      <div class="card"><h3>My bookings</h3>
+        ${bookings.map((b) => `<div class="li"><div><span class="mono">${esc(b.id.slice(0, 12))}…</span>
+          <div class="dim">${esc(b.state)}</div></div>
+          <div>${b.state === 'settled' ? `<button class="act subtle" data-review="${esc(b.id)}">Review</button>` : ''}
+          <a class="dim" href="/v1/loeto/bookings/${esc(b.id)}/ics">itinerary</a></div></div>`).join('') || '<p class="dim">No bookings yet.</p>'}
+      </div>`;
+    m.querySelectorAll('[data-book]').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          const accounts = await api('/v1/wallet/accounts');
+          const wallet = accounts.find((a) => a.type === 'user_wallet');
+          if (!wallet) return toast('No wallet yet', true);
+          await api('/v1/loeto/bookings', { method: 'POST', body: { experience_id: b.dataset.book, source_account_id: wallet.id } });
+          toast('Booked — payment held in escrow'); views.loeto(m);
+        } catch (e) { toast(e.message, true); }
+      };
+    });
+    m.querySelectorAll('[data-review]').forEach((b) => {
+      b.onclick = async () => {
+        const rating = Number(prompt('Rating 1–5?'));
+        try {
+          await api(`/v1/loeto/bookings/${b.dataset.review}/review`, {
+            method: 'POST', body: { rating, comment: prompt('Comment?') || null },
+          });
+          toast('Review posted'); views.loeto(m);
+        } catch (e) { toast(e.message, true); }
+      };
+    });
+  },
+
+  async lelapa(m) {
+    const circles = await api('/v1/lelapa/circles');
+    m.innerHTML = `
+      <div class="row"><input id="cname" placeholder="New circle name"><button class="act" id="mk">Create</button></div>
+      ${circles.map((c) => `<div class="card"><h3>${esc(c.name)}</h3>
+        <div class="dim">${c.members.length} member(s)</div>
+        <div class="row">
+          <button class="act subtle" data-tree="${esc(c.id)}">Family tree</button>
+          <button class="act subtle" data-invite="${esc(c.id)}">Invite</button>
+          <button class="act subtle" data-events="${esc(c.id)}">Events</button>
+        </div><div id="cx-${c.id}"></div></div>`).join('') || '<p class="dim">Create your first family circle.</p>'}`;
+    $('#mk').onclick = async () => {
+      try { await api('/v1/lelapa/circles', { method: 'POST', body: { name: $('#cname').value } }); views.lelapa(m); }
+      catch (e) { toast(e.message, true); }
+    };
+    m.querySelectorAll('[data-tree]').forEach((b) => {
+      b.onclick = async () => {
+        const tree = await api(`/v1/lelapa/circles/${b.dataset.tree}/tree`);
+        $('#cx-' + b.dataset.tree).innerHTML = tree.relations.map((r) =>
+          `<div class="li"><span class="mono">${esc(r.member_ref.slice(0, 10))}…</span>
+           <span>${esc(r.relation)} of <span class="mono">${esc(r.related_to.slice(0, 10))}…</span></span></div>`).join('')
+          || '<p class="dim">No relationships declared yet.</p>';
+      };
+    });
+    m.querySelectorAll('[data-invite]').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          await api(`/v1/lelapa/circles/${b.dataset.invite}/invitations`, {
+            method: 'POST',
+            body: { msisdn: prompt('Phone number?'), relation: prompt('Relation? (e.g. mother)') },
+          });
+          toast('Invitation sent');
+        } catch (e) { toast(e.message, true); }
+      };
+    });
+    m.querySelectorAll('[data-events]').forEach((b) => {
+      b.onclick = async () => {
+        const events = await api(`/v1/lelapa/circles/${b.dataset.events}/events`);
+        $('#cx-' + b.dataset.events).innerHTML = events.map((e) =>
+          `<div class="li"><b>${esc(e.title)}</b><span class="dim">${esc(e.kind)} · ${esc(e.date)}</span></div>`).join('')
+          || '<p class="dim">No events.</p>';
+      };
+    });
+  },
+
+  async puo(m) {
+    const [courses, progress] = await Promise.all([api('/v1/puo/courses'), api('/v1/puo/progress')]);
+    m.innerHTML = `
+      <div class="card"><h3>My progress</h3><div class="big">${progress.completed_lessons}</div>
+        <div class="dim">lessons completed</div>
+        ${Object.values(progress.by_course).map((c) =>
+          `<div class="li"><span>${esc(c.title)}</span><span class="dim">${c.completed}/${c.total}</span></div>`).join('')}
+      </div>
+      ${courses.map((c) => `<div class="card"><h3>${esc(c.title)}</h3>
+        <div class="dim">${esc(c.language)} · ${esc(c.level)} · ${c.lesson_refs.length} lesson(s)</div>
+        <div class="row">${c.lesson_refs.map((l) =>
+          `<button class="act subtle" data-done="${esc(l)}">Complete lesson</button>`).join('')}</div>
+      </div>`).join('') || '<p class="dim">No courses published yet.</p>'}`;
+    m.querySelectorAll('[data-done]').forEach((b) => {
+      b.onclick = async () => {
+        try { await api(`/v1/puo/lessons/${b.dataset.done}/complete`, { method: 'POST', body: {} }); toast('Ke gone! Lesson completed'); views.puo(m); }
+        catch (e) { toast(e.message, true); }
+      };
+    });
+  },
+
+  async wallet(m) {
+    const [accounts, history, payouts, intents] = await Promise.all([
+      api('/v1/wallet/accounts'), api('/v1/wallet/history'),
+      api('/v1/wallet/payouts'), api('/v1/payments/intents'),
+    ]);
+    m.innerHTML = `
+      ${accounts.map((a) => `<div class="card"><h3>${esc(a.type)}</h3>
+        <div class="big">${bwp(a.balance_minor)}</div><div class="mono">${esc(a.id)}</div></div>`).join('')
+        || '<div class="card"><p class="dim">No accounts yet — your wallet opens with your first top-up.</p></div>'}
+      <div class="card"><h3>Payment history (receipts)</h3>
+        ${history.map((h) => `<div class="li"><div><b>${esc(h.purpose)}</b>
+          <div class="mono">${esc(h.ref)} · ${esc(h.ts.slice(0, 16))}</div></div>
+          <div>${h.my_entries.map((e) => (e.amount_minor > 0 ? '+' : '') + bwp(e.amount_minor)).join('<br>')}</div></div>`).join('')
+          || '<p class="dim">No transactions yet.</p>'}
+      </div>
+      <div class="card"><h3>Payouts</h3>
+        ${payouts.map((p) => `<div class="li"><div>${bwp(p.amount_minor)}
+          <div class="dim">${esc(p.state)}</div></div>
+          <span class="mono">${esc((p.provider_receipt_ref || '').slice(0, 14))}</span></div>`).join('') || '<p class="dim">None.</p>'}
+      </div>
+      <div class="card"><h3>Mobile-money activity</h3>
+        ${intents.map((i) => `<div class="li"><div>${esc(i.type)} · ${esc(i.provider)}
+          <div class="dim">${esc(i.state)}</div></div><div>${bwp(i.amount_minor)}</div></div>`).join('') || '<p class="dim">None.</p>'}
+      </div>`;
+  },
+
+  async cards(m) {
+    const [cards, intents, subs] = await Promise.all([
+      api('/v1/cards'), api('/v1/cards/intents'), api('/v1/cards/subscriptions'),
+    ]);
+    m.innerHTML = `
+      <div class="card"><h3>Saved cards</h3>
+        <p class="dim">Card details are entered in your bank's secure field — Motse stores only a token, never your card number, CVV or PIN.</p>
+        ${cards.cards.map((c) => `<div class="li"><div><b>${esc(c.display)}</b>${c.is_default ? ' <span class="pill ok">default</span>' : ''}
+          <div class="dim">${esc(c.nickname)} · exp ${esc(String(c.exp_month || '—'))}/${esc(String(c.exp_year || '—'))} · ${esc(c.gateway)}</div></div>
+          <div>${c.is_default ? '' : `<button class="act subtle" data-default="${esc(c.id)}">Default</button>`} <button class="act subtle" data-del="${esc(c.id)}">Remove</button></div></div>`).join('')
+          || '<p class="dim">No saved cards yet.</p>'}
+        <div class="row" style="margin-top:8px">
+          <select id="cbrand"><option value="visa">Visa</option><option value="mastercard">Mastercard</option><option value="amex">Amex</option><option value="discover">Discover</option></select>
+          <input id="clast4" placeholder="last 4" maxlength="4" size="4">
+          <input id="cexpM" placeholder="MM" maxlength="2" size="2">
+          <input id="cexpY" placeholder="YYYY" maxlength="4" size="4">
+          <button class="act" id="addCard">Add card</button>
+        </div>
+      </div>
+      <div class="card"><h3>Card payments</h3>
+        ${intents.intents.map((i) => `<div class="li"><div><b>${bwp(i.amount_minor)}</b>${i.original_currency !== 'BWP' ? ` <span class="dim">(${esc(i.original_currency)})</span>` : ''}
+          <div class="dim">${esc(i.brand)} · ${esc(i.gateway)} · ${esc((i.created_at || '').slice(0, 16))}</div></div>
+          <div><span class="pill ${['captured', 'refunded'].includes(i.state) ? 'ok' : i.state === 'declined' ? 'bad' : 'warn'}">${esc(i.state)}</span></div></div>`).join('')
+          || '<p class="dim">No card payments yet.</p>'}
+      </div>
+      <div class="card"><h3>Subscriptions</h3>
+        ${subs.subscriptions.map((s) => `<div class="li"><div><b>${esc(s.plan)}</b> · ${bwp(s.amount_minor)}/${esc(s.interval)}
+          <div class="dim">${esc(s.state)} · ${s.charges} charges</div></div>
+          <div>${s.state === 'active' ? `<button class="act subtle" data-pause="${esc(s.id)}">Pause</button>` : s.state === 'paused' ? `<button class="act subtle" data-resume="${esc(s.id)}">Resume</button>` : ''} ${['active', 'paused', 'past_due'].includes(s.state) ? `<button class="act subtle" data-cancel="${esc(s.id)}">Cancel</button>` : ''}</div></div>`).join('')
+          || '<p class="dim">No subscriptions.</p>'}
+      </div>`;
+    $('#addCard').onclick = async () => {
+      try {
+        // A real integration collects the PAN in the gateway's hosted field
+        // (an iframe we never see) and gets back this opaque reference; the
+        // card number never reaches this app or the Motse API.
+        const hostedFieldRef = 'hf_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now());
+        await api('/v1/cards', { method: 'POST', body: {
+          hosted_field_ref: hostedFieldRef, brand: $('#cbrand').value, last4: $('#clast4').value,
+          exp_month: Number($('#cexpM').value) || undefined, exp_year: Number($('#cexpY').value) || undefined,
+        } });
+        toast('Card saved'); views.cards(m);
+      } catch (e) { toast(e.message, true); }
+    };
+    m.querySelectorAll('[data-default]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/${b.dataset.default}/default`, { method: 'POST', body: {} }); views.cards(m); }; });
+    m.querySelectorAll('[data-del]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/${b.dataset.del}`, { method: 'DELETE', body: {} }); toast('Card removed'); views.cards(m); }; });
+    m.querySelectorAll('[data-pause]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/subscriptions/${b.dataset.pause}/pause`, { method: 'POST', body: {} }); views.cards(m); }; });
+    m.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/subscriptions/${b.dataset.resume}/resume`, { method: 'POST', body: {} }); views.cards(m); }; });
+    m.querySelectorAll('[data-cancel]').forEach((b) => { b.onclick = async () => { await api(`/v1/cards/subscriptions/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} }); views.cards(m); }; });
+  },
+
+  async alerts(m) {
+    const notes = await api('/v1/notifications?page_size=30');
+    m.innerHTML = notes.items.map((n) => `
+      <div class="card"><h3>${esc(n.title)} ${n.read ? '' : '<span class="pill warn">new</span>'}</h3>
+        <div class="dim">${esc(n.body || '')} · ${esc(n.category)}</div>
+        ${n.read ? '' : `<div class="row"><button class="act subtle" data-read="${esc(n.id)}">Mark read</button></div>`}
+      </div>`).join('') || '<p class="dim">No notifications.</p>';
+    m.querySelectorAll('[data-read]').forEach((b) => {
+      b.onclick = async () => {
+        await api(`/v1/notifications/${b.dataset.read}/read`, { method: 'POST', body: {} });
+        views.alerts(m);
+      };
+    });
+  },
+};
+
+// ── Shell ────────────────────────────────────────────────────────────
+const SECTIONS = [
+  ['home', 'Gae', '⌂'], ['heritage', 'Ditso', '♪'], ['kgetsi', 'Kgetsi', '⬢'],
+  ['loeto', 'Loeto', '➤'], ['lelapa', 'Lelapa', '☰'], ['puo', 'Puo', '✎'],
+  ['wallet', 'Wallet', '◈'], ['cards', 'Cards', '▭'], ['alerts', 'Alerts', '!'],
+];
+function nav(active) {
+  $('#nav').innerHTML = SECTIONS.map(([k, label, icon]) =>
+    `<button data-v="${k}" class="${k === active ? 'active' : ''}"><span class="ico">${icon}</span>${label}</button>`).join('');
+  $('#nav').querySelectorAll('button').forEach((b) => { b.onclick = () => show(b.dataset.v); });
+}
+async function show(view) {
+  nav(view);
+  const m = $('#main'); m.innerHTML = '<p class="dim">Loading…</p>';
+  try { await views[view](m); }
+  catch (e) { m.innerHTML = `<p class="dim">${esc(e.message)}</p>`; }
+}
+async function boot(user) {
+  $('#login').style.display = 'none'; $('#shell').style.display = 'block';
+  if (user) $('#lvl').innerHTML = `<span class="pill ok">${esc(user.level)}</span>`;
+  if (!navigator.onLine) $('#offlineBar').style.display = 'block';
+  flushOutbox();
+  show('home');
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js').catch(() => {});
+if (TOKEN) boot(null);
+</script>
+</body>
+</html>

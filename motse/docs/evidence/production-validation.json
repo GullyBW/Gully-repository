@@ -1,0 +1,1094 @@
+{
+  "mode": "smoke",
+  "started_at": "2026-07-07T13:28:09.798Z",
+  "node": "v22.22.2",
+  "scenarios": {
+    "duplicate_requests": {
+      "concurrent": 50,
+      "executed": 1,
+      "winners": 1
+    },
+    "sustained_load": {
+      "requests": 2798,
+      "rps": 1399,
+      "p50_ms": 5.4,
+      "p95_ms": 7.81,
+      "p99_ms": 9.74,
+      "statuses": {
+        "200": 1673,
+        "429": 1125
+      },
+      "error_5xx": 0,
+      "throttled_429": 1125
+    },
+    "log_correlation": {
+      "http_log_lines": 2827,
+      "correlated": 2827
+    },
+    "transaction_volume": {
+      "txns": 2000,
+      "commits": 1800,
+      "rollbacks": 200,
+      "throughput_per_s": 191996,
+      "us_per_txn": 5.2
+    },
+    "outbox_reliability": {
+      "backlog_peak": 1100,
+      "backlog_recovery_ms": 14.8,
+      "dead_peak": 30,
+      "dlq_replay_ms": 1.2
+    },
+    "contention": {
+      "locks": 60,
+      "acquired": 1,
+      "contended": 59,
+      "contention_ratio": 0.98,
+      "rl_takes": 900,
+      "limited": 600,
+      "limited_ratio": 0.67
+    },
+    "chaos": {
+      "outage_ops_failed": 10,
+      "recovery_ms": 0.05,
+      "kv_stats": {
+        "calls": 20,
+        "faults": 12,
+        "down": false
+      }
+    },
+    "exporter": {
+      "spans": 5000,
+      "exported": 5000,
+      "dropped": 0,
+      "spans_per_s": 93328,
+      "broken_collector_500_spans_ms": 11.3
+    },
+    "overhead": {
+      "txn_bare_us": 1.04,
+      "txn_instrumented_us": 2.42,
+      "txn_added_us": 1.37,
+      "txn_overhead_pct": 132,
+      "outbox_bare_us": 9.57,
+      "outbox_instrumented_us": 22,
+      "outbox_added_us": 12.43,
+      "outbox_overhead_pct": 129.9,
+      "heap_growth_mb": 39.3
+    },
+    "resilience": {
+      "breaker": "validated",
+      "bulkhead": "validated",
+      "retry": "validated",
+      "deadline": "validated",
+      "load_shedding": "validated"
+    },
+    "runtime": {
+      "at": "2026-07-07T13:28:12.437Z",
+      "at_ms": 1783430892437,
+      "heap_used_bytes": 54930736,
+      "heap_total_bytes": 86495232,
+      "heap_limit_bytes": 8640266240,
+      "external_bytes": 2351023,
+      "rss_bytes": 151056384,
+      "array_buffers_bytes": 125375,
+      "heap_utilization": 0.006357528168020896,
+      "event_loop_utilization": 0.9455627625491203,
+      "event_loop_delay_p99_ms": 0,
+      "event_loop_delay_mean_ms": 0,
+      "gc_count": 0,
+      "gc_total_ms": 0,
+      "active_handles": 11
+    },
+    "config": {
+      "keys": 9,
+      "revisions": 3,
+      "snapshots": [
+        "w12-baseline"
+      ],
+      "kill_switch": false,
+      "safe_mode": false,
+      "scheduled": [],
+      "rollouts": []
+    },
+    "capacity": {
+      "samples": 494,
+      "recommendations": 3
+    },
+    "governance": {
+      "history": 1,
+      "policy": {
+        "low": {
+          "approvals": 0,
+          "distinctApprover": false
+        },
+        "medium": {
+          "approvals": 0,
+          "distinctApprover": false
+        },
+        "high": {
+          "approvals": 1,
+          "distinctApprover": true
+        },
+        "critical": {
+          "approvals": 2,
+          "distinctApprover": true
+        }
+      }
+    },
+    "disaster_recovery": {
+      "passed": 7,
+      "scenarios": 7,
+      "rto_max_ms": 13.97,
+      "confidence": 1
+    },
+    "business": {
+      "value_minor": 7000,
+      "events": 1,
+      "healthy": 7
+    },
+    "operational_intelligence": {
+      "recommendations_under_stress": 3
+    },
+    "governance_analytics": {
+      "total_changes": 1,
+      "compliance": 0.8,
+      "maturity": 0.52,
+      "rollback_rate": 1
+    },
+    "forecast_accuracy": {
+      "overall_accuracy_pct": 87.135,
+      "trustworthy": true
+    },
+    "business_reconciliation": {
+      "data_confidence": 1,
+      "financial_accuracy": 1,
+      "discrepancy_detected": true,
+      "detected_exposure_minor": 3000
+    },
+    "recommendation_effectiveness": {
+      "precision": 0.5,
+      "recall": 0.5,
+      "trust": 0.5,
+      "incidents_prevented": 1,
+      "recalibrated_confidence": 0.74
+    },
+    "executive_intelligence": {
+      "operational_confidence": 0.8882,
+      "components": [
+        "data_confidence",
+        "operational_health",
+        "governance_compliance",
+        "forecast_accuracy",
+        "recommendation_trust",
+        "dr_readiness"
+      ],
+      "open_risks": 2
+    },
+    "continuous_learning": {
+      "samples": 5,
+      "learned_operational_maturity": 0.6181,
+      "learning_confidence": 0.25,
+      "forecast_multiplier": 1
+    }
+  },
+  "checks": [
+    {
+      "name": "admin drain returns 200 under trace",
+      "expected": "200",
+      "observed": "200",
+      "pass": true
+    },
+    {
+      "name": "child span nests under the HTTP root (same trace, parent link)",
+      "expected": "root→child",
+      "observed": "root→child",
+      "pass": true
+    },
+    {
+      "name": "response traceparent preserves the inbound trace id",
+      "expected": "abababababababababababababababab",
+      "observed": "abababababababababababababababab",
+      "pass": true
+    },
+    {
+      "name": "HTTP duplicate is replayed, not re-executed",
+      "expected": "Idempotent-Replay=true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "exactly-once under 50 concurrent duplicates",
+      "expected": "1",
+      "observed": "1",
+      "pass": true
+    },
+    {
+      "name": "metrics count HTTP requests exactly",
+      "expected": "2798",
+      "observed": "2798",
+      "pass": true
+    },
+    {
+      "name": "every response carries trace headers",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "zero 5xx under sustained load",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "rate limiting engages under anonymous burst (429s observed)",
+      "expected": ">0",
+      "observed": "1125",
+      "pass": true
+    },
+    {
+      "name": "authenticated caller unaffected by exhausted anonymous bucket (M2)",
+      "expected": "200",
+      "observed": "200",
+      "pass": true
+    },
+    {
+      "name": "sampled traces are complete (root span, status, duration)",
+      "expected": "25",
+      "observed": "25",
+      "pass": true
+    },
+    {
+      "name": "100% of request logs correlate (trace_id + service)",
+      "expected": "2827",
+      "observed": "2827",
+      "pass": true
+    },
+    {
+      "name": "tracer ring buffer stays bounded",
+      "expected": "<=2000",
+      "observed": "2000",
+      "pass": true
+    },
+    {
+      "name": "commit counter is exact",
+      "expected": "1800",
+      "observed": "1800",
+      "pass": true
+    },
+    {
+      "name": "rollback counter is exact",
+      "expected": "200",
+      "observed": "200",
+      "pass": true
+    },
+    {
+      "name": "rolled-back rows are absent",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ rollback-storm",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ rollback-storm",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "backlog gauge matches reality",
+      "expected": "1100",
+      "observed": "1100",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ backlog-growth",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ backlog-growth",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "backlog drains to zero after consumer recovery",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "dead letters accumulate when retries exhaust",
+      "expected": "30",
+      "observed": "30",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ dlq-accumulation",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ dlq-accumulation",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "operator replay clears the DLQ",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ healthy-traffic",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "mutual exclusion held (exactly one winner per wave)",
+      "expected": ">=1 acquired",
+      "observed": "1",
+      "pass": true
+    },
+    {
+      "name": "alert TransactionFailureSpike @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxBacklogGrowing @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert OutboxDeadLetterAccumulation @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "alert LockContentionHigh @ contention-burst",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert RateLimitSaturation @ contention-burst",
+      "expected": "fires",
+      "observed": "fires",
+      "pass": true
+    },
+    {
+      "name": "alert LedgerImbalance @ contention-burst",
+      "expected": "silent",
+      "observed": "silent",
+      "pass": true
+    },
+    {
+      "name": "operations fail closed during KV outage (no silent success)",
+      "expected": "10",
+      "observed": "10",
+      "pass": true
+    },
+    {
+      "name": "readiness detects the KV outage via dependency probes (M1)",
+      "expected": "not ready",
+      "observed": "not ready",
+      "pass": true
+    },
+    {
+      "name": "redis dependency reports failed during outage (M1)",
+      "expected": "failed",
+      "observed": "failed",
+      "pass": true
+    },
+    {
+      "name": "first operation after outage succeeds (no lingering state)",
+      "expected": "ran",
+      "observed": "ran",
+      "pass": true
+    },
+    {
+      "name": "a transient blip is retryable without duplicate execution",
+      "expected": "failed then ran",
+      "observed": "failed then ran",
+      "pass": true
+    },
+    {
+      "name": "restart data loss degrades to at-least-once (documented boundary)",
+      "expected": "ran again",
+      "observed": "ran again",
+      "pass": true
+    },
+    {
+      "name": "dependency state recovers after the outage ends (M1)",
+      "expected": "healthy",
+      "observed": "healthy",
+      "pass": true
+    },
+    {
+      "name": "exporter ships every span (zero dropped, healthy transport)",
+      "expected": "5000",
+      "observed": "5000",
+      "pass": true
+    },
+    {
+      "name": "a dead collector never breaks span creation (drops counted)",
+      "expected": "500 dropped, no throw",
+      "observed": "500 dropped",
+      "pass": true
+    },
+    {
+      "name": "outbox drain cost stays flat with published-row accumulation (M3)",
+      "expected": "<300µs/op",
+      "observed": "10µs",
+      "pass": true
+    },
+    {
+      "name": "transaction instrumentation cost within budget",
+      "expected": "<=15µs/txn",
+      "observed": "1.37µs",
+      "pass": true
+    },
+    {
+      "name": "outbox instrumentation cost within budget",
+      "expected": "<=75µs/op",
+      "observed": "12.43µs",
+      "pass": true
+    },
+    {
+      "name": "breaker trips open under sustained dependency failure",
+      "expected": "open",
+      "observed": "open",
+      "pass": true
+    },
+    {
+      "name": "open breaker spares the dead dependency (fast-fail, no calls)",
+      "expected": "5",
+      "observed": "5",
+      "pass": true
+    },
+    {
+      "name": "breaker closes after the dependency recovers",
+      "expected": "closed",
+      "observed": "closed",
+      "pass": true
+    },
+    {
+      "name": "bulkhead sheds overflow instead of cascading",
+      "expected": ">0 rejected",
+      "observed": "20",
+      "pass": true
+    },
+    {
+      "name": "adaptive retry recovers a transient failure",
+      "expected": "ok",
+      "observed": "ok",
+      "pass": true
+    },
+    {
+      "name": "timeout budget abandons a hung call",
+      "expected": "deadline",
+      "observed": "deadline",
+      "pass": true
+    },
+    {
+      "name": "load shedder sheds normal traffic over the cap",
+      "expected": ">0 shed",
+      "observed": "3",
+      "pass": true
+    },
+    {
+      "name": "load shedder never sheds critical paths",
+      "expected": "2",
+      "observed": "2",
+      "pass": true
+    },
+    {
+      "name": "runtime sampler reports live heap + event-loop metrics",
+      "expected": "heap>0",
+      "observed": "heap>0",
+      "pass": true
+    },
+    {
+      "name": "runtime metrics reach the shared registry",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "runtime detector flags a leaking heap trend",
+      "expected": "leak",
+      "observed": "leak",
+      "pass": true
+    },
+    {
+      "name": "the live process is NOT falsely flagged as leaking",
+      "expected": "clean",
+      "observed": "clean",
+      "pass": true
+    },
+    {
+      "name": "config change applies to the running system with zero restart",
+      "expected": "12",
+      "observed": "12",
+      "pass": true
+    },
+    {
+      "name": "config validation rejects an invalid value",
+      "expected": "rejected",
+      "observed": "rejected",
+      "pass": true
+    },
+    {
+      "name": "kill switch forces a safe value then restores",
+      "expected": "150<500 then restore",
+      "observed": "150 then 500",
+      "pass": true
+    },
+    {
+      "name": "config snapshot restore reverts changes",
+      "expected": "12",
+      "observed": "12",
+      "pass": true
+    },
+    {
+      "name": "capacity forecast produces multi-horizon projections",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "every projection carries a confidence + assumptions",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "capacity report yields at least one recommendation",
+      "expected": ">=1",
+      "observed": "3",
+      "pass": true
+    },
+    {
+      "name": "a critical config change is held pending (not applied)",
+      "expected": "pending",
+      "observed": "pending",
+      "pass": true
+    },
+    {
+      "name": "separation of duties blocks proposer self-approval",
+      "expected": "blocked",
+      "observed": "blocked",
+      "pass": true
+    },
+    {
+      "name": "the change applies only after the approval chain completes",
+      "expected": "16",
+      "observed": "16",
+      "pass": true
+    },
+    {
+      "name": "the applied change carries a full forensic record",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "a governed change is reversible to its prior value",
+      "expected": "12",
+      "observed": "12",
+      "pass": true
+    },
+    {
+      "name": "every DR scenario recovers consistently",
+      "expected": "7",
+      "observed": "7",
+      "pass": true
+    },
+    {
+      "name": "RTO objective is met across all scenarios",
+      "expected": "met",
+      "observed": "met",
+      "pass": true
+    },
+    {
+      "name": "RPO objective is met across all scenarios",
+      "expected": "met",
+      "observed": "met",
+      "pass": true
+    },
+    {
+      "name": "recovery confidence is full",
+      "expected": "1",
+      "observed": "1",
+      "pass": true
+    },
+    {
+      "name": "domain events correlate into business capabilities",
+      "expected": ">=1 contribution",
+      "observed": "1",
+      "pass": true
+    },
+    {
+      "name": "business value is tracked from event payloads",
+      "expected": ">=7000",
+      "observed": "7000",
+      "pass": true
+    },
+    {
+      "name": "executive view aggregates value + customer reach",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "impactOf answers the customer-impact questions",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "a healthy platform yields no false recommendations",
+      "expected": "0",
+      "observed": "0",
+      "pass": true
+    },
+    {
+      "name": "a real degradation produces an evidence-based recommendation",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "recommendations carry evidence + confidence + business impact",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "governance records become quantified analytics",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "compliance + maturity scores are computed in range",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "governance recommendations are evidence-backed",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "forecast accuracy is measured by backtesting the planner history",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "per-field backtests report accuracy + trend correctness",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "the recommendation gate reflects measured accuracy",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "business telemetry reconciles against the authoritative ledger",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "fundraising value is validated against the ledger (not just asserted)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "a telemetry undercount is caught with root cause + financial exposure",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "recommendations are tracked as measurable products (precision + recall)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "operator trust + ROI are computed from real outcomes",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "confidence recalibrates from historical evidence (shrinks toward hit-rate)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "operational confidence blends only sourced, measured components",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "the executive briefing answers the seven leadership questions",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "the briefing fuses business validation + recommendation quality domains",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "every observation becomes persisted knowledge",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "the platform learns a maturity score + confidence trend from its own outcomes",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "recommendation confidence is recalibrated from historical outcomes",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "learned forecast confidence never inflates (multiplier <= 1 when present)",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    },
+    {
+      "name": "ledger trial balance held through every scenario",
+      "expected": "balanced",
+      "observed": "balanced",
+      "pass": true
+    },
+    {
+      "name": "platform ready after all fault injection",
+      "expected": "true",
+      "observed": "true",
+      "pass": true
+    }
+  ],
+  "alert_evaluation": [
+    {
+      "phase": "rollback-storm",
+      "alert": "TransactionFailureSpike",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "rollback-storm",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "OutboxBacklogGrowing",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "backlog-growth",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "dlq-accumulation",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "LockContentionHigh",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "RateLimitSaturation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "healthy-traffic",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "TransactionFailureSpike",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "OutboxBacklogGrowing",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "OutboxDeadLetterAccumulation",
+      "expected": false,
+      "fired": false
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "LockContentionHigh",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "RateLimitSaturation",
+      "expected": true,
+      "fired": true
+    },
+    {
+      "phase": "contention-burst",
+      "alert": "LedgerImbalance",
+      "expected": false,
+      "fired": false
+    }
+  ],
+  "recommendations": [],
+  "finished_at": "2026-07-07T13:28:12.593Z",
+  "verdict": "PASS"
+}

@@ -1,0 +1,115 @@
+name: Foundation Stability Pipeline
+
+# Gates Foundation-layer correctness (F1 persistence/transactions, F2
+# transactional outbox, F3 Redis-backed distributed runtime) so no regression
+# reaches higher-level work. A Redis service is provisioned for future
+# REDIS_URL-backed runs; the default in-memory adapter keeps CI hermetic.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Module graph loads (typecheck)
+        run: npm run typecheck
+
+      - name: Root (Tirelo) unit + integration tests
+        run: npm test -- --runInBand
+
+      - name: Motse full suite (must stay green)
+        run: npm run motse:test
+
+      - name: Persistence + transaction validation (F1)
+        run: npm run test:persistence
+
+      - name: Transactional outbox consistency (F2)
+        run: npm run test:outbox
+
+      - name: Distributed runtime — idempotency / rate-limit / locks (F3)
+        run: npm run test:redis
+
+      - name: Foundation coverage gate (>=95/95/90)
+        run: npm run motse:coverage:foundation
+
+      - name: Observability + health suites (Phase 2/3/A)
+        run: npm run motse:test -- tests/observability.test.js tests/health.test.js tests/observability-stack.test.js
+
+      - name: Observability coverage gate (>=95/95/90)
+        run: npm run motse:coverage:observability
+
+      - name: Enterprise missions coverage gate (>=95/95/90)
+        run: npm run motse:coverage:enterprise
+
+      - name: Resilience + runtime coverage gate (>=95/95/90)
+        run: npm run motse:coverage:resilience
+
+      - name: Config + capacity coverage gate (>=95/95/90)
+        run: npm run motse:coverage:config
+
+      - name: Governance + DR coverage gate (>=95/95/90)
+        run: npm run motse:coverage:govdr
+
+      - name: Business observability + operational intelligence gate (>=95/95/90)
+        run: npm run motse:coverage:business
+
+      - name: Governance analytics + forecast accuracy gate (>=95/95/90)
+        run: npm run motse:coverage:analytics
+
+      - name: Business reconciliation + recommendation effectiveness gate (>=95/95/90)
+        run: npm run motse:coverage:reconciliation
+
+      - name: Executive operational intelligence gate (>=95/95/90)
+        run: npm run motse:coverage:executive
+
+      - name: Continuous learning gate (>=95/95/90)
+        run: npm run motse:coverage:learning
+
+      - name: Evidence integrity gate (>=95/95/90)
+        run: npm run motse:coverage:evidence
+
+      - name: Grafana dashboards regenerate cleanly (no drift)
+        run: |
+          node deploy/motse/observability/generate-dashboards.js
+          git diff --exit-code deploy/motse/observability/dashboards
+
+      - name: SLO assets regenerate cleanly (no drift from slo.yaml)
+        run: |
+          node deploy/motse/observability/generate-slo-assets.js
+          git diff --exit-code deploy/motse/observability/dashboards/slo.json deploy/motse/observability/prometheus-slo-alerts.yaml
+
+      - name: Production validation smoke (telemetry truth + fault injection)
+        run: npm run motse:validate:smoke
+
+      - name: Evidence integrity gate (metric/dashboard/alert/recommendation/confidence/config)
+        run: npm run motse:evidence
+
+      - name: Repository secret scan
+        run: node motse/scripts/secret-scan.js

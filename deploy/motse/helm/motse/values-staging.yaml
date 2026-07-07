@@ -1,0 +1,10 @@
+# Staging: production-shaped, synthetic data ONLY (doc §16 — cultural
+# content never leaves prod), canary target for every merge.
+replicas: 2
+autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilization: 65 }
+ingress: { enabled: true, host: api.staging.motse.bw, className: gce }
+config:
+  NODE_ENV: production
+  MOTSE_LOG_LEVEL: info
+  MOTSE_RATE_CAPACITY: "300"
+  MOTSE_RATE_REFILL: "5"

@@ -1,0 +1,296 @@
+'use strict';
+
+/**
+ * Grafana dashboard generator (Phase 2, WS4). One spec per domain →
+ * one dashboard JSON each; regenerate with:
+ *   node deploy/motse/observability/generate-dashboards.js
+ * Checked-in outputs live in ./dashboards. Panels are Prometheus-backed
+ * (datasource uid "prometheus") over the /metrics series.
+ */
+const fs = require('fs');
+const path = require('path');
+
+const rate = (expr) => `sum(rate(${expr}[5m]))`;
+const p95 = (metric) =>
+  `histogram_quantile(0.95, sum(rate(${metric}_bucket[5m])) by (le))`;
+
+const DASHBOARDS = {
+  system: {
+    title: 'Motse · System',
+    panels: [
+      ['Request throughput (rps)', rate('motse_http_requests_total')],
+      ['Latency p95 (ms)', p95('motse_http_request_duration_ms')],
+      ['Error rate (5xx rps)', rate('motse_http_requests_total{code=~"5.."}')],
+      ['4xx rate (rps)', rate('motse_http_requests_total{code=~"4.."}')],
+      ['Users total', 'motse_users_total'],
+      ['CPU usage', 'sum(rate(container_cpu_usage_seconds_total{pod=~"motse-core.*"}[5m]))'],
+      ['Memory (bytes)', 'sum(container_memory_working_set_bytes{pod=~"motse-core.*"})'],
+    ],
+  },
+  payments: {
+    title: 'Motse · Payments',
+    panels: [
+      ['Payments by outcome', 'sum by (outcome) (rate(motse_payments_total[5m]))'],
+      ['Success rate (%)',
+        '100 * sum(rate(motse_payments_total{outcome="completed"}[5m])) / clamp_min(sum(rate(motse_payments_total[5m])), 1e-9)'],
+      ['Webhook rejections by reason', 'sum by (reason) (rate(motse_webhooks_rejected_total[5m]))'],
+      ['Retry queue depth', 'motse_payment_retry_queue_depth'],
+      ['Dead letters', 'motse_payment_dead_letters'],
+      ['Per-provider volume', 'sum by (provider) (rate(motse_payments_total[5m]))'],
+    ],
+  },
+  ledger: {
+    title: 'Motse · Ledger',
+    panels: [
+      ['Trial balance (MUST be 0)', 'motse_ledger_trial_balance_minor'],
+      ['Postings committed (rps)', rate('motse_domain_events_total{type="ledger.posting.committed"}')],
+      ['Posting rejections by reason', 'sum by (reason) (rate(motse_ledger_rejections_total[5m]))'],
+      ['Reconciliation variances', 'increase(motse_reconciliation_variance_total[24h])'],
+      ['Payouts settled (rps)', rate('motse_domain_events_total{type="ledger.payout.settled"}')],
+    ],
+  },
+  escrow: {
+    title: 'Motse · Escrow',
+    panels: [
+      ['Frozen escrows', 'motse_escrows_frozen'],
+      ['Stuck escrows (30d+)', 'motse_escrows_stuck'],
+      ['Milestones released (rps)', rate('motse_domain_events_total{type="kgetsi.milestone.released"}')],
+      ['Contributions (rps)', rate('motse_domain_events_total{type="kgetsi.contribution.received"}')],
+    ],
+  },
+  governance: {
+    title: 'Motse · Governance',
+    panels: [
+      ['Seats frozen (Ring 3)', rate('motse_domain_events_total{type="governance.seat.frozen"}')],
+      ['Disputes opened', rate('motse_domain_events_total{type="governance.dispute.opened"}')],
+      ['Disputes resolved', rate('motse_domain_events_total{type="governance.dispute.resolved"}')],
+      ['Audit events total', 'motse_audit_events_total'],
+    ],
+  },
+  search: {
+    title: 'Motse · Search',
+    panels: [
+      ['Search requests (rps)', rate('motse_http_requests_total{route="/v1/search"}')],
+      ['Search errors', rate('motse_http_requests_total{route="/v1/search",code=~"4..|5.."}')],
+    ],
+  },
+  notifications: {
+    title: 'Motse · Notifications',
+    panels: [
+      ['Dispatched by category', 'sum by (category) (rate(motse_notifications_total[5m]))'],
+      ['Civic alerts (exempt category)', rate('motse_domain_events_total{type="kgotla.alert.published"}')],
+    ],
+  },
+  'offline-sync': {
+    title: 'Motse · Offline Sync',
+    panels: [
+      ['Outbox mutations applied', 'motse_outbox_mutations_applied'],
+      ['Sync batches (rps)', rate('motse_http_requests_total{route="/v1/sync/outbox"}')],
+      ['Sync failures', rate('motse_http_requests_total{route="/v1/sync/outbox",code=~"4..|5.."}')],
+      ['USSD/SMS letsema joins', rate('motse_domain_events_total{type="kgotla.letsema.joined"}')],
+    ],
+  },
+  authentication: {
+    title: 'Motse · Authentication',
+    panels: [
+      ['OTP requests (rps)', rate('motse_http_requests_total{route="/v1/identity/otp"}')],
+      ['Login failures', rate('motse_http_requests_total{route="/v1/identity/otp/verify",code=~"4.."}')],
+      ['Authz denials by code', 'sum by (code) (rate(motse_authz_denials_total[5m]))'],
+      ['Security events', rate('motse_domain_events_total{type="security.event.raised"}')],
+    ],
+  },
+  ussd: {
+    title: 'Motse · USSD',
+    panels: [
+      ['USSD sessions (rps)', rate('motse_http_requests_total{route="/v1/gateway/ussd/session"}')],
+      ['USSD p95 (ms) — operator budget 1500ms (§15.1)', p95('motse_http_request_duration_ms')],
+      ['SMS inbound (rps)', rate('motse_http_requests_total{route="/v1/gateway/sms/inbound"}')],
+    ],
+  },
+  // ── Foundation & Phase-2 observability (operationalized in Phase A) ──
+  foundation: {
+    title: 'Motse · Foundation — Transactions',
+    panels: [
+      ['Transaction rate (commit vs rollback, rps)',
+        'sum by (result) (rate(foundation_transaction_total[5m]))'],
+      ['Success rate (%)',
+        '100 * sum(rate(foundation_transaction_total{result="commit"}[5m])) / clamp_min(sum(rate(foundation_transaction_total[5m])), 1e-9)'],
+      ['Rollback frequency (rps)', rate('foundation_transaction_total{result="rollback"}')],
+      ['Commit latency p95 (ms)', p95('foundation_transaction_ms')],
+      ['Idempotency: first vs duplicate (rps)',
+        'sum by (result) (rate(foundation_idempotency_total[5m]))'],
+    ],
+  },
+  outbox: {
+    title: 'Motse · Foundation — Transactional Outbox',
+    panels: [
+      ['Publish throughput by type (rps)',
+        'sum by (type) (rate(foundation_outbox_published_total[5m]))'],
+      ['Publish latency p95 (ms)', p95('foundation_outbox_publish_ms')],
+      ['Retry rate (rps)', rate('foundation_outbox_retried_total')],
+      ['Dead-letter depth', 'motse_outbox_dead'],
+      ['Backlog (pending)', 'motse_outbox_pending'],
+    ],
+  },
+  ratelimit: {
+    title: 'Motse · Adaptive Rate Limiting',
+    panels: [
+      ['Decisions by class (rps)',
+        'sum by (class) (rate(motse_ratelimit_adaptive_total{result="allowed"}[5m]))'],
+      ['Rejections by class (rps)',
+        'sum by (class) (rate(motse_ratelimit_adaptive_total{result=~"limited|banned"}[5m]))'],
+      ['Rejection ratio by class (%)',
+        '100 * sum by (class) (rate(motse_ratelimit_adaptive_total{result=~"limited|banned"}[5m])) / clamp_min(sum by (class) (rate(motse_ratelimit_adaptive_total[5m])), 1e-9)'],
+      ['Ban decisions (rps)', 'sum(rate(motse_ratelimit_adaptive_total{result="banned"}[5m]))'],
+      ['Saturation trend (limited, 1h window)',
+        'sum by (class) (increase(motse_ratelimit_adaptive_total{result="limited"}[1h]))'],
+    ],
+  },
+  resilience: {
+    title: 'Motse · Resilience Patterns',
+    panels: [
+      ['Circuit breaker outcomes (rps)', 'sum by (name, result) (rate(motse_breaker_total[5m]))'],
+      ['Short-circuits — fast failures saved (rps)', rate('motse_breaker_total{result="short_circuited"}')],
+      ['Bulkhead rejections by compartment (rps)', 'sum by (name) (rate(motse_bulkhead_total{result="rejected"}[5m]))'],
+      ['Retries by outcome (rps)', 'sum by (result) (rate(motse_retry_total[5m]))'],
+      ['Load shed vs passed (rps)', 'sum by (result) (rate(motse_loadshed_total[5m]))'],
+      ['Self-heal actions (rps)', 'sum by (result) (rate(motse_selfheal_total[5m]))'],
+    ],
+  },
+  business: {
+    title: 'Motse · Business Observability',
+    panels: [
+      ['Business events by capability/outcome (rps)', 'sum by (capability, outcome) (rate(motse_business_events_total[5m]))'],
+      ['SLA compliance by capability', 'motse_business_sla'],
+      ['Value processed by capability (minor)', 'motse_business_value_minor'],
+      ['Failed business events (1h)', 'sum by (capability) (increase(motse_business_events_total{outcome="failure"}[1h]))'],
+      ['Success rate by capability (%)',
+        '100 * sum by (capability) (rate(motse_business_events_total{outcome="success"}[5m])) / clamp_min(sum by (capability) (rate(motse_business_events_total[5m])), 1e-9)'],
+      ['Open operational recommendations', 'motse_opsintel_recommendations'],
+    ],
+  },
+  config: {
+    title: 'Motse · Configuration Platform',
+    panels: [
+      ['Config changes by op (rps)', 'sum by (op) (rate(motse_config_changes_total[5m]))'],
+      ['Total config changes (1h)', 'sum(increase(motse_config_changes_total[1h]))'],
+      ['Kill switch active (1=on)', 'motse_config_kill_switch'],
+      ['Safe mode active (1=on)', 'motse_config_safe_mode'],
+      ['Governance actions by risk (1h)', 'sum by (risk, event) (increase(motse_config_governance_total[1h]))'],
+    ],
+  },
+  governance: {
+    title: 'Motse · Governance Analytics',
+    panels: [
+      ['Compliance score (0..1)', 'motse_governance_compliance_score'],
+      ['Operational maturity score (0..1)', 'motse_governance_maturity_score'],
+      ['Rollback rate', 'motse_governance_rollback_rate'],
+      ['Governance actions by event (1h)', 'sum by (event) (increase(motse_config_governance_total[1h]))'],
+      ['Emergency activations (1h)', 'sum by (type) (increase(motse_config_emergency_total[1h]))'],
+      ['Forecast accuracy (0..1)', 'motse_forecast_accuracy'],
+    ],
+  },
+  learning: {
+    title: 'Motse · Continuous Learning',
+    panels: [
+      ['Learned operational maturity (0..1)', 'motse_learning_operational_maturity'],
+      ['Learned forecast-confidence multiplier (0..1)', 'motse_learning_forecast_confidence'],
+      ['Learning confidence — evidence volume (0..1)', 'motse_learning_confidence'],
+      ['Knowledge-base observations', 'motse_learning_samples'],
+      ['Operational confidence being learned from (0..1)', 'motse_executive_operational_confidence'],
+    ],
+  },
+  executive: {
+    title: 'Motse · Executive Operational Intelligence',
+    panels: [
+      ['Operational confidence (0..1)', 'motse_executive_operational_confidence'],
+      ['Business value at risk (minor units)', 'motse_executive_value_at_risk_minor'],
+      ['Customers affected', 'motse_executive_customers_affected'],
+      ['Open operational risks', 'motse_executive_open_risks'],
+      ['Data confidence — telemetry vs ledger (0..1)', 'motse_reconciliation_data_confidence'],
+      ['Recommendation operator trust (0..1)', 'motse_recommendation_trust_score'],
+      ['Governance compliance (0..1)', 'motse_governance_compliance_score'],
+      ['Forecast accuracy (0..1)', 'motse_forecast_accuracy'],
+      ['DR recovery confidence (0..1)', 'motse_dr_recovery_confidence'],
+    ],
+  },
+  reconciliation: {
+    title: 'Motse · Business Outcome Validation & Recommendation Effectiveness',
+    panels: [
+      ['Financial accuracy — telemetry vs ledger (0..1)', 'motse_reconciliation_financial_accuracy'],
+      ['Telemetry accuracy — event capture (0..1)', 'motse_reconciliation_telemetry_accuracy'],
+      ['Data confidence (0..1)', 'motse_reconciliation_data_confidence'],
+      ['Reconciliation success rate (0..1)', 'motse_reconciliation_success_rate'],
+      ['Open reconciliation discrepancies', 'motse_reconciliation_discrepancies'],
+      ['Recommendation precision (0..1)', 'motse_recommendation_precision'],
+      ['Recommendation recall (0..1)', 'motse_recommendation_recall'],
+      ['Operator trust score (0..1)', 'motse_recommendation_trust_score'],
+      ['Recommendations generated', 'motse_recommendation_generated'],
+      ['Incidents prevented (accepted recommendations)', 'motse_recommendation_incidents_prevented'],
+    ],
+  },
+  dr: {
+    title: 'Motse · Disaster Recovery',
+    panels: [
+      ['DR runs by scenario/result (rate)', 'sum by (scenario, result) (rate(motse_dr_runs_total[1h]))'],
+      ['Recovery confidence (0..1)', 'motse_dr_recovery_confidence'],
+      ['RTO max across scenarios (ms)', 'motse_dr_rto_max_ms'],
+      ['Recovery duration p95 (ms)', p95('motse_dr_recovery_ms')],
+    ],
+  },
+  runtime: {
+    title: 'Motse · Runtime Intelligence (Node)',
+    panels: [
+      ['Heap used vs limit (bytes)', 'motse_runtime_heap_used_bytes'],
+      ['Heap utilization', 'motse_runtime_heap_utilization'],
+      ['RSS (bytes)', 'motse_runtime_rss_bytes'],
+      ['Event-loop utilization', 'motse_runtime_event_loop_utilization'],
+      ['Event-loop delay p99 (ms)', 'motse_runtime_event_loop_delay_p99_ms'],
+      ['GC pause p95 (ms)', p95('motse_runtime_gc_pause_ms')],
+      ['Active handles', 'motse_runtime_active_handles'],
+    ],
+  },
+  distributed: {
+    title: 'Motse · Foundation — Distributed Runtime (Redis)',
+    panels: [
+      ['Lock acquisition (acquired vs contended, rps)',
+        'sum by (result) (rate(foundation_lock_total[5m]))'],
+      ['Lock contention rate (%)',
+        '100 * sum(rate(foundation_lock_total{result="contended"}[5m])) / clamp_min(sum(rate(foundation_lock_total[5m])), 1e-9)'],
+      ['Rate limiter: allowed vs limited (rps)',
+        'sum by (result) (rate(foundation_ratelimit_total[5m]))'],
+      ['Idempotency hits (duplicate, rps)', rate('foundation_idempotency_total{result="duplicate"}')],
+      ['KV adapter (0=in-memory, 1=redis)', 'motse_distributed_redis_backed'],
+    ],
+  },
+};
+
+function dashboard(key, spec) {
+  return {
+    uid: `motse-${key}`,
+    title: spec.title,
+    schemaVersion: 39,
+    tags: ['motse', key],
+    time: { from: 'now-6h', to: 'now' },
+    refresh: '30s',
+    panels: spec.panels.map(([title, expr], i) => ({
+      id: i + 1,
+      title,
+      type: 'timeseries',
+      datasource: { type: 'prometheus', uid: 'prometheus' },
+      gridPos: { h: 8, w: 12, x: (i % 2) * 12, y: Math.floor(i / 2) * 8 },
+      targets: [{ expr, refId: 'A' }],
+    })),
+  };
+}
+
+const outDir = path.join(__dirname, 'dashboards');
+fs.mkdirSync(outDir, { recursive: true });
+for (const [key, spec] of Object.entries(DASHBOARDS)) {
+  fs.writeFileSync(
+    path.join(outDir, `${key}.json`),
+    `${JSON.stringify(dashboard(key, spec), null, 2)}\n`
+  );
+}
+// eslint-disable-next-line no-console
+console.log(`Generated ${Object.keys(DASHBOARDS).length} dashboards in ${outDir}`);

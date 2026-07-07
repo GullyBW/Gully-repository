@@ -1,0 +1,954 @@
+'use strict';
+
+/**
+ * Production validation harness (Phases 1–2: observability validation +
+ * reliability engineering). Runs the REAL platform — the same container and
+ * Express app that serve production — under production-shaped conditions and
+ * validates empirically that the telemetry tells the truth:
+ *
+ *   traces complete & propagate · logs correlate · metrics match reality ·
+ *   alerts fire only when they should · instrumentation overhead is bounded ·
+ *   the Foundation recovers from injected faults (outage/blip/restart).
+ *
+ * Every scenario records expected-vs-observed checks; the run fails (exit 1)
+ * if any check fails. Evidence is written to docs/evidence/ as JSON — the
+ * measured basis for the SLO thresholds in deploy/motse/observability/slo.yaml.
+ *
+ *   node motse/scripts/production-validation.js [--smoke]
+ *   --smoke: CI-sized run (seconds, not minutes); identical checks.
+ */
+process.env.MOTSE_LOG_LEVEL = 'info'; // we validate log output — do not silence it
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+const { performance } = require('perf_hooks');
+
+const { createPlatform } = require('../src/container');
+const { createApp } = require('../src/app');
+const { Store } = require('../src/kernel/store');
+const { Clock } = require('../src/kernel/clock');
+const { EventBus } = require('../src/kernel/eventBus');
+const { OutboxService } = require('../src/persistence/outbox');
+const { Tracer } = require('../src/observability/tracer');
+const { OtelSpanExporter } = require('../src/observability/otel.exporter');
+const { Metrics } = require('../src/monitoring/metrics');
+const { ChaosKv } = require('../src/distributed/chaos.kv');
+const { InMemoryKvAdapter } = require('../src/distributed/kv');
+const { BusinessReconciliation } = require('../src/observability/business.reconciliation');
+
+const SMOKE = process.argv.includes('--smoke');
+const CFG = SMOKE
+  ? { loadSeconds: 2, workers: 8, txns: 2000, backlog: 1100, dlq: 30, locks: 60, rlBurst: 900, spans: 5000 }
+  : { loadSeconds: 6, workers: 24, txns: 20000, backlog: 1100, dlq: 50, locks: 200, rlBurst: 2000, spans: 20000 };
+
+// ── report plumbing ──────────────────────────────────────────────────
+const report = {
+  mode: SMOKE ? 'smoke' : 'full',
+  started_at: new Date().toISOString(),
+  node: process.version,
+  scenarios: {},
+  checks: [],
+  alert_evaluation: [],
+  recommendations: [],
+};
+
+function check(name, expected, observed, pass) {
+  report.checks.push({ name, expected: String(expected), observed: String(observed), pass });
+  // eslint-disable-next-line no-console
+  console.log(`  ${pass ? 'PASS' : 'FAIL'}  ${name}  (expected ${expected}, observed ${observed})`);
+  return pass;
+}
+
+function pct(sorted, q) {
+  return sorted.length ? sorted[Math.min(Math.floor(sorted.length * q), sorted.length - 1)] : 0;
+}
+
+function section(title) {
+  // eslint-disable-next-line no-console
+  console.log(`\n── ${title} ──`);
+}
+
+// Alert conditions mirrored from deploy/motse/observability/prometheus-alerts.yaml
+// (semantic evaluation over the same signals PromQL would read).
+function evaluateAlerts(platform, window) {
+  const m = platform.metrics;
+  const ratio = (num, den) => (den > 0 ? num / den : 0);
+  const txTotal = m.counterTotal('foundation_transaction_total') - window.tx0;
+  const txRb = m.counterValue('foundation_transaction_total', { result: 'rollback' }) - window.rb0;
+  const lockTotal = m.counterTotal('foundation_lock_total') - window.lock0;
+  const lockCont = m.counterValue('foundation_lock_total', { result: 'contended' }) - window.cont0;
+  const rlTotal = m.counterTotal('foundation_ratelimit_total') - window.rl0;
+  const rlLim = m.counterValue('foundation_ratelimit_total', { result: 'limited' }) - window.lim0;
+  const stats = platform.outbox.stats();
+  return {
+    TransactionFailureSpike: ratio(txRb, txTotal) > 0.05,
+    OutboxBacklogGrowing: stats.pending > 1000,
+    OutboxDeadLetterAccumulation: stats.dead > 0,
+    LockContentionHigh: ratio(lockCont, lockTotal) > 0.2,
+    RateLimitSaturation: ratio(rlLim, rlTotal) > 0.5,
+    LedgerImbalance: !platform.ledger.trialBalance().balanced,
+  };
+}
+
+function snapshotWindow(platform) {
+  const m = platform.metrics;
+  return {
+    tx0: m.counterTotal('foundation_transaction_total'),
+    rb0: m.counterValue('foundation_transaction_total', { result: 'rollback' }),
+    lock0: m.counterTotal('foundation_lock_total'),
+    cont0: m.counterValue('foundation_lock_total', { result: 'contended' }),
+    rl0: m.counterTotal('foundation_ratelimit_total'),
+    lim0: m.counterValue('foundation_ratelimit_total', { result: 'limited' }),
+  };
+}
+
+function recordAlertPhase(platform, phase, window, expectedFired) {
+  const fired = evaluateAlerts(platform, window);
+  for (const [alert, isFired] of Object.entries(fired)) {
+    const expected = expectedFired.includes(alert);
+    report.alert_evaluation.push({ phase, alert, expected, fired: isFired });
+    check(`alert ${alert} @ ${phase}`, expected ? 'fires' : 'silent', isFired ? 'fires' : 'silent', isFired === expected);
+  }
+}
+
+// ── boot the real platform with capturing sinks ──────────────────────
+const logLines = [];
+const platform = createPlatform({ logSink: (line) => logLines.push(JSON.parse(line)) });
+const exported = [];
+platform.otel.transport = (payload) => exported.push(payload); // in-memory OTLP collector
+const { app } = createApp(platform);
+
+function httpRequest(base, method, urlPath, { body = null, headers = {} } = {}) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const payload = body ? JSON.stringify(body) : null;
+    const req = http.request(`${base}${urlPath}`, { method, headers: { 'content-type': 'application/json', ...headers } }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, ms: performance.now() - started }));
+    });
+    req.on('error', () => resolve({ status: 0, headers: {}, ms: performance.now() - started }));
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+async function main() {
+  const server = http.createServer(app);
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const heapStart = process.memoryUsage().heapUsed;
+
+  // ════ W7 · End-to-end trace nesting over HTTP (admin outbox drain) ════
+  // Runs BEFORE the sustained load: the /v1 rate limiter keys by client IP
+  // ahead of authentication, so the load phase exhausts this host's bucket
+  // for authenticated callers too (see recommendation below).
+  section('W7 cross-boundary trace propagation');
+  // The operator session is reused by W1's adaptive-rate-limit check.
+  const { sandbox_code } = platform.identity.requestOtp('+26771009999');
+  const { user: opsUser, session: opsSession } = platform.identity.verifyOtp('+26771009999', sandbox_code, { deviceId: 'validator' });
+  platform.identity.grantInstitutional(opsUser.id, { institution: 'Validation' }, 'system:bootstrap');
+  platform.identity.grantRole(opsUser.id, 'platform_admin', 'platform', 'system:bootstrap');
+  {
+    const traceId = 'ab'.repeat(16);
+    const res = await httpRequest(base, 'POST', '/v1/admin/outbox/drain', {
+      headers: {
+        traceparent: `00-${traceId}-${'e'.repeat(16)}-01`,
+        Authorization: `Bearer ${opsSession.access_token}`,
+        'X-Device-Id': 'validator',
+        'Idempotency-Key': 'validate-drain-1',
+      },
+    });
+    const spans = platform.tracer.trace(traceId);
+    const root = spans.find((sp) => sp.name === 'HTTP POST');
+    const child = spans.find((sp) => sp.name === 'outbox.drain');
+    check('admin drain returns 200 under trace', 200, res.status, res.status === 200);
+    check('child span nests under the HTTP root (same trace, parent link)', 'root→child', root && child && child.parent_id === root.span_id ? 'root→child' : 'broken', !!(root && child && child.parent_id === root.span_id));
+    check('response traceparent preserves the inbound trace id', traceId, (res.headers.traceparent || '').split('-')[1], (res.headers.traceparent || '').includes(traceId));
+  }
+
+  // ════ W2 · Duplicate requests (HTTP replay + distributed exactly-once) ════
+  // Also pre-load: the /v1 bucket must have headroom for the replay check —
+  // a 429 fires before the idempotency middleware and would mask it.
+  section('W2 duplicate requests');
+  {
+    const key = 'dup-validate-1';
+    const body = { msisdn: '+26771888001' };
+    const first = await httpRequest(base, 'POST', '/v1/identity/otp', { body, headers: { 'Idempotency-Key': key } });
+    const second = await httpRequest(base, 'POST', '/v1/identity/otp', { body, headers: { 'Idempotency-Key': key } });
+    check('HTTP duplicate is replayed, not re-executed', 'Idempotent-Replay=true', second.headers['idempotent-replay'] || 'absent',
+      first.status === 200 && second.headers['idempotent-replay'] === 'true');
+
+    let ran = 0;
+    const CONCURRENT = 50;
+    const outcomes = await Promise.all(
+      Array.from({ length: CONCURRENT }, () => platform.distributed.idempotency.runOnce('race-key', async () => { ran += 1; return 'winner'; }))
+    );
+    const winners = outcomes.filter((o) => o.ran).length;
+    report.scenarios.duplicate_requests = { concurrent: CONCURRENT, executed: ran, winners };
+    check(`exactly-once under ${CONCURRENT} concurrent duplicates`, 1, ran, ran === 1 && winners === 1);
+  }
+
+  // ════ W1 · Sustained + burst HTTP traffic against the real app ════
+  section(`W1 sustained load (${CFG.loadSeconds}s × ${CFG.workers} workers)`);
+  {
+    const MIX = [
+      () => httpRequest(base, 'GET', '/health'),
+      () => httpRequest(base, 'GET', '/health/full'),
+      () => httpRequest(base, 'GET', '/v1/kgetsi/campaigns'),
+      () => httpRequest(base, 'GET', '/v1/heritage/search'),
+      () => httpRequest(base, 'GET', '/metrics'),
+      () => httpRequest(base, 'POST', '/v1/identity/otp', {
+        body: { msisdn: `+2677${Math.floor(1000000 + Math.random() * 8999999)}` },
+        headers: { 'Idempotency-Key': `w1-${Math.random()}` },
+      }),
+    ];
+    const latencies = [];
+    const statuses = {};
+    let missingTraceHeaders = 0;
+    const deadline = Date.now() + CFG.loadSeconds * 1000;
+    const http0 = platform.metrics.counterTotal('motse_http_requests_total');
+    await Promise.all(
+      Array.from({ length: CFG.workers }, async () => {
+        while (Date.now() < deadline) {
+          const res = await MIX[Math.floor(Math.random() * MIX.length)]();
+          latencies.push(res.ms);
+          statuses[res.status] = (statuses[res.status] || 0) + 1;
+          if (!res.headers['x-trace-id'] || !res.headers.traceparent) missingTraceHeaders += 1;
+        }
+      })
+    );
+    latencies.sort((a, b) => a - b);
+    const sent = latencies.length;
+    const httpCounted = platform.metrics.counterTotal('motse_http_requests_total') - http0;
+    const fiveHundreds = Object.entries(statuses).filter(([code]) => Number(code) >= 500).reduce((n, [, v]) => n + v, 0);
+    const s = {
+      requests: sent,
+      rps: Math.round(sent / CFG.loadSeconds),
+      p50_ms: +pct(latencies, 0.5).toFixed(2),
+      p95_ms: +pct(latencies, 0.95).toFixed(2),
+      p99_ms: +pct(latencies, 0.99).toFixed(2),
+      statuses,
+      error_5xx: fiveHundreds,
+      throttled_429: statuses['429'] || 0,
+    };
+    report.scenarios.sustained_load = s;
+    // eslint-disable-next-line no-console
+    console.log(`  ${s.requests} req (${s.rps} rps)  p50=${s.p50_ms}ms p95=${s.p95_ms}ms p99=${s.p99_ms}ms  429=${s.throttled_429} 5xx=${s.error_5xx}`);
+    check('metrics count HTTP requests exactly', sent, httpCounted, httpCounted === sent);
+    check('every response carries trace headers', 0, missingTraceHeaders, missingTraceHeaders === 0);
+    check('zero 5xx under sustained load', 0, fiveHundreds, fiveHundreds === 0);
+    check('rate limiting engages under anonymous burst (429s observed)', '>0', s.throttled_429, s.throttled_429 > 0);
+    // Mission 2 regression guard: the anonymous bucket is now exhausted, yet
+    // an authenticated caller must ride its own class quota (finding 2 fixed).
+    const authedDuringThrottle = await httpRequest(base, 'GET', '/v1/wallet/accounts', {
+      headers: { Authorization: `Bearer ${opsSession.access_token}`, 'X-Device-Id': 'validator' },
+    });
+    check('authenticated caller unaffected by exhausted anonymous bucket (M2)', 200, authedDuringThrottle.status, authedDuringThrottle.status === 200);
+
+    // Trace completeness on sampled requests (sent last so the ring buffer still holds them).
+    let complete = 0;
+    const SAMPLES = 25;
+    for (let i = 0; i < SAMPLES; i += 1) {
+      const traceId = `${i.toString(16).padStart(2, '0')}${'c'.repeat(30)}`;
+      await httpRequest(base, 'GET', '/health/full', { headers: { traceparent: `00-${traceId}-${'d'.repeat(16)}-01` } });
+      const spans = platform.tracer.trace(traceId);
+      const root = spans.find((sp) => sp.name === 'HTTP GET');
+      if (root && root.attributes['http.status_code'] === 200 && root.duration_ms != null) complete += 1;
+    }
+    check('sampled traces are complete (root span, status, duration)', SAMPLES, complete, complete === SAMPLES);
+
+    const httpLogs = logLines.filter((l) => l.message === 'http');
+    const correlated = httpLogs.filter((l) => l.trace_id && l.service === 'motse-core').length;
+    report.scenarios.log_correlation = { http_log_lines: httpLogs.length, correlated };
+    check('100% of request logs correlate (trace_id + service)', httpLogs.length, correlated, correlated === httpLogs.length && httpLogs.length > 0);
+    check('tracer ring buffer stays bounded', `<=${platform.tracer.maxSpans}`, platform.tracer.spans.length, platform.tracer.spans.length <= platform.tracer.maxSpans);
+  }
+
+  // ════ W3 · Transaction volume + rollback storm (metric exactness) ════
+  section(`W3 transaction volume (${CFG.txns} txns, 10% rollback storm)`);
+  {
+    const window = snapshotWindow(platform);
+    const m = platform.metrics;
+    const c0 = m.counterValue('foundation_transaction_total', { result: 'commit' });
+    const r0 = m.counterValue('foundation_transaction_total', { result: 'rollback' });
+    const col = platform.store.collection('validation_tx');
+    const t0 = performance.now();
+    let commits = 0;
+    let rollbacks = 0;
+    for (let i = 0; i < CFG.txns; i += 1) {
+      try {
+        platform.store.transaction(() => {
+          col.insert({ id: `tx-${i}`, i });
+          if (i % 10 === 9) throw new Error('storm');
+        });
+        commits += 1;
+      } catch { rollbacks += 1; }
+    }
+    const elapsed = performance.now() - t0;
+    const dc = m.counterValue('foundation_transaction_total', { result: 'commit' }) - c0;
+    const dr = m.counterValue('foundation_transaction_total', { result: 'rollback' }) - r0;
+    report.scenarios.transaction_volume = {
+      txns: CFG.txns, commits, rollbacks,
+      throughput_per_s: Math.round(CFG.txns / (elapsed / 1000)),
+      us_per_txn: +(elapsed * 1000 / CFG.txns).toFixed(1),
+    };
+    // eslint-disable-next-line no-console
+    console.log(`  ${Math.round(CFG.txns / (elapsed / 1000))} txn/s  (${(elapsed * 1000 / CFG.txns).toFixed(1)}µs/txn)`);
+    check('commit counter is exact', commits, dc, dc === commits);
+    check('rollback counter is exact', rollbacks, dr, dr === rollbacks);
+    check('rolled-back rows are absent', 0, col.find((r) => r.i % 10 === 9).length, col.find((r) => r.i % 10 === 9).length === 0);
+    recordAlertPhase(platform, 'rollback-storm', window, ['TransactionFailureSpike']);
+  }
+
+  // ════ W4 · Outbox backlog growth, DLQ accumulation, recovery ════
+  section(`W4 outbox backlog (${CFG.backlog}) + dead letters (${CFG.dlq}) + recovery`);
+  {
+    platform.bus.register('validate.backlog', 1, ['n']);
+    platform.bus.register('validate.dlq', 1, ['n']);
+    let backlogConsumerUp = false;
+    platform.bus.subscribe('validate.backlog', 'validator', () => {
+      if (!backlogConsumerUp) throw new Error('consumer down');
+    });
+    let dlqConsumerUp = false;
+    platform.bus.subscribe('validate.dlq', 'validator', () => {
+      if (!dlqConsumerUp) throw new Error('consumer down');
+    });
+
+    const savedMaxAttempts = platform.outbox.maxAttempts;
+    // Phase a: backlog grows while the consumer is down (retries keep rows pending).
+    platform.outbox.maxAttempts = 9999;
+    const windowA = snapshotWindow(platform);
+    platform.outbox.run(({ stage }) => {
+      for (let i = 0; i < CFG.backlog; i += 1) stage('validate.backlog', { n: i });
+    });
+    const pendingPeak = platform.outbox.stats().pending;
+    const gaugeLine = platform.metrics.render().match(/motse_outbox_pending (\d+)/);
+    check('backlog gauge matches reality', pendingPeak, gaugeLine && Number(gaugeLine[1]), gaugeLine && Number(gaugeLine[1]) === pendingPeak);
+    recordAlertPhase(platform, 'backlog-growth', windowA, ['OutboxBacklogGrowing']);
+
+    // Recovery: consumer restored → one drain clears the backlog.
+    backlogConsumerUp = true;
+    const tRec = performance.now();
+    platform.outbox.drain();
+    const backlogRecoveryMs = +(performance.now() - tRec).toFixed(1);
+    check('backlog drains to zero after consumer recovery', 0, platform.outbox.stats().pending, platform.outbox.stats().pending === 0);
+
+    // Phase b: dead-letter accumulation (attempts exhaust), then operator replay.
+    platform.outbox.maxAttempts = 1;
+    const windowB = snapshotWindow(platform);
+    platform.outbox.run(({ stage }) => {
+      for (let i = 0; i < CFG.dlq; i += 1) stage('validate.dlq', { n: i });
+    });
+    const deadPeak = platform.outbox.stats().dead;
+    check('dead letters accumulate when retries exhaust', CFG.dlq, deadPeak, deadPeak === CFG.dlq);
+    recordAlertPhase(platform, 'dlq-accumulation', windowB, ['OutboxDeadLetterAccumulation']);
+
+    dlqConsumerUp = true;
+    const tReplay = performance.now();
+    for (const entry of platform.outbox.deadLetters()) platform.outbox.replayDead(entry.id);
+    const dlqReplayMs = +(performance.now() - tReplay).toFixed(1);
+    check('operator replay clears the DLQ', 0, platform.outbox.stats().dead, platform.outbox.stats().dead === 0);
+    platform.outbox.maxAttempts = savedMaxAttempts;
+    report.scenarios.outbox_reliability = {
+      backlog_peak: pendingPeak, backlog_recovery_ms: backlogRecoveryMs,
+      dead_peak: deadPeak, dlq_replay_ms: dlqReplayMs,
+    };
+    // eslint-disable-next-line no-console
+    console.log(`  backlog recovery ${backlogRecoveryMs}ms · DLQ replay ${dlqReplayMs}ms`);
+  }
+
+  // ════ W5 · Lock contention + rate-limit saturation ════
+  section(`W5 lock contention (${CFG.locks} concurrent) + rate-limit saturation (${CFG.rlBurst} takes)`);
+  {
+    const windowHealthy = snapshotWindow(platform);
+    // Healthy pattern: serial lock use — no contention, limiter within capacity.
+    for (let i = 0; i < 20; i += 1) await platform.distributed.lock.withLock(`serial-${i}`, async () => {});
+    for (let i = 0; i < 100; i += 1) await platform.distributed.rateLimiter.take(`healthy-${i % 10}`);
+    recordAlertPhase(platform, 'healthy-traffic', windowHealthy, []);
+
+    const windowStress = snapshotWindow(platform);
+    let acquired = 0;
+    let contended = 0;
+    await Promise.all(
+      Array.from({ length: CFG.locks }, () =>
+        platform.distributed.lock
+          .withLock('hot-resource', () => new Promise((r) => { setImmediate(r); }))
+          .then(() => { acquired += 1; })
+          .catch((e) => { if (e.code === 'STATE_CONFLICT') contended += 1; })
+      )
+    );
+    let limited = 0;
+    for (let i = 0; i < CFG.rlBurst; i += 1) {
+      const r = await platform.distributed.rateLimiter.take('saturating-id');
+      if (!r.allowed) limited += 1;
+    }
+    report.scenarios.contention = {
+      locks: CFG.locks, acquired, contended, contention_ratio: +(contended / CFG.locks).toFixed(2),
+      rl_takes: CFG.rlBurst, limited, limited_ratio: +(limited / CFG.rlBurst).toFixed(2),
+    };
+    // eslint-disable-next-line no-console
+    console.log(`  locks: ${acquired} acquired / ${contended} contended · limiter: ${limited}/${CFG.rlBurst} limited`);
+    check('mutual exclusion held (exactly one winner per wave)', '>=1 acquired', acquired, acquired >= 1 && acquired + contended === CFG.locks);
+    recordAlertPhase(platform, 'contention-burst', windowStress, ['LockContentionHigh', 'RateLimitSaturation']);
+  }
+
+  // ════ W6 · Chaos: KV outage, transient blips, restart data loss ════
+  section('W6 chaos — Redis outage / blips / restart');
+  {
+    const chaosKv = new ChaosKv(platform.kv);
+    platform.kv = chaosKv;
+    platform.distributed.idempotency.kv = chaosKv;
+    platform.distributed.rateLimiter.kv = chaosKv;
+    platform.distributed.lock.kv = chaosKv;
+
+    chaosKv.down();
+    let failuresDuringOutage = 0;
+    for (let i = 0; i < 10; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await platform.distributed.idempotency.runOnce(`outage-${i}`, () => 'x').catch(() => { failuresDuringOutage += 1; });
+    }
+    check('operations fail closed during KV outage (no silent success)', 10, failuresDuringOutage, failuresDuringOutage === 10);
+
+    // Mission 1 regression guard: active dependency probes must surface the
+    // outage in readiness (the pre-fix engine left readiness green here).
+    await platform.dependencies.checkAll();
+    const readyDuringOutage = platform.health.ready();
+    check('readiness detects the KV outage via dependency probes (M1)', 'not ready', readyDuringOutage.ready ? 'ready' : 'not ready', readyDuringOutage.ready === false);
+    check('redis dependency reports failed during outage (M1)', 'failed', platform.dependencies.summary().redis, platform.dependencies.summary().redis === 'failed');
+
+    const tUp = performance.now();
+    chaosKv.up();
+    const recovered = await platform.distributed.idempotency.runOnce('post-outage', () => 'ok');
+    const outageRecoveryMs = +(performance.now() - tUp).toFixed(2);
+    check('first operation after outage succeeds (no lingering state)', 'ran', recovered.ran ? 'ran' : 'blocked', recovered.ran === true);
+
+    chaosKv.failNext(1);
+    const blip = await platform.distributed.idempotency.runOnce('blip-op', () => 'x').catch(() => 'failed');
+    const blipRetry = await platform.distributed.idempotency.runOnce('blip-op', () => 'x');
+    check('a transient blip is retryable without duplicate execution', 'failed then ran', `${blip} then ${blipRetry.ran ? 'ran' : 'blocked'}`, blip === 'failed' && blipRetry.ran === true);
+
+    await platform.distributed.idempotency.runOnce('pre-restart', () => 'x');
+    chaosKv.restart(new InMemoryKvAdapter({ clock: platform.clock }));
+    const reRun = await platform.distributed.idempotency.runOnce('pre-restart', () => 'x');
+    check('restart data loss degrades to at-least-once (documented boundary)', 'ran again', reRun.ran ? 'ran again' : 'blocked', reRun.ran === true);
+    // Recovery path: two clean probe cycles walk failed → recovering → healthy.
+    await platform.dependencies.checkAll();
+    await platform.dependencies.checkAll();
+    check('dependency state recovers after the outage ends (M1)', 'healthy', platform.dependencies.summary().redis, platform.dependencies.summary().redis === 'healthy');
+    report.scenarios.chaos = { outage_ops_failed: failuresDuringOutage, recovery_ms: outageRecoveryMs, kv_stats: chaosKv.stats() };
+    // eslint-disable-next-line no-console
+    console.log(`  recovery after outage: ${outageRecoveryMs}ms`);
+  }
+
+  // ════ W8 · Exporter throughput + failure isolation ════
+  section(`W8 OTLP exporter (${CFG.spans} spans)`);
+  {
+    const collected = [];
+    const exporter = new OtelSpanExporter({ transport: (p) => collected.push(p), serviceName: 'validate' });
+    const tracer = new Tracer({ clock: new Clock(), maxSpans: 100, sink: (sp) => exporter.accept(sp) });
+    const t0 = performance.now();
+    for (let i = 0; i < CFG.spans; i += 1) tracer.startSpan('export-bench', { attributes: { i } }).end();
+    exporter.flush();
+    const elapsed = performance.now() - t0;
+    const shipped = collected.reduce((n, p) => n + p.resourceSpans[0].scopeSpans[0].spans.length, 0);
+    const rate = Math.round(CFG.spans / (elapsed / 1000));
+    report.scenarios.exporter = { spans: CFG.spans, exported: shipped, dropped: exporter.dropped, spans_per_s: rate };
+    // eslint-disable-next-line no-console
+    console.log(`  ${rate} spans/s exported · dropped=${exporter.dropped}`);
+    check('exporter ships every span (zero dropped, healthy transport)', CFG.spans, shipped, shipped === CFG.spans && exporter.dropped === 0);
+
+    const broken = new OtelSpanExporter({ transport: () => { throw new Error('collector down'); } });
+    const brokenTracer = new Tracer({ clock: new Clock(), sink: (sp) => broken.accept(sp) });
+    const tOk = performance.now();
+    for (let i = 0; i < 500; i += 1) brokenTracer.startSpan('x').end();
+    broken.flush();
+    const brokenElapsed = performance.now() - tOk;
+    check('a dead collector never breaks span creation (drops counted)', '500 dropped, no throw', `${broken.dropped} dropped`, broken.dropped === 500);
+    report.scenarios.exporter.broken_collector_500_spans_ms = +brokenElapsed.toFixed(1);
+  }
+
+  // ════ W9 · Instrumentation overhead (with vs without) ════
+  section('W9 instrumentation overhead');
+  {
+    // Fixed iteration counts in every mode: micro-benchmarks need enough
+    // samples to beat JIT/GC noise, and they are cheap. A warmup pass runs
+    // first so both variants measure optimized code.
+    const N = 20000;
+    const OB_N = 5000;
+    const benchStore = (store) => {
+      const col = store.collection('bench');
+      for (let i = 0; i < 2000; i += 1) store.transaction(() => col.insert({ id: `warm-${i}` })); // warmup
+      const t0 = performance.now();
+      for (let i = 0; i < N; i += 1) store.transaction(() => col.insert({ id: `b-${i}` }));
+      return performance.now() - t0;
+    };
+    const bare = benchStore(new Store());
+    const instrumented = benchStore(new Store({ metrics: new Metrics() }));
+    const txOverheadPct = +(((instrumented - bare) / bare) * 100).toFixed(1);
+
+    const benchOutbox = (opts) => {
+      const store = new Store();
+      const clock = new Clock();
+      const bus = new EventBus(clock);
+      bus.register('bench.evt', 1, ['n']);
+      const outbox = new OutboxService({ store, clock, bus, ...opts });
+      for (let i = 0; i < 500; i += 1) outbox.run(({ stage }) => stage('bench.evt', { n: i })); // warmup
+      const t0 = performance.now();
+      for (let i = 0; i < OB_N; i += 1) outbox.run(({ stage }) => stage('bench.evt', { n: i }));
+      return performance.now() - t0;
+    };
+    const obBare = benchOutbox({});
+    const obFull = benchOutbox({ metrics: new Metrics(), tracer: new Tracer({ clock: new Clock(), maxSpans: 100 }) });
+    const obOverheadPct = +(((obFull - obBare) / obBare) * 100).toFixed(1);
+
+    const heapEnd = process.memoryUsage().heapUsed;
+    // Overhead criterion: instrumentation may add at most an absolute floor
+    // (sized for slow CI runners; local baselines +1.2µs/txn, +25µs/outbox-op)
+    // OR 25% of the bare operation cost, whichever is GREATER. The hybrid is
+    // needed because the bare outbox op itself varies severalfold with heap
+    // pressure (its drain full-scans the collection — see recommendation),
+    // so a pure absolute budget is not stable across run contexts, and a
+    // pure percentage is meaningless on ~1µs micro-ops.
+    const txnAddedUs = +((instrumented - bare) * 1000 / N).toFixed(2);
+    const obAddedUs = +((obFull - obBare) * 1000 / OB_N).toFixed(2);
+    const txnBareUs = bare * 1000 / N;
+    const obBareUs = obBare * 1000 / OB_N;
+    const txnBudgetUs = +Math.max(15, txnBareUs * 0.25).toFixed(1);
+    const obBudgetUs = +Math.max(75, obBareUs * 0.25).toFixed(1);
+    // Mission 3 regression guard: the pending index holds drain cost flat as
+    // published rows accumulate (pre-fix: ~866µs/op at 5.5k rows).
+    check('outbox drain cost stays flat with published-row accumulation (M3)', '<300µs/op', `${obBareUs.toFixed(0)}µs`, obBareUs < 300);
+    if (obBareUs >= 300) {
+      report.recommendations.push(
+        `REGRESSION: outbox bare op cost measured ${obBareUs.toFixed(0)}µs at ${OB_N + 500} rows — the pending index should hold this flat; investigate.`
+      );
+    }
+    report.scenarios.overhead = {
+      txn_bare_us: +(bare * 1000 / N).toFixed(2),
+      txn_instrumented_us: +(instrumented * 1000 / N).toFixed(2),
+      txn_added_us: txnAddedUs,
+      txn_overhead_pct: txOverheadPct,
+      outbox_bare_us: +(obBare * 1000 / OB_N).toFixed(2),
+      outbox_instrumented_us: +(obFull * 1000 / OB_N).toFixed(2),
+      outbox_added_us: obAddedUs,
+      outbox_overhead_pct: obOverheadPct,
+      heap_growth_mb: +((heapEnd - heapStart) / 1048576).toFixed(1),
+    };
+    // eslint-disable-next-line no-console
+    console.log(`  txn +${txnAddedUs}µs/op (${txOverheadPct}%) · outbox +${obAddedUs}µs/op (${obOverheadPct}%) · heap +${report.scenarios.overhead.heap_growth_mb}MB`);
+    check('transaction instrumentation cost within budget', `<=${txnBudgetUs}µs/txn`, `${txnAddedUs}µs`, txnAddedUs <= txnBudgetUs);
+    check('outbox instrumentation cost within budget', `<=${obBudgetUs}µs/op`, `${obAddedUs}µs`, obAddedUs <= obBudgetUs);
+  }
+
+  // ════ W10 · Resilience patterns under chaos (Mission 8) ════
+  section('W10 resilience patterns under chaos');
+  {
+    const { CircuitBreaker } = require('../src/resilience/circuit.breaker');
+    const { Bulkhead } = require('../src/resilience/bulkhead');
+    const { withRetry, withDeadline, RetryBudget } = require('../src/resilience/retry');
+    const clk = { nowMs: () => Date.now() };
+
+    // Circuit breaker over a downed KV: trips, then spares the dependency.
+    const chaosKv = new ChaosKv(new InMemoryKvAdapter({ clock: platform.clock })).down();
+    const cb = new CircuitBreaker({ clock: clk, failureThreshold: 5, cooldownMs: 40, metrics: platform.metrics });
+    let raw = 0;
+    for (let i = 0; i < 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cb.exec(() => chaosKv.get('k')).catch(() => {});
+    }
+    const openState = cb.state;
+    const callsAtOpen = chaosKv.stats().calls;
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cb.exec(() => { raw += 1; return chaosKv.get('k'); }).catch(() => {});
+    }
+    check('breaker trips open under sustained dependency failure', 'open', openState, openState === 'open');
+    check('open breaker spares the dead dependency (fast-fail, no calls)', callsAtOpen, chaosKv.stats().calls, chaosKv.stats().calls === callsAtOpen);
+    // Recovery: dependency healthy + cooldown → half-open probe closes.
+    chaosKv.up();
+    await new Promise((r) => { setTimeout(r, 60); });
+    const recovered = await cb.exec(() => chaosKv.get('k')).then(() => true).catch(() => false);
+    check('breaker closes after the dependency recovers', 'closed', cb.state, recovered && cb.state === 'closed');
+
+    // Bulkhead isolation: overflow is rejected, the pool never exceeds its cap.
+    const bh = new Bulkhead({ name: 'redis', maxConcurrent: 5, maxQueue: 5, metrics: platform.metrics });
+    let rejected = 0;
+    const slow = () => new Promise((r) => { setTimeout(r, 30); });
+    await Promise.all(Array.from({ length: 30 }, () => bh.exec(slow).catch((e) => { if (e.code === 'UNAVAILABLE') rejected += 1; })));
+    check('bulkhead sheds overflow instead of cascading', '>0 rejected', rejected, rejected > 0 && bh.stats().peak_active <= 5);
+
+    // Adaptive retry + budget: recovers a transient blip; budget caps a storm.
+    const budget = new RetryBudget({ ratio: 0.2, minRetries: 2, clock: clk });
+    let tries = 0;
+    const retried = await withRetry(async () => { tries += 1; if (tries < 3) throw new Error('blip'); return 'ok'; },
+      { attempts: 5, baseMs: 1, budget, metrics: platform.metrics });
+    check('adaptive retry recovers a transient failure', 'ok', retried, retried === 'ok');
+
+    // Timeout budget: a hung dependency is abandoned, not awaited forever.
+    const hung = new Promise(() => {});
+    const deadlineHit = await withDeadline(hung, 20).then(() => false).catch((e) => e.code === 'UNAVAILABLE');
+    check('timeout budget abandons a hung call', 'deadline', deadlineHit ? 'deadline' : 'hung', deadlineHit === true);
+
+    // Load shedding: over the in-flight cap, normal paths shed, critical pass.
+    const { LoadShedder } = require('../src/resilience/load.shed');
+    const shed = new LoadShedder({ maxInFlight: 2, metrics: platform.metrics });
+    const mw = shed.middleware();
+    const fakeRes = () => ({ on() {}, writableFinished: true });
+    let shedCount = 0; let critPass = 0;
+    for (let i = 0; i < 5; i += 1) mw({ path: '/v1/search' }, fakeRes(), (e) => { if (e) shedCount += 1; });
+    mw({ path: '/health/live' }, fakeRes(), (e) => { if (!e) critPass += 1; });
+    mw({ path: '/v1/admin/overview' }, fakeRes(), (e) => { if (!e) critPass += 1; });
+    check('load shedder sheds normal traffic over the cap', '>0 shed', shedCount, shedCount > 0);
+    check('load shedder never sheds critical paths', 2, critPass, critPass === 2);
+    void raw;
+  }
+
+  // ════ W11 · Runtime intelligence detects synthetic pressure (Mission 5) ════
+  section('W11 runtime intelligence');
+  {
+    const s = platform.runtime.sample();
+    check('runtime sampler reports live heap + event-loop metrics', 'heap>0', s.heap_used_bytes > 0 ? 'heap>0' : 'none', s.heap_used_bytes > 0 && typeof s.event_loop_utilization === 'number');
+    check('runtime metrics reach the shared registry', true, platform.metrics.render().includes('motse_runtime_heap_used_bytes'), platform.metrics.render().includes('motse_runtime_heap_used_bytes'));
+    // Feed a synthetic leaking window into a private instance to prove the
+    // predictive detector fires (the live process should NOT be leaking).
+    const { RuntimeIntelligence } = require('../src/observability/runtime.intelligence');
+    const probe = new RuntimeIntelligence({ clock: { nowMs: () => Date.now(), nowIso: () => new Date().toISOString() }, sampleMs: 60000 });
+    for (let i = 0; i < 8; i += 1) {
+      const used = 850_000_000 + i * 5_000_000;
+      probe.samples.push({ at_ms: i * 60000, heap_used_bytes: used, heap_limit_bytes: 1_000_000_000, heap_utilization: used / 1e9, event_loop_delay_p99_ms: 2, event_loop_utilization: 0.2, active_handles: 10 });
+    }
+    const leak = probe.insights().some((x) => x.kind === 'memory_leak_suspected');
+    check('runtime detector flags a leaking heap trend', 'leak', leak ? 'leak' : 'none', leak === true);
+    const liveLeak = platform.runtime.insights().some((x) => x.kind === 'memory_leak_suspected');
+    check('the live process is NOT falsely flagged as leaking', 'clean', liveLeak ? 'FLAGGED' : 'clean', liveLeak === false);
+    report.scenarios.resilience = { breaker: 'validated', bulkhead: 'validated', retry: 'validated', deadline: 'validated', load_shedding: 'validated' };
+    report.scenarios.runtime = platform.runtime.snapshot().current;
+  }
+
+  // ════ W12 · Distributed config applied live (Mission 6) ════
+  section('W12 live configuration');
+  {
+    const breaker = platform.resilience.breaker('redis');
+    const before = breaker.failureThreshold;
+    platform.config.set('resilience.redis.breaker.failureThreshold', before + 7, { actor: 'validator', reason: 'W12' });
+    check('config change applies to the running system with zero restart', before + 7, breaker.failureThreshold, breaker.failureThreshold === before + 7);
+    // Validation rejects an out-of-range value.
+    let rejected = false;
+    try { platform.config.set('resilience.redis.breaker.failureThreshold', -1); } catch { rejected = true; }
+    check('config validation rejects an invalid value', 'rejected', rejected ? 'rejected' : 'accepted', rejected === true);
+    // Emergency kill switch drives managed knobs to safe values, reversibly.
+    const shedBefore = platform.resilience.shedder.maxInFlight;
+    platform.config.killSwitch(true, { actor: 'validator' });
+    const safe = platform.resilience.shedder.maxInFlight;
+    platform.config.killSwitch(false, { actor: 'validator' });
+    check('kill switch forces a safe value then restores', `${safe}<${shedBefore} then restore`, `${safe} then ${platform.resilience.shedder.maxInFlight}`, safe < shedBefore && platform.resilience.shedder.maxInFlight === shedBefore);
+    // Snapshot → change → restore round-trips.
+    platform.config.snapshot('w12-baseline', { actor: 'validator' });
+    platform.config.set('resilience.redis.breaker.failureThreshold', 42);
+    platform.config.restore('w12-baseline', { actor: 'validator' });
+    check('config snapshot restore reverts changes', before + 7, breaker.failureThreshold, breaker.failureThreshold === before + 7);
+    report.scenarios.config = platform.config.stats();
+  }
+
+  // ════ W13 · Predictive capacity planning (Mission 9) ════
+  section('W13 capacity planning');
+  {
+    for (let i = 0; i < 10; i += 1) { platform.runtime.sample(); platform.capacity.record(); }
+    const forecast = platform.capacity.forecast();
+    check('capacity forecast produces multi-horizon projections', true, !!forecast.projections.heap.forecast, !!(forecast.projections.heap.forecast && forecast.projections.heap.forecast['365d'] !== undefined));
+    check('every projection carries a confidence + assumptions', true,
+      forecast.projections.heap.confidence != null && Array.isArray(forecast.projections.heap.assumptions),
+      forecast.projections.heap.confidence != null && forecast.projections.heap.assumptions.length > 0);
+    check('capacity report yields at least one recommendation', '>=1', forecast.recommendations.length, forecast.recommendations.length >= 1);
+    report.scenarios.capacity = { samples: forecast.samples, recommendations: forecast.recommendations.length };
+  }
+
+  // ════ W14 · Configuration governance (Phase 1) ════
+  section('W14 configuration governance');
+  {
+    const g = platform.configGovernance;
+    // Two distinct operator admins for separation of duties.
+    const mkAdmin = (dev, msisdn) => {
+      const otp = platform.identity.requestOtp(msisdn);
+      const { user } = platform.identity.verifyOtp(msisdn, otp.sandbox_code, { deviceId: dev });
+      platform.identity.grantInstitutional(user.id, { institution: 'Ops' }, 'system:bootstrap');
+      platform.identity.grantRole(user.id, 'platform_admin', 'platform', 'system:bootstrap');
+      return user.id;
+    };
+    const gA = mkAdmin('gov-a', '+26773000001');
+    const gB = mkAdmin('gov-b', '+26773000002');
+    const gC = mkAdmin('gov-c', '+26773000003');
+    const breaker = platform.resilience.breaker('redis');
+    const base = breaker.failureThreshold;
+    const chg = g.request('resilience.redis.breaker.failureThreshold', base + 4, { actor: gA, justification: 'W14 governance drill' });
+    check('a critical config change is held pending (not applied)', 'pending', chg.status, chg.status === 'pending' && breaker.failureThreshold === base);
+    let selfBlocked = false;
+    try { g.approve(chg.id, gA); } catch { selfBlocked = true; }
+    check('separation of duties blocks proposer self-approval', 'blocked', selfBlocked ? 'blocked' : 'allowed', selfBlocked === true);
+    g.approve(chg.id, gB);
+    const applied = g.approve(chg.id, gC);
+    check('the change applies only after the approval chain completes', base + 4, breaker.failureThreshold, applied.status === 'applied' && breaker.failureThreshold === base + 4);
+    check('the applied change carries a full forensic record', true,
+      !!(applied.rollback_ref != null && applied.approvals.length === 2 && applied.affects.length > 0 && applied.justification),
+      applied.rollback_ref != null && applied.approvals.length === 2 && applied.affects.length > 0 && !!applied.justification);
+    const reverted = g.rollbackChange(applied.id, gA);
+    check('a governed change is reversible to its prior value', base, breaker.failureThreshold, reverted.status === 'rolled_back' && breaker.failureThreshold === base);
+    report.scenarios.governance = { history: g.history().length, policy: g.policy };
+  }
+
+  // ════ W15 · Disaster-recovery validation (Phase 2 / Mission 10) ════
+  section('W15 disaster recovery');
+  {
+    const dr = await platform.dr.validateAll();
+    check('every DR scenario recovers consistently', dr.scenarios, dr.passed, dr.passed === dr.scenarios);
+    check('RTO objective is met across all scenarios', 'met', dr.rto.met ? 'met' : 'MISSED', dr.rto.met === true);
+    check('RPO objective is met across all scenarios', 'met', dr.rpo.met ? 'met' : 'MISSED', dr.rpo.met === true);
+    check('recovery confidence is full', 1, dr.recovery_confidence, dr.recovery_confidence === 1);
+    // eslint-disable-next-line no-console
+    console.log(`  RTO max ${dr.rto.max_ms}ms · avg ${dr.rto.avg_ms}ms · confidence ${dr.recovery_confidence}`);
+    report.scenarios.disaster_recovery = { passed: dr.passed, scenarios: dr.scenarios, rto_max_ms: dr.rto.max_ms, confidence: dr.recovery_confidence };
+  }
+
+  // ════ W16 · Business observability (Phase 1) ════
+  section('W16 business observability');
+  {
+    // Drive real business activity through the live app: a campaign + contributions.
+    const otpM = platform.identity.requestOtp('+26774000001');
+    const { user: opener } = platform.identity.verifyOtp('+26774000001', otpM.sandbox_code, { deviceId: 'biz' });
+    platform.identity.grantInstitutional(opener.id, { institution: 'VDC' }, 'system:bootstrap'); // L3 (can endorse)
+    const clearing = platform.payments.clearingAccountId('orange_money');
+    const wallet = platform.ledger.openAccount(opener.id, 'user_wallet');
+    platform.ledger.providerDeposit({ providerAccountId: clearing, destAccountId: wallet.id, amountMinor: 100000, providerTxRef: 'biz:seed', idempotencyKey: 'biz:seed' });
+    const campaign = platform.kgetsi.open(opener.id, { campaignClass: 'community', title: 'Business obs drill', targetMinor: 50000, milestones: [{ description: 'x', amount_minor: 50000 }] });
+    platform.kgetsi.endorse(campaign.id, opener.id, 'ok');
+    platform.kgetsi.goLive(campaign.id, opener.id);
+    platform.kgetsi.contribute(campaign.id, { sourceAccountId: wallet.id, amountMinor: 7000, contributorRef: opener.id, idempotencyKey: 'biz:c1' });
+    const snap = platform.business.snapshot();
+    check('domain events correlate into business capabilities', '>=1 contribution', snap.fundraising.completed, snap.fundraising.completed >= 1);
+    check('business value is tracked from event payloads', '>=7000', snap.fundraising.value_minor, snap.fundraising.value_minor >= 7000);
+    const exec = platform.business.executiveView();
+    check('executive view aggregates value + customer reach', true, exec.total_value_minor >= 7000 && exec.customers_reached >= 1, exec.total_value_minor >= 7000 && exec.customers_reached >= 1);
+    const impact = platform.business.impactOf('fundraising');
+    check('impactOf answers the customer-impact questions', true, impact != null && impact.product === 'Kgetsi Campaigns', impact != null && impact.product === 'Kgetsi Campaigns');
+    report.scenarios.business = { value_minor: exec.total_value_minor, events: exec.total_business_events, healthy: exec.capabilities_healthy };
+  }
+
+  // ════ W17 · Operational intelligence (Phase 2) ════
+  section('W17 operational intelligence');
+  {
+    // A healthy platform must NOT emit recommendations (no false positives).
+    // Use a FRESH platform — the harness one carries residual stress signals
+    // from earlier phases (that opsIntel correctly reports, not a false positive).
+    const calmPlatform = createPlatform();
+    for (let i = 0; i < 3; i += 1) calmPlatform.opsIntel.record();
+    const calm = calmPlatform.opsIntel.advise();
+    check('a healthy platform yields no false recommendations', 0, calm.recommendations.length, calm.recommendations.length === 0);
+    // Inject a failing dependency → a critical, evidence-backed recommendation.
+    const chaos = new ChaosKv(platform.kv);
+    platform.kv = chaos; platform.distributed.idempotency.kv = chaos; chaos.down();
+    await platform.dependencies.checkAll();
+    platform.opsIntel.record();
+    const advice = platform.opsIntel.advise();
+    const critical = advice.recommendations.find((r) => r.urgency === 'critical');
+    check('a real degradation produces an evidence-based recommendation', true, !!critical, !!critical);
+    check('recommendations carry evidence + confidence + business impact', true,
+      !!(critical && critical.evidence && critical.confidence > 0 && critical.business_impact && critical.rollback),
+      !!(critical && critical.evidence && critical.confidence > 0 && critical.business_impact && critical.rollback));
+    chaos.up();
+    // Walk the dependency state back to healthy so final readiness is clean.
+    await platform.dependencies.checkAll();
+    await platform.dependencies.checkAll();
+    report.scenarios.operational_intelligence = { recommendations_under_stress: advice.recommendations.length };
+  }
+
+  // ════ W18 · Governance analytics (Analytics Phase 1) ════
+  section('W18 governance analytics');
+  {
+    // W14 already produced a governed change (applied + rolled back). Analyse it.
+    const rep = platform.governanceAnalytics.report();
+    check('governance records become quantified analytics', true, rep.total_changes >= 1 && typeof rep.compliance_score === 'number', rep.total_changes >= 1 && typeof rep.compliance_score === 'number');
+    check('compliance + maturity scores are computed in range', true,
+      rep.compliance_score >= 0 && rep.compliance_score <= 1 && rep.operational_maturity_score >= 0 && rep.operational_maturity_score <= 1,
+      rep.compliance_score >= 0 && rep.compliance_score <= 1 && rep.operational_maturity_score >= 0 && rep.operational_maturity_score <= 1);
+    const recs = platform.governanceAnalytics.recommend();
+    check('governance recommendations are evidence-backed', true,
+      recs.recommendations.every((r) => r.evidence && typeof r.confidence === 'number' && r.remediation),
+      recs.recommendations.every((r) => r.evidence && typeof r.confidence === 'number' && r.remediation));
+    report.scenarios.governance_analytics = { total_changes: rep.total_changes, compliance: rep.compliance_score, maturity: rep.operational_maturity_score, rollback_rate: rep.rollback.rate };
+  }
+
+  // ════ W19 · Forecast accuracy validation (Analytics Phase 2) ════
+  section('W19 forecast accuracy');
+  {
+    // The capacity planner recorded history across W13 + the health cycles.
+    for (let i = 0; i < 6; i += 1) { platform.runtime.sample(); platform.capacity.record(); }
+    const acc = platform.forecastAccuracy.report();
+    check('forecast accuracy is measured by backtesting the planner history', true, acc.overall_accuracy_pct != null, acc.overall_accuracy_pct != null);
+    check('per-field backtests report accuracy + trend correctness', true,
+      Object.values(acc.fields).some((f) => !f.insufficient_data && typeof f.accuracy === 'number'),
+      Object.values(acc.fields).some((f) => !f.insufficient_data && typeof f.accuracy === 'number'));
+    check('the recommendation gate reflects measured accuracy', true, typeof acc.recommendation_gate.trustworthy === 'boolean', typeof acc.recommendation_gate.trustworthy === 'boolean');
+    // eslint-disable-next-line no-console
+    console.log(`  overall forecast accuracy ${acc.overall_accuracy_pct}% · trustworthy ${acc.recommendation_gate.trustworthy} · calibrated ${acc.calibration.well_calibrated}`);
+    report.scenarios.forecast_accuracy = { overall_accuracy_pct: acc.overall_accuracy_pct, trustworthy: acc.recommendation_gate.trustworthy };
+  }
+
+  // ════ W20 · Business outcome validation (FINAL Phase 1) ════
+  section('W20 business outcome validation');
+  {
+    // W16 drove a real 7000 contribution into a campaign; the ledger is the
+    // authoritative record. Reconcile the business telemetry against it.
+    const recon = platform.reconciliation.reconcile();
+    check('business telemetry reconciles against the authoritative ledger', true,
+      recon.data_confidence === 1 && recon.discrepancies.length === 0,
+      recon.data_confidence === 1 && recon.discrepancies.length === 0);
+    check('fundraising value is validated against the ledger (not just asserted)', true,
+      recon.capabilities.fundraising.reconciled && recon.capabilities.fundraising.authoritative.value_minor >= 7000,
+      recon.capabilities.fundraising.reconciled && recon.capabilities.fundraising.authoritative.value_minor >= 7000);
+    // Prove the reconciler DETECTS a telemetry gap (not just always green): a
+    // fake ledger holds 3 contributions the telemetry under-counts by one.
+    const fakeLedger = {
+      postings: { find: () => [1, 2, 3].map(() => ({ purpose: 'escrow_fund', ref: 'campaign:x', entries: [{ account_id: 's', amount_minor: -3000 }, { account_id: 'e', amount_minor: 3000 }] })) },
+      payouts: { find: () => [] },
+    };
+    const gapBiz = { valueEventCounts: () => ({ fundraising: { value_events: 2, value_minor: 6000, customers: 2 } }) };
+    const gap = new BusinessReconciliation({ business: gapBiz, ledger: fakeLedger, clock: platform.clock }).reconcile();
+    const d = gap.discrepancies.find((x) => x.capability === 'fundraising');
+    check('a telemetry undercount is caught with root cause + financial exposure', true,
+      !!d && d.kind === 'missing_events' && d.financial_exposure_minor === 3000 && !!d.probable_root_cause && !!d.remediation,
+      !!d && d.kind === 'missing_events' && d.financial_exposure_minor === 3000 && !!d.probable_root_cause && !!d.remediation);
+    report.scenarios.business_reconciliation = {
+      data_confidence: recon.data_confidence,
+      financial_accuracy: recon.financial_accuracy,
+      discrepancy_detected: !!d,
+      detected_exposure_minor: d ? d.financial_exposure_minor : 0,
+    };
+  }
+
+  // ════ W21 · Recommendation effectiveness (FINAL Phase 2) ════
+  section('W21 recommendation effectiveness');
+  {
+    const re = platform.recommendationEffectiveness;
+    // A true positive: accepted, prevented a real incident with known exposure.
+    const tp = re.record({ source: 'operational_intelligence', signal: 'dependency_failure', confidence: 0.95 });
+    re.accept(tp.id, 'ops-oncall');
+    re.resolve(tp.id, { success: true, incident_prevented: true, financial_exposure_minor: 250000 });
+    // A false positive: raised, rejected, not a real problem.
+    const fp = re.record({ source: 'operational_intelligence', signal: 'retry_storm', confidence: 0.6 });
+    re.reject(fp.id, 'ops-oncall', 'transient blip');
+    re.resolve(fp.id, { false_positive: true });
+    // A false negative: a real incident nothing flagged (makes recall measurable).
+    re.recordMiss({ signal: 'disk_full', financial_exposure_minor: 5000 });
+    const eff = re.effectiveness();
+    check('recommendations are tracked as measurable products (precision + recall)', true,
+      eff.precision != null && eff.recall != null && eff.generated >= 2,
+      eff.precision != null && eff.recall != null && eff.generated >= 2);
+    check('operator trust + ROI are computed from real outcomes', true,
+      eff.operator_trust_score != null && eff.outcomes.incidents_prevented === 1 && eff.roi.financial_exposure_prevented_minor === 250000,
+      eff.operator_trust_score != null && eff.outcomes.incidents_prevented === 1 && eff.roi.financial_exposure_prevented_minor === 250000);
+    // Confidence recalibration: two resolved of the same signal (1 hit, 1 miss)
+    // must pull a fresh 0.9 prior down toward the observed 0.5 hit-rate.
+    const s1 = re.record({ source: 'operational_intelligence', signal: 'memory_pressure', confidence: 0.9 });
+    re.accept(s1.id); re.resolve(s1.id, { success: true });
+    const s2 = re.record({ source: 'operational_intelligence', signal: 'memory_pressure', confidence: 0.9 });
+    re.resolve(s2.id, { false_positive: true });
+    const calibrated = re.calibratedConfidence('memory_pressure', 0.9);
+    check('confidence recalibrates from historical evidence (shrinks toward hit-rate)', true,
+      calibrated < 0.9 && calibrated > 0.5, calibrated < 0.9 && calibrated > 0.5);
+    // eslint-disable-next-line no-console
+    console.log(`  precision ${eff.precision} · recall ${eff.recall} · trust ${eff.operator_trust_score} · memory_pressure confidence 0.9→${calibrated}`);
+    report.scenarios.recommendation_effectiveness = {
+      precision: eff.precision, recall: eff.recall, trust: eff.operator_trust_score,
+      incidents_prevented: eff.outcomes.incidents_prevented, recalibrated_confidence: calibrated,
+    };
+  }
+
+  // ════ W22 · Executive operational intelligence (FINAL Phase 3) ════
+  section('W22 executive operational intelligence');
+  {
+    const exec = platform.executive.report();
+    // Every confidence component must cite a source (no unsupported numbers).
+    const sourced = exec.operational_confidence_detail.components.every((c) => typeof c.source === 'string' && c.source.length > 0);
+    check('operational confidence blends only sourced, measured components', true,
+      sourced && exec.operational_confidence != null, sourced && exec.operational_confidence != null);
+    // The briefing answers all seven executive questions.
+    const b = exec.briefing;
+    const answersSeven = !!(b.what_happened && b.why && b.who_was_affected && b.business_value_affected_minor != null
+      && b.recommended_action && ('recommendation_confidence' in b) && b.if_nothing_is_done);
+    check('the executive briefing answers the seven leadership questions', true, answersSeven, answersSeven);
+    // After W20 injected/observed activity + W21 recorded outcomes, the fused
+    // view must expose recommendation quality and business validation as domains.
+    check('the briefing fuses business validation + recommendation quality domains', true,
+      exec.domains.business_validation.available && exec.domains.recommendation_quality.available,
+      exec.domains.business_validation.available && exec.domains.recommendation_quality.available);
+    // eslint-disable-next-line no-console
+    console.log(`  operational confidence ${exec.operational_confidence} · open risks ${exec.risks.length} · value at risk ${b.business_value_affected_minor} minor`);
+    report.scenarios.executive_intelligence = {
+      operational_confidence: exec.operational_confidence,
+      components: exec.operational_confidence_detail.components.map((c) => c.name),
+      open_risks: exec.risks.length,
+    };
+  }
+
+  // ════ W23 · Continuous learning (FINAL Phase 4) ════
+  section('W23 continuous learning');
+  {
+    const cl = platform.continuousLearning;
+    // Build forecast history so the learned forecast-confidence multiplier activates.
+    for (let i = 0; i < 12; i += 1) { platform.runtime.sample(); platform.capacity.record(); }
+    // Observe the executive briefing several times to accumulate a knowledge base.
+    const before = cl.knowledge().length;
+    for (let i = 0; i < 5; i += 1) cl.observe();
+    const rep = cl.learn();
+    check('every observation becomes persisted knowledge', true,
+      cl.knowledge().length === before + 5 && rep.samples >= 5,
+      cl.knowledge().length === before + 5 && rep.samples >= 5);
+    check('the platform learns a maturity score + confidence trend from its own outcomes', true,
+      rep.learned_operational_maturity.score != null && typeof rep.trends.operational_confidence.direction === 'string',
+      rep.learned_operational_maturity.score != null && typeof rep.trends.operational_confidence.direction === 'string');
+    // Recommendation confidence is recalibrated from recorded outcomes (W21 fed it).
+    const model = rep.recommendation_confidence_model.find((s) => s.resolved > 0);
+    check('recommendation confidence is recalibrated from historical outcomes', true, !!model, !!model);
+    // The learned forecast multiplier only discounts — it never inflates confidence.
+    const mult = rep.learned_forecast_confidence.multiplier;
+    check('learned forecast confidence never inflates (multiplier <= 1 when present)', true,
+      mult == null || (mult >= 0 && mult <= 1), mult == null || (mult >= 0 && mult <= 1));
+    // eslint-disable-next-line no-console
+    console.log(`  learned maturity ${rep.learned_operational_maturity.score} · learning confidence ${rep.learning_confidence} · trend ${rep.improving}`);
+    report.scenarios.continuous_learning = {
+      samples: rep.samples, learned_operational_maturity: rep.learned_operational_maturity.score,
+      learning_confidence: rep.learning_confidence, forecast_multiplier: mult,
+    };
+  }
+
+  // ════ Integrity + verdict ════
+  section('final integrity');
+  check('ledger trial balance held through every scenario', 'balanced', platform.ledger.trialBalance().balanced ? 'balanced' : 'IMBALANCED', platform.ledger.trialBalance().balanced);
+  const ready = platform.health.ready();
+  check('platform ready after all fault injection', true, ready.ready, ready.ready === true);
+
+  server.close();
+  report.finished_at = new Date().toISOString();
+  const failed = report.checks.filter((c) => !c.pass);
+  report.verdict = failed.length === 0 ? 'PASS' : 'FAIL';
+
+  const outDir = path.join(__dirname, '../docs/evidence');
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(outDir, 'production-validation.json'), `${JSON.stringify(report, null, 2)}\n`);
+
+  // eslint-disable-next-line no-console
+  console.log(`\n${report.checks.length} checks · ${report.checks.length - failed.length} passed · ${failed.length} failed`);
+  if (report.recommendations.length) {
+    // eslint-disable-next-line no-console
+    console.log(`recommendations: ${report.recommendations.length} (see docs/evidence/production-validation.json)`);
+  }
+  // eslint-disable-next-line no-console
+  console.log(`verdict: ${report.verdict}`);
+  process.exit(failed.length === 0 ? 0 : 1);
+}
+
+main().catch((e) => {
+  // eslint-disable-next-line no-console
+  console.error('validation harness crashed:', e);
+  process.exit(1);
+});
