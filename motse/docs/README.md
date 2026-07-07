@@ -59,6 +59,7 @@ chaos/production harness.
 ### Overview & architecture
 | Doc | What it covers |
 | --- | --- |
+| [PROJECT-PROPOSAL](PROJECT-PROPOSAL.md) | Non-technical overview — what Motse is, the opportunity, vision, beneficiaries, roadmap, risks, and success metrics (start here for the big picture) |
 | [ARCHITECTURE](ARCHITECTURE.md) | System topology, the modular monolith, the three primitives, the event bus |
 | [API](API.md) | The `/v1` REST surface, gateway (auth · idempotency · rate limiting), error model |
 | [ROADMAP-EPICS](ROADMAP-EPICS.md) | Phased roadmap and workstream epics |
