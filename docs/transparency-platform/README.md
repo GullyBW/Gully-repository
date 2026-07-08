@@ -167,15 +167,34 @@ guarantees baked in as defaults. See [`phase7/`](./phase7/00-phase7-index.md).
 | 9 | [Engineering Metrics](./phase7/09-engineering-metrics.md) | DORA + posture/conformance; guardrails; team-not-individual |
 | 10 | [Knowledge Platform](./phase7/10-knowledge-platform.md) | Searchable, versioned, traceable knowledge graph; reusable factory |
 
+## Phase 8 — Digital Engineering Twin & Continuous Verification (delivered)
+
+An executable, synthetic, production-isolated validation environment that continuously proves the
+architecture, security, privacy, governance, resilience, and readiness — generating machine-verifiable
+evidence for human decision-makers. See [`phase8/`](./phase8/00-phase8-index.md).
+
+| WS | Document | Focus |
+|----|----------|-------|
+| 1 | [Digital Engineering Twin](./phase8/01-digital-engineering-twin.md) | Synthetic executable model of the whole platform; fidelity levels; isolation |
+| 2 | [Synthetic Data Platform](./phase8/02-synthetic-data-platform.md) | Fully-artificial datasets; no linkage to real people/institutions |
+| 3 | [Architecture-as-Code](./phase8/03-architecture-as-code.md) | DDRs → executable fitness functions; violations blocked |
+| 4 | [Continuous Verification](./phase8/04-continuous-verification-framework.md) | 8-dimension automated verification; signed evidence per change |
+| 5 | [Adversarial Simulation](./phase8/05-adversarial-simulation.md) | SIM-1…10: insider/operator/DoS/phishing/metadata/tamper/DR/governance |
+| 6 | [Compliance Evidence Automation](./phase8/06-compliance-evidence-automation.md) | Auto-generated, signed, anchored, packaged evidence |
+| 7 | [Platform Certification](./phase8/07-platform-certification.md) | Human certification supported by automated evidence |
+| 8 | [Engineering Analytics](./phase8/08-engineering-analytics.md) | Verification coverage/conformance/posture; guardrails; team-level |
+| 9 | [Human Review Boundaries](./phase8/09-human-review-boundaries.md) | Twin generates evidence; humans decide (crypto/legal/constitutional/go-live) |
+| 10 | [Continuous Learning](./phase8/10-continuous-learning.md) | Twin-driven improvement preserving architectural intent |
+
 ## What happens next
 
-The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–7). Engineering may proceed
-**on synthetic data**, using the Phase-7 factory to execute the Phase-6 specs through the
-systems-engineering reviews (SRR→PRR), building the security spine first (D-05), with the 🔒
-anonymity/crypto/custody/metadata/AI subsystems human-expert-built and ISRB-signed. **Production
-go-live remains reserved for the Oversight Board**, contingent on the readiness gates (`phase2/05`,
-`phase3/08`), the evidence package (`phase5/06`, `phase4/13`), and the 🔒 legal/judicial/privacy/
-security/procurement/funding reviews. **No production data flows until the gates pass.**
+The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–8). Engineering may proceed
+**on synthetic data**: build the Phase-6 specs on the Phase-7 factory, continuously validated in the
+Phase-8 twin, through the systems-engineering reviews and platform certification — security spine
+first (D-05), 🔒 subsystems human-expert-built. **A green twin is evidence, not a launch decision.**
+**Production go-live remains reserved for the Oversight Board**, contingent on the readiness gates
+(`phase2/05`, `phase3/08`), the evidence package (`phase5/06`, `phase4/13`), and the 🔒 legal/judicial/
+privacy/security/procurement/funding reviews. **No production data flows until the gates pass.**
 
 ## Design commitments carried through every section
 
