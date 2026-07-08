@@ -54,12 +54,34 @@ engineering work items. See [`design/`](./design/00-design-index.md).
 | 06 | [Observability Architecture](./design/06-observability-architecture.md) | Metrics/logs/traces · SIEM/SecOps · tamper-evident audit · Public Trust Index |
 | 07 | [DevSecOps Architecture](./design/07-devsecops-architecture.md) | Secure SDLC · SLSA/SBOM/reproducible builds · IaC · security-gated CI/CD · autonomy boundary |
 
+## Phase 2 — Governance & Implementation (delivered — awaiting ORG sign-off)
+
+Operationalizes the approved architecture into an executable governance subsystem, full
+traceability, a phased programme, and MVP work items; pauses at the **Operational Readiness
+Gate**. See [`phase2/`](./phase2/00-phase2-index.md).
+
+| # | Document | Focus |
+|---|----------|-------|
+| 01 | [Governance System](./phase2/01-governance-system.md) | 8 bodies: authority, decision rights, quorum, voting, cadence, escalation; wired to technical controls |
+| 02 | [Policy Engine](./phase2/02-policy-engine.md) | Policy-as-code lifecycle, versioning, enforcement, rollback, compliance monitoring |
+| 03 | [Operational Governance](./phase2/03-operational-governance.md) | CoI, appeals, transparency reporting, whistleblower protection, audit, exceptions, emergency, disaster |
+| 04 | [Requirements Traceability Matrix](./phase2/04-traceability-matrix.md) | Need→Req→Assumption→Threat→Risk→DDR→Component→Task→Test→Metric |
+| 05 | [Operational Readiness Gate](./phase2/05-operational-readiness-gate.md) | 10 blocking criteria before any production go-live |
+| 06 | [Implementation Roadmap](./phase2/06-implementation-roadmap.md) | Phases 0–6: objectives, scope, deps, risks, staffing, budget (BWP), exit criteria |
+| 07 | [Interoperability Framework](./phase2/07-interoperability-framework.md) | API/event standards, federation, versioning, schema governance, onboarding |
+| 08 | [Chain-of-Custody Procedures](./phase2/08-chain-of-custody-procedures.md) | Ingest→verify→hash→timestamp→retain→archive→delete→audit SOPs |
+| 09 | [Public Trust Index](./phase2/09-public-trust-index.md) | 9 indicators, sources, calculation, publication, governance, privacy |
+| 10 | [Justice Analytics](./phase2/10-justice-analytics.md) | Privacy-preserving analytics; disclosure control; purpose limitation |
+| 11 | [GitHub Work Items (MVP)](./phase2/11-github-work-items.md) | Epics/Features/Stories/Tasks with full metadata |
+| 12 | [Representative Artifacts](./phase2/12-implementation-artifacts.md) | Sample OpenAPI, event schema, DB migration, IaC, CI/CD gate, runbook, test plan |
+
 ## What happens next
 
-After you approve the Design Phase (or flag DDR changes), the next batch is **Governance
-Framework**, then **per-context implementation specs + OpenAPI/schemas**, then **GitHub Epics/
-Stories for the MVP** — see the **Design Approval Gate** at the end of
-[`design/07`](./design/07-devsecops-architecture.md#-design-approval-gate-ratified-d-11).
+Phase 2 pauses at the **Operational Readiness Gate** (`phase2/05`). Build against **synthetic
+data** (Phase 0/1) may begin now; **production go-live is blocked** until the gate's 10 criteria
+are GREEN with Oversight Board sign-off. Next options: begin the **Phase 0/1 build** (full
+per-context specs + OpenAPI/schemas + IaC/CI-CD), deepen **governance** toward the gate, or expand
+the **work-item backlog** into a sprint/milestone plan.
 
 ## Design commitments carried through every section
 

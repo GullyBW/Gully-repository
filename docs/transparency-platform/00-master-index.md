@@ -61,10 +61,10 @@ and engineering work items.
 |-------|--------------|--------|
 | **DISCOVERY** | 01 Assumptions · 02 Problem Analysis · 03 Stakeholders · 04 Gap Analysis · 05 Service Blueprint · 06 Domain Model · 07 Capability Map · 08 Threat Model · 09 Trust Model · 10 Risk Register · 11 Checkpoint | **✅ DELIVERED & CONFIRMED** |
 | **CHECKPOINT** | 12 Ratified Decisions (D-01…D-11) | **✅ RATIFIED** |
-| **DESIGN** (`design/`, D-11 order) | 01 Enterprise Reference Arch · 02 Data Arch · 03 Integration Arch · 04 Security Arch · 05 AI Arch · 06 Observability Arch · 07 DevSecOps Arch · 15 DDRs → **Design Approval Gate** | **✅ DELIVERED — awaiting approval** |
-| GOVERNANCE & SPECS | Governance Framework (operational subsystem) · per-context implementation specs (APIs/OpenAPI/schemas/events/failure modes/monitoring) · sequence diagrams · state machines · permission matrices | Blocked on Design approval |
-| ENGINEERING | **GitHub Epics/Features/Stories/Tasks** · acceptance criteria · test plans · IaC modules · CI/CD definitions · runbooks — **MVP slice first** | Blocked |
-| REMAINING CATALOGUE | Executive Summary · Legal & Ethical · Compliance · Comparative Analysis · Botswana Adaptation · Technology Stack · Sustainability & Funding · Implementation & Future Roadmap · Final Recommendations | Blocked |
+| **DESIGN** (`design/`, D-11 order) | 01 Enterprise Reference Arch · 02 Data Arch · 03 Integration Arch · 04 Security Arch · 05 AI Arch · 06 Observability Arch · 07 DevSecOps Arch · 15 DDRs → **Design Approval Gate** | **✅ DELIVERED & APPROVED** |
+| **PHASE 2 — Governance & Implementation** (`phase2/`) | 01 Governance System · 02 Policy Engine · 03 Operational Governance · 04 Traceability Matrix · 05 Operational Readiness Gate · 06 Implementation Roadmap (P0–P6) · 07 Interoperability Framework · 08 Chain-of-Custody Procedures · 09 Public Trust Index · 10 Justice Analytics · 11 GitHub Work Items (MVP) · 12 Representative Artifacts → **Operational Readiness Gate** | **✅ DELIVERED — awaiting ORG sign-off** |
+| ENGINEERING (post-ORG) | Full per-context specs + complete OpenAPI/schemas/IaC/CI-CD/runbooks · sprint/milestone plan — **build on synthetic data may start; prod go-live blocked by ORG** | Gated by Operational Readiness Gate (`phase2/05`) |
+| REMAINING CATALOGUE | Executive Summary · Legal & Ethical · Compliance · Comparative Analysis · Botswana Adaptation · Technology Stack · Sustainability & Funding · Future Roadmap · Final Recommendations | Schedulable alongside |
 
 > **⛔ Approval gates.** The blueprint pauses at defined gates (Discovery Checkpoint ✅, Design
 > Approval Gate ⟵ current) rather than emitting everything at once. This is intentional: each
