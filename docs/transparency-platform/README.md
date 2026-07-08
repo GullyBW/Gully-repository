@@ -91,16 +91,36 @@ Operationalizes the approved programme into a production-ready national delivery
 | 7 | [Operational Readiness Scorecard](./phase3/07-operational-readiness.md) | 9 domains + GREEN/AMBER/RED thresholds (no-AMBER for Critical) |
 | 8 | [Production Deployment Governance](./phase3/08-production-deployment-governance.md) | Go-live/rollback criteria, approvals, emergency, hypercare, PIR |
 
+## Phase 4 — Strategic Assurance & Implementation Evidence (delivered)
+
+Completes the strategic, legal, compliance, funding, assurance, and evidence documentation that the
+readiness/go-live gates consume. See [`phase4/`](./phase4/00-phase4-index.md).
+
+| # | Document | Focus |
+|---|----------|-------|
+| 01 | [Executive Summary](./phase4/01-executive-summary.md) | Cabinet/leadership/funder briefing |
+| 02 | [Legal & Ethical Framework](./phase4/02-legal-ethical-framework.md) | Constitutional, judicial independence, due process, privacy, ethics (all `⟦validate⟧`) |
+| 03 | [Compliance Mapping](./phase4/03-compliance-mapping.md) | DPA/ISO 27001/27701/OWASP/NIST/SOC 2 controls + evidence |
+| 04 | [Comparative Analysis](./phase4/04-comparative-analysis.md) | SecureDrop, GlobaLeaks, X-Road, CT/KT — transferable principles |
+| 05 | [Botswana Adaptation Strategy](./phase4/05-botswana-adaptation-strategy.md) | Assumptions-to-validate + institutional engagement plan |
+| 06 | [Technology Strategy](./phase4/06-technology-strategy.md) | Selection principles, scalability, lifecycle, modernization |
+| 07 | [Sustainability & Funding](./phase4/07-sustainability-funding-strategy.md) | Funding model, staffing, procurement, sustainability (BWP) |
+| 08 | [Benefits Realization](./phase4/08-benefits-realization-framework.md) | Measurable benefits with baseline/target/owner/method |
+| 09 | [Enterprise Risk Management](./phase4/09-enterprise-risk-management.md) | Strategic/legal/financial/procurement/reputational risks |
+| 10 | [National DPI Alignment](./phase4/10-national-dpi-alignment.md) | Open standards, interoperability, guardrails |
+| 11 | [Business Continuity & Resilience](./phase4/11-business-continuity-resilience.md) | Workforce, crisis comms, suppliers, exercises |
+| 12 | [Independent Assurance Framework](./phase4/12-independent-assurance-framework.md) | Recurring independent reviews across domains |
+| 13 | [Production Evidence Package](./phase4/13-production-evidence-package.md) | Versioned evidence structure for OB go-live sign-off |
+
 ## What happens next
 
-Phase 3 pauses at the **Production Go-Live Gate** (`phase3/08`): production go-live requires the
-Operational Readiness scorecard (`phase3/07`) **GREEN** across Critical/🔒 domains **and** the
-Operational Readiness Gate (`phase2/05`) satisfied, with **Oversight Board sign-off**. Build/
-validation on **synthetic data** may proceed; **no production data flows until the gates pass.**
-Next options: begin the **Phase 0/1 build**, produce the **remaining catalogue** (Executive
-Summary, Legal & Ethical, Compliance, Comparative Analysis, Botswana Adaptation, Technology Stack,
-Sustainability & Funding, Future Roadmap, Final Recommendations), or assemble the **readiness
-evidence pack**.
+The blueprint is **complete as an implementation-ready programme** (all 26 catalogue sections
+delivered). Production go-live remains gated: the **Production Evidence Package** (`phase4/13`) must
+be assembled, the **Operational Readiness scorecard** (`phase3/07`) GREEN across Critical/🔒 domains,
+and the **gates** (`phase2/05`, `phase3/08`) satisfied with **Oversight Board sign-off**. Build/
+validation on **synthetic data** may proceed; **no production data flows until the gates pass** and
+qualified Botswana legal/judicial validation, governance constitution, MoUs, and independent funding
+are in place.
 
 ## Design commitments carried through every section
 

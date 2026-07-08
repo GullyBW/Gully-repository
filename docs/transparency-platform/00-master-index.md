@@ -63,9 +63,13 @@ and engineering work items.
 | **CHECKPOINT** | 12 Ratified Decisions (D-01…D-11) | **✅ RATIFIED** |
 | **DESIGN** (`design/`, D-11 order) | 01 Enterprise Reference Arch · 02 Data Arch · 03 Integration Arch · 04 Security Arch · 05 AI Arch · 06 Observability Arch · 07 DevSecOps Arch · 15 DDRs → **Design Approval Gate** | **✅ DELIVERED & APPROVED** |
 | **PHASE 2 — Governance & Implementation** (`phase2/`) | 01 Governance System · 02 Policy Engine · 03 Operational Governance · 04 Traceability Matrix · 05 Operational Readiness Gate · 06 Implementation Roadmap (P0–P6) · 07 Interoperability Framework · 08 Chain-of-Custody Procedures · 09 Public Trust Index · 10 Justice Analytics · 11 GitHub Work Items (MVP) · 12 Representative Artifacts → **Operational Readiness Gate** | **✅ DELIVERED & APPROVED** |
-| **PHASE 3 — Production Readiness** (`phase3/`) | 01 Governance Maturation (charters+RACI) · 02 Data Governance · 03 Security Validation Programme · 04 Enterprise Test Strategy · 05 Change Management · 06 Enterprise Service Management · 07 Operational Readiness Scorecard · 08 Production Deployment Governance → **Production Go-Live Gate** | **✅ DELIVERED — awaiting go-live sign-off** |
+| **PHASE 3 — Production Readiness** (`phase3/`) | 01 Governance Maturation (charters+RACI) · 02 Data Governance · 03 Security Validation Programme · 04 Enterprise Test Strategy · 05 Change Management · 06 Enterprise Service Management · 07 Operational Readiness Scorecard · 08 Production Deployment Governance → **Production Go-Live Gate** | **✅ DELIVERED & APPROVED** |
+| **PHASE 4 — Strategic Assurance & Evidence** (`phase4/`) | 01 Executive Summary · 02 Legal & Ethical · 03 Compliance Mapping · 04 Comparative Analysis · 05 Botswana Adaptation · 06 Technology Strategy · 07 Sustainability & Funding · 08 Benefits Realization · 09 Enterprise Risk Mgmt · 10 National DPI Alignment · 11 Business Continuity · 12 Independent Assurance · 13 Production Evidence Package | **✅ DELIVERED** |
 | ENGINEERING (post-gate) | Full per-context specs + complete OpenAPI/schemas/IaC/CI-CD/runbooks · sprint/milestone plan — **build on synthetic data may start; prod go-live blocked by gates** | Gated by Readiness Gate (`phase2/05`) + Go-Live Gate (`phase3/08`) |
-| REMAINING CATALOGUE | Executive Summary · Legal & Ethical · Compliance · Comparative Analysis · Botswana Adaptation · Technology Stack · Sustainability & Funding · Future Roadmap · Final Recommendations | Schedulable alongside |
+
+**Catalogue status:** all 26 Part-F sections are now delivered across the phases (Executive Summary,
+Legal & Ethical, Compliance, Comparative Analysis, Botswana Adaptation, Technology Stack, Funding,
+Roadmaps, and Final Recommendations completed in Phase 4 + Design/Phase-2/3).
 
 > **⛔ Approval gates.** The blueprint pauses at defined gates (Discovery Checkpoint ✅, Design
 > Approval Gate ⟵ current) rather than emitting everything at once. This is intentional: each
