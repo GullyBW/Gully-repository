@@ -112,15 +112,34 @@ readiness/go-live gates consume. See [`phase4/`](./phase4/00-phase4-index.md).
 | 12 | [Independent Assurance Framework](./phase4/12-independent-assurance-framework.md) | Recurring independent reviews across domains |
 | 13 | [Production Evidence Package](./phase4/13-production-evidence-package.md) | Versioned evidence structure for OB go-live sign-off |
 
+## Phase 5 — Programme Execution & National Delivery (delivered)
+
+The execution framework that drives the approved blueprint to disciplined delivery without
+redesigning it or bypassing the gates. See [`phase5/`](./phase5/00-phase5-index.md).
+
+| WS | Document | Focus |
+|----|----------|-------|
+| 1 | [PMO Operating Model](./phase5/01-pmo-operating-model.md) | Permanent programme office; control functions; no gate-waiver authority |
+| 2 | [Final Recommendations](./phase5/02-final-recommendations.md) | All recommendations prioritized Critical→Strategic (catalogue item 26) |
+| 3 | [Implementation Master Plan](./phase5/03-implementation-master-plan.md) | Per-phase reviews, gates, milestones, decision points |
+| 4 | [Benefits Realization Programme](./phase5/04-benefits-realization-programme.md) | Operational benefits + corrective actions |
+| 5 | [Enterprise Portfolio Management](./phase5/05-enterprise-portfolio-management.md) | Dashboards, dependency map, RAID log |
+| 6 | [Readiness Evidence Catalogue](./phase5/06-readiness-evidence-catalogue.md) | Full evidence catalogue + revalidation schedule |
+| 7 | [Executive Decision Support](./phase5/07-executive-decision-support.md) | Audience-specific briefing packs (shared facts) |
+| 8 | [Implementation Assurance](./phase5/08-implementation-assurance.md) | Continual independent assurance during delivery |
+| 9 | [National Rollout Strategy](./phase5/09-national-rollout-strategy.md) | Pilot → staged → national, gate-controlled |
+| 10 | [Continuous Improvement](./phase5/10-continuous-improvement.md) | Annual reviews, refresh, feedback loops |
+| 11 | [Enterprise Traceability](./phase5/11-enterprise-traceability.md) | Need→…→Executive Outcome; no orphans |
+
 ## What happens next
 
-The blueprint is **complete as an implementation-ready programme** (all 26 catalogue sections
-delivered). Production go-live remains gated: the **Production Evidence Package** (`phase4/13`) must
-be assembled, the **Operational Readiness scorecard** (`phase3/07`) GREEN across Critical/🔒 domains,
-and the **gates** (`phase2/05`, `phase3/08`) satisfied with **Oversight Board sign-off**. Build/
-validation on **synthetic data** may proceed; **no production data flows until the gates pass** and
-qualified Botswana legal/judicial validation, governance constitution, MoUs, and independent funding
-are in place.
+The blueprint is **complete as an implementation-ready national programme** (Discovery → Design →
+Phases 2–5; all 26 catalogue sections + execution framework). Production go-live remains reserved
+for the **Oversight Board**, contingent on: the **Readiness Evidence** assembled (`phase5/06`,
+`phase4/13`), the **Operational Readiness scorecard** GREEN (`phase3/07`), the **gates** satisfied
+(`phase2/05`, `phase3/08`), and the **🔒 human reviews** (legal/judicial/privacy/security/procurement/
+funding) landed. Build/validation on **synthetic data** may proceed; **no production data flows until
+the gates pass.**
 
 ## Design commitments carried through every section
 
