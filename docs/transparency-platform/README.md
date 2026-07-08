@@ -75,13 +75,32 @@ Gate**. See [`phase2/`](./phase2/00-phase2-index.md).
 | 11 | [GitHub Work Items (MVP)](./phase2/11-github-work-items.md) | Epics/Features/Stories/Tasks with full metadata |
 | 12 | [Representative Artifacts](./phase2/12-implementation-artifacts.md) | Sample OpenAPI, event schema, DB migration, IaC, CI/CD gate, runbook, test plan |
 
+## Phase 3 — Production Readiness (delivered — awaiting go-live sign-off)
+
+Operationalizes the approved programme into a production-ready national delivery; pauses at the
+**Production Go-Live Gate**. See [`phase3/`](./phase3/00-phase3-index.md).
+
+| WS | Document | Focus |
+|----|----------|-------|
+| 1 | [Governance Maturation](./phase3/01-governance-maturation.md) | Charters, membership, appointment, terms, voting, escalation, cadence + full RACI |
+| 2 | [Data Governance Framework](./phase3/02-data-governance-framework.md) | Ownership model, lifecycle per class, lineage, quality controls |
+| 3 | [Security Validation Programme](./phase3/03-security-validation-programme.md) | Pen/red/blue/purple, vuln mgmt, supply-chain, threat-model & crypto reviews, DR testing |
+| 4 | [Enterprise Test Strategy](./phase3/04-enterprise-test-strategy.md) | Unit→UAT incl. privacy & governance testing; entry/exit criteria |
+| 5 | [Change Management](./phase3/05-change-management.md) | National adoption, engagement, training, resistance, rollout waves |
+| 6 | [Enterprise Service Management](./phase3/06-enterprise-service-management.md) | Service catalogue, ITIL practices, SLOs, runbooks (zero standing privilege) |
+| 7 | [Operational Readiness Scorecard](./phase3/07-operational-readiness.md) | 9 domains + GREEN/AMBER/RED thresholds (no-AMBER for Critical) |
+| 8 | [Production Deployment Governance](./phase3/08-production-deployment-governance.md) | Go-live/rollback criteria, approvals, emergency, hypercare, PIR |
+
 ## What happens next
 
-Phase 2 pauses at the **Operational Readiness Gate** (`phase2/05`). Build against **synthetic
-data** (Phase 0/1) may begin now; **production go-live is blocked** until the gate's 10 criteria
-are GREEN with Oversight Board sign-off. Next options: begin the **Phase 0/1 build** (full
-per-context specs + OpenAPI/schemas + IaC/CI-CD), deepen **governance** toward the gate, or expand
-the **work-item backlog** into a sprint/milestone plan.
+Phase 3 pauses at the **Production Go-Live Gate** (`phase3/08`): production go-live requires the
+Operational Readiness scorecard (`phase3/07`) **GREEN** across Critical/🔒 domains **and** the
+Operational Readiness Gate (`phase2/05`) satisfied, with **Oversight Board sign-off**. Build/
+validation on **synthetic data** may proceed; **no production data flows until the gates pass.**
+Next options: begin the **Phase 0/1 build**, produce the **remaining catalogue** (Executive
+Summary, Legal & Ethical, Compliance, Comparative Analysis, Botswana Adaptation, Technology Stack,
+Sustainability & Funding, Future Roadmap, Final Recommendations), or assemble the **readiness
+evidence pack**.
 
 ## Design commitments carried through every section
 
