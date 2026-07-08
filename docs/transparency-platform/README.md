@@ -131,15 +131,33 @@ redesigning it or bypassing the gates. See [`phase5/`](./phase5/00-phase5-index.
 | 10 | [Continuous Improvement](./phase5/10-continuous-improvement.md) | Annual reviews, refresh, feedback loops |
 | 11 | [Enterprise Traceability](./phase5/11-enterprise-traceability.md) | Need→…→Executive Outcome; no orphans |
 
+## Phase 6 — Engineering Execution & Reference Implementation (delivered)
+
+Engineers the approved blueprint into implementation-ready specifications — synthetic-data-only, with
+the 🔒 critical subsystems kept under human-expert control. See [`phase6/`](./phase6/00-phase6-index.md).
+
+| WS | Document | Focus |
+|----|----------|-------|
+| 1 | [Architecture Repository](./phase6/01-architecture-repository.md) | Living, traceable, CI-enforced artifact graph + repo layout |
+| 2 | [Per-Context Engineering Specs](./phase6/02-per-context-engineering-specs.md) | Spec template + worked MVP contexts (Reporting, Evidence, IAM) |
+| 3 | [Executable Contracts](./phase6/03-executable-contracts.md) | OpenAPI, AsyncAPI, JSON Schema, event catalog, DB, IAM policy, errors, versioning |
+| 4 | [Engineering Standards](./phase6/04-engineering-standards.md) | Coding, API, logging, observability, testing, infra, deps, secrets, crypto, release |
+| 5 | [Reference Implementation](./phase6/05-reference-implementation.md) | Synthetic dev env, CI/CD, IaC, monitoring, demo workflows |
+| 6 | [Verification & Validation](./phase6/06-verification-validation.md) | V&V framework (verification + validation per requirement) |
+| 7 | [Engineering Work Packages](./phase6/07-engineering-work-packages.md) | Build-ready stories, test cases, DoD, sprint sequencing |
+| 8 | [Systems Engineering Reviews](./phase6/08-systems-engineering-reviews.md) | SRR/PDR/CDR/TRR/ORR/PRR |
+| 9 | [DevSecOps Engineering](./phase6/09-devsecops-engineering.md) | IaC, CI/CD, security testing, supply chain, SBOM, signing, rollback, DR |
+| 10 | [Engineering Governance](./phase6/10-engineering-governance.md) | Governance alignment + AI autonomy boundary |
+
 ## What happens next
 
-The blueprint is **complete as an implementation-ready national programme** (Discovery → Design →
-Phases 2–5; all 26 catalogue sections + execution framework). Production go-live remains reserved
-for the **Oversight Board**, contingent on: the **Readiness Evidence** assembled (`phase5/06`,
-`phase4/13`), the **Operational Readiness scorecard** GREEN (`phase3/07`), the **gates** satisfied
-(`phase2/05`, `phase3/08`), and the **🔒 human reviews** (legal/judicial/privacy/security/procurement/
-funding) landed. Build/validation on **synthetic data** may proceed; **no production data flows until
-the gates pass.**
+The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–6). Engineering may proceed
+**on synthetic data** through the systems-engineering reviews (SRR→PRR, `phase6/08`), building the
+security spine first (D-05), with the 🔒 anonymity/crypto/custody/metadata/AI subsystems
+human-expert-built and ISRB-signed. **Production go-live remains reserved for the Oversight Board**,
+contingent on the readiness gates (`phase2/05`, `phase3/08`), the evidence package (`phase5/06`,
+`phase4/13`), and the 🔒 legal/judicial/privacy/security/procurement/funding reviews. **No production
+data flows until the gates pass.**
 
 ## Design commitments carried through every section
 
