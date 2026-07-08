@@ -149,15 +149,33 @@ the 🔒 critical subsystems kept under human-expert control. See [`phase6/`](./
 | 9 | [DevSecOps Engineering](./phase6/09-devsecops-engineering.md) | IaC, CI/CD, security testing, supply chain, SBOM, signing, rollback, DR |
 | 10 | [Engineering Governance](./phase6/10-engineering-governance.md) | Governance alignment + AI autonomy boundary |
 
+## Phase 7 — Engineering Factory, IDP & Autonomous Delivery (delivered)
+
+The engineering ecosystem that lets teams build NJTIP repeatably and safely, with the approved
+guarantees baked in as defaults. See [`phase7/`](./phase7/00-phase7-index.md).
+
+| WS | Document | Focus |
+|----|----------|-------|
+| 1 | [Internal Developer Platform](./phase7/01-internal-developer-platform.md) | Self-service templates, scaffolding, provisioning — compliant by construction |
+| 2 | [Golden Paths](./phase7/02-golden-paths.md) | Approved secure-by-default patterns (REST, events, authN/Z, persistence, files, infra…) |
+| 3 | [Governance Automation](./phase7/03-governance-automation.md) | Governance-as-code; non-compliant deploys fail CI |
+| 4 | [AI Engineering Guardrails](./phase7/04-ai-engineering-guardrails.md) | T1–T4 activity classification; 🔒 = spec-only; provenance + audit |
+| 5 | [Developer Experience](./phase7/05-developer-experience.md) | Portal, API/event catalogs, synthetic data, mocks, playbooks |
+| 6 | [Quality Engineering Platform](./phase7/06-quality-engineering-platform.md) | Reusable test frameworks; privacy/invariant tests as release-blockers |
+| 7 | [Observability Platform](./phase7/07-observability-platform.md) | Logging/metrics/tracing/SLOs — privacy-budgeted; intake minimal-signal |
+| 8 | [SRE Practices](./phase7/08-sre-practices.md) | Incident/on-call/DR under zero standing privilege |
+| 9 | [Engineering Metrics](./phase7/09-engineering-metrics.md) | DORA + posture/conformance; guardrails; team-not-individual |
+| 10 | [Knowledge Platform](./phase7/10-knowledge-platform.md) | Searchable, versioned, traceable knowledge graph; reusable factory |
+
 ## What happens next
 
-The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–6). Engineering may proceed
-**on synthetic data** through the systems-engineering reviews (SRR→PRR, `phase6/08`), building the
-security spine first (D-05), with the 🔒 anonymity/crypto/custody/metadata/AI subsystems
-human-expert-built and ISRB-signed. **Production go-live remains reserved for the Oversight Board**,
-contingent on the readiness gates (`phase2/05`, `phase3/08`), the evidence package (`phase5/06`,
-`phase4/13`), and the 🔒 legal/judicial/privacy/security/procurement/funding reviews. **No production
-data flows until the gates pass.**
+The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–7). Engineering may proceed
+**on synthetic data**, using the Phase-7 factory to execute the Phase-6 specs through the
+systems-engineering reviews (SRR→PRR), building the security spine first (D-05), with the 🔒
+anonymity/crypto/custody/metadata/AI subsystems human-expert-built and ISRB-signed. **Production
+go-live remains reserved for the Oversight Board**, contingent on the readiness gates (`phase2/05`,
+`phase3/08`), the evidence package (`phase5/06`, `phase4/13`), and the 🔒 legal/judicial/privacy/
+security/procurement/funding reviews. **No production data flows until the gates pass.**
 
 ## Design commitments carried through every section
 
