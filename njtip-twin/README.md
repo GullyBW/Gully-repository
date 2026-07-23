@@ -1,81 +1,73 @@
-# NJTIP — Digital Engineering Twin & Continuous Verification Framework
+# NJTIP — Digital Engineering Twin & Engineering Assurance Platform
 
-An **executable** implementation of the Digital Engineering Twin designed in the NJTIP blueprint
+An **executable** engineering-assurance platform for the NJTIP blueprint
 ([`docs/transparency-platform/phase8/`](../docs/transparency-platform/phase8/00-phase8-index.md)).
 It converts the approved architecture into **continuously verifiable behaviour** and produces
-**machine-verifiable, review-ready evidence** — while deliberately preserving human responsibility
-for the decisions automation must never make.
+**signed, machine-verifiable, independently-verifiable evidence** — while deliberately preserving
+human responsibility for the decisions automation must never make. See [`ASSESSMENT.md`](./ASSESSMENT.md)
+for the v0.1→v0.2 architectural review that motivated this expansion.
 
-> **SYNTHETIC DATA ONLY.** No production systems, no production data, no real individuals or
-> institutions. **Zero runtime dependencies** (Node.js built-ins only). **Deterministic** (seeded;
-> no `Math.random`, no wall-clock in hashed content) → reproducible, bit-for-bit comparable evidence.
->
-> **A green twin is EVIDENCE, not a go-live decision.** It shows the design and controls are
-> internally consistent and hold under synthetic simulation. It does **not** certify real-world
-> anonymity vs a global adversary, legal admissibility, or that governance/legal/funding conditions
-> are met. Production go-live remains an Oversight Board decision behind the readiness gates.
+> **SYNTHETIC DATA ONLY.** No production systems/data. **Zero runtime dependencies** (Node built-ins
+> only). **Deterministic** (seeded; no `Math.random`, no wall-clock in signed content) → reproducible,
+> independently-verifiable evidence. **A green run is EVIDENCE, not a go-live decision.**
 
 ## Quick start
 
 ```bash
 cd njtip-twin
-npm test        # unit + fitness + adversarial tests (node --test) — no install needed
-npm run verify  # run architecture fitness functions against a synthetic twin
-npm run simulate# run the adversarial simulation suite
-npm run ci       # full continuous-verification gate + generate evidence bundle
+npm test              # 24 tests (unit + fitness + assurance) — no install needed
+npm run ci             # full continuous-assurance gate → signed evidence + dashboard + reports
+npm run verify-evidence# independently recompute digest, verify signature + archive chain
+npm run bench          # performance (informational; not gated)
+npm run gov -- history # governance decision ledger (human decisions only)
 ```
 
-Requires Node.js ≥ 18 (developed on Node 22). `npm install` is a no-op — there are no dependencies.
+## What it does (v0.2 — Engineering Assurance Platform)
 
-## What it implements (mapped to the deliverables)
+| Capability | Where | Notes |
+|-----------|-------|-------|
+| **Reference implementation** | `src/` | 3 constitutional zones + reporting/evidence/IAM/policy/bus/governance/emergency/backup/time models |
+| **Executable architecture verification** (violations = failing tests) | `verification/fitness/` (14) | zone isolation, identity minimization, least privilege, policy, zero trust, secure flows, encryption, auditability, governance, chain-of-custody, emergency, backup, time-integrity, traceability-coverage |
+| **Requirements Traceability engine** | `src/traceability/` | requirements → verifiers; auto matrix; 100%-coverage is a **gated invariant**; "show all evidence for Requirement X" |
+| **Adversarial simulation** (35) | `adversarial/` | cyber / insider / governance / operational, with resilience metrics |
+| **Chaos engineering** (9) | `chaos/` | db/policy/audit/bus/latency/packet-loss/cert/storage/crash fault injection; validates degrade + recover |
+| **Formal verification** (4) | `formal/` | bounded exhaustive model checking of access control, approval chains, policy logic, governance state machine |
+| **Compliance mapping** | `src/compliance/` | fitness → ISO 27001/27701, NIST CSF/800-53, CIS, OWASP ASVS |
+| **Evidence integrity** | `src/evidence/` | deterministic **Ed25519 signatures**, hash-chained **immutable archive**, synthetic trusted **timestamps**, **independent verifier** |
+| **Architectural drift detection** | `src/drift/` | approved architecture-of-record vs actual; undocumented change = drift |
+| **Maturity model** (1–10) | `src/maturity/` | automation caps at **level 6**; levels 7–10 require **human attestation** |
+| **Governance review portal** | `src/governance/` + `scripts/gov.js` | append-only, hash-chained ledger of **human** decisions/waivers/attestations; never automates authority |
+| **Multi-audience reports** | `src/reports/` | executive / engineering / security / governance / audit / operational |
+| **Compliance dashboard** | `src/dashboard/` | self-contained, theme-aware `dashboard.html` (scorecards, heat map, trends) |
+| **Version management** | `src/version.js` | the twin is a governed artifact; assurance-surface snapshot + changelog |
+| **Threat-intel extension points** | `src/threatintel/` + `threatintel/feeds/` | offline feed loader; coverage-gap analysis; no live connectivity |
+| **Performance verification** | `src/perf/` | informational throughput/latency trends (excluded from the signed digest) |
 
-| Deliverable | Where |
-|-------------|-------|
-| **1. Reference implementation** (modular, testable, observable engineering infra) | `src/` — zones, stores, IAM, policy engine, event bus, governance, synthetic crypto, orchestrator |
-| **2. Executable architecture verification** (violations = failing tests) | `verification/fitness/*.js` + `verification/fitness.test.js` |
-| **3. Adversarial simulation framework** (metrics + reports) | `adversarial/scenarios.js` (SIM-01…12) + `adversarial/scenarios.test.js` |
-| **4. Evidence generation pipeline** (machine-verifiable, packaged) | `src/evidence/evidence.js` → `evidence-out/evidence.json` + `REVIEW-REPORT.md` |
-| **5. Continuous verification** (CI gate, blocks on violation) | `scripts/ci.js` + `.github/workflows/njtip-twin.yml` |
-| **6. Independent expert review support** | `humanReviewRequired` in the evidence bundle + review report |
+## The continuous-assurance gate
 
-## The nine architecture invariants (fitness functions)
+`npm run ci` runs fitness + adversarial + chaos + formal, builds the traceability matrix, maps
+compliance, checks drift, assesses maturity, then **signs and archives** a deterministic evidence
+bundle and renders the dashboard + six audience reports. It **blocks (exit 1)** on any critical
+fitness failure, unresisted attack, failed chaos/formal check, architecture drift, or traceability
+coverage < 100%. Wired into `.github/workflows/njtip-twin.yml` (scoped to `njtip-twin/**`).
 
-Each converts an approved architectural decision into a check. **A failing check is an architecture
-violation and fails the build.** Compliant twin passes all nine; the tests also feed deliberately
-**broken** twins to prove each check *catches* violations.
+Sample outputs are committed under [`evidence-out/`](./evidence-out/) (`REVIEW-REPORT.md`,
+`dashboard.html`, `reports/*.md`); the stateful/non-deterministic JSON (evidence, archive, history,
+ledger, perf) is regenerated by `npm run ci` and git-ignored.
 
-| Fitness function | Invariant | Refs |
-|------------------|-----------|------|
-| `FIT-ZONE-ISOLATION` | No cross-zone DB paths; cross-zone only via audited events | DDR-01/04, I-6 |
-| `FIT-IDENTITY-MINIMIZATION` | No reporter-identifying field is ever stored (rejected at write) | DDR-05, D-02, ID-1 |
-| `FIT-LEAST-PRIVILEGE` | Zero standing privilege; separation of duties; default deny | DDR-09, E-1/E-3 |
-| `FIT-POLICY-ENFORCEMENT` | Policy engine default-deny | DDR-09 |
-| `FIT-ZERO-TRUST` | No implicit trust; fail-closed on control outage | DDR-09, S-3 |
-| `FIT-SECURE-DATA-FLOWS` | Cross-zone events PII-free and directional | DDR-07, I-6/DD-1 |
-| `FIT-ENCRYPTION` | Content is ciphertext at rest; keys not co-located | DDR-10, I-4 |
-| `FIT-AUDITABILITY` | Append-only, hash-chained, anchored, tamper-evident audit | DDR-13, T-2 |
-| `FIT-GOVERNANCE` | Threshold (M-of-N) custody; signed CoI-aware routing | DDR-10, E-1/I-1/T-4 |
+## Human accountability (enforced, not just stated)
 
-## Adversarial scenarios (SIM-01…12)
+- The **maturity model caps automated progress at level 6**; reaching 7–10 requires a human to
+  record an attestation via the governance portal (`npm run gov -- attest …`). Automation cannot
+  set it.
+- Every report and the evidence bundle repeat: **evidence ≠ authorization**; legal, constitutional,
+  judicial, governance, and ethical decisions — and production go-live — remain human.
+- The **synthetic crypto/signing keys** demonstrate control flow and reproducibility; the real
+  anonymity/crypto/key-custody subsystems remain 🔒 human-expert-built (never autonomously generated).
 
-Compromised operator · insider cross-zone · metadata correlation · DoS/flood · privilege escalation
-· identity spoofing · policy bypass · misconfigured infra (proves detection) · data exfiltration ·
-governance failure/coercion · component failure (fail-closed) · disaster recovery. Each documents
-expected behaviour, success criteria, and resilience metrics.
+## Honest limits
 
-## Honest limits (by design)
-
-- The **synthetic crypto** (`src/platform/crypto.js`) demonstrates control *flow* only. The real
-  cryptography, key custody, anonymity, evidence-integrity, and AI subsystems are
-  **🔒 human-expert-built and ISRB-signed** — never autonomously generated (blueprint `phase6/10`,
-  `phase7/04`). The twin validates their *interfaces and invariants*, not a production crypto core.
-- The twin proves internal consistency under simulation. Real-world anonymity vs a global passive
-  adversary, device compromise, admissibility, and the governance/legal/funding conditions are
-  **human-gate** questions the twin cannot answer.
-
-## Human accountability (never automated)
-
-The evidence bundle always lists the domains reserved for accountable humans — cryptography,
-anonymity, evidence integrity, legal compliance, constitutional interpretation, judicial procedure,
-AI decision boundaries, governance policy, procurement, and production go-live. **Automation
-supports these decisions with evidence; it never makes them.**
+A fully-green run proves the design and controls are internally consistent and hold under **synthetic
+simulation** — including *bounded* formal proofs over finite state spaces. It does **not** prove
+real-world anonymity vs a global passive adversary, device-compromise resistance, legal
+admissibility, or that governance/legal/funding conditions are met. Those are human-gate questions.

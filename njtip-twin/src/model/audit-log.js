@@ -10,9 +10,21 @@ class AuditLog {
     this._head = null;
     this._clock = clock;
     this._anchors = [];
+    this._available = true;
+  }
+
+  setAvailable(v) {
+    this._available = !!v;
   }
 
   append({ actor, action, purpose, zone }) {
+    // Fail-closed: if the audit store is unavailable, the action must NOT proceed
+    // silently — auditability is a precondition for sensitive operations.
+    if (!this._available) {
+      const e = new Error('audit store unavailable — operation refused (fail-closed)');
+      e.code = 'AUDIT_UNAVAILABLE';
+      throw e;
+    }
     const record = { seq: this._entries.length, actor, action, purpose, zone, ts: this._clock() };
     const hash = chain(this._head, record);
     const entry = { record, prevHash: this._head, hash };

@@ -1,4 +1,6 @@
 node_modules/
-# Generated evidence bundles (a sample is committed under evidence-out/ for reference)
+# Generated, stateful, or non-deterministic outputs (regenerable via `npm run ci`).
+# The committed sample REVIEW-REPORT.md + dashboard.html + reports/ show the format.
 evidence-out/*.json
+evidence-out/perf.json
 !evidence-out/.gitkeep

@@ -1,11 +1,11 @@
 'use strict';
-// Adversarial simulation runner: run every scenario against fresh synthetic twins
-// and report resilience. Exit non-zero if any scenario is NOT resisted.
+// Adversarial simulation runner (full v0.2 suite). Exit non-zero if any scenario
+// is not resisted.
 const { build } = require('../src/platform/orchestrator');
-const { runAll } = require('../adversarial/scenarios');
+const adversarial = require('../adversarial');
 
 function runSimulation() {
-  return runAll((opts) => build(opts));
+  return adversarial.runAll((opts) => build(opts));
 }
 
 function main() {
@@ -13,8 +13,6 @@ function main() {
   console.log('\n=== Adversarial Simulation (synthetic twin) ===');
   for (const r of results) {
     console.log(`${r.pass ? '✅ RESISTED' : '❌ FAILED  '}  ${r.id}  — ${r.name}`);
-    console.log(`        expected: ${r.expected}`);
-    console.log(`        metrics:  ${JSON.stringify(r.metrics)}`);
   }
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} scenarios resisted; ${failed.length} failure(s).`);

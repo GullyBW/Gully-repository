@@ -12,4 +12,9 @@ module.exports = [
   require('./encryption'),
   require('./auditability'),
   require('./governance'),
+  require('./chain-of-custody'),
+  require('./emergency'),
+  require('./backup'),
+  require('./time-integrity'),
+  require('./traceability-coverage'),
 ];

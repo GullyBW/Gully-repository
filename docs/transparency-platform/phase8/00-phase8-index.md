@@ -16,12 +16,16 @@ engineering framework.**
 ## ✅ Executable implementation
 
 This phase is **implemented and running** at [`/njtip-twin`](../../../njtip-twin/README.md) — a
-deterministic, zero-dependency, synthetic-data-only reference twin. It provides 9 executable
-architecture **fitness functions** (violations = failing tests), 12 **adversarial scenarios**
-(SIM-01…12), an **evidence generation pipeline** (machine-verifiable `evidence.json` +
-`REVIEW-REPORT.md`), and a **continuous-verification CI gate** that blocks on any critical
-violation. Run `cd njtip-twin && npm test && npm run ci`. The WS1–WS10 designs below are realized
-there; a green run is **evidence, not a go-live decision**.
+deterministic, zero-dependency, synthetic-data-only **Engineering Assurance Platform** (v0.2). It
+provides **14 executable architecture fitness functions** (violations = failing tests), **35
+adversarial scenarios**, **9 chaos experiments**, **4 bounded formal proofs**, a **requirements
+traceability engine** (100% coverage gated), **compliance mapping** (ISO/NIST/CIS/OWASP), **signed +
+archived + independently-verifiable evidence**, **architectural drift detection**, a **10-level
+maturity model** (automation capped at level 6), a **governance review portal** (human decisions
+only), **multi-audience reports**, and a **compliance dashboard** — all behind a
+continuous-assurance CI gate that blocks on any critical violation. Run
+`cd njtip-twin && npm test && npm run ci`. A green run is **evidence, not a go-live decision**.
+See [`njtip-twin/ASSESSMENT.md`](../../../njtip-twin/ASSESSMENT.md) for the v0.1→v0.2 rationale.
 
 ## What the DET is (and is not)
 

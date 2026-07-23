@@ -27,6 +27,26 @@ class PolicyEngine {
     return { effect: this._default, reason: 'default-deny' };
   }
 
+  // Detect conflicting rules (both allow and deny declared for the same action).
+  detectConflicts() {
+    const byAction = new Map();
+    for (const r of this._rules) {
+      if (!byAction.has(r.action)) byAction.set(r.action, new Set());
+      byAction.get(r.action).add(r.effect);
+    }
+    return [...byAction.entries()].filter(([, effs]) => effs.has('allow') && effs.has('deny')).map(([a]) => a);
+  }
+
+  // Deny-precedence evaluation: if ANY matching deny rule exists, deny (fail-safe).
+  // This resolves policy conflicts on the safe side.
+  evaluateSafe(req) {
+    if (!this._available) return { effect: 'deny', reason: 'engine-unavailable-fail-closed' };
+    const matches = this._rules.filter((r) => r.action === req.action && (!r.when || r.when(req)));
+    if (matches.some((m) => m.effect === 'deny')) return { effect: 'deny', reason: 'deny-precedence' };
+    if (matches.some((m) => m.effect === 'allow')) return { effect: 'allow', reason: 'allow-matched' };
+    return { effect: this._default, reason: 'default-deny' };
+  }
+
   introspect() {
     return { defaultEffect: this._default, failClosed: true, available: this._available };
   }

@@ -11,6 +11,11 @@ class EventBus {
   constructor() {
     this._subs = new Map();
     this._published = [];
+    this._available = true;
+  }
+
+  setAvailable(v) {
+    this._available = !!v;
   }
 
   subscribe(type, zone, handler) {
@@ -31,6 +36,11 @@ class EventBus {
   }
 
   publish({ type, sourceZone, targetZone, payload }) {
+    if (!this._available) {
+      const e = new Error('event bus unavailable — publish refused (fail-closed)');
+      e.code = 'BUS_UNAVAILABLE';
+      throw e;
+    }
     if (targetZone && targetZone !== sourceZone) {
       const pii = this._hasPII(payload);
       if (pii) throw new SchemaViolation(`PII field "${pii}" cannot cross zone boundary (I-6/DD-1)`);

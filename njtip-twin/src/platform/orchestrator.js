@@ -11,6 +11,9 @@ const { IAM } = require('../model/iam');
 const { ThresholdCustody, RecipientDirectory } = require('../model/governance');
 const { PolicyEngine } = require('../policy/policy-engine');
 const { EventBus } = require('../platform/event-bus');
+const { EmergencyAccess } = require('../model/emergency');
+const { BackupVault } = require('../model/backup');
+const { TimeSource } = require('../model/timesource');
 const crypto = require('./crypto');
 
 // Deployment topology (config the zone-isolation fitness function inspects).
@@ -46,6 +49,16 @@ function build(opts = {}) {
     threshold: new ThresholdCustody({ M: 3, custodians: ['c1', 'c2', 'c3', 'c4', 'c5'] }),
     recipients: new RecipientDirectory(),
   };
+
+  // Time source + a synthetic TLS certificate (valid around the logical-clock start).
+  twin.time = new TimeSource(clock);
+  const T0 = 1_700_000_000_000;
+  twin.cert = { subject: 'synthetic-intake', notBefore: T0 - 1_000_000, notAfter: T0 + 10_000_000_000 };
+  // Break-glass + backup vault (both audited / integrity-checked).
+  twin.emergency = new EmergencyAccess(twin.audit, clock);
+  twin.backup = new BackupVault(clock);
+  // Component health map (chaos fault-injection toggles these).
+  twin.health = { policy: true, audit: true, bus: true, db: true, crashed: false };
 
   // Baseline policy: everything default-deny; explicitly allow a couple of safe reads.
   twin.policy.addRule({ action: 'submit-report', effect: 'allow' });

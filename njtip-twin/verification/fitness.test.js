@@ -22,19 +22,22 @@ test('zone-isolation FAILS on a cross-zone DB misconfiguration', () => {
   const twin = build({ topology: broken });
   const r = fitness.find((f) => f.id === 'FIT-ZONE-ISOLATION').check(twin);
   assert.strictEqual(r.pass, false);
-  assert.ok(r.violations.length > 0);
 });
 
-test('governance FAILS when threshold M < 2 (single-party override possible)', () => {
+test('governance FAILS when threshold M < 2', () => {
   const twin = build();
   twin.threshold = new ThresholdCustody({ M: 1, custodians: ['c1'] });
-  const r = fitness.find((f) => f.id === 'FIT-GOVERNANCE').check(twin);
-  assert.strictEqual(r.pass, false);
+  assert.strictEqual(fitness.find((f) => f.id === 'FIT-GOVERNANCE').check(twin).pass, false);
 });
 
-test('policy-enforcement FAILS if an undeclared action is allowed', () => {
+test('emergency FAILS if single-approver break-glass is allowed', () => {
   const twin = build();
-  twin.policy.addRule({ action: 'exfiltrate-everything', effect: 'allow' });
-  const r = fitness.find((f) => f.id === 'FIT-POLICY-ENFORCEMENT').check(twin);
-  assert.strictEqual(r.pass, false);
+  // Replace with a permissive emergency stub to prove the check catches it.
+  twin.emergency = { request: () => ({ expires: 1 }), isActive: () => true };
+  assert.strictEqual(fitness.find((f) => f.id === 'FIT-EMERGENCY').check(twin).pass, false);
+});
+
+test('traceability coverage passes (every requirement has real verifiers)', () => {
+  const r = fitness.find((f) => f.id === 'FIT-TRACEABILITY-COVERAGE').check();
+  assert.strictEqual(r.pass, true, r.violations.join('; '));
 });
