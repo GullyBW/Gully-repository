@@ -13,6 +13,16 @@ engineering framework.**
 > validation environment**; a change is trustworthy only when the twin says so *and* the human gates
 > agree. It **validates**; it does not deploy.
 
+## ✅ Executable implementation
+
+This phase is **implemented and running** at [`/njtip-twin`](../../../njtip-twin/README.md) — a
+deterministic, zero-dependency, synthetic-data-only reference twin. It provides 9 executable
+architecture **fitness functions** (violations = failing tests), 12 **adversarial scenarios**
+(SIM-01…12), an **evidence generation pipeline** (machine-verifiable `evidence.json` +
+`REVIEW-REPORT.md`), and a **continuous-verification CI gate** that blocks on any critical
+violation. Run `cd njtip-twin && npm test && npm run ci`. The WS1–WS10 designs below are realized
+there; a green run is **evidence, not a go-live decision**.
+
 ## What the DET is (and is not)
 
 - **[FACT] Is:** a synthetic, isolated, executable model of all bounded contexts, APIs, events,

@@ -1,0 +1,4 @@
+node_modules/
+# Generated evidence bundles (a sample is committed under evidence-out/ for reference)
+evidence-out/*.json
+!evidence-out/.gitkeep

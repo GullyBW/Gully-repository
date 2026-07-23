@@ -186,9 +186,29 @@ evidence for human decision-makers. See [`phase8/`](./phase8/00-phase8-index.md)
 | 9 | [Human Review Boundaries](./phase8/09-human-review-boundaries.md) | Twin generates evidence; humans decide (crypto/legal/constitutional/go-live) |
 | 10 | [Continuous Learning](./phase8/10-continuous-learning.md) | Twin-driven improvement preserving architectural intent |
 
+## ▶ Executable Digital Engineering Twin (`/njtip-twin`)
+
+Phase 8 is not just designed — it is **implemented and runnable** at
+[`/njtip-twin`](../../njtip-twin/README.md): a deterministic, **zero-dependency**, synthetic-data-only
+engineering twin that converts the approved architecture into continuously verifiable behaviour.
+
+- **9 architecture fitness functions** where a violation is a failing test (zone isolation,
+  identity minimization, least privilege, policy enforcement, zero trust, secure data flows,
+  encryption, auditability, governance/threshold custody).
+- **12 adversarial scenarios** (compromised operator, insider cross-zone, metadata correlation, DoS,
+  privilege escalation, identity spoofing, policy bypass, misconfig detection, exfiltration,
+  governance failure, component failure, disaster recovery) with resilience metrics.
+- **Evidence pipeline** → machine-verifiable `evidence.json` + review-ready `REVIEW-REPORT.md` with a
+  deterministic content digest and an explicit **human-review-required** section.
+- **CI gate** (`.github/workflows/njtip-twin.yml`) that **blocks** on any critical violation.
+
+Run it: `cd njtip-twin && npm test && npm run ci`. A green run is **evidence for human review, not a
+production go-live approval.**
+
 ## What happens next
 
-The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–8). Engineering may proceed
+The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–8), and Phase 8 is realized
+as a running system. Engineering may proceed
 **on synthetic data**: build the Phase-6 specs on the Phase-7 factory, continuously validated in the
 Phase-8 twin, through the systems-engineering reviews and platform certification — security spine
 first (D-05), 🔒 subsystems human-expert-built. **A green twin is evidence, not a launch decision.**
