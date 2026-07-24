@@ -48,6 +48,10 @@ const { SpatialIndex, geohash } = require('../src/geo/gis');
 const { ApiRegistry } = require('../src/apigov/registry');
 const decisionSupport = require('../src/ai/decision-support');
 const openapiSpec = require('../src/openapi');
+const capabilityMod = require('../src/capability/model');
+const maturityMod = require('../src/maturity/maturity');
+const devplatform = require('../src/devplatform/sdk');
+const { MetadataGovernance } = require('../src/fabric/metadata');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -276,6 +280,24 @@ module.exports = [
     // Decision support is advisory + human-gated.
     const d = decisionSupport.completionForecast({ openCases: 10, resolvedPerDay: 5 });
     if (d.advisoryOnly !== true || d.autonomous !== false) v.push('decision support is not advisory/non-autonomous');
+  }),
+
+  fit('APP-FIT-PLATFORM-INTELLIGENCE', 'Capability/maturity human-gated; SDK deterministic; metadata classified', (v) => {
+    // Maturity is capped by automation and human-gated (never authorizes).
+    const m = maturityMod.assess({ twin: [{ id: 'FIT-X', pass: true }], app: [], infra: [] });
+    if (m.overallLevel > m.automationCap) v.push('maturity exceeded the automation cap');
+    if (m.humanGate.required !== true) v.push('maturity is not human-gated');
+    // Capability heat map maps controls to live status.
+    const hm = capabilityMod.heatMap([{ id: 'FIT-IDENTITY-MINIMIZATION', pass: true }, { id: 'APP-FIT-ANONYMITY-BOUNDARY', pass: true }]);
+    if (hm['Anonymous Reporting'].status !== 'healthy') v.push('capability heat map did not reflect passing controls');
+    // SDK generation is deterministic + the test harness detects duplicate operationIds.
+    const sdkA = devplatform.generateClientSdk(openapiSpec.spec());
+    if (sdkA !== devplatform.generateClientSdk(openapiSpec.spec())) v.push('SDK generation is not deterministic');
+    if (!devplatform.testHarness(openapiSpec.spec()).ok) v.push('OpenAPI has duplicate/missing operationIds');
+    // Metadata rejects an invalid classification (governance).
+    const md = new MetadataGovernance();
+    let refused = false; try { md.register('d', { owner: 'o', classification: 'bogus' }); } catch (_) { refused = true; }
+    if (!refused) v.push('metadata accepted an invalid classification');
   }),
 
   fit('APP-FIT-CUSTODY-SIGNED-CHAIN', 'Custody ledger is signed, hash-chained, tamper-evident', (v) => {

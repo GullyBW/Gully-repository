@@ -44,6 +44,10 @@ const threatIntelMod = require('./security/threat-intel');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
 const { ApiRegistry } = require('./apigov/registry');
 const decisionSupport = require('./ai/decision-support');
+const { MetadataGovernance } = require('./fabric/metadata');
+const capabilityMod = require('./capability/model');
+const maturityMod = require('./maturity/maturity');
+const devplatform = require('./devplatform/sdk');
 const openapiSpec = require('./openapi');
 const { runTwin, runApp, runInfra } = require('./twin-validate');
 const { invariantsHeld } = require('./twin-validate');
@@ -146,12 +150,19 @@ function createApp(overrides = {}) {
   // API governance (Phase 37): registry seeded from the live OpenAPI contract.
   const apiRegistry = new ApiRegistry();
   apiRegistry.fromOpenApi(openapiSpec.spec());
+  // Metadata platform (Phase 32), capability model (Phase 38), maturity intelligence
+  // (Phase 40), and developer platform (Phase 39). Capability/maturity read the live gate.
+  const metadata = new MetadataGovernance({ lineage });
+  const _fitness = () => ({ twin: runTwin(), app: runApp(), infra: runInfra() });
+  const capability = { map: capabilityMod.capabilityMap, dependencies: capabilityMod.dependencies, ownership: capabilityMod.ownership, heatMap: () => { const f = _fitness(); return capabilityMod.heatMap([...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass }))); } };
+  const maturity = { assess: () => { const f = _fitness(); return maturityMod.assess({ ...f, docs: 20 }); } };
+  const devPlatform = { generateClientSdk: () => devplatform.generateClientSdk(openapiSpec.spec()), mockService: () => devplatform.mockService(openapiSpec.spec()), testHarness: () => devplatform.testHarness(openapiSpec.spec()), integrationTemplate: devplatform.integrationTemplate };
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, apiRegistry, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, metadata, apiRegistry, capability, maturity, devPlatform, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

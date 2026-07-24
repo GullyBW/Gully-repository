@@ -170,6 +170,11 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/executive/scorecard') { requireRole('oversight-board'); return json(200, app.workflow.executiveScorecard()); }
   // API governance (Phase 37) + operational decision support (Phase 33, advisory).
   if (method === 'GET' && p === '/api/admin/api-governance') { requireRole('admin'); return json(200, app.apiRegistry.dashboard()); }
+  // Capability model (Phase 38), maturity intelligence (Phase 40), developer platform (Phase 39).
+  if (method === 'GET' && p === '/api/capability/map') { requireRole('oversight-board'); return json(200, { map: app.capability.map(), heatMap: app.capability.heatMap() }); }
+  if (method === 'GET' && p === '/api/admin/maturity') { requireRole('admin'); return json(200, app.maturity.assess()); }
+  if (method === 'GET' && p === '/api/developer/sdk') { requireRole('admin'); return { status: 200, body: app.devPlatform.generateClientSdk(), type: 'text/plain' }; }
+  if (method === 'GET' && p === '/api/developer/harness') { requireRole('admin'); return json(200, app.devPlatform.testHarness()); }
   if (method === 'GET' && p === '/api/decision-support') { requireRole('oversight-board'); const k = app.workflow.analytics().kpis; return json(200, { predictiveKpis: app.decisionSupport.predictiveKpis({ openCases: k.backlog, arrivalPerDay: 20, resolvedPerDay: 18 }), completion: app.decisionSupport.completionForecast({ openCases: k.backlog, resolvedPerDay: 18 }) }); }
   if (method === 'POST' && p === '/api/twin2/simulate') {
     requireRole('admin');

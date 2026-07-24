@@ -1,8 +1,8 @@
 {
   "name": "njtip-app",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
-  "description": "NJTIP — National Digital Governance Platform. Event sourcing + CQRS, policy-as-data IAM + Zero Trust, multi-tenant isolation, knowledge graph, advisory AI, workflow orchestration, GIS, signed chain of custody, compliance automation, Twin 2.0 simulations, data fabric. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
+  "description": "NJTIP — National Digital Governance Ecosystem. Event governance, workflow simulation, enterprise event bus + federation, Twin 3.0 Monte-Carlo, semantic search, graph intelligence, privacy engineering, threat intelligence, API governance, decision support, metadata, capability model, developer platform, maturity intelligence. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node src/server.js",
