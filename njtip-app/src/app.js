@@ -35,6 +35,8 @@ function createApp(overrides = {}) {
   // (separate collections → no key collision).
   const statusRepo = makeStore(ZONES.INDEPENDENT, cfg, 'reports');
   const notifications = new NotificationService(makeStore(ZONES.INDEPENDENT, cfg, 'notifications'));
+  // Investigator workload counters live in the Executive zone (operational routing).
+  const workloadRepo = makeStore(ZONES.EXECUTIVE, cfg, 'workload');
 
   // Production adapters behind stable ports (swappable at this composition root only):
   // 🔒 key management (encryption at rest), evidence object storage (ciphertext-only),
@@ -48,7 +50,7 @@ function createApp(overrides = {}) {
   const certs = makeCertificateManager(cfg);
 
   const workflow = overrides.workflow || new Workflow({
-    seed: overrides.seed ?? 1, ledgerFile: overrides.ledgerFile, statusRepo, notifications, metrics,
+    seed: overrides.seed ?? 1, ledgerFile: overrides.ledgerFile, statusRepo, notifications, metrics, workloadRepo,
   });
 
   health.register('workflow', () => !!workflow);

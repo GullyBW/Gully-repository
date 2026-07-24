@@ -18,6 +18,7 @@ const { UnitOfWork } = require('../src/adapters/uow');
 const authz = require('../src/authz');
 const caseLc = require('../src/domain/case-lifecycle');
 const evLc = require('../src/domain/evidence-lifecycle');
+const inv = require('../src/domain/investigation');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -105,6 +106,20 @@ module.exports = [
     if (idp.verify(new OidcVerifier({ secret: 's', issuer: 'evil' }).issue({ sub: 'x', role: 'admin' }))) v.push('accepted a token from the wrong issuer');
     if (idp.verify(idp.issue({ sub: 'x', role: 'superuser' }))) v.push('accepted a disallowed role claim');
     if (!idp.verify(idp.issue({ sub: 'x', role: 'investigator' }))) v.push('rejected a valid token');
+  }),
+
+  fit('APP-FIT-WORKFLOW-INTEGRITY', 'Prioritisation is deterministic; assignment stays within the roster', (v) => {
+    // Prioritisation is a pure function of its inputs (reproducible).
+    if (JSON.stringify(inv.scorePriority({ category: 'police', escalated: true, ageMs: 0 })) !== JSON.stringify(inv.scorePriority({ category: 'police', escalated: true, ageMs: 0 }))) v.push('prioritisation is not deterministic');
+    // Assignment never returns an excluded principal, and returns null when all excluded.
+    const roster = [{ id: 'a', unit: 'x' }, { id: 'b', unit: 'y' }];
+    const pick = inv.assign({ roster, exclude: ['a'] });
+    if (pick && pick.id === 'a') v.push('assignment returned an excluded principal');
+    if (inv.assign({ roster, exclude: ['a', 'b'] }) !== null) v.push('assignment did not fail closed when all excluded');
+    // SLA breach is a monotonic function of time.
+    const early = inv.slaStatus({ band: 'P1', createdAt: 0, now: 1 }).breached;
+    const late = inv.slaStatus({ band: 'P1', createdAt: 0, now: 30 * 24 * 3600_000 }).breached;
+    if (early || !late) v.push('SLA breach detection is not monotonic in time');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

@@ -14,11 +14,18 @@ const { MemoryStore } = require('./adapters/store');
 const { NotificationService } = require('./adapters/notifications');
 const caseLifecycle = require('./domain/case-lifecycle');
 const evidenceLifecycle = require('./domain/evidence-lifecycle');
+const investigation = require('./domain/investigation');
 
 const SUBJECT_UNIT = { police: 'police', courts: 'courts', prosecution: 'prosecution', prison: 'prison', official: 'official', regulatory: 'regulatory', other: 'other' };
+// Investigator roster (operational routing; distinct from IAM authorization). Each entry's
+// unit is used for conflict-of-interest exclusion during assignment.
+const DEFAULT_ROSTER = [
+  { id: 'inv-001', unit: 'dcec' }, { id: 'inv-002', unit: 'ombudsman' },
+  { id: 'inv-003', unit: 'judicial-oversight' }, { id: 'inv-004', unit: 'dcec' },
+];
 
 class Workflow {
-  constructor({ clock, seed = 1, ledgerFile, statusRepo, notifications, metrics } = {}) {
+  constructor({ clock, seed = 1, ledgerFile, statusRepo, notifications, metrics, workloadRepo, roster } = {}) {
     this.clock = clock || (() => Date.now());
     this._rand = rng.mulberry32(seed);
     this.report = new ReportStore(this.clock);
@@ -32,6 +39,8 @@ class Workflow {
     // Injected ports (default: in-memory / synthetic reference).
     this._statusRepo = statusRepo || new MemoryStore(ZONES.INDEPENDENT);
     this.notifications = notifications || new NotificationService(new MemoryStore(ZONES.INDEPENDENT), this.clock);
+    this._workload = workloadRepo || new MemoryStore(ZONES.EXECUTIVE);
+    this._roster = roster || DEFAULT_ROSTER;
     this._metrics = metrics || { inc() {}, observe() {} };
 
     this.policy.addRule({ action: 'submit-report', effect: 'allow' });
@@ -58,7 +67,9 @@ class Workflow {
       throw e;
     }
     const routed = this.recipients.route(SUBJECT_UNIT[category]);
-    this._statusRepo.put(case_code, { case_code, status: 'received', category, recipient: routed.recipientId, coi: routed.coiStatus });
+    const createdAt = this.clock();
+    const priority = investigation.scorePriority({ category, escalated: false, ageMs: 0 });
+    this._statusRepo.put(case_code, { case_code, status: 'received', category, recipient: routed.recipientId, coi: routed.coiStatus, createdAt, stage: investigation.REVIEW_CHAIN[0], priority });
     this.audit.append({ actor: 'citizen(anon)', action: 'report-submitted', purpose: 'intake', zone: ZONES.INDEPENDENT });
     this.audit.append({ actor: 'system', action: 'report-routed', purpose: routed.recipientId, zone: ZONES.INDEPENDENT });
     this.notifications.notify(case_code, 'received', { status: 'received' });
@@ -120,6 +131,7 @@ class Workflow {
     }
     s.status = target;
     s.disposition = disposition;
+    if (!s.firstReviewedAt) s.firstReviewedAt = this.clock(); // SLA: time-to-first-review
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: principal, action: 'investigator-review', purpose: disposition || 'note', zone: ZONES.EXECUTIVE });
     this.notifications.notify(case_code, 'reviewed', { status: s.status });
@@ -136,11 +148,79 @@ class Workflow {
     const r = caseLifecycle.apply(s.status, event);
     if (!r.ok) throw httpError(409, 'case lifecycle: ' + r.reason);
     s.status = r.to;
+    if (r.to === 'resolved' && !s.resolvedAt) s.resolvedAt = this.clock(); // SLA: time-to-resolution
+    if (r.to === 'escalated') s.priority = investigation.scorePriority({ category: s.category, escalated: true, ageMs: this.clock() - s.createdAt });
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: principal, action: 'case-' + event, purpose: r.to, zone: ZONES.EXECUTIVE });
     this.notifications.notify(case_code, r.to, { status: r.to });
     this._metrics.inc('njtip_case_transitions_total', { event });
     return { case_code, status: s.status, allowed: caseLifecycle.allowedEvents(s.status) };
+  }
+
+  // --- Enterprise operational workflows (Phase 2) ---------------------------------
+
+  // (Re)compute and persist the case priority (severity + escalation + ageing).
+  prioritize(case_code) {
+    const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
+    s.priority = investigation.scorePriority({ category: s.category, escalated: s.status === 'escalated', ageMs: this.clock() - s.createdAt });
+    this._statusRepo.put(case_code, s);
+    return { case_code, priority: s.priority };
+  }
+
+  // Assign a case to the least-loaded eligible investigator (conflict-of-interest excludes
+  // the subject unit). Workload counts are durable so balancing is stable across restarts.
+  assignCase({ case_code }) {
+    const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
+    const loads = this._workload.get('loads') || {};
+    const pick = investigation.assign({ roster: this._roster, loads, preferUnit: s.recipient });
+    if (!pick) throw httpError(409, 'no eligible investigator (conflict-of-interest)');
+    loads[pick.id] = (loads[pick.id] || 0) + 1;
+    this._workload.put('loads', loads);
+    s.assignee = pick.id;
+    this._statusRepo.put(case_code, s);
+    this.audit.append({ actor: 'system', action: 'case-assigned', purpose: pick.id, zone: ZONES.EXECUTIVE });
+    this._metrics.inc('njtip_assignments_total');
+    return { case_code, assignee: pick.id, load: loads[pick.id] };
+  }
+  workloads() { return this._workload.get('loads') || {}; }
+
+  // SLA status for a case (first-review + resolution due/breach), given the current clock.
+  slaStatus(case_code) {
+    const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
+    return investigation.slaStatus({ band: (s.priority || {}).band || 'P4', createdAt: s.createdAt, firstReviewedAt: s.firstReviewedAt, resolvedAt: s.resolvedAt, now: this.clock() });
+  }
+
+  // Multi-stage review chain: advance the case's review stage (intake→investigation→
+  // oversight-review→decision). Independent of the lifecycle status; both are audited.
+  advanceStage({ principal, case_code }) {
+    const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
+    const next = investigation.nextStage(investigation.REVIEW_CHAIN, s.stage || investigation.REVIEW_CHAIN[0]);
+    if (!next) throw httpError(409, 'already at the final review stage');
+    s.stage = next;
+    this._statusRepo.put(case_code, s);
+    this.audit.append({ actor: principal, action: 'stage-advanced', purpose: next, zone: ZONES.EXECUTIVE });
+    return { case_code, stage: s.stage };
+  }
+
+  // File an appeal against a resolved/closed case. Appeals do NOT mutate the closed case
+  // (immutable history); they create a linked appeal record entering the appeal chain.
+  fileAppeal({ case_code, by, reason }) {
+    const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
+    if (!['resolved', 'closed'].includes(s.status)) throw httpError(409, 'only resolved or closed cases may be appealed');
+    if (!by || !reason) throw httpError(400, 'an accountable appellant and a reason are required');
+    s.appeal = { by, stage: investigation.APPEAL_CHAIN[0], filedAt: this.clock() };
+    this._statusRepo.put(case_code, s);
+    this.audit.append({ actor: by, action: 'appeal-filed', purpose: investigation.APPEAL_CHAIN[0], zone: ZONES.INDEPENDENT });
+    this._metrics.inc('njtip_appeals_total');
+    return { case_code, appeal: s.appeal };
+  }
+
+  // Retention plan for a case (disposition date + action) based on outcome; legal hold at
+  // the object store overrides purge. Read-only planning — never auto-purges.
+  retentionPlan(case_code) {
+    const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
+    const outcome = s.disposition === 'escalate' ? 'escalated' : (s.status === 'resolved' ? 'resolved' : s.status);
+    return { case_code, ...investigation.retentionFor({ outcome, decidedAt: s.resolvedAt || s.createdAt }) };
   }
 
   oversightDashboard({ category } = {}) {

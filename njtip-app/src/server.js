@@ -68,6 +68,14 @@ async function route(app, req, url, body) {
   // Evidence handling lifecycle transition (seal/open/admit/exclude/purge).
   if (method === 'POST' && (m = p.match(/^\/api\/investigator\/([^/]+)\/evidence\/([^/]+)\/transition$/))) { requirePermission('seal-evidence', { caseCode: dec(m[1]) }); return json(200, app.workflow.evidenceTransition({ case_code: dec(m[1]), evidenceId: dec(m[2]), event: body.event })); }
 
+  // --- Enterprise operational workflows (assignment, SLA, stages, appeals, retention) ---
+  if (method === 'POST' && (m = p.match(/^\/api\/investigator\/([^/]+)\/assign$/))) { requireRole('investigator'); return json(200, app.workflow.assignCase({ case_code: dec(m[1]) })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/investigator\/([^/]+)\/stage$/))) { const u = requireRole('investigator'); return json(200, app.workflow.advanceStage({ principal: u.principal, case_code: dec(m[1]) })); }
+  if (method === 'GET' && (m = p.match(/^\/api\/reports\/([^/]+)\/sla$/))) { const s = app.workflow.slaStatus(dec(m[1])); return json(200, s); }
+  if (method === 'GET' && (m = p.match(/^\/api\/reports\/([^/]+)\/retention$/))) { requireRole('investigator'); return json(200, app.workflow.retentionPlan(dec(m[1]))); }
+  if (method === 'POST' && (m = p.match(/^\/api\/reports\/([^/]+)\/appeal$/))) return json(201, app.workflow.fileAppeal({ case_code: dec(m[1]), by: body.by, reason: body.reason }));
+  if (method === 'GET' && p === '/api/investigator/workloads') { requireRole('investigator'); return json(200, { workloads: app.workflow.workloads() }); }
+
   // --- Oversight (aggregate, read-only) ---
   if (method === 'GET' && p === '/api/oversight/dashboard') return json(200, app.workflow.oversightDashboard({ category: url.searchParams.get('category') }));
   if (method === 'GET' && p === '/api/oversight/report') return json(200, { generatedAt: new Date().toISOString(), ...app.workflow.oversightDashboard() });
