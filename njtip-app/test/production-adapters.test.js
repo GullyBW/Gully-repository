@@ -60,7 +60,10 @@ test('OIDC: verifies signed JWT, maps claims → role; rejects tamper/expiry/bad
   let now = 10_000_000;
   const v = new OidcVerifier({ secret: 'idp-secret', clock: () => now });
   const tok = v.issue({ sub: 'inv-042', role: 'investigator', ttlMs: 1000 });
-  assert.deepStrictEqual(v.verify(tok), { principal: 'inv-042', role: 'investigator', kind: 'oidc' });
+  const claims = v.verify(tok);
+  assert.strictEqual(claims.principal, 'inv-042');
+  assert.strictEqual(claims.role, 'investigator');
+  assert.strictEqual(claims.kind, 'oidc');
   // Tamper → null.
   assert.strictEqual(v.verify(tok.slice(0, -2) + 'xx'), null);
   // Wrong trust anchor → null.

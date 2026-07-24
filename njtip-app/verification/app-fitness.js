@@ -10,6 +10,7 @@ const { makeKeyManager } = require('../src/adapters/kms');
 const { makeObjectStore } = require('../src/adapters/object-store');
 const { MessageBroker } = require('../src/adapters/broker');
 const { OidcVerifier } = require('../src/adapters/oidc');
+const { SecretsManager } = require('../src/adapters/secrets');
 const { CaptureProvider } = require('../src/adapters/notify-providers');
 const { MemorySqlDriver } = require('../src/adapters/drivers/sql-driver');
 const { SqlStore } = require('../src/adapters/sql-store');
@@ -104,5 +105,16 @@ module.exports = [
     if (idp.verify(new OidcVerifier({ secret: 's', issuer: 'evil' }).issue({ sub: 'x', role: 'admin' }))) v.push('accepted a token from the wrong issuer');
     if (idp.verify(idp.issue({ sub: 'x', role: 'superuser' }))) v.push('accepted a disallowed role claim');
     if (!idp.verify(idp.issue({ sub: 'x', role: 'investigator' }))) v.push('rejected a valid token');
+  }),
+
+  fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
+    const idp = new OidcVerifier({ secret: 's' });
+    const tok = idp.issue({ sub: 'x', role: 'admin' });
+    const claims = idp.verify(tok);
+    idp.revoke(claims.jti);
+    if (idp.verify(tok)) v.push('revoked token still verifies');
+    const sm = new SecretsManager({ source: { DB_PASSWORD: 'super-secret-value' } });
+    if (JSON.stringify(sm.list()).includes('super-secret-value')) v.push('secret value leaked in list() metadata');
+    if ('value' in (sm.status('DB_PASSWORD') || {})) v.push('secret value leaked in status()');
   }),
 ];
