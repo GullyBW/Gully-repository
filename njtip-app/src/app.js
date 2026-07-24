@@ -24,6 +24,8 @@ const { EventStore } = require('./eventsourcing/event-store');
 const authz = require('./authz');
 const { PolicySet, DEFAULT_POLICIES } = require('./iam/policy-engine');
 const zeroTrust = require('./iam/zero-trust');
+const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
+const { KnowledgeGraph } = require('./graph/graph');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
 
@@ -87,12 +89,16 @@ function createApp(overrides = {}) {
   const devices = new zeroTrust.DeviceRegistry();
   const breakGlass = new zeroTrust.BreakGlass();
   const iam = { policies, devices, breakGlass, trustScore: zeroTrust.trustScore, continuousAuthz: zeroTrust.continuousAuthz };
+  // Multi-tenant government platform (Phase 22) + knowledge graph (Phase 23).
+  const tenants = new TenantRegistry();
+  const collaboration = new CollaborationBroker(tenants);
+  const graph = new KnowledgeGraph();
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
 }
 
 module.exports = { createApp };

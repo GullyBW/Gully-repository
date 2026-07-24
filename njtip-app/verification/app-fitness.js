@@ -29,6 +29,9 @@ const { CaseAggregate } = require('../src/eventsourcing/case-aggregate');
 const { caseReadModel } = require('../src/eventsourcing/projections');
 const { PolicySet } = require('../src/iam/policy-engine');
 const zeroTrust = require('../src/iam/zero-trust');
+const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../src/tenancy/tenant');
+const { KnowledgeGraph } = require('../src/graph/graph');
+const { MemoryStore } = require('../src/adapters/store');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -148,6 +151,28 @@ module.exports = [
     const bg = new zeroTrust.BreakGlass();
     let sod = false; try { bg.request({ principal: 'a', justification: 'x', approver: 'a' }); } catch (_) { sod = true; }
     if (!sod) v.push('break-glass allowed self-approval');
+  }),
+
+  fit('APP-FIT-TENANT-ISOLATION', 'Tenants are namespace-isolated (fail-closed); shares refuse content', (v) => {
+    const inner = new MemoryStore('independent');
+    const a = new TenantScopedStore(inner, 'agency-a');
+    const b = new TenantScopedStore(inner, 'agency-b');
+    a.put('K', { x: 1 });
+    if (b.get('K') !== null) v.push('tenant B read tenant A data (isolation breach)');
+    if (b.keys().length !== 0) v.push('tenant B enumerated tenant A keys');
+    // Cross-tenant collaboration refuses identity/content.
+    const reg = new TenantRegistry(); reg.register('agency-a'); reg.register('agency-b');
+    const cb = new CollaborationBroker(reg);
+    let refused = false; try { cb.share({ fromTenant: 'agency-a', toTenant: 'agency-b', ref: { content: 'secret' } }); } catch (_) { refused = true; }
+    if (!refused) v.push('cross-tenant share carried case content');
+  }),
+
+  fit('APP-FIT-GRAPH-PRIVACY', 'Knowledge graph refuses identifying node/edge properties', (v) => {
+    const g = new KnowledgeGraph();
+    g.addNode('n1', 'Person', { role: 'suspect' });
+    let refused = false; try { g.addNode('n2', 'Person', { name: 'Real Name' }); } catch (_) { refused = true; }
+    if (!refused) v.push('graph stored an identifying node property');
+    if (!KnowledgeGraph) v.push('graph missing');
   }),
 
   fit('APP-FIT-WORKFLOW-INTEGRITY', 'Prioritisation is deterministic; assignment stays within the roster', (v) => {
