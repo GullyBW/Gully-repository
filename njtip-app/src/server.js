@@ -168,6 +168,9 @@ async function route(app, req, url, body) {
 
   // --- Executive intelligence (Phase 21), Twin 2.0 sims (Phase 17/24), data fabric (Phase 14) ---
   if (method === 'GET' && p === '/api/executive/scorecard') { requireRole('oversight-board'); return json(200, app.workflow.executiveScorecard()); }
+  // API governance (Phase 37) + operational decision support (Phase 33, advisory).
+  if (method === 'GET' && p === '/api/admin/api-governance') { requireRole('admin'); return json(200, app.apiRegistry.dashboard()); }
+  if (method === 'GET' && p === '/api/decision-support') { requireRole('oversight-board'); const k = app.workflow.analytics().kpis; return json(200, { predictiveKpis: app.decisionSupport.predictiveKpis({ openCases: k.backlog, arrivalPerDay: 20, resolvedPerDay: 18 }), completion: app.decisionSupport.completionForecast({ openCases: k.backlog, resolvedPerDay: 18 }) }); }
   if (method === 'POST' && p === '/api/twin2/simulate') {
     requireRole('admin');
     const k = body.kind;

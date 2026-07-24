@@ -42,6 +42,9 @@ const simulation = require('./twin2/simulation');
 const privacy = require('./privacy/privacy-engineering');
 const threatIntelMod = require('./security/threat-intel');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
+const { ApiRegistry } = require('./apigov/registry');
+const decisionSupport = require('./ai/decision-support');
+const openapiSpec = require('./openapi');
 const { runTwin, runApp, runInfra } = require('./twin-validate');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
@@ -140,12 +143,15 @@ function createApp(overrides = {}) {
   const catalog = new MetadataCatalog();
   const lineage = new DataLineage();
   const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, canonical: CANONICAL_MODEL };
+  // API governance (Phase 37): registry seeded from the live OpenAPI contract.
+  const apiRegistry = new ApiRegistry();
+  apiRegistry.fromOpenApi(openapiSpec.spec());
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, apiRegistry, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

@@ -45,6 +45,9 @@ const privacy = require('../src/privacy/privacy-engineering');
 const threat = require('../src/security/threat-intel');
 const { CustodyLedger } = require('../src/custody/ledger');
 const { SpatialIndex, geohash } = require('../src/geo/gis');
+const { ApiRegistry } = require('../src/apigov/registry');
+const decisionSupport = require('../src/ai/decision-support');
+const openapiSpec = require('../src/openapi');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -256,6 +259,23 @@ module.exports = [
     // Recommendations are advisory, never autonomous.
     const rec = threat.recommend({ deviceRiskBand: 'high' });
     if (rec.advisoryOnly !== true || rec.autonomous !== false) v.push('threat recommendation is not advisory/non-autonomous');
+  }),
+
+  fit('APP-FIT-API-GOVERNANCE', 'APIs governed from the live contract; unknown ops rejected; decisions advisory', (v) => {
+    const reg = new ApiRegistry(); reg.fromOpenApi(openapiSpec.spec());
+    // The governed contract validates a documented op and rejects an unknown one (fail-closed).
+    if (!reg.validate('GET', '/api/twin/validate').ok) v.push('governed op failed validation');
+    if (reg.validate('DELETE', '/nonexistent').ok) v.push('unknown API validated (must fail closed)');
+    // Retirement requires prior deprecation.
+    reg.register('GET', '/x', { operationId: 'x' });
+    let lifecycle = false; try { reg.retire('GET', '/x'); } catch (_) { lifecycle = true; }
+    if (!lifecycle) v.push('API retired without deprecation');
+    // Rate limiting denies beyond the burst.
+    reg.registerConsumer('c', { ratePerMin: 0, burst: 1 });
+    reg.allow('c'); if (reg.allow('c').allowed) v.push('rate limiter did not deny beyond burst');
+    // Decision support is advisory + human-gated.
+    const d = decisionSupport.completionForecast({ openCases: 10, resolvedPerDay: 5 });
+    if (d.advisoryOnly !== true || d.autonomous !== false) v.push('decision support is not advisory/non-autonomous');
   }),
 
   fit('APP-FIT-CUSTODY-SIGNED-CHAIN', 'Custody ledger is signed, hash-chained, tamper-evident', (v) => {
