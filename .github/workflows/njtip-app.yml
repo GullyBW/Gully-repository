@@ -1,0 +1,39 @@
+# NJTIP v1.0 product MVP CI. Scoped to njtip-app/** and njtip-twin/** so it never
+# interferes with the marketplace CI (ci.yml). Every change runs the product's tests
+# AND the Digital Engineering Twin quality gate — architecture violations fail CI.
+name: NJTIP App — Product CI + Twin Gate
+
+on:
+  push:
+    paths: ['njtip-app/**', 'njtip-twin/**']
+  pull_request:
+    paths: ['njtip-app/**', 'njtip-twin/**']
+
+jobs:
+  product-and-assurance:
+    name: Vertical slice tests + Twin fitness gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Digital Engineering Twin — full assurance gate
+        working-directory: njtip-twin
+        run: node --test && node scripts/ci.js
+      - name: Product MVP — vertical slice + API tests
+        working-directory: njtip-app
+        run: node --test
+      - name: Product build gate — Twin architecture fitness
+        working-directory: njtip-app
+        run: node scripts/assure.js
+      - name: Upload assurance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: njtip-assurance-evidence
+          path: |
+            njtip-twin/evidence-out/evidence.json
+            njtip-twin/evidence-out/REVIEW-REPORT.md
+            njtip-twin/evidence-out/dashboard.html
+          if-no-files-found: warn

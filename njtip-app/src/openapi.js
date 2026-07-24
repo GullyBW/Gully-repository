@@ -1,0 +1,48 @@
+'use strict';
+// Stable API contract for the v1.0 MVP vertical slice (OpenAPI 3.1). Generated
+// programmatically so it stays in lock-step with the server. Versioned under /v1.
+function spec() {
+  return {
+    openapi: '3.1.0',
+    info: { title: 'NJTIP MVP API', version: '1.0.0', description: 'Anonymous reporting → governance vertical slice. SYNTHETIC ONLY.' },
+    servers: [{ url: '/', description: 'v1' }],
+    paths: {
+      '/api/reports': { post: {
+        summary: 'Submit an anonymous report (no identity is accepted)', operationId: 'submitReport',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ReportSubmission' } } } },
+        responses: { 201: { description: 'Accepted', content: { 'application/json': { schema: { $ref: '#/components/schemas/CaseHandle' } } } }, 400: ref('Error'), 403: ref('Error') } } },
+      '/api/reports/{case_code}/status': { get: {
+        summary: 'Get status by case code (no identifier required)', operationId: 'getStatus',
+        parameters: [pathParam('case_code')], responses: { 200: { description: 'Status' }, 404: ref('Error') } } },
+      '/api/reports/{case_code}/evidence': { post: {
+        summary: 'Attach evidence (chain of custody)', operationId: 'attachEvidence',
+        parameters: [pathParam('case_code')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { content: { type: 'string' } }, required: ['content'] } } } },
+        responses: { 201: { description: 'Ingested' }, 404: ref('Error') } } },
+      '/api/investigator/{case_code}/review': { post: {
+        summary: 'Investigator review (JIT, FIDO2, matter-scoped)', operationId: 'investigatorReview', security: [{ bearerAuth: [] }],
+        parameters: [pathParam('case_code')], requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { note: { type: 'string' }, disposition: { type: 'string', enum: ['reviewed', 'escalate'] } } } } } },
+        responses: { 200: { description: 'Reviewed' }, 401: ref('Error'), 403: ref('Error') } } },
+      '/api/oversight/dashboard': { get: { summary: 'Non-attributable aggregate dashboard', operationId: 'oversightDashboard', responses: { 200: { description: 'Aggregates' } } } },
+      '/api/governance/decisions': { post: {
+        summary: 'Record a HUMAN governance decision (never automated)', operationId: 'recordGovernanceDecision', security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/GovernanceDecision' } } } },
+        responses: { 201: { description: 'Recorded' }, 401: ref('Error') } } },
+      '/api/evidence/bundle': { get: { summary: 'Generate deterministic workflow evidence', operationId: 'generateEvidence', responses: { 200: { description: 'Evidence bundle' } } } },
+      '/api/twin/validate': { get: { summary: 'Run the Digital Engineering Twin fitness gate', operationId: 'twinValidate', responses: { 200: { description: 'Invariant results' } } } },
+    },
+    components: {
+      securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } },
+      schemas: {
+        ReportSubmission: { type: 'object', required: ['category', 'content'], additionalProperties: false,
+          properties: { category: { type: 'string', enum: ['police', 'courts', 'prosecution', 'prison', 'official', 'regulatory', 'other'] }, content: { type: 'string' }, extra: { type: 'object', description: 'MUST NOT contain identity — rejected if it does' } } },
+        CaseHandle: { type: 'object', properties: { case_code: { type: 'string' }, recipient: { type: 'string' }, coi: { type: 'string' } } },
+        GovernanceDecision: { type: 'object', required: ['verdict', 'rationale'], properties: { reviewer: { type: 'string' }, subject: { type: 'string' }, verdict: { type: 'string' }, rationale: { type: 'string' } } },
+        Error: { type: 'object', properties: { error: { type: 'string' } } },
+      },
+    },
+  };
+}
+function ref(name) { return { description: name, content: { 'application/json': { schema: { $ref: `#/components/schemas/${name}` } } } }; }
+function pathParam(name) { return { name, in: 'path', required: true, schema: { type: 'string' } }; }
+
+module.exports = { spec };

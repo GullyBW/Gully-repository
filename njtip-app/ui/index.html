@@ -1,0 +1,91 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NJTIP v1.0 (Synthetic MVP)</title>
+<style>
+:root{--bg:#fff;--fg:#111;--mut:#666;--card:#f6f7f9;--acc:#3b5bdb;--ok:#1e874b;--bad:#c0392b;--line:#e3e6ea}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1216;--fg:#e8eaed;--mut:#9aa0a6;--card:#171b21;--line:#2a2f36;--acc:#7aa2ff}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:760px;margin:0 auto;padding:20px}
+.banner{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--mut);font-size:13px}
+h1{font-size:20px;margin:14px 0 2px}.sub{color:var(--mut);font-size:13px;margin-bottom:12px}
+nav{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}nav button{background:var(--card);border:1px solid var(--line);color:var(--fg);padding:7px 12px;border-radius:20px;cursor:pointer;font-size:14px}
+nav button[aria-selected=true]{background:var(--acc);color:#fff;border-color:var(--acc)}
+section{display:none}section.active{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:10px 0}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+input,select,textarea{width:100%;padding:9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--fg);font:inherit}
+textarea{min-height:80px;resize:vertical}
+button.go{margin-top:12px;background:var(--acc);color:#fff;border:none;padding:10px 16px;border-radius:8px;cursor:pointer;font-size:15px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:10px;overflow:auto;font-size:12px;white-space:pre-wrap}
+.hint{font-size:12px;color:var(--mut)}
+</style></head><body><div class="wrap">
+<div class="banner"><b>SYNTHETIC MVP.</b> No production data. Anonymous reporting → governance vertical slice, continuously validated by the Digital Engineering Twin. <b>Evidence supports human decisions; it never replaces them.</b></div>
+<h1>NJTIP — National Justice Transparency &amp; Integrity Platform</h1>
+<div class="sub">v1.0 MVP · every step below exercises a real architectural subsystem.</div>
+<nav role="tablist">
+  <button role="tab" aria-selected="true" data-t="citizen">Citizen</button>
+  <button role="tab" aria-selected="false" data-t="investigator">Investigator</button>
+  <button role="tab" aria-selected="false" data-t="oversight">Oversight</button>
+  <button role="tab" aria-selected="false" data-t="governance">Governance</button>
+  <button role="tab" aria-selected="false" data-t="assurance">Assurance</button>
+</nav>
+
+<section id="citizen" class="active"><div class="card">
+  <h2>File a confidential report</h2>
+  <p class="hint">No name, phone, email, ID, or IP is collected — the system rejects identity fields by construction.</p>
+  <label for="cat">Category</label>
+  <select id="cat"><option>police</option><option>courts</option><option>prosecution</option><option>prison</option><option>official</option><option>regulatory</option><option>other</option></select>
+  <label for="content">What did you observe? (avoid naming yourself)</label>
+  <textarea id="content" placeholder="Describe the concern…"></textarea>
+  <button class="go" onclick="submitReport()">Submit anonymously</button>
+  <div id="citizenOut"></div>
+</div></section>
+
+<section id="investigator"><div class="card">
+  <h2>Investigator review</h2>
+  <p class="hint">Requires just-in-time, phishing-resistant, matter-scoped authorization (synthetic token).</p>
+  <label>Bearer token</label><input id="invTok" value="inv-token-synthetic">
+  <label>Case code</label><input id="invCase" placeholder="NJ-…">
+  <label>Disposition</label><select id="disp"><option>reviewed</option><option>escalate</option></select>
+  <button class="go" onclick="review()">Record review</button>
+  <div id="invOut"></div>
+</div></section>
+
+<section id="oversight"><div class="card">
+  <h2>Oversight dashboard</h2><p class="hint">Aggregate &amp; non-attributable — no case content or identity.</p>
+  <button class="go" onclick="dash()">Refresh aggregates</button><div id="ovOut"></div>
+</div></section>
+
+<section id="governance"><div class="card">
+  <h2>Record a governance decision</h2>
+  <p class="hint">This <b>records a human decision</b>. It never automates governance authority.</p>
+  <label>Bearer token</label><input id="govTok" value="gov-token-synthetic">
+  <label>Reviewer (accountable human)</label><input id="rev" placeholder="e.g. Oversight Board Chair">
+  <label>Subject</label><input id="subj" value="MVP readiness">
+  <label>Verdict</label><input id="verd" placeholder="e.g. defer / proceed">
+  <label>Rationale (required)</label><textarea id="rat" placeholder="Why…"></textarea>
+  <button class="go" onclick="decide()">Record human decision</button>
+  <div id="govOut"></div>
+</div></section>
+
+<section id="assurance"><div class="card">
+  <h2>Digital Engineering Twin validation</h2><p class="hint">Runs the architecture fitness gate against the running product.</p>
+  <button class="go" onclick="twin()">Validate architecture</button>
+  <button class="go" onclick="evidence()" style="background:#555">Generate evidence</button>
+  <div id="asOut"></div>
+</div></section>
+
+<script>
+const $=s=>document.querySelector(s), out=(el,o)=>{document.querySelector(el).innerHTML='<pre>'+JSON.stringify(o,null,2)+'</pre>'};
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.setAttribute('aria-selected',x===b));
+  document.querySelectorAll('section').forEach(s=>s.classList.toggle('active',s.id===b.dataset.t));
+});
+async function api(m,p,body,tok){const h={'content-type':'application/json'};if(tok)h.authorization='Bearer '+tok;
+  const r=await fetch(p,{method:m,headers:h,body:body?JSON.stringify(body):undefined});return {status:r.status,body:await r.json()};}
+async function submitReport(){out('#citizenOut',await api('POST','/api/reports',{category:$('#cat').value,content:$('#content').value}));}
+async function review(){out('#invOut',await api('POST','/api/investigator/'+encodeURIComponent($('#invCase').value)+'/review',{disposition:$('#disp').value},$('#invTok').value));}
+async function dash(){out('#ovOut',await api('GET','/api/oversight/dashboard'));}
+async function decide(){out('#govOut',await api('POST','/api/governance/decisions',{reviewer:$('#rev').value,subject:$('#subj').value,verdict:$('#verd').value,rationale:$('#rat').value},$('#govTok').value));}
+async function twin(){out('#asOut',await api('GET','/api/twin/validate'));}
+async function evidence(){out('#asOut',await api('GET','/api/evidence/bundle'));}
+</script></div></body></html>

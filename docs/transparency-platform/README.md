@@ -205,10 +205,21 @@ engineering twin that converts the approved architecture into continuously verif
 Run it: `cd njtip-twin && npm test && npm run ci`. A green run is **evidence for human review, not a
 production go-live approval.**
 
+## ▶ Product MVP (`/njtip-app`)
+
+The project has transitioned from architecture to **product engineering**. The first
+production-track vertical slice — **anonymous reporting → policy → evidence → audit → investigator →
+oversight → governance decision → evidence → Twin validation** — is built and runnable at
+[`/njtip-app`](../../njtip-app/README.md): a zero-dependency REST API + UI prototype that reuses the
+Twin's validated components, with the **Digital Engineering Twin as the CI quality gate** (architecture
+violations fail the build). Architecture Baseline v1.0 is frozen; changes are ADR-governed. Run
+`cd njtip-app && npm test && npm start`.
+
 ## What happens next
 
-The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–8), and Phase 8 is realized
-as a running system. Engineering may proceed
+The blueprint is **complete end-to-end** (Discovery → Design → Phases 2–8), Phase 8 is realized as a
+running assurance platform, and the **product MVP is under construction** with implementation now
+driving refinement rather than speculative design. Engineering may proceed
 **on synthetic data**: build the Phase-6 specs on the Phase-7 factory, continuously validated in the
 Phase-8 twin, through the systems-engineering reviews and platform certification — security spine
 first (D-05), 🔒 subsystems human-expert-built. **A green twin is evidence, not a launch decision.**
