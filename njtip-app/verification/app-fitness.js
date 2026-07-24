@@ -37,6 +37,7 @@ const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../s
 const { FederationRegistry } = require('../src/tenancy/federation');
 const { EnterpriseEventBus } = require('../src/fabric/event-bus');
 const { KnowledgeGraph } = require('../src/graph/graph');
+const graphIntel = require('../src/graph/intelligence');
 const { MemoryStore } = require('../src/adapters/store');
 const advisor = require('../src/ai/advisor');
 const { RecommendationQueue } = require('../src/ai/approval');
@@ -200,6 +201,21 @@ module.exports = [
     let refused = false; try { g.addNode('n2', 'Person', { name: 'Real Name' }); } catch (_) { refused = true; }
     if (!refused) v.push('graph stored an identifying node property');
     if (!KnowledgeGraph) v.push('graph missing');
+  }),
+
+  fit('APP-FIT-SEMANTIC-GRAPH-ADVISORY', 'Semantic search stays privacy-safe; graph inference is advisory', (v) => {
+    const { SemanticSearch, expandQuery } = require('../src/search/semantic');
+    // Semantic expansion never introduces identity terms.
+    const exp = expandQuery('corruption police');
+    if (exp.expanded.some((t) => ['name', 'omang', 'email', 'phone'].includes(t))) v.push('semantic expansion introduced an identity term');
+    const ss = new SemanticSearch();
+    let refusedIdx = false; try { ss.index({ case_code: 'NJ-1', email: 'a@b.c' }); } catch (_) { refusedIdx = true; }
+    if (!refusedIdx) v.push('semantic index accepted an identity field');
+    // Graph inference is advisory + human-gated.
+    const g = new KnowledgeGraph(); g.addNode('a', 'Organization'); g.addNode('b', 'Asset'); g.addNode('c', 'Person'); g.addEdge('a', 'b', 'controls'); g.addEdge('c', 'a', 'director'); g.addEdge('c', 'b', 'beneficiary');
+    const pred = graphIntel.predictLinks(g, 'a');
+    if (pred.advisoryOnly !== true || pred.requiresHumanApproval !== true || pred.autonomous !== false) v.push('graph inference not marked advisory/human-gated');
+    if (!Array.isArray(pred.explanation) || !pred.explanation.length) v.push('graph inference not explainable');
   }),
 
   fit('APP-FIT-AI-ADVISORY-ONLY', 'AI is advisory-only, explainable, and human-approval-gated', (v) => {

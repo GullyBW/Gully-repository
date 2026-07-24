@@ -29,6 +29,7 @@ const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
 const { FederationRegistry } = require('./tenancy/federation');
 const { makeEventBus } = require('./fabric/event-bus');
 const { KnowledgeGraph } = require('./graph/graph');
+const graphIntel = require('./graph/intelligence');
 const advisor = require('./ai/advisor');
 const { RecommendationQueue } = require('./ai/approval');
 const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-engine');
@@ -140,7 +141,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, ai, orchestration, workflowSim, custody, gis, compliance, twin2, twin3, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, orchestration, workflowSim, custody, gis, compliance, twin2, twin3, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

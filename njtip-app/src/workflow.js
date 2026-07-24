@@ -251,6 +251,9 @@ class Workflow {
     return idx;
   }
   searchCases(query, opts) { return this._searchIndex().search(query, opts); }
+  // Semantic search (Phase 30): concept-expanded, intent-aware, explainable — over the same
+  // privacy-preserving index (identity never participates).
+  semanticSearch(query, opts) { const { SemanticSearch } = require('./search/semantic'); return new SemanticSearch(this._searchIndex()).search(query, opts); }
 
   // Enrich rows with derived, non-identifying analytics fields (SLA breach + band).
   _analyticsRows() {

@@ -56,6 +56,8 @@ class SearchIndex {
       .map((id) => ({ case_code: id, ...this._docs.get(id) }));
   }
   size() { return this._docs.size; }
+  // Direct lookup of an indexed document's non-identifying fields (no tokenisation).
+  doc(id) { const d = this._docs.get(id); return d ? { case_code: id, ...d } : null; }
 }
 
 function makeSearchIndex(cfg = {}) {

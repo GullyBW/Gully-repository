@@ -83,6 +83,10 @@ async function route(app, req, url, body) {
   // --- Search, analytics, intelligence (privacy-preserving, non-attributable) ---
   if (method === 'GET' && p === '/api/search') { requireRole('investigator'); return json(200, { results: app.workflow.searchCases(url.searchParams.get('q'), { limit: Number(url.searchParams.get('limit') || 50) }) }); }
   if (method === 'GET' && p === '/api/analytics') return json(200, app.workflow.analytics({ by: url.searchParams.get('by') || 'category' }));
+  // Semantic search (Phase 30) + graph intelligence (Phase 31, advisory).
+  if (method === 'GET' && p === '/api/search/semantic') { requireRole('investigator'); return json(200, app.workflow.semanticSearch(url.searchParams.get('q'))); }
+  if (method === 'GET' && (m = p.match(/^\/api\/graph\/([^/]+)\/predict$/))) { requireRole('investigator'); return json(200, app.graphIntel.predictLinks(app.graph, dec(m[1]))); }
+  if (method === 'GET' && p === '/api/graph/patterns') { requireRole('investigator'); return json(200, app.graphIntel.suspiciousPatterns(app.graph)); }
   if (method === 'GET' && (m = p.match(/^\/api\/reports\/([^/]+)\/timeline$/))) { requireRole('investigator'); return json(200, app.workflow.caseTimeline(dec(m[1]))); }
   if (method === 'GET' && p === '/api/analytics/export') {
     requireRole('oversight-board');
