@@ -10,7 +10,9 @@
     "twin": "node scripts/assure.js",
     "evidence": "node scripts/evidence-package.js",
     "readiness": "node scripts/readiness.js",
-    "perf": "node scripts/perf.js"
+    "perf": "node scripts/perf.js",
+    "health": "node scripts/engineering-health.js",
+    "infra-baseline": "node scripts/infra-baseline.js"
   },
   "license": "SEE-BLUEPRINT",
   "dependencies": {},

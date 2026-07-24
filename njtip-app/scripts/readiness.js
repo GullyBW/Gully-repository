@@ -14,7 +14,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runTwin, runApp } = require('../src/twin-validate');
+const { runTwin, runApp, runInfra } = require('../src/twin-validate');
 const { Workflow } = require('../src/workflow');
 const configMod = require('../src/config');
 
@@ -29,7 +29,7 @@ const REQUIRED_ATTESTATIONS = [
 ];
 
 function fitnessDimension() {
-  const results = [...runTwin(), ...runApp()];
+  const results = [...runTwin(), ...runApp(), ...runInfra()];
   const failing = results.filter((r) => !r.pass);
   return { name: 'architecture-invariants', pass: failing.length === 0, detail: `${results.length - failing.length}/${results.length} invariants hold`, failing: failing.map((f) => f.id) };
 }

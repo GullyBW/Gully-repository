@@ -15,7 +15,7 @@
 // never authorizes production deployment.
 const fs = require('node:fs');
 const { signing, hash } = require('../src/twin');
-const { runTwin, runApp } = require('../src/twin-validate');
+const { runTwin, runApp, runInfra } = require('../src/twin-validate');
 const authz = require('../src/authz');
 const caseLc = require('../src/domain/case-lifecycle');
 const evLc = require('../src/domain/evidence-lifecycle');
@@ -35,10 +35,11 @@ const ADAPTER_INVENTORY = [
 function buildCore() {
   const twin = runTwin().map((r) => ({ id: r.id, pass: r.pass })).sort((a, b) => a.id.localeCompare(b.id));
   const app = runApp().map((r) => ({ id: r.id, pass: r.pass })).sort((a, b) => a.id.localeCompare(b.id));
+  const infra = runInfra().map((r) => ({ id: r.id, pass: r.pass })).sort((a, b) => a.id.localeCompare(b.id));
   return {
     platform: 'NJTIP',
     version: configMod.load({ NJTIP_PERSISTENCE: 'memory' }).version,
-    fitness: { twin, app, twinPassed: twin.filter((r) => r.pass).length, appPassed: app.filter((r) => r.pass).length, allHold: [...twin, ...app].every((r) => r.pass) },
+    fitness: { twin, app, infra, twinPassed: twin.filter((r) => r.pass).length, appPassed: app.filter((r) => r.pass).length, infraPassed: infra.filter((r) => r.pass).length, allHold: [...twin, ...app, ...infra].every((r) => r.pass) },
     adapters: ADAPTER_INVENTORY,
     authorization: { rbac: authz.RBAC, mfaRequired: [...authz.MFA_REQUIRED].sort() },
     lifecycles: {

@@ -13,10 +13,10 @@ test('every application fitness function passes', () => {
   assert.strictEqual(results.length, appFitness.length);
 });
 
-test('combined validate reports twin + app invariants and holds', () => {
+test('combined validate reports twin + app + infra invariants and holds', () => {
   const v = twinValidate();
   assert.strictEqual(v.invariantsHeld, true, 'failing: ' + v.failing.join(', '));
   assert.strictEqual(v.passed, v.total);
-  assert.ok(v.twin.total >= 14 && v.app.total >= 8);
-  assert.strictEqual(v.total, v.twin.total + v.app.total);
+  assert.ok(v.twin.total >= 14 && v.app.total >= 8 && v.infra.total >= 6);
+  assert.strictEqual(v.total, v.twin.total + v.app.total + v.infra.total);
 });

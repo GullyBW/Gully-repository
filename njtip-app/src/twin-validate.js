@@ -8,6 +8,7 @@
 const { build } = require('../../njtip-twin/src/platform/orchestrator');
 const twinFitness = require('../../njtip-twin/verification/fitness');
 const appFitness = require('../verification/app-fitness');
+const infraFitness = require('../verification/infra-fitness');
 
 function runTwin() {
   const twin = build();
@@ -16,20 +17,25 @@ function runTwin() {
 function runApp() {
   return appFitness.map((f) => f.check());
 }
+function runInfra() {
+  return infraFitness.map((f) => f.check());
+}
 
 function twinValidate() {
   const twin = runTwin();
   const app = runApp();
-  const all = [...twin, ...app];
+  const infra = runInfra();
+  const all = [...twin, ...app, ...infra];
   return {
     invariantsHeld: all.every((r) => r.pass),
     passed: all.filter((r) => r.pass).length, total: all.length,
     twin: { passed: twin.filter((r) => r.pass).length, total: twin.length },
     app: { passed: app.filter((r) => r.pass).length, total: app.length },
+    infra: { passed: infra.filter((r) => r.pass).length, total: infra.length },
     failing: all.filter((r) => !r.pass).map((r) => r.id),
-    note: 'Architecture invariants continuously verified by the Twin AND the app fitness gate. Evidence ≠ authorization.',
+    note: 'Architecture + application + infrastructure invariants continuously verified by the Twin. Evidence ≠ authorization.',
   };
 }
 function invariantsHeld() { return twinValidate().invariantsHeld; }
 
-module.exports = { twinValidate, invariantsHeld, runTwin, runApp };
+module.exports = { twinValidate, invariantsHeld, runTwin, runApp, runInfra };

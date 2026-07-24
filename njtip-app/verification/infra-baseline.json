@@ -1,0 +1,17 @@
+{
+  "facts": {
+    "runAsNonRoot": true,
+    "readOnlyRootFilesystem": true,
+    "dropAll": true,
+    "hasLiveness": true,
+    "hasReadiness": true,
+    "hasLimits": true,
+    "defaultDeny": true,
+    "hpaMin": "3",
+    "hpaMax": "12",
+    "pdbMin": "2"
+  },
+  "digest": "6bdf8cb5fbfd6fc25e1f3894569202ddf55267870107c4a9977fdfea59f8c58e",
+  "recordedAt": "2026-07-24T17:30:15.821Z",
+  "note": "Human-reviewed infrastructure baseline. Drift from this fails the build until re-baselined."
+}
