@@ -13,6 +13,7 @@ const { OidcVerifier } = require('../src/adapters/oidc');
 const { CaptureProvider } = require('../src/adapters/notify-providers');
 const { MemorySqlDriver } = require('../src/adapters/drivers/sql-driver');
 const { SqlStore } = require('../src/adapters/sql-store');
+const { UnitOfWork } = require('../src/adapters/uow');
 const authz = require('../src/authz');
 const caseLc = require('../src/domain/case-lifecycle');
 const evLc = require('../src/domain/evidence-lifecycle');
@@ -51,6 +52,19 @@ module.exports = [
     new SqlStore(ZONES.INDEPENDENT, 'reports', d).put('K', { case_code: 'NJ-X', status: 'received' });
     // Tables are opaque `${zone}__${collection}` blobs; there is no identity column by design.
     for (const t of d.tables()) if (!/^[a-z]+__[a-z]+$/.test(t)) v.push('unexpected table shape: ' + t);
+  }),
+
+  fit('APP-FIT-PERSISTENCE-INTEGRITY', 'Optimistic locking prevents lost updates; txns roll back', (v) => {
+    const d = new MemorySqlDriver();
+    const s = new SqlStore(ZONES.INDEPENDENT, 'reports', d);
+    s.put('K', { n: 0 });
+    const stale = s.getWithVersion('K').version;
+    if (!s.putIfVersion('K', { n: 1 }, stale).ok) v.push('first CAS write should succeed');
+    if (s.putIfVersion('K', { n: 2 }, stale).ok) v.push('stale CAS write was accepted (lost update possible)');
+    // A failed transaction must leave no partial state.
+    const uow = new UnitOfWork(d);
+    try { uow.run(() => { s.put('K', { n: 99 }); throw new Error('x'); }); } catch (_) { /* expected */ }
+    if (JSON.stringify(s.get('K')) !== JSON.stringify({ n: 1 })) v.push('transaction did not roll back partial write');
   }),
 
   fit('APP-FIT-AUTHZ-DEFAULT-DENY', 'Authorization is default-deny with MFA step-up', (v) => {

@@ -45,8 +45,8 @@ test('SqlStore: durable via driver, zone + collection isolated, same interface',
   assert.strictEqual(reports.size(), 1);
   assert.strictEqual(reports.delete('K1'), true);
   assert.strictEqual(reports.get('K1'), null);
-  // Migration was recorded exactly once regardless of store instance count.
-  assert.deepStrictEqual(driver.migrations(), ['001_init']);
+  // Migrations recorded once each regardless of store instance count.
+  assert.deepStrictEqual(driver.migrations(), ['001_init', '002_versioning']);
   // Isolation is by table name; no queryable identity column exists by design.
   assert.ok(driver.tables().every((t) => /^[a-z]+__[a-z]+$/.test(t)));
 });
