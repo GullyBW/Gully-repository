@@ -17,6 +17,8 @@ const { makeNotificationProviders } = require('./adapters/notify-providers');
 const { makeCache } = require('./adapters/cache');
 const { makeSecretsManager } = require('./adapters/secrets');
 const { makeCertificateManager } = require('./adapters/certificates');
+const { makeIntegrationGateway } = require('./adapters/integrations');
+const { makeFeatureFlags } = require('./adapters/flags');
 const { Workflow } = require('./workflow');
 const authz = require('./authz');
 const { invariantsHeld } = require('./twin-validate');
@@ -56,6 +58,8 @@ function createApp(overrides = {}) {
   const cache = makeCache(cfg);
   const secrets = makeSecretsManager(cfg);
   const certs = makeCertificateManager(cfg);
+  const integrations = makeIntegrationGateway(cfg);
+  const flags = makeFeatureFlags(cfg);
 
   const workflow = overrides.workflow || new Workflow({
     seed: overrides.seed ?? 1, ledgerFile: overrides.ledgerFile, statusRepo, notifications, metrics, workloadRepo,
@@ -74,7 +78,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, workflow };
 }
 
 module.exports = { createApp };

@@ -22,6 +22,8 @@ const inv = require('../src/domain/investigation');
 const { SearchIndex } = require('../src/adapters/search');
 const analytics = require('../src/analytics');
 const { Tracer } = require('../src/adapters/observability');
+const { IntegrationGateway, CaptureIntegrationClient } = require('../src/adapters/integrations');
+const { FeatureFlags } = require('../src/adapters/flags');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -149,6 +151,29 @@ module.exports = [
     const json = JSON.stringify(rec);
     if (json.includes('a@b.c') || json.includes('secret') || json.includes('1.2.3.4')) v.push('trace span leaked identity/content');
     if (rec.attrs.route !== '/api/reports') v.push('trace dropped a safe attribute (over-redaction)');
+  }),
+
+  fit('APP-FIT-INTEGRATION-ISOLATION', 'Outbound integrations refuse PII/content and fail fast (circuit breaker)', (v) => {
+    let now = 0;
+    const gw = new IntegrationGateway({ clock: () => now });
+    gw.register('siem', new CaptureIntegrationClient({ failTimes: 99 }), { failureThreshold: 2, cooldownMs: 100 });
+    // Outbound PII/content is refused (fail-closed).
+    let refused = false; try { gw.send('siem', { email: 'a@b.c' }); } catch (e) { refused = /refuses PII/.test(e.message); }
+    if (!refused) v.push('integration sent a PII payload');
+    // Repeated downstream failures open the breaker (isolation — no cascade).
+    for (let i = 0; i < 2; i++) { try { gw.send('siem', { event: 'x' }); } catch (_) { /* downstream error */ } }
+    if (gw.state('siem') !== 'open') v.push('circuit breaker did not open after repeated failures');
+    let fastFail = false; try { gw.send('siem', { event: 'y' }); } catch (e) { fastFail = !!e.circuitOpen; }
+    if (!fastFail) v.push('open circuit did not fail fast');
+  }),
+
+  fit('APP-FIT-FLAGS-DETERMINISTIC', 'Feature-flag rollout is deterministic, sticky, and identity-free', (v) => {
+    const ff = new FeatureFlags({ f: { rolloutPct: 50 } });
+    // Sticky: same subject → same decision.
+    if (ff.isEnabled('f', { subject: 'case-123' }) !== ff.isEnabled('f', { subject: 'case-123' })) v.push('flag decision is not deterministic/sticky');
+    // Kill-switch overrides rollout.
+    ff.set('f', { enabled: false, rolloutPct: 100 });
+    if (ff.isEnabled('f', { subject: 'x' })) v.push('kill-switch did not disable the feature');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

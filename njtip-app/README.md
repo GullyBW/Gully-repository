@@ -16,16 +16,25 @@ quality gate.
 
 ```bash
 cd njtip-app
-npm test           # 40 tests (vertical slice + API + adapters + domain + fitness + assurance)
+npm test           # 74 tests (vertical slice + API + enterprise adapters + domain + fitness + assurance)
 npm start          # serve the app + UI at http://localhost:8087
-npm run twin       # run the Twin + application fitness gates (the quality gate)
-npm run evidence   # generate a deterministic, signed assurance evidence package (Phase 9)
+npm run twin       # combined gate: 36 invariants (14 twin + 15 app + 7 infrastructure)
+npm run perf       # load + soak + chaos resilience harness (Phase 5)
+npm run evidence   # deterministic, signed assurance evidence package (Phase 9)
 npm run readiness  # human-gated operational readiness assessment (Phase 10 — never authorizes)
+npm run health     # engineering-health score + transparent trend (Phase 8)
 # container (build context = repo root, so it can copy the Twin it validates against):
 docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 njtip-app
-# reference Kubernetes manifests (HA, autoscaling, zone-isolation NetworkPolicy):
-ls deploy/k8s/
+# reference Kubernetes + pilot manifests (HA, autoscaling, zone-isolation, canary):
+ls deploy/k8s/ deploy/pilot/
 ```
+
+> **v1.3 — Operational Enterprise System.** Enterprise *semantics* on every adapter
+> (transactions, optimistic locking, pooling, cache, DLQ/retry, object versioning/lifecycle,
+> token revocation + key rotation, secrets leasing, cert lifecycle, circuit-breaker
+> integrations), expanded operational workflows, privacy-preserving intelligence, distributed
+> tracing + SLOs, and a Twin gate that now spans architecture **+ application + infrastructure**.
+> Full summary: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).
 
 ## v1.2 — operational production platform (ports & adapters)
 

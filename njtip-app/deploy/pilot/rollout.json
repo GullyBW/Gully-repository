@@ -1,0 +1,16 @@
+{
+  "pilot": "njtip-controlled-pilot",
+  "note": "Reviewed pilot rollout configuration. Staging only — deployment approval is a recorded human governance decision, never implied by this file.",
+  "canary": { "weightPercent": 5, "promoteWhen": "SLO healthy for 24h and no page-severity alerts" },
+  "cohorts": ["pilot-internal"],
+  "flags": {
+    "enterprise-search": { "enabled": true },
+    "analytics-export": { "enabled": true },
+    "pilot-cohort-rollout": { "rolloutPct": 0, "cohorts": ["pilot-internal"] }
+  },
+  "humanGate": {
+    "required": true,
+    "approvers": ["engineering-lead", "ops-lead", "pilot-owner", "business-owner", "independent-assessor", "oversight-board"],
+    "recordedIn": "governance-ledger"
+  }
+}

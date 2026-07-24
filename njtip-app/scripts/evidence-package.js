@@ -56,6 +56,19 @@ function buildCore() {
       'anonymity boundary (no push to anonymous reporters)',
       'human-accountable governance (decisions recorded, never automated)',
     ],
+    // Phase 9: organise the evidence by INDEPENDENT-REVIEW DOMAIN, mapping each to the
+    // concrete fitness checks / controls that support an assessor's judgement. This maps
+    // evidence to domains; it never renders a verdict — that is the assessor's to make.
+    assessmentDomains: {
+      'software-architecture': ['FIT-ZONE-ISOLATION', 'FIT-SECURE-DATA-FLOWS', 'APP-FIT-PERSISTENCE-INTEGRITY'],
+      cybersecurity: ['FIT-ZERO-TRUST', 'FIT-ENCRYPTION', 'APP-FIT-CIPHERTEXT-ONLY', 'APP-FIT-CREDENTIAL-HYGIENE', 'INFRA-FIT-K8S-HARDENING', 'INFRA-FIT-NETWORK-DEFAULT-DENY'],
+      privacy: ['FIT-IDENTITY-MINIMIZATION', 'APP-FIT-PII-FREE-EVENTS', 'APP-FIT-ANONYMITY-BOUNDARY', 'APP-FIT-ANALYTICS-PRIVACY', 'APP-FIT-TRACE-PRIVACY'],
+      governance: ['FIT-GOVERNANCE', 'APP-FIT-AUTHZ-DEFAULT-DENY'],
+      'legal-compliance': ['FIT-AUDITABILITY', 'FIT-CHAIN-OF-CUSTODY', 'APP-FIT-LIFECYCLE-DEFAULT-DENY'],
+      'risk-management': ['FIT-EMERGENCY', 'FIT-BACKUP', 'INFRA-FIT-DR-BACKUP-RESTORE', 'INFRA-FIT-DRIFT'],
+      'operational-readiness': ['INFRA-FIT-HA-SCALABILITY', 'INFRA-FIT-DEPLOY-GATE', 'INFRA-FIT-CONFIG-VALIDATION'],
+      'engineering-quality': ['FIT-TRACEABILITY-COVERAGE', 'APP-FIT-WORKFLOW-INTEGRITY', 'FIT-TIME-INTEGRITY'],
+    },
   };
 }
 

@@ -112,6 +112,28 @@ delivers coarse, non-identifying reasons to **authenticated staff only**. The **
 enforced: anonymous reporters are never pushed to a device (their only channel is poll-by-case-code), and
 case content is refused in the body. SES/SendGrid, Twilio/SNS, FCM/APNs drivers keep the same `send()`.
 
+## v1.3 enterprise semantics (real, tested — on the same ports)
+
+These behaviours are implemented and tested in-repo; only the vendor network client is a
+drop-in. See [`enterprise-operations.md`](./enterprise-operations.md) for the full map.
+
+- **Persistence**: transactions (`adapters/uow.js`, rollback on throw), optimistic locking
+  (`SqlStore.putIfVersion` / driver `casUpsert`), connection pool with FIFO backpressure
+  (`adapters/pool.js`), migration `002_versioning.sql`.
+- **Cache** (`adapters/cache.js`): TTL, namespacing, atomic incr, distributed session store.
+- **Messaging**: retry + exponential backoff + **dead-letter queue** + `replayDeadLetters()`.
+- **Object storage**: `putVersion`/`versions`/`getVersion` + `applyLifecycle` (keepLatest /
+  expireAfterMs / transitionAfterMs) + `setLegalHold`.
+- **Identity**: `revoke(jti)`, `rotateKey()`/`jwks()`, `SamlVerifier`.
+- **Secrets** (`adapters/secrets.js`): leases + versioned `rotate`; metadata-only status.
+- **Certificates** (`adapters/certificates.js`): lifecycle states, rotation-due, CRL.
+- **Search** (`adapters/search.js`): inverted index, non-identifying fields only (fail-closed).
+- **Integrations** (`adapters/integrations.js`): circuit breaker + PII-free outbound.
+- **Feature flags** (`adapters/flags.js`): deterministic sticky rollout, cohorts, kill-switch.
+
+Each is guarded by an app or infra fitness function; the container refuses to start unless
+the whole gate (twin + app + infra) passes.
+
 ## Checklist for adding a production driver
 
 1. Implement the port's exact method signatures against the real backend.
