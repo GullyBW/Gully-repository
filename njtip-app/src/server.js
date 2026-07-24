@@ -146,6 +146,17 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/geo/heatmap') { requireRole('oversight-board'); return json(200, app.gis.heatmap()); }
   if (method === 'GET' && p === '/api/compliance/assess') { requireRole('admin'); return json(200, app.compliance.assess()); }
 
+  // --- Executive intelligence (Phase 21), Twin 2.0 sims (Phase 17/24), data fabric (Phase 14) ---
+  if (method === 'GET' && p === '/api/executive/scorecard') { requireRole('oversight-board'); return json(200, app.workflow.executiveScorecard()); }
+  if (method === 'POST' && p === '/api/twin2/simulate') {
+    requireRole('admin');
+    const k = body.kind;
+    const fn = { capacity: app.twin2.capacityForecast, failure: app.twin2.failurePrediction, recovery: app.twin2.recoverySimulation, deployment: app.twin2.deploymentSimulation, failover: app.twin2.failoverSimulation }[k];
+    if (!fn) throw err(400, 'unknown simulation kind');
+    return json(200, { kind: k, result: fn(body.input || {}) });
+  }
+  if (method === 'GET' && p === '/api/fabric/catalog') { requireRole('admin'); return json(200, { subjects: app.fabric.schemaRegistry.subjects(), services: app.fabric.serviceRegistry.list(), canonical: Object.keys(app.fabric.canonical) }); }
+
   throw err(404, 'not-found');
 }
 

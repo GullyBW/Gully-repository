@@ -79,4 +79,27 @@ function exportRows(rows, { format = 'json' } = {}) {
   return shaped;
 }
 
-module.exports = { K_ANON, kpis, aggregate, trends, timeline, filter, exportRows, suppress, EXPORT_COLS };
+// Executive Intelligence (Phase 21): a governance-level scorecard over non-identifying rows.
+// Aggregate and privacy-preserving (reuses suppression); informs strategy, never identifies.
+function executiveScorecard(rows, now) {
+  const k = kpis(rows, now);
+  const byRegion = aggregate(rows.filter((r) => r.region), { by: 'region' });
+  const byCategory = aggregate(rows, { by: 'category' });
+  const slaCompliance = k.total ? +(1 - k.slaBreachRate).toFixed(3) : 1;
+  return {
+    nationalKpis: k,
+    slaCompliancePct: slaCompliance,
+    backlog: k.backlog,
+    byCategory: byCategory.groups,
+    byRegion: byRegion.groups,
+    scorecard: {
+      throughput: k.resolved,
+      efficiency: k.total ? +(k.resolved / k.total).toFixed(3) : 0,
+      timeliness: slaCompliance,
+      grade: slaCompliance >= 0.9 ? 'A' : slaCompliance >= 0.75 ? 'B' : 'C',
+    },
+    note: 'Aggregate, non-attributable, small cells suppressed. Strategic signal only.',
+  };
+}
+
+module.exports = { K_ANON, kpis, aggregate, trends, timeline, filter, exportRows, suppress, executiveScorecard, EXPORT_COLS };

@@ -29,12 +29,13 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.3 — Operational Enterprise System.** Enterprise *semantics* on every adapter
-> (transactions, optimistic locking, pooling, cache, DLQ/retry, object versioning/lifecycle,
-> token revocation + key rotation, secrets leasing, cert lifecycle, circuit-breaker
-> integrations), expanded operational workflows, privacy-preserving intelligence, distributed
-> tracing + SLOs, and a Twin gate that now spans architecture **+ application + infrastructure**.
-> Full summary: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).
+> **v1.4 — National Digital Governance Platform.** New bounded contexts added behind stable
+> ports (backward compatible): event sourcing + CQRS, policy-as-data IAM + Zero Trust,
+> multi-tenant isolation, knowledge graph, advisory-only AI, configurable workflow
+> orchestration, GIS, signed chain of custody, compliance automation, Twin 2.0 simulations,
+> and a government data fabric. Combined gate: **44 invariants** (14 twin + 22 app + 8 infra),
+> 99 tests. Full summary: [`docs/national-platform.md`](./docs/national-platform.md) ·
+> v1.3: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).
 
 ## v1.2 — operational production platform (ports & adapters)
 

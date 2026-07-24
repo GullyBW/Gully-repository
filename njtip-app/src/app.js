@@ -32,6 +32,8 @@ const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-e
 const { CustodyLedger } = require('./custody/ledger');
 const complianceMod = require('./compliance/compliance');
 const { SpatialIndex } = require('./geo/gis');
+const simulation = require('./twin2/simulation');
+const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
 const { runTwin, runApp, runInfra } = require('./twin-validate');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
@@ -110,12 +112,20 @@ function createApp(overrides = {}) {
   const custody = new CustodyLedger();
   const gis = new SpatialIndex();
   const compliance = { assess: () => complianceMod.assess([...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }))) };
+  // Twin 2.0 simulations (Phase 17/24) and the national data fabric (Phase 14).
+  const twin2 = simulation;
+  const schemaRegistry = new SchemaRegistry();
+  for (const [name, schema] of Object.entries(CANONICAL_MODEL)) schemaRegistry.register(name, schema);
+  const serviceRegistry = new ServiceRegistry();
+  const catalog = new MetadataCatalog();
+  const lineage = new DataLineage();
+  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, canonical: CANONICAL_MODEL };
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, custody, gis, compliance, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, custody, gis, compliance, twin2, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
 }
 
 module.exports = { createApp };

@@ -1,8 +1,8 @@
 {
   "name": "njtip-app",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
-  "description": "NJTIP — anonymous reporting → governance platform. Enterprise adapters behind stable ports (SQL txns/locking/pooling, Redis cache, Kafka DLQ/retry, S3 versioning/lifecycle, OIDC/SAML, Vault secrets, cert lifecycle, search, integrations). Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
+  "description": "NJTIP — National Digital Governance Platform. Event sourcing + CQRS, policy-as-data IAM + Zero Trust, multi-tenant isolation, knowledge graph, advisory AI, workflow orchestration, GIS, signed chain of custody, compliance automation, Twin 2.0 simulations, data fabric. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node src/server.js",
@@ -12,7 +12,8 @@
     "readiness": "node scripts/readiness.js",
     "perf": "node scripts/perf.js",
     "health": "node scripts/engineering-health.js",
-    "infra-baseline": "node scripts/infra-baseline.js"
+    "infra-baseline": "node scripts/infra-baseline.js",
+    "devsecops": "node scripts/devsecops.js"
   },
   "license": "SEE-BLUEPRINT",
   "dependencies": {},

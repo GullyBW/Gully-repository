@@ -274,6 +274,8 @@ class Workflow {
     const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
     return analytics.timeline(s, this.audit.entries());
   }
+  // Executive intelligence scorecard (Phase 21): governance-level, privacy-preserving.
+  executiveScorecard() { return analytics.executiveScorecard(this._analyticsRows(), this.clock()); }
   exportCases({ format = 'json', filter = {} } = {}) {
     const rows = analytics.filter(this._analyticsRows(), filter);
     return analytics.exportRows(rows, { format });

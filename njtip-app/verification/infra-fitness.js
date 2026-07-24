@@ -97,6 +97,12 @@ module.exports = [
     if (JSON.stringify(restored.get('NJ-2')) !== JSON.stringify(primary.get('NJ-2'))) v.push('restore corrupted a record');
   }),
 
+  fit('INFRA-FIT-DEVSECOPS', 'No dangerous code patterns or hardcoded secrets (SAST + secret scan)', (v) => {
+    const { sast, secretScan } = require('../scripts/devsecops');
+    for (const f of sast().filter((x) => x.severity === 'high')) v.push(`SAST ${f.rule} in ${f.file}`);
+    for (const f of secretScan()) v.push(`secret ${f.rule} in ${f.file}`);
+  }),
+
   fit('INFRA-FIT-DRIFT', 'Infrastructure matches the recorded baseline (no unreviewed drift)', (v) => {
     const baselineFile = path.join(__dirname, 'infra-baseline.json');
     const current = infraSignature();

@@ -26,7 +26,7 @@ function load(env = process.env) {
     OIDC_SECRET: env.NJTIP_OIDC_SECRET || undefined,
     oidcIssuer: env.NJTIP_OIDC_ISSUER || 'njtip-idp',
     oidcAudience: env.NJTIP_OIDC_AUDIENCE || 'njtip-app',
-    version: '1.3.0',
+    version: '1.4.0',
   };
   validate(cfg);
   return cfg;
