@@ -24,6 +24,9 @@ const analytics = require('../src/analytics');
 const { Tracer } = require('../src/adapters/observability');
 const { IntegrationGateway, CaptureIntegrationClient } = require('../src/adapters/integrations');
 const { FeatureFlags } = require('../src/adapters/flags');
+const { EventStore } = require('../src/adapters/../eventsourcing/event-store');
+const { CaseAggregate } = require('../src/eventsourcing/case-aggregate');
+const { caseReadModel } = require('../src/eventsourcing/projections');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -111,6 +114,21 @@ module.exports = [
     if (idp.verify(new OidcVerifier({ secret: 's', issuer: 'evil' }).issue({ sub: 'x', role: 'admin' }))) v.push('accepted a token from the wrong issuer');
     if (idp.verify(idp.issue({ sub: 'x', role: 'superuser' }))) v.push('accepted a disallowed role claim');
     if (!idp.verify(idp.issue({ sub: 'x', role: 'investigator' }))) v.push('rejected a valid token');
+  }),
+
+  fit('APP-FIT-EVENT-SOURCING', 'Event log is immutable + hash-chained; replay = projection; events PII-free', (v) => {
+    let t = 0; const es = new EventStore({ clock: () => (t += 1) });
+    es.append('NJ-FIT', [{ type: 'CaseSubmitted', data: { category: 'police', recipient: 'ombudsman', stage: 'intake-review' } }, { type: 'CaseTransitioned', data: { to: 'resolved' } }]);
+    if (!es.verifyChain().ok) v.push('event chain does not verify');
+    // Events are immutable (frozen).
+    if (!Object.isFrozen(es.readAll()[0])) v.push('persisted event is mutable');
+    // Replay (aggregate) equals projection (read model).
+    const replay = new CaseAggregate('NJ-FIT').loadFromHistory(es.readStream('NJ-FIT')).state();
+    const proj = caseReadModel(es.readAll()).get('NJ-FIT');
+    if (replay.status !== proj.status) v.push('replay and projection disagree');
+    // Events carry no denied identity/content keys.
+    const denied = ['omang', 'name', 'email', 'phone', 'content', 'body', 'plaintext'];
+    if (denied.some((k) => JSON.stringify(es.readAll()).toLowerCase().includes('"' + k + '"'))) v.push('event carried a denied identity/content field');
   }),
 
   fit('APP-FIT-WORKFLOW-INTEGRITY', 'Prioritisation is deterministic; assignment stays within the roster', (v) => {

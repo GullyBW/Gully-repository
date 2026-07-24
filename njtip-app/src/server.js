@@ -109,6 +109,11 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/admin/slo') { requireRole('admin'); return json(200, app.evaluateSlo()); }
   if (method === 'GET' && p === '/api/admin/traces') { requireRole('admin'); return json(200, { spans: app.tracer.recent(Number(url.searchParams.get('limit') || 50)) }); }
 
+  // --- Event sourcing / CQRS (Phase 11) ---
+  if (method === 'GET' && (m = p.match(/^\/api\/reports\/([^/]+)\/events$/))) { requireRole('investigator'); return json(200, { events: app.workflow.caseEvents(dec(m[1])), replayState: app.workflow.replayCase(dec(m[1])) }); }
+  if (method === 'GET' && p === '/api/admin/events/verify') { requireRole('admin'); return json(200, app.workflow.verifyEventIntegrity()); }
+  if (method === 'GET' && p === '/api/admin/readmodel/rebuild') { requireRole('admin'); return json(200, { rebuilt: app.workflow.rebuildReadModel() }); }
+
   throw err(404, 'not-found');
 }
 

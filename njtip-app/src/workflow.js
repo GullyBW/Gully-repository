@@ -17,6 +17,8 @@ const evidenceLifecycle = require('./domain/evidence-lifecycle');
 const investigation = require('./domain/investigation');
 const analytics = require('./analytics');
 const { SearchIndex } = require('./adapters/search');
+const { CaseAggregate } = require('./eventsourcing/case-aggregate');
+const { caseReadModel } = require('./eventsourcing/projections');
 
 const SUBJECT_UNIT = { police: 'police', courts: 'courts', prosecution: 'prosecution', prison: 'prison', official: 'official', regulatory: 'regulatory', other: 'other' };
 // Investigator roster (operational routing; distinct from IAM authorization). Each entry's
@@ -27,7 +29,7 @@ const DEFAULT_ROSTER = [
 ];
 
 class Workflow {
-  constructor({ clock, seed = 1, ledgerFile, statusRepo, notifications, metrics, workloadRepo, roster } = {}) {
+  constructor({ clock, seed = 1, ledgerFile, statusRepo, notifications, metrics, workloadRepo, roster, events } = {}) {
     this.clock = clock || (() => Date.now());
     this._rand = rng.mulberry32(seed);
     this.report = new ReportStore(this.clock);
@@ -43,6 +45,7 @@ class Workflow {
     this.notifications = notifications || new NotificationService(new MemoryStore(ZONES.INDEPENDENT), this.clock);
     this._workload = workloadRepo || new MemoryStore(ZONES.EXECUTIVE);
     this._roster = roster || DEFAULT_ROSTER;
+    this._events = events || null; // optional event store (Phase 11); additive, PII-free
     this._metrics = metrics || { inc() {}, observe() {} };
 
     this.policy.addRule({ action: 'submit-report', effect: 'allow' });
@@ -57,6 +60,10 @@ class Workflow {
   }
 
   _caseCode() { return 'NJ-' + Math.floor(this._rand() * 1e12).toString(36).toUpperCase().padStart(8, '0'); }
+
+  // Append a PII-free domain event to the event store, if one is wired (Phase 11). Additive:
+  // the read-model projection (statusRepo) is unaffected. Never carries identity/content.
+  _emit(caseCode, type, data, actor = 'system') { if (this._events) try { this._events.append(caseCode, [{ type, data, meta: { actor } }]); } catch (_) { /* event store is additive; never blocks the workflow */ } }
 
   submitReport({ category, content, extra }) {
     if (this.policy.evaluate({ action: 'submit-report' }).effect !== 'allow') throw httpError(403, 'submit not permitted');
@@ -75,6 +82,7 @@ class Workflow {
     this.audit.append({ actor: 'citizen(anon)', action: 'report-submitted', purpose: 'intake', zone: ZONES.INDEPENDENT });
     this.audit.append({ actor: 'system', action: 'report-routed', purpose: routed.recipientId, zone: ZONES.INDEPENDENT });
     this.notifications.notify(case_code, 'received', { status: 'received' });
+    this._emit(case_code, 'CaseSubmitted', { category, recipient: routed.recipientId, stage: investigation.REVIEW_CHAIN[0] });
     this._metrics.inc('njtip_reports_total', { category });
     return { case_code, recipient: routed.recipientId, coi: routed.coiStatus };
   }
@@ -93,6 +101,7 @@ class Workflow {
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: 'citizen(anon)', action: 'evidence-ingested', purpose: res.contentHash, zone: ZONES.EXECUTIVE });
     this.notifications.notify(case_code, 'evidence-received', { status: s.status });
+    this._emit(case_code, 'EvidenceAttached', { contentHash: res.contentHash });
     this._metrics.inc('njtip_evidence_total');
     return { evidenceId: id, contentHash: res.contentHash, state: 'ingested' };
   }
@@ -137,6 +146,7 @@ class Workflow {
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: principal, action: 'investigator-review', purpose: disposition || 'note', zone: ZONES.EXECUTIVE });
     this.notifications.notify(case_code, 'reviewed', { status: s.status });
+    this._emit(case_code, 'CaseReviewed', { status: s.status }, principal);
     this._metrics.inc('njtip_reviews_total', { disposition: disposition || 'note' });
     return { case_code, status: s.status };
   }
@@ -155,6 +165,7 @@ class Workflow {
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: principal, action: 'case-' + event, purpose: r.to, zone: ZONES.EXECUTIVE });
     this.notifications.notify(case_code, r.to, { status: r.to });
+    this._emit(case_code, 'CaseTransitioned', { event, to: r.to }, principal);
     this._metrics.inc('njtip_case_transitions_total', { event });
     return { case_code, status: s.status, allowed: caseLifecycle.allowedEvents(s.status) };
   }
@@ -181,6 +192,7 @@ class Workflow {
     s.assignee = pick.id;
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: 'system', action: 'case-assigned', purpose: pick.id, zone: ZONES.EXECUTIVE });
+    this._emit(case_code, 'CaseAssigned', { assignee: pick.id });
     this._metrics.inc('njtip_assignments_total');
     return { case_code, assignee: pick.id, load: loads[pick.id] };
   }
@@ -201,6 +213,7 @@ class Workflow {
     s.stage = next;
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: principal, action: 'stage-advanced', purpose: next, zone: ZONES.EXECUTIVE });
+    this._emit(case_code, 'StageAdvanced', { stage: next }, principal);
     return { case_code, stage: s.stage };
   }
 
@@ -213,6 +226,7 @@ class Workflow {
     s.appeal = { by, stage: investigation.APPEAL_CHAIN[0], filedAt: this.clock() };
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: by, action: 'appeal-filed', purpose: investigation.APPEAL_CHAIN[0], zone: ZONES.INDEPENDENT });
+    this._emit(case_code, 'AppealFiled', { stage: investigation.APPEAL_CHAIN[0] }, by);
     this._metrics.inc('njtip_appeals_total');
     return { case_code, appeal: s.appeal };
   }
@@ -264,6 +278,25 @@ class Workflow {
     const rows = analytics.filter(this._analyticsRows(), filter);
     return analytics.exportRows(rows, { format });
   }
+
+  // --- Event sourcing & CQRS (Phase 11): read-side/replay over the immutable log --------
+
+  caseEvents(case_code) { return this._events ? this._events.readStream(case_code).map((e) => ({ type: e.type, version: e.version, at: e.meta.at, data: e.data })) : []; }
+  // Replay a case from its events (event sourcing) → derived state, independent of the
+  // read-model. Proves the read model and the event log agree.
+  replayCase(case_code) {
+    if (!this._events) return null;
+    const agg = new CaseAggregate(case_code).loadFromHistory(this._events.readStream(case_code));
+    return agg.state();
+  }
+  // Rebuild the entire case read model from events (CQRS projection rebuild / time-travel).
+  rebuildReadModel({ untilAt } = {}) {
+    if (!this._events) return [];
+    const events = this._events.readAll(untilAt != null ? { untilAt } : {});
+    return [...caseReadModel(events).values()];
+  }
+  // Event-log tamper-evidence (hash chain) — used by health + fitness.
+  verifyEventIntegrity() { return this._events ? this._events.verifyChain() : { ok: true, length: 0, note: 'no event store wired' }; }
 
   oversightDashboard({ category } = {}) {
     const rows = this._statusRepo.values().filter((s) => !category || s.category === category);

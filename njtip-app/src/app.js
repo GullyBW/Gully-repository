@@ -20,6 +20,7 @@ const { makeCertificateManager } = require('./adapters/certificates');
 const { makeIntegrationGateway } = require('./adapters/integrations');
 const { makeFeatureFlags } = require('./adapters/flags');
 const { Workflow } = require('./workflow');
+const { EventStore } = require('./eventsourcing/event-store');
 const authz = require('./authz');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
@@ -61,14 +62,19 @@ function createApp(overrides = {}) {
   const integrations = makeIntegrationGateway(cfg);
   const flags = makeFeatureFlags(cfg);
 
+  // Event store (Phase 11): immutable, hash-chained write-side log. Additive — the read
+  // models keep serving queries; every workflow transition also appends a PII-free event.
+  const events = new EventStore();
+
   const workflow = overrides.workflow || new Workflow({
-    seed: overrides.seed ?? 1, ledgerFile: overrides.ledgerFile, statusRepo, notifications, metrics, workloadRepo,
+    seed: overrides.seed ?? 1, ledgerFile: overrides.ledgerFile, statusRepo, notifications, metrics, workloadRepo, events,
   });
 
   health.register('workflow', () => !!workflow);
   health.register('audit-integrity', () => workflow.audit.verifyIntegrity().ok);
   health.register('custody-integrity', () => workflow.evidence.verifyCustodyChain().ok);
   health.register('architecture-invariants', () => { try { return invariantsHeld(); } catch (_) { return false; } });
+  health.register('event-log-integrity', () => workflow.verifyEventIntegrity().ok);
   // KMS liveness self-test: encrypt→decrypt a probe (never touches real data).
   health.register('key-management', () => { try { return keyManager.decrypt(keyManager.encrypt(ZONES.EXECUTIVE, 'healthcheck')) === 'healthcheck'; } catch (_) { return false; } });
 
@@ -78,7 +84,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
 }
 
 module.exports = { createApp };
