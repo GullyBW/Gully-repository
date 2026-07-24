@@ -28,6 +28,9 @@ const { EventStore } = require('../src/adapters/../eventsourcing/event-store');
 const { CaseAggregate } = require('../src/eventsourcing/case-aggregate');
 const { caseReadModel } = require('../src/eventsourcing/projections');
 const { EventRegistry, seedCaseEvents } = require('../src/eventsourcing/event-governance');
+const workflowSim = require('../src/orchestration/workflow-simulator');
+const { DEFAULT_WORKFLOW } = require('../src/orchestration/workflow-engine');
+const twin3 = require('../src/twin2/monte-carlo');
 const { PolicySet } = require('../src/iam/policy-engine');
 const zeroTrust = require('../src/iam/zero-trust');
 const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../src/tenancy/tenant');
@@ -234,6 +237,19 @@ module.exports = [
     // Retirement requires prior deprecation (lifecycle discipline).
     let lifecycle = false; try { reg.retire('X'); } catch (_) { lifecycle = true; }
     if (!lifecycle) v.push('event retired without deprecation');
+  }),
+
+  fit('APP-FIT-WORKFLOW-SIMULATION', 'Default workflow passes activation validation; sims are deterministic', (v) => {
+    const gate = workflowSim.validateForActivation(DEFAULT_WORKFLOW);
+    if (!gate.ok) v.push('default workflow failed activation validation: ' + gate.issues.join('; '));
+    // The simulator detects a deadlock in a broken definition (must be able to fail).
+    const bad = { id: 'bad', version: 1, start: 's', terminal: ['done'], states: { s: { on: {} }, done: { on: {} } } };
+    if (workflowSim.validateForActivation(bad).ok) v.push('simulator failed to detect a deadlock');
+    // Monte-Carlo replay is deterministic (same seed → same result).
+    const a = twin3.workloadForecast({ seed: 7 }); const b = twin3.workloadForecast({ seed: 7 });
+    if (JSON.stringify(a.perInvestigator) !== JSON.stringify(b.perInvestigator)) v.push('Monte-Carlo simulation is not deterministic');
+    // Predictive readiness is human-gated and never authorizes.
+    if (twin3.predictiveReadiness({ fitnessPassRate: 1, failureRisk: 0 }).humanGate !== true) v.push('predictive readiness is not human-gated');
   }),
 
   fit('APP-FIT-WORKFLOW-INTEGRITY', 'Prioritisation is deterministic; assignment stays within the roster', (v) => {

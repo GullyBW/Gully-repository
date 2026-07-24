@@ -30,6 +30,8 @@ const { KnowledgeGraph } = require('./graph/graph');
 const advisor = require('./ai/advisor');
 const { RecommendationQueue } = require('./ai/approval');
 const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-engine');
+const workflowSim = require('./orchestration/workflow-simulator');
+const twin3 = require('./twin2/monte-carlo');
 const { CustodyLedger } = require('./custody/ledger');
 const complianceMod = require('./compliance/compliance');
 const { SpatialIndex } = require('./geo/gis');
@@ -109,6 +111,10 @@ function createApp(overrides = {}) {
   // orchestration engine (Phase 20). The AI never acts; the engine only routes.
   const ai = { advisor, queue: new RecommendationQueue() };
   const orchestration = new WorkflowEngine();
+  // Phase 27: a workflow VERSION must pass simulation before activation (the Twin is the
+  // authoritative validation environment). Fail-closed: an invalid workflow is not registered.
+  const activationGate = workflowSim.validateForActivation(DEFAULT_WORKFLOW);
+  if (!activationGate.ok) throw new Error('default workflow failed activation validation: ' + activationGate.issues.join('; '));
   orchestration.register(DEFAULT_WORKFLOW);
   // Enterprise chain of custody (Phase 16), GIS (Phase 15), and compliance automation
   // (Phase 25). Compliance assesses from the live fitness gate; it never authorizes.
@@ -128,7 +134,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, custody, gis, compliance, twin2, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, workflowSim, custody, gis, compliance, twin2, twin3, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

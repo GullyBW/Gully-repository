@@ -141,6 +141,15 @@ async function route(app, req, url, body) {
   if (method === 'POST' && p === '/api/orchestration/start') { requireRole('investigator'); return json(201, app.orchestration.start(body.defId || 'investigation', { context: body.context })); }
   if (method === 'POST' && (m = p.match(/^\/api\/orchestration\/([^/]+)\/fire$/))) { const u = requireRole('investigator'); return json(200, app.orchestration.fire(dec(m[1]), body.event, { by: u.principal })); }
   if (method === 'GET' && p === '/api/orchestration/analytics') { requireRole('oversight-board'); return json(200, app.orchestration.analytics()); }
+  // Workflow simulation (Phase 27): validate a definition before activation.
+  if (method === 'POST' && p === '/api/orchestration/simulate') { requireRole('admin'); return json(200, { validation: app.workflowSim.validateForActivation(body.def), execution: app.workflowSim.simulate(body.def, { runs: 200, seed: 1 }) }); }
+  // Twin 3.0 predictive operational simulations (Phase 29).
+  if (method === 'POST' && p === '/api/twin3/forecast') {
+    requireRole('admin');
+    const fn = { workload: app.twin3.workloadForecast, staffing: app.twin3.staffingShortage, budget: app.twin3.budgetForecast, incident: app.twin3.incidentTrend }[body.kind];
+    if (!fn) throw err(400, 'unknown forecast kind');
+    return json(200, fn(body.input || {}));
+  }
 
   // --- Chain of custody (Phase 16), GIS (Phase 15), compliance (Phase 25) ---
   if (method === 'POST' && p === '/api/custody/record') { const u = requireRole('investigator'); return json(201, app.custody.record({ evidenceId: body.evidenceId, action: body.action, actor: u.principal, contentHash: body.contentHash, witness: body.witness })); }
