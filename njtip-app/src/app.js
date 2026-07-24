@@ -6,7 +6,8 @@
 const configMod = require('./config');
 const { makeStore } = require('./adapters/store');
 const { SessionManager } = require('./adapters/session');
-const { Logger, Metrics, Health } = require('./adapters/observability');
+const { Logger, Metrics, Health, Tracer } = require('./adapters/observability');
+const slo = require('./observability/slo');
 const { NotificationService } = require('./adapters/notifications');
 const { makeKeyManager } = require('./adapters/kms');
 const { makeObjectStore } = require('./adapters/object-store');
@@ -26,6 +27,13 @@ function createApp(overrides = {}) {
   const metrics = new Metrics();
   const logger = new Logger(cfg.logLevel);
   const health = new Health();
+  const tracer = new Tracer();
+  // SLO evaluation from live metrics (availability + latency error budgets + alerts).
+  const evaluateSlo = () => {
+    const c = metrics.counters(); let total = 0, failed = 0;
+    for (const [k, v] of Object.entries(c)) { if (k.startsWith('njtip_http_requests_total')) { total += v; if (/status="?5\d\d"?/.test(k)) failed += v; } }
+    return slo.evaluate(slo.computeSlis({ total, failed, latencies: metrics.samples('njtip_http_latency_ms') }));
+  };
   const session = new SessionManager({ secret: cfg.SESSION_SECRET, ttlMs: cfg.sessionTtlMs });
   // OIDC/OAuth2 verifier — an alternative auth port for IdP-issued bearer tokens. The
   // server accepts either a session token or a verified OIDC token (no privilege change).
@@ -66,7 +74,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, workflow };
 }
 
 module.exports = { createApp };

@@ -56,6 +56,8 @@ function spec() {
       '/api/admin/health': { get: { summary: 'System health (admin)', operationId: 'adminHealth', security: [{ bearerAuth: [] }], responses: { 200: { description: 'Health' }, 401: ref('Error') } } },
       '/api/admin/metrics': { get: { summary: 'Metrics snapshot (admin)', operationId: 'adminMetrics', security: [{ bearerAuth: [] }], responses: { 200: { description: 'Metrics' } } } },
       '/api/admin/config': { get: { summary: 'Redacted configuration (admin)', operationId: 'adminConfig', security: [{ bearerAuth: [] }], responses: { 200: { description: 'Config (secrets redacted)' } } } },
+      '/api/admin/slo': { get: { summary: 'SLO/SLI evaluation with error budgets + alerts (admin)', operationId: 'adminSlo', security: [{ bearerAuth: [] }], responses: { 200: { description: 'SLO status' }, 401: ref('Error') } } },
+      '/api/admin/traces': { get: { summary: 'Recent distributed-trace spans (admin; non-identifying)', operationId: 'adminTraces', security: [{ bearerAuth: [] }], responses: { 200: { description: 'Spans' }, 401: ref('Error') } } },
       '/healthz': { get: { summary: 'Liveness/health', operationId: 'healthz', responses: { 200: { description: 'Healthy' }, 503: { description: 'Unhealthy' } } } },
       '/readyz': { get: { summary: 'Readiness (architecture invariants held)', operationId: 'readyz', responses: { 200: { description: 'Ready' }, 503: { description: 'Not ready' } } } },
       '/metrics': { get: { summary: 'Prometheus metrics', operationId: 'metrics', responses: { 200: { description: 'text/plain metrics' } } } },

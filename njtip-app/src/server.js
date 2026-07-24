@@ -106,6 +106,8 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/admin/health') { requireRole('admin'); return json(200, app.health.snapshot()); }
   if (method === 'GET' && p === '/api/admin/metrics') { requireRole('admin'); return json(200, app.metrics.snapshot()); }
   if (method === 'GET' && p === '/api/admin/config') { requireRole('admin'); return json(200, configMod.redacted(app.cfg)); }
+  if (method === 'GET' && p === '/api/admin/slo') { requireRole('admin'); return json(200, app.evaluateSlo()); }
+  if (method === 'GET' && p === '/api/admin/traces') { requireRole('admin'); return json(200, { spans: app.tracer.recent(Number(url.searchParams.get('limit') || 50)) }); }
 
   throw err(404, 'not-found');
 }
@@ -117,7 +119,9 @@ function dec(s) { return decodeURIComponent(s); }
 function createServer(overrides = {}) {
   const app = overrides.app || createApp(overrides);
   return http.createServer(async (req, res) => {
-    const traceId = newTraceId();
+    // Distributed tracing: continue an incoming trace (traceparent) or start a new one.
+    const span = app.tracer.startSpan('http.request', { traceparent: req.headers.traceparent, attrs: { method: req.method } });
+    const traceId = span.traceId;
     const start = process.hrtime.bigint();
     const url = new URL(req.url, 'http://localhost');
     let body = {};
@@ -130,12 +134,14 @@ function createServer(overrides = {}) {
       if (!e.status || e.status >= 500) app.logger.error('request.error', { traceId, path: url.pathname, error: e.message });
     }
     const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    span.setAttr('route', routeLabel(url.pathname)); span.setAttr('status', out.status);
+    span.end(out.status >= 500 ? 'error' : 'ok');
     app.metrics.inc('njtip_http_requests_total', { route: routeLabel(url.pathname), status: out.status });
     app.metrics.observe('njtip_http_latency_ms', ms);
     // Structured, PII-redacting access log (never logs body/headers/identity).
     app.logger.info('request', { traceId, method: req.method, path: url.pathname, status: out.status, ms: Math.round(ms) });
     const payload = out.type === 'application/json' ? JSON.stringify(out.body) : out.body;
-    res.writeHead(out.status, { 'content-type': out.type, 'x-njtip-synthetic': 'true', 'x-trace-id': traceId });
+    res.writeHead(out.status, { 'content-type': out.type, 'x-njtip-synthetic': 'true', 'x-trace-id': traceId, 'traceparent': span.traceparent() });
     res.end(payload);
   });
 }

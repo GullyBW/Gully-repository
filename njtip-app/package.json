@@ -9,7 +9,8 @@
     "test": "node --test",
     "twin": "node scripts/assure.js",
     "evidence": "node scripts/evidence-package.js",
-    "readiness": "node scripts/readiness.js"
+    "readiness": "node scripts/readiness.js",
+    "perf": "node scripts/perf.js"
   },
   "license": "SEE-BLUEPRINT",
   "dependencies": {},

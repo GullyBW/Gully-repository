@@ -21,6 +21,7 @@ const evLc = require('../src/domain/evidence-lifecycle');
 const inv = require('../src/domain/investigation');
 const { SearchIndex } = require('../src/adapters/search');
 const analytics = require('../src/analytics');
+const { Tracer } = require('../src/adapters/observability');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -137,6 +138,17 @@ module.exports = [
     // Export never carries identity.
     const rows = analytics.exportRows([{ case_code: 'NJ-Z', category: 'police', email: 'a@b.c', createdAt: 1 }], { format: 'csv' });
     if (rows.includes('a@b.c')) v.push('export leaked an identity value');
+  }),
+
+  fit('APP-FIT-TRACE-PRIVACY', 'Distributed-trace spans never carry identity/content', (v) => {
+    const tr = new Tracer();
+    const span = tr.startSpan('http.request', { attrs: { email: 'a@b.c', content: 'secret', route: '/api/reports' } });
+    span.setAttr('ip', '1.2.3.4');
+    span.end();
+    const rec = tr.recent(1)[0];
+    const json = JSON.stringify(rec);
+    if (json.includes('a@b.c') || json.includes('secret') || json.includes('1.2.3.4')) v.push('trace span leaked identity/content');
+    if (rec.attrs.route !== '/api/reports') v.push('trace dropped a safe attribute (over-redaction)');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
