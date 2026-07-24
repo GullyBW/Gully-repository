@@ -169,6 +169,12 @@ async function route(app, req, url, body) {
   }
   if (method === 'GET' && p === '/api/fabric/catalog') { requireRole('admin'); return json(200, { subjects: app.fabric.schemaRegistry.subjects(), services: app.fabric.serviceRegistry.list(), canonical: Object.keys(app.fabric.canonical) }); }
 
+  // Enterprise event bus (Phase 28) + federation (Phase 34).
+  if (method === 'GET' && p === '/api/eventbus/topics') { requireRole('admin'); return json(200, { topics: app.eventBus.topics(), deadLetters: app.eventBus.deadLetters() }); }
+  if (method === 'GET' && (m = p.match(/^\/api\/eventbus\/([^/]+)\/replay$/))) { requireRole('admin'); return json(200, { replay: app.eventBus.replay(dec(m[1]), { fromSeq: Number(url.searchParams.get('fromSeq') || 0) }) }); }
+  if (method === 'GET' && p === '/api/federation/grants') { requireRole('admin'); return json(200, { grants: app.federation.grants(), audit: app.federation.auditTrail() }); }
+  if (method === 'POST' && p === '/api/federation/authorize') { const u = requireRole('admin'); return json(201, app.federation.authorize({ fromTenant: body.fromTenant, toTenant: body.toTenant, scopes: body.scopes, approver: u.principal, requester: body.requester })); }
+
   throw err(404, 'not-found');
 }
 

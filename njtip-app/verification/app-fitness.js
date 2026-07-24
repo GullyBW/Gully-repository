@@ -34,6 +34,8 @@ const twin3 = require('../src/twin2/monte-carlo');
 const { PolicySet } = require('../src/iam/policy-engine');
 const zeroTrust = require('../src/iam/zero-trust');
 const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../src/tenancy/tenant');
+const { FederationRegistry } = require('../src/tenancy/federation');
+const { EnterpriseEventBus } = require('../src/fabric/event-bus');
 const { KnowledgeGraph } = require('../src/graph/graph');
 const { MemoryStore } = require('../src/adapters/store');
 const advisor = require('../src/ai/advisor');
@@ -173,6 +175,23 @@ module.exports = [
     const cb = new CollaborationBroker(reg);
     let refused = false; try { cb.share({ fromTenant: 'agency-a', toTenant: 'agency-b', ref: { content: 'secret' } }); } catch (_) { refused = true; }
     if (!refused) v.push('cross-tenant share carried case content');
+  }),
+
+  fit('APP-FIT-EVENTBUS-FEDERATION', 'Event bus stays PII-free; federation defaults to isolation', (v) => {
+    const bus = new EnterpriseEventBus();
+    bus.registerTopic('t');
+    // PII/content on the bus is refused (inherited from the broker).
+    let refused = false; try { bus.publish('t', { email: 'a@b.c' }); } catch (_) { refused = true; }
+    if (!refused) v.push('event bus published a PII payload');
+    // Ordered replay works.
+    bus.publish('t', { caseCode: 'NJ-1' }); bus.publish('t', { caseCode: 'NJ-2' });
+    if (bus.replay('t').map((e) => e.seq).join() !== '1,2') v.push('event ordering/replay broken');
+    // Federation defaults to ISOLATION; requires explicit SoD authorization.
+    const reg = new TenantRegistry(); reg.register('a'); reg.register('b');
+    const fed = new FederationRegistry({ registry: reg });
+    if (fed.isFederated('a', 'b', 'cases')) v.push('tenants federated by default (must be isolated)');
+    let sod = false; try { fed.authorize({ fromTenant: 'a', toTenant: 'b', scopes: ['cases'], approver: 'x', requester: 'x' }); } catch (_) { sod = true; }
+    if (!sod) v.push('federation allowed self-approval');
   }),
 
   fit('APP-FIT-GRAPH-PRIVACY', 'Knowledge graph refuses identifying node/edge properties', (v) => {
