@@ -161,6 +161,10 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/admin/custody/archive') { requireRole('admin'); return json(200, app.custody.archive()); }
   if (method === 'GET' && p === '/api/geo/heatmap') { requireRole('oversight-board'); return json(200, app.gis.heatmap()); }
   if (method === 'GET' && p === '/api/compliance/assess') { requireRole('admin'); return json(200, app.compliance.assess()); }
+  // Privacy engineering (Phase 35) + threat intelligence (Phase 36).
+  if (method === 'POST' && p === '/api/privacy/pia') { requireRole('admin'); return json(200, app.privacy.automatedPIA(body.flow || {})); }
+  if (method === 'GET' && p === '/api/privacy/anonymization') { requireRole('oversight-board'); return json(200, app.privacy.anonymizationQuality(app.workflow.listReports())); }
+  if (method === 'POST' && p === '/api/threat/assess') { requireRole('admin'); return json(200, { device: app.threatIntel.deviceRisk(body.device || {}), anomaly: app.threatIntel.behavioralAnomaly(body.behavior || {}), recommendation: app.threatIntel.recommend(body.context || {}) }); }
 
   // --- Executive intelligence (Phase 21), Twin 2.0 sims (Phase 17/24), data fabric (Phase 14) ---
   if (method === 'GET' && p === '/api/executive/scorecard') { requireRole('oversight-board'); return json(200, app.workflow.executiveScorecard()); }

@@ -41,6 +41,8 @@ const graphIntel = require('../src/graph/intelligence');
 const { MemoryStore } = require('../src/adapters/store');
 const advisor = require('../src/ai/advisor');
 const { RecommendationQueue } = require('../src/ai/approval');
+const privacy = require('../src/privacy/privacy-engineering');
+const threat = require('../src/security/threat-intel');
 const { CustodyLedger } = require('../src/custody/ledger');
 const { SpatialIndex, geohash } = require('../src/geo/gis');
 const configMod = require('../src/config');
@@ -234,6 +236,26 @@ module.exports = [
     // A non-advisory object cannot be queued (fail-closed).
     let refused = false; try { q.submit({ advisoryOnly: false, autonomous: true }); } catch (_) { refused = true; }
     if (!refused) v.push('queue accepted a non-advisory/autonomous recommendation');
+  }),
+
+  fit('APP-FIT-PRIVACY-ENGINEERING', 'Privacy is measurable: PIA flags identity; DP deterministic; minimization holds', (v) => {
+    // PIA flags an identity-bearing flow (and passes a clean one).
+    if (privacy.automatedPIA({ name: 'f', fields: ['email'], crossZone: true }).pass) v.push('PIA passed a flow carrying identity');
+    if (!privacy.automatedPIA({ name: 'g', fields: ['category', 'status'], purpose: 'triage' }).pass) v.push('PIA failed a clean flow');
+    // Differential privacy is deterministic per seed.
+    if (privacy.dpNoisyCount(100, { epsilon: 1, seed: 3 }).noisy !== privacy.dpNoisyCount(100, { epsilon: 1, seed: 3 }).noisy) v.push('differential privacy is not deterministic');
+    // Minimisation validation refuses identity fields.
+    if (privacy.validateMinimization({ email: 'a@b.c' }).ok) v.push('minimisation accepted an identity field');
+  }),
+
+  fit('APP-FIT-THREAT-INTEL-BOUNDED', 'Threat intel can only LOWER trust and never overrides governance', (v) => {
+    const enriched = threat.enrichTrust(80, { deviceRisk: 100, credentialRisk: 100, anomalyScore: 100 });
+    if (enriched.enrichedScore > enriched.baseScore) v.push('threat intel raised the trust score (must only lower)');
+    // Even with zero risk, it never exceeds the base score.
+    if (threat.enrichTrust(50, {}).enrichedScore > 50) v.push('threat intel exceeded the base score with no risk');
+    // Recommendations are advisory, never autonomous.
+    const rec = threat.recommend({ deviceRiskBand: 'high' });
+    if (rec.advisoryOnly !== true || rec.autonomous !== false) v.push('threat recommendation is not advisory/non-autonomous');
   }),
 
   fit('APP-FIT-CUSTODY-SIGNED-CHAIN', 'Custody ledger is signed, hash-chained, tamper-evident', (v) => {

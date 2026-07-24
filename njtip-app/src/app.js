@@ -39,6 +39,8 @@ const { CustodyLedger } = require('./custody/ledger');
 const complianceMod = require('./compliance/compliance');
 const { SpatialIndex } = require('./geo/gis');
 const simulation = require('./twin2/simulation');
+const privacy = require('./privacy/privacy-engineering');
+const threatIntelMod = require('./security/threat-intel');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
 const { runTwin, runApp, runInfra } = require('./twin-validate');
 const { invariantsHeld } = require('./twin-validate');
@@ -130,6 +132,8 @@ function createApp(overrides = {}) {
   const compliance = { assess: () => complianceMod.assess([...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }))) };
   // Twin 2.0 simulations (Phase 17/24) and the national data fabric (Phase 14).
   const twin2 = simulation;
+  // Privacy engineering (Phase 35) + threat intelligence (Phase 36).
+  const threatIntel = { feed: new threatIntelMod.ThreatFeed(), deviceRisk: threatIntelMod.deviceRisk, credentialRisk: threatIntelMod.credentialRisk, behavioralAnomaly: threatIntelMod.behavioralAnomaly, enrichTrust: threatIntelMod.enrichTrust, correlate: threatIntelMod.correlate, recommend: threatIntelMod.recommend };
   const schemaRegistry = new SchemaRegistry();
   for (const [name, schema] of Object.entries(CANONICAL_MODEL)) schemaRegistry.register(name, schema);
   const serviceRegistry = new ServiceRegistry();
@@ -141,7 +145,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, orchestration, workflowSim, custody, gis, compliance, twin2, twin3, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
