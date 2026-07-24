@@ -32,6 +32,8 @@ const zeroTrust = require('../src/iam/zero-trust');
 const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../src/tenancy/tenant');
 const { KnowledgeGraph } = require('../src/graph/graph');
 const { MemoryStore } = require('../src/adapters/store');
+const advisor = require('../src/ai/advisor');
+const { RecommendationQueue } = require('../src/ai/approval');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -173,6 +175,24 @@ module.exports = [
     let refused = false; try { g.addNode('n2', 'Person', { name: 'Real Name' }); } catch (_) { refused = true; }
     if (!refused) v.push('graph stored an identifying node property');
     if (!KnowledgeGraph) v.push('graph missing');
+  }),
+
+  fit('APP-FIT-AI-ADVISORY-ONLY', 'AI is advisory-only, explainable, and human-approval-gated', (v) => {
+    const rec = advisor.recommendPriority({ category: 'police', status: 'escalated', createdAt: 0, now: 0 });
+    if (rec.advisoryOnly !== true || rec.autonomous !== false || rec.requiresHumanApproval !== true) v.push('AI output is not marked advisory/non-autonomous/human-gated');
+    if (!Array.isArray(rec.explanation) || rec.explanation.length === 0) v.push('AI recommendation is not explainable');
+    if (typeof rec.confidence !== 'number') v.push('AI recommendation has no confidence score');
+    // Determinism: same input → same output.
+    if (JSON.stringify(rec) !== JSON.stringify(advisor.recommendPriority({ category: 'police', status: 'escalated', createdAt: 0, now: 0 }))) v.push('AI recommendation is not deterministic');
+    // The queue never auto-applies and requires a named human.
+    const q = new RecommendationQueue(); const s = q.submit(rec, { caseCode: 'NJ-X' });
+    const decision = q.decide(s.id, { by: 'human', decision: 'approved' });
+    if (decision.appliesAutomatically !== false) v.push('approval auto-applies (must require a human action)');
+    let needsHuman = false; try { q.decide(q.submit(rec).id, { decision: 'approved' }); } catch (_) { needsHuman = true; }
+    if (!needsHuman) v.push('recommendation decided without a named human');
+    // A non-advisory object cannot be queued (fail-closed).
+    let refused = false; try { q.submit({ advisoryOnly: false, autonomous: true }); } catch (_) { refused = true; }
+    if (!refused) v.push('queue accepted a non-advisory/autonomous recommendation');
   }),
 
   fit('APP-FIT-WORKFLOW-INTEGRITY', 'Prioritisation is deterministic; assignment stays within the roster', (v) => {

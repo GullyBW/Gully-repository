@@ -121,6 +121,24 @@ async function route(app, req, url, body) {
   if (method === 'POST' && p === '/api/breakglass') { const u = requireRole('admin'); return json(201, app.iam.breakGlass.request({ principal: body.principal || u.principal, justification: body.justification, approver: body.approver })); }
   if (method === 'GET' && p === '/api/admin/breakglass') { requireRole('admin'); return json(200, { grants: app.iam.breakGlass.ledger() }); }
 
+  // --- Advisory AI (Phase 13) — recommendations only; human approval required ---
+  if (method === 'GET' && (m = p.match(/^\/api\/ai\/recommend\/([^/]+)$/))) {
+    requireRole('investigator');
+    const rows = app.workflow.listReports();
+    const cur = app.workflow.status(dec(m[1])); if (!cur) return json(404, { error: 'not-found' });
+    const full = { case_code: dec(m[1]), category: (rows.find((r) => r.case_code === dec(m[1])) || {}).category, status: cur.status };
+    const rec = app.ai.advisor.recommendPriority(full);
+    const q = app.ai.queue.submit(rec, { caseCode: dec(m[1]) });
+    return json(200, { recommendation: rec, queued: q });
+  }
+  if (method === 'GET' && p === '/api/ai/pending') { requireRole('oversight-board'); return json(200, { pending: app.ai.queue.pending() }); }
+  if (method === 'POST' && (m = p.match(/^\/api\/ai\/decide\/([^/]+)$/))) { const u = requireRole('oversight-board'); return json(200, app.ai.queue.decide(dec(m[1]), { by: body.by || u.principal, decision: body.decision, note: body.note })); }
+
+  // --- Workflow orchestration (Phase 20) — configurable, versioned ---
+  if (method === 'POST' && p === '/api/orchestration/start') { requireRole('investigator'); return json(201, app.orchestration.start(body.defId || 'investigation', { context: body.context })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/orchestration\/([^/]+)\/fire$/))) { const u = requireRole('investigator'); return json(200, app.orchestration.fire(dec(m[1]), body.event, { by: u.principal })); }
+  if (method === 'GET' && p === '/api/orchestration/analytics') { requireRole('oversight-board'); return json(200, app.orchestration.analytics()); }
+
   throw err(404, 'not-found');
 }
 

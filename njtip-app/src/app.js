@@ -26,6 +26,9 @@ const { PolicySet, DEFAULT_POLICIES } = require('./iam/policy-engine');
 const zeroTrust = require('./iam/zero-trust');
 const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
 const { KnowledgeGraph } = require('./graph/graph');
+const advisor = require('./ai/advisor');
+const { RecommendationQueue } = require('./ai/approval');
+const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-engine');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
 
@@ -93,12 +96,17 @@ function createApp(overrides = {}) {
   const tenants = new TenantRegistry();
   const collaboration = new CollaborationBroker(tenants);
   const graph = new KnowledgeGraph();
+  // Advisory-only AI (Phase 13) with a human-approval queue, and the configurable workflow
+  // orchestration engine (Phase 20). The AI never acts; the engine only routes.
+  const ai = { advisor, queue: new RecommendationQueue() };
+  const orchestration = new WorkflowEngine();
+  orchestration.register(DEFAULT_WORKFLOW);
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
 }
 
 module.exports = { createApp };
