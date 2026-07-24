@@ -80,6 +80,17 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/oversight/dashboard') return json(200, app.workflow.oversightDashboard({ category: url.searchParams.get('category') }));
   if (method === 'GET' && p === '/api/oversight/report') return json(200, { generatedAt: new Date().toISOString(), ...app.workflow.oversightDashboard() });
 
+  // --- Search, analytics, intelligence (privacy-preserving, non-attributable) ---
+  if (method === 'GET' && p === '/api/search') { requireRole('investigator'); return json(200, { results: app.workflow.searchCases(url.searchParams.get('q'), { limit: Number(url.searchParams.get('limit') || 50) }) }); }
+  if (method === 'GET' && p === '/api/analytics') return json(200, app.workflow.analytics({ by: url.searchParams.get('by') || 'category' }));
+  if (method === 'GET' && (m = p.match(/^\/api\/reports\/([^/]+)\/timeline$/))) { requireRole('investigator'); return json(200, app.workflow.caseTimeline(dec(m[1]))); }
+  if (method === 'GET' && p === '/api/analytics/export') {
+    requireRole('oversight-board');
+    const fmt = url.searchParams.get('format') || 'json';
+    const out = app.workflow.exportCases({ format: fmt, filter: { category: url.searchParams.get('category'), status: url.searchParams.get('status') } });
+    return fmt === 'csv' ? { status: 200, body: out, type: 'text/csv' } : json(200, { rows: out });
+  }
+
   // --- Governance (privileged; records HUMAN decisions only) ---
   if (method === 'POST' && p === '/api/governance/decisions') { const u = requireRole('oversight-board'); return json(201, app.workflow.governanceDecision({ reviewer: body.reviewer || u.principal, role: u.role, subject: body.subject, verdict: body.verdict, rationale: body.rationale })); }
 

@@ -19,6 +19,8 @@ const authz = require('../src/authz');
 const caseLc = require('../src/domain/case-lifecycle');
 const evLc = require('../src/domain/evidence-lifecycle');
 const inv = require('../src/domain/investigation');
+const { SearchIndex } = require('../src/adapters/search');
+const analytics = require('../src/analytics');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -120,6 +122,21 @@ module.exports = [
     const early = inv.slaStatus({ band: 'P1', createdAt: 0, now: 1 }).breached;
     const late = inv.slaStatus({ band: 'P1', createdAt: 0, now: 30 * 24 * 3600_000 }).breached;
     if (early || !late) v.push('SLA breach detection is not monotonic in time');
+  }),
+
+  fit('APP-FIT-ANALYTICS-PRIVACY', 'Search refuses identity/content; analytics suppress small cells; export omits identity', (v) => {
+    const idx = new SearchIndex();
+    let refused = false; try { idx.index({ case_code: 'NJ-X', email: 'a@b.c' }); } catch (_) { refused = true; }
+    if (!refused) v.push('search indexed a sensitive field');
+    // Non-allowlisted content is not indexed.
+    idx.index({ case_code: 'NJ-Y', category: 'police', note: 'leaky' });
+    if (idx.search('leaky').length !== 0) v.push('search indexed a non-allowlisted field');
+    // Small cells suppressed.
+    const agg = analytics.aggregate([{ category: 'courts' }], { by: 'category', k: 5 });
+    if (agg.groups.courts.count !== null || !agg.groups.courts.suppressed) v.push('small cell not suppressed');
+    // Export never carries identity.
+    const rows = analytics.exportRows([{ case_code: 'NJ-Z', category: 'police', email: 'a@b.c', createdAt: 1 }], { format: 'csv' });
+    if (rows.includes('a@b.c')) v.push('export leaked an identity value');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

@@ -15,6 +15,8 @@ const { NotificationService } = require('./adapters/notifications');
 const caseLifecycle = require('./domain/case-lifecycle');
 const evidenceLifecycle = require('./domain/evidence-lifecycle');
 const investigation = require('./domain/investigation');
+const analytics = require('./analytics');
+const { SearchIndex } = require('./adapters/search');
 
 const SUBJECT_UNIT = { police: 'police', courts: 'courts', prosecution: 'prosecution', prison: 'prison', official: 'official', regulatory: 'regulatory', other: 'other' };
 // Investigator roster (operational routing; distinct from IAM authorization). Each entry's
@@ -221,6 +223,46 @@ class Workflow {
     const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
     const outcome = s.disposition === 'escalate' ? 'escalated' : (s.status === 'resolved' ? 'resolved' : s.status);
     return { case_code, ...investigation.retentionFor({ outcome, decidedAt: s.resolvedAt || s.createdAt }) };
+  }
+
+  // --- Search & analytics (Phase 3): privacy-preserving, non-attributable --------
+
+  // Build a fresh search index from the durable projection (always consistent with the
+  // store regardless of persistence backend). Indexes non-identifying fields only.
+  _searchIndex() {
+    const idx = new SearchIndex();
+    for (const s of this._statusRepo.values()) {
+      idx.index({ case_code: s.case_code, category: s.category, status: s.status, stage: s.stage, recipient: s.recipient, band: (s.priority || {}).band });
+    }
+    return idx;
+  }
+  searchCases(query, opts) { return this._searchIndex().search(query, opts); }
+
+  // Enrich rows with derived, non-identifying analytics fields (SLA breach + band).
+  _analyticsRows() {
+    const now = this.clock();
+    return this._statusRepo.values().map((s) => ({
+      case_code: s.case_code, category: s.category, status: s.status, stage: s.stage, recipient: s.recipient,
+      createdAt: s.createdAt, firstReviewedAt: s.firstReviewedAt, priority: s.priority,
+      slaBreached: investigation.slaStatus({ band: (s.priority || {}).band || 'P4', createdAt: s.createdAt, firstReviewedAt: s.firstReviewedAt, resolvedAt: s.resolvedAt, now }).breached,
+    }));
+  }
+  analytics({ by = 'category' } = {}) {
+    const rows = this._analyticsRows();
+    return {
+      kpis: analytics.kpis(rows, this.clock()),
+      aggregate: analytics.aggregate(rows, { by }),
+      trends: analytics.trends(rows, { field: 'status' }),
+      note: 'Aggregate, non-attributable. Small cells suppressed (k-anonymity). No identity or content.',
+    };
+  }
+  caseTimeline(case_code) {
+    const s = this._statusRepo.get(case_code); if (!s) throw httpError(404, 'unknown case');
+    return analytics.timeline(s, this.audit.entries());
+  }
+  exportCases({ format = 'json', filter = {} } = {}) {
+    const rows = analytics.filter(this._analyticsRows(), filter);
+    return analytics.exportRows(rows, { format });
   }
 
   oversightDashboard({ category } = {}) {
