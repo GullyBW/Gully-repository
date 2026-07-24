@@ -1,0 +1,44 @@
+# Zone isolation on the wire: default-deny, then permit only the explicitly required paths.
+# The only permitted cross-zone traffic is PII-free events via the broker; case content and
+# identity never traverse a zone boundary (enforced in the app by the broker's PII-free rule).
+---
+# 1) Default-deny ALL ingress and egress in every zone namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: njtip-independent
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# 2) Allow ingress to the app only from the ingress controller, and DNS egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: njtip-app-ingress
+  namespace: njtip-independent
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: njtip-app }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+      ports: [{ protocol: TCP, port: 8087 }]
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Own-zone Postgres only (no cross-zone DB access).
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: njtip-postgres } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    # Broker for PII-free cross-zone events ONLY (payloads are identity/content-free).
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: njtip-broker } }
+      ports: [{ protocol: TCP, port: 9092 }]

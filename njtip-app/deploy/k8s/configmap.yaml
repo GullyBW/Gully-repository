@@ -1,0 +1,14 @@
+# Non-secret 12-factor configuration. Secrets are NOT here (see secret.example.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: njtip-config
+  namespace: njtip-independent
+  labels: { app.kubernetes.io/name: njtip-app }
+data:
+  NJTIP_MODE: "production-shaped"
+  NJTIP_PERSISTENCE: "sql"          # per-zone Postgres (db/migrations/001_init.sql)
+  NJTIP_LOG_LEVEL: "info"
+  NJTIP_OIDC_ISSUER: "https://idp.example.gov.bw/"   # replace with the real IdP
+  NJTIP_OIDC_AUDIENCE: "njtip-app"
+  PORT: "8087"

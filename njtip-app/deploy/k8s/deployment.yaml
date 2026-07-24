@@ -1,0 +1,57 @@
+# App Deployment: HA (3 replicas, spread across nodes), hardened pod, health-gated traffic.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: njtip-app
+  namespace: njtip-independent
+  labels: { app.kubernetes.io/name: njtip-app, app.kubernetes.io/part-of: njtip }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app.kubernetes.io/name: njtip-app }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }   # zero-downtime rollout
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: njtip-app, njtip.zone: independent }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      # Spread replicas across nodes/zones for availability.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: njtip-app }
+      containers:
+        - name: njtip-app
+          image: REGISTRY/njtip-app:v1.2.0    # replace with your registry/digest
+          ports: [{ containerPort: 8087, name: http }]
+          envFrom:
+            - configMapRef: { name: njtip-config }
+            - secretRef: { name: njtip-secrets }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            # /readyz is green only when the architecture invariants hold (fail-closed).
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

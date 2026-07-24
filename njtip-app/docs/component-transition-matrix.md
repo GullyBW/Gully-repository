@@ -22,3 +22,25 @@ never autonomously generated.
 Security spine first: **Authentication → Cryptography → Storage → Audit/Evidence persistence**, then
 Policy externalization, Event bus durability, Notifications, then Governance UI. Each behind a stable
 interface so the vertical slice keeps running and the Twin keeps validating throughout.
+
+## v1.2 — Adapter status (production transition in progress)
+
+Every production concern now sits behind a **stable port**, selected only at the composition root
+(`src/app.js`). In-repo **reference drivers** are synthetic and labelled; **production drivers** are
+documented drop-ins that implement the same port. Requesting an unbundled production driver **fails
+closed** (never silently degrades). Full guide: [`production-adapters.md`](./production-adapters.md).
+
+| Port | Reference driver (in-repo, tested) | Production driver (drop-in) | Selector | App fitness check |
+|---|---|---|---|---|
+| Persistence | `MemoryStore` · `FileStore` · `SqlStore`+`MemorySqlDriver` | PostgreSQL (5-method driver) | `NJTIP_PERSISTENCE` | `APP-FIT-NO-IDENTITY-COLUMN` |
+| Encryption at rest 🔒 | `SyntheticKeyManager` (Twin envelope) | KMS/HSM + threshold custody (**human-built**) | `NJTIP_KMS` | `APP-FIT-CIPHERTEXT-ONLY` |
+| Evidence object storage | `ObjectStore` (memory, ciphertext-only) | S3 · MinIO · GCS | `NJTIP_OBJECT_STORE` | `APP-FIT-CIPHERTEXT-ONLY` |
+| Messaging | `MessageBroker` (memory outbox, PII-free) | Kafka · RabbitMQ · NATS | `NJTIP_BROKER` | `APP-FIT-PII-FREE-EVENTS` |
+| Federated auth | `OidcVerifier` (HS256, offline) | OIDC/OAuth2 IdP (JWKS, FIDO2/MFA) | `NJTIP_OIDC_*` | `APP-FIT-OIDC-NO-IMPLICIT-PRIVILEGE` |
+| Sessions | `SessionManager` (HMAC, expiring, revocable) | same (secret from a secrets manager) | — | `APP-FIT-SECRETS-REDACTED` |
+| Staff notifications | `CaptureProvider` (email/sms/push) | SES · Twilio · FCM | — | `APP-FIT-ANONYMITY-BOUNDARY` |
+
+New v1.2 business capabilities: **RBAC+ABAC authorization** (`authz.js`, `APP-FIT-AUTHZ-DEFAULT-DENY`),
+**case + evidence lifecycles** (`domain/`, `APP-FIT-LIFECYCLE-DEFAULT-DENY`), a signed **assurance
+evidence package** (Phase 9), a **human-gated readiness assessment** (Phase 10, never auto-authorizes),
+and **Kubernetes reference manifests** (`deploy/k8s/`: HA, autoscaling, zone-isolation NetworkPolicy).

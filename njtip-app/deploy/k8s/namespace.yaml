@@ -1,0 +1,19 @@
+# Constitutional zone isolation starts at the namespace boundary: each zone is its own
+# namespace with its own quota, RBAC, and NetworkPolicy. There is no shared datastore.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: njtip-independent
+  labels: { app.kubernetes.io/part-of: njtip, njtip.zone: independent }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: njtip-executive
+  labels: { app.kubernetes.io/part-of: njtip, njtip.zone: executive }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: njtip-judiciary
+  labels: { app.kubernetes.io/part-of: njtip, njtip.zone: judiciary }
