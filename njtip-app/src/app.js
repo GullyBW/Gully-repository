@@ -13,6 +13,7 @@ const { makeObjectStore } = require('./adapters/object-store');
 const { makeBroker } = require('./adapters/broker');
 const { makeOidcVerifier } = require('./adapters/oidc');
 const { makeNotificationProviders } = require('./adapters/notify-providers');
+const { makeCache } = require('./adapters/cache');
 const { Workflow } = require('./workflow');
 const authz = require('./authz');
 const { invariantsHeld } = require('./twin-validate');
@@ -40,6 +41,7 @@ function createApp(overrides = {}) {
   const objectStore = makeObjectStore(keyManager, cfg);
   const broker = makeBroker(cfg);
   const notifyProviders = makeNotificationProviders(cfg);
+  const cache = makeCache(cfg);
 
   const workflow = overrides.workflow || new Workflow({
     seed: overrides.seed ?? 1, ledgerFile: overrides.ledgerFile, statusRepo, notifications, metrics,
@@ -55,7 +57,7 @@ function createApp(overrides = {}) {
   const auth = { verify: (token) => session.verify(token) || oidc.verify(token) };
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
-  return { cfg, metrics, logger, health, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, workflow };
+  return { cfg, metrics, logger, health, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, cache, workflow };
 }
 
 module.exports = { createApp };

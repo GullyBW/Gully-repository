@@ -18,8 +18,10 @@ function load(env = process.env) {
     sessionTtlMs: Number(env.NJTIP_SESSION_TTL_MS || 3600_000),
     // Production-adapter selectors (composition root chooses the concrete driver).
     kms: env.NJTIP_KMS || 'synthetic',            // synthetic | kms (🔒 human-built)
-    objectStore: env.NJTIP_OBJECT_STORE || 'memory', // memory | s3 | minio | gcs
+    objectStore: env.NJTIP_OBJECT_STORE || 'memory', // memory | s3 | azure | minio | gcs
     broker: env.NJTIP_BROKER || 'memory',         // memory | kafka | rabbitmq | nats
+    cache: env.NJTIP_CACHE || 'memory',           // memory | redis
+    secrets: env.NJTIP_SECRETS || 'env',          // env | vault | kms-secrets
     // OIDC/OAuth2 trust anchors (verifier falls back to SESSION_SECRET when unset).
     OIDC_SECRET: env.NJTIP_OIDC_SECRET || undefined,
     oidcIssuer: env.NJTIP_OIDC_ISSUER || 'njtip-idp',
@@ -34,8 +36,10 @@ function validate(cfg) {
   if (!['memory', 'file', 'sql'].includes(cfg.persistence)) throw new Error(`invalid NJTIP_PERSISTENCE: ${cfg.persistence}`);
   if (!['synthetic', 'production-shaped'].includes(cfg.mode)) throw new Error(`invalid NJTIP_MODE: ${cfg.mode}`);
   if (!['synthetic', 'kms'].includes(cfg.kms)) throw new Error(`invalid NJTIP_KMS: ${cfg.kms}`);
-  if (!['memory', 's3', 'minio', 'gcs'].includes(cfg.objectStore)) throw new Error(`invalid NJTIP_OBJECT_STORE: ${cfg.objectStore}`);
+  if (!['memory', 's3', 'azure', 'minio', 'gcs'].includes(cfg.objectStore)) throw new Error(`invalid NJTIP_OBJECT_STORE: ${cfg.objectStore}`);
   if (!['memory', 'kafka', 'rabbitmq', 'nats'].includes(cfg.broker)) throw new Error(`invalid NJTIP_BROKER: ${cfg.broker}`);
+  if (!['memory', 'redis'].includes(cfg.cache)) throw new Error(`invalid NJTIP_CACHE: ${cfg.cache}`);
+  if (!['env', 'vault', 'kms-secrets'].includes(cfg.secrets)) throw new Error(`invalid NJTIP_SECRETS: ${cfg.secrets}`);
   if (!Number.isInteger(cfg.port) || cfg.port < 0) throw new Error('invalid PORT');
 }
 
