@@ -1,6 +1,6 @@
 {
   "name": "njtip-app",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "NJTIP v1.0 MVP — anonymous reporting → governance vertical slice. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin.",
   "engines": { "node": ">=18" },

@@ -14,10 +14,27 @@ exercises every major architectural subsystem, with the
 
 ```bash
 cd njtip-app
-npm test          # 10 end-to-end + API tests (node --test) — no install
-npm start          # serve the MVP + UI at http://localhost:8087
+npm test          # 20 tests (vertical slice + API + adapters + security + observability)
+npm start          # serve the app + UI at http://localhost:8087
 npm run twin       # run the Digital Engineering Twin fitness gate (the quality gate)
+# container (build context = repo root, so it can copy the Twin it validates against):
+docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 njtip-app
 ```
+
+## v1.1 — production-shaped (clean architecture, ports & adapters)
+
+Synthetic placeholders are being replaced by production-grade components **behind stable interfaces**
+(see [`docs/production-transition.md`](./docs/production-transition.md)):
+zone-isolated **durable persistence**, **secure sessions** (HMAC, expiring, revocable),
+**config/secrets management** (validated, secret-redacting), **structured observability**
+(PII-redacting JSON logs, Prometheus `/metrics`, `/healthz`, `/readyz`, trace IDs), **centralized
+error handling**, **notifications** (privacy-aware, poll-by-code), an **admin portal**, and
+**search/reporting** — all Twin-green and tested. Composition root (`src/app.js`) is the one place
+that selects synthetic vs production adapters.
+
+**Config (env):** `NJTIP_MODE` (synthetic|production-shaped) · `NJTIP_PERSISTENCE` (memory|file) ·
+`NJTIP_DATA_DIR` · `NJTIP_SESSION_SECRET` (from a secrets manager in prod) · `PORT` · `NJTIP_LOG_LEVEL`.
+Ops: [`docs/operations/runbook.md`](./docs/operations/runbook.md).
 
 ## The vertical slice (Part 3)
 

@@ -26,6 +26,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:
   <button role="tab" aria-selected="false" data-t="investigator">Investigator</button>
   <button role="tab" aria-selected="false" data-t="oversight">Oversight</button>
   <button role="tab" aria-selected="false" data-t="governance">Governance</button>
+  <button role="tab" aria-selected="false" data-t="admin">Admin</button>
   <button role="tab" aria-selected="false" data-t="assurance">Assurance</button>
 </nav>
 
@@ -38,6 +39,11 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:
   <textarea id="content" placeholder="Describe the concern…"></textarea>
   <button class="go" onclick="submitReport()">Submit anonymously</button>
   <div id="citizenOut"></div>
+  <hr style="border-color:var(--line);margin:14px 0">
+  <label for="track">Track a case (code only — no identity)</label>
+  <input id="track" placeholder="NJ-…">
+  <button class="go" onclick="track()" style="background:#555">Check status &amp; notifications</button>
+  <div id="trackOut"></div>
 </div></section>
 
 <section id="investigator"><div class="card">
@@ -67,6 +73,15 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:
   <div id="govOut"></div>
 </div></section>
 
+<section id="admin"><div class="card">
+  <h2>Administration</h2><p class="hint">System monitoring, metrics, and redacted configuration (admin auth).</p>
+  <label>Bearer token</label><input id="admTok" value="admin-token-synthetic">
+  <button class="go" onclick="adm('/api/admin/health')">Health</button>
+  <button class="go" onclick="adm('/api/admin/metrics')" style="background:#555">Metrics</button>
+  <button class="go" onclick="adm('/api/admin/config')" style="background:#555">Config (redacted)</button>
+  <div id="admOut"></div>
+</div></section>
+
 <section id="assurance"><div class="card">
   <h2>Digital Engineering Twin validation</h2><p class="hint">Runs the architecture fitness gate against the running product.</p>
   <button class="go" onclick="twin()">Validate architecture</button>
@@ -88,4 +103,6 @@ async function dash(){out('#ovOut',await api('GET','/api/oversight/dashboard'));
 async function decide(){out('#govOut',await api('POST','/api/governance/decisions',{reviewer:$('#rev').value,subject:$('#subj').value,verdict:$('#verd').value,rationale:$('#rat').value},$('#govTok').value));}
 async function twin(){out('#asOut',await api('GET','/api/twin/validate'));}
 async function evidence(){out('#asOut',await api('GET','/api/evidence/bundle'));}
+async function track(){const c=encodeURIComponent($('#track').value);const st=await api('GET','/api/reports/'+c+'/status');const n=await api('GET','/api/reports/'+c+'/notifications');out('#trackOut',{status:st.body,notifications:n.body});}
+async function adm(p){out('#admOut',await api('GET',p,null,$('#admTok').value));}
 </script></div></body></html>
