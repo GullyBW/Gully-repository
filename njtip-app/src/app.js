@@ -14,6 +14,7 @@ const { makeBroker } = require('./adapters/broker');
 const { makeOidcVerifier } = require('./adapters/oidc');
 const { makeNotificationProviders } = require('./adapters/notify-providers');
 const { Workflow } = require('./workflow');
+const authz = require('./authz');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
 
@@ -54,7 +55,7 @@ function createApp(overrides = {}) {
   const auth = { verify: (token) => session.verify(token) || oidc.verify(token) };
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
-  return { cfg, metrics, logger, health, session, oidc, auth, keyManager, objectStore, broker, notifyProviders, workflow };
+  return { cfg, metrics, logger, health, session, oidc, auth, authz, keyManager, objectStore, broker, notifyProviders, workflow };
 }
 
 module.exports = { createApp };

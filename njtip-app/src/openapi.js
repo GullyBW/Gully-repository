@@ -22,6 +22,14 @@ function spec() {
         summary: 'Investigator review (JIT, FIDO2, matter-scoped)', operationId: 'investigatorReview', security: [{ bearerAuth: [] }],
         parameters: [pathParam('case_code')], requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { note: { type: 'string' }, disposition: { type: 'string', enum: ['reviewed', 'escalate'] } } } } } },
         responses: { 200: { description: 'Reviewed' }, 401: ref('Error'), 403: ref('Error') } } },
+      '/api/investigator/{case_code}/transition': { post: {
+        summary: 'Advance a case through its lifecycle (RBAC+ABAC gated)', operationId: 'transitionCase', security: [{ bearerAuth: [] }],
+        parameters: [pathParam('case_code')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['event'], properties: { event: { type: 'string', enum: ['review', 'escalate', 'resolve', 'close'] } } } } } },
+        responses: { 200: { description: 'Transitioned' }, 401: ref('Error'), 403: ref('Error'), 409: ref('Error') } } },
+      '/api/investigator/{case_code}/evidence/{evidence_id}/transition': { post: {
+        summary: 'Advance an evidence item through its handling lifecycle', operationId: 'transitionEvidence', security: [{ bearerAuth: [] }],
+        parameters: [pathParam('case_code'), pathParam('evidence_id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['event'], properties: { event: { type: 'string', enum: ['seal', 'open', 'admit', 'exclude', 'purge'] } } } } } },
+        responses: { 200: { description: 'Transitioned' }, 401: ref('Error'), 403: ref('Error'), 409: ref('Error') } } },
       '/api/oversight/dashboard': { get: { summary: 'Non-attributable aggregate dashboard', operationId: 'oversightDashboard', responses: { 200: { description: 'Aggregates' } } } },
       '/api/governance/decisions': { post: {
         summary: 'Record a HUMAN governance decision (never automated)', operationId: 'recordGovernanceDecision', security: [{ bearerAuth: [] }],

@@ -12,6 +12,8 @@ const {
 } = require('./twin');
 const { MemoryStore } = require('./adapters/store');
 const { NotificationService } = require('./adapters/notifications');
+const caseLifecycle = require('./domain/case-lifecycle');
+const evidenceLifecycle = require('./domain/evidence-lifecycle');
 
 const SUBJECT_UNIT = { police: 'police', courts: 'courts', prosecution: 'prosecution', prison: 'prison', official: 'official', regulatory: 'regulatory', other: 'other' };
 
@@ -68,13 +70,34 @@ class Workflow {
   notificationsFor(case_code) { return this._statusRepo.get(case_code) ? this.notifications.forCase(case_code) : null; }
 
   attachEvidence({ case_code, content }) {
-    if (!this._statusRepo.get(case_code)) throw httpError(404, 'unknown case');
+    const s = this._statusRepo.get(case_code);
+    if (!s) throw httpError(404, 'unknown case');
     const id = 'EV-' + case_code + '-' + this.evidence._custody.length;
     const res = this.evidence.ingest({ id, actor: 'citizen(anon)', role: 'submitter', content, matter: case_code });
+    // Track the item's evidentiary lifecycle state (durable, on the case projection).
+    s.evidenceItems = s.evidenceItems || [];
+    s.evidenceItems.push({ id, contentHash: res.contentHash, state: 'ingested' });
+    this._statusRepo.put(case_code, s);
     this.audit.append({ actor: 'citizen(anon)', action: 'evidence-ingested', purpose: res.contentHash, zone: ZONES.EXECUTIVE });
-    this.notifications.notify(case_code, 'evidence-received', { status: this._statusRepo.get(case_code).status });
+    this.notifications.notify(case_code, 'evidence-received', { status: s.status });
     this._metrics.inc('njtip_evidence_total');
-    return { evidenceId: id, contentHash: res.contentHash };
+    return { evidenceId: id, contentHash: res.contentHash, state: 'ingested' };
+  }
+
+  // Advance an evidence item through its handling lifecycle (seal/open/admit/exclude/purge),
+  // rejecting illegal transitions by construction. Custody hashes remain the integrity proof.
+  evidenceTransition({ case_code, evidenceId, event }) {
+    const s = this._statusRepo.get(case_code);
+    if (!s) throw httpError(404, 'unknown case');
+    const item = (s.evidenceItems || []).find((e) => e.id === evidenceId);
+    if (!item) throw httpError(404, 'unknown evidence');
+    const r = evidenceLifecycle.apply(item.state, event);
+    if (!r.ok) throw httpError(409, 'evidence lifecycle: ' + r.reason);
+    item.state = r.to;
+    this._statusRepo.put(case_code, s);
+    this.audit.append({ actor: 'system', action: 'evidence-' + event, purpose: evidenceId, zone: ZONES.EXECUTIVE });
+    this._metrics.inc('njtip_evidence_transitions_total', { event });
+    return { evidenceId, state: item.state, allowed: evidenceLifecycle.allowedEvents(item.state) };
   }
 
   // Investigator queue (search/filter): non-identifying case metadata only.
@@ -90,13 +113,34 @@ class Workflow {
     this.iam.grant({ principal, action: 'read-evidence', zone: ZONES.EXECUTIVE, matter: case_code, ttlMs: 3600_000 });
     const decision = this.iam.decide({ principal, action: 'read-evidence', zone: ZONES.EXECUTIVE, matter: case_code });
     if (!decision.allow) throw httpError(403, 'not authorized: ' + decision.reason);
-    s.status = disposition === 'escalate' ? 'escalated' : 'reviewed';
+    const target = disposition === 'escalate' ? 'escalated' : 'reviewed';
+    // Guard the transition with the case state machine (idempotent re-review is a no-op).
+    if (target !== s.status && !caseLifecycle.canTransition(s.status, target)) {
+      throw httpError(409, `illegal case transition ${s.status} → ${target}`);
+    }
+    s.status = target;
     s.disposition = disposition;
     this._statusRepo.put(case_code, s);
     this.audit.append({ actor: principal, action: 'investigator-review', purpose: disposition || 'note', zone: ZONES.EXECUTIVE });
     this.notifications.notify(case_code, 'reviewed', { status: s.status });
     this._metrics.inc('njtip_reviews_total', { disposition: disposition || 'note' });
     return { case_code, status: s.status };
+  }
+
+  // Case management: advance a case through its lifecycle (review/escalate/resolve/close),
+  // rejecting illegal transitions. This is the general case-lifecycle capability behind the
+  // investigator/oversight portals.
+  transitionCase({ principal, case_code, event }) {
+    const s = this._statusRepo.get(case_code);
+    if (!s) throw httpError(404, 'unknown case');
+    const r = caseLifecycle.apply(s.status, event);
+    if (!r.ok) throw httpError(409, 'case lifecycle: ' + r.reason);
+    s.status = r.to;
+    this._statusRepo.put(case_code, s);
+    this.audit.append({ actor: principal, action: 'case-' + event, purpose: r.to, zone: ZONES.EXECUTIVE });
+    this.notifications.notify(case_code, r.to, { status: r.to });
+    this._metrics.inc('njtip_case_transitions_total', { event });
+    return { case_code, status: s.status, allowed: caseLifecycle.allowedEvents(s.status) };
   }
 
   oversightDashboard({ category } = {}) {

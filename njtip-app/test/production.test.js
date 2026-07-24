@@ -162,6 +162,24 @@ test('server accepts an OIDC-issued bearer token on a privileged route', async (
   assert.strictEqual((await req('GET', '/api/reports', null, forged)).status, 401);
 });
 
+test('case + evidence lifecycle endpoints are RBAC-gated and enforce legal transitions', async () => {
+  const token = (await req('POST', '/api/auth/session', { credential: 'demo-investigator' })).body.token;
+  const code = (await req('POST', '/api/reports', { category: 'prison', content: 'x' })).body.case_code;
+  // Illegal transition (resolve directly from received) → 409.
+  const illegal = await req('POST', `/api/investigator/${code}/transition`, { event: 'resolve' }, token);
+  assert.strictEqual(illegal.status, 409);
+  // Legal path: escalate → resolve.
+  assert.strictEqual((await req('POST', `/api/investigator/${code}/transition`, { event: 'escalate' }, token)).body.status, 'escalated');
+  assert.strictEqual((await req('POST', `/api/investigator/${code}/transition`, { event: 'resolve' }, token)).body.status, 'resolved');
+  // Unauthorized (no token) → 401.
+  assert.strictEqual((await req('POST', `/api/investigator/${code}/transition`, { event: 'close' }, null)).status, 401);
+  // Evidence lifecycle via API.
+  const ev = await req('POST', `/api/reports/${code}/evidence`, { content: 'blob' });
+  assert.strictEqual(ev.body.state, 'ingested');
+  const seal = await req('POST', `/api/investigator/${code}/evidence/${ev.body.evidenceId}/transition`, { event: 'seal' }, token);
+  assert.strictEqual(seal.body.state, 'sealed');
+});
+
 test('identity is rejected at the API (400) and twin invariants held', async () => {
   const bad = await req('POST', '/api/reports', { category: 'police', content: 'x', extra: { email: 'a@b.c' } });
   assert.strictEqual(bad.status, 400);

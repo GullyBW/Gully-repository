@@ -29,6 +29,14 @@ async function route(app, req, url, body) {
     if (!u || u.role !== role) throw err(401, `${role} authentication required`);
     return u;
   };
+  // Authenticate, then apply the app-level RBAC+ABAC gate for a specific action.
+  const requirePermission = (action, attributes = {}) => {
+    const u = app.auth.verify(bearer(req));
+    if (!u) throw err(401, 'authentication required');
+    const d = app.authz.authorize({ role: u.role, action, attributes });
+    if (!d.allow) throw err(403, d.reason);
+    return u;
+  };
 
   // --- Ops & contract ---
   if (method === 'GET' && (p === '/' || p === '/index.html')) return page('index.html');
@@ -53,6 +61,10 @@ async function route(app, req, url, body) {
   // --- Investigator (privileged) ---
   if (method === 'GET' && p === '/api/reports') { requireRole('investigator'); return json(200, { queue: app.workflow.listReports({ category: url.searchParams.get('category'), status: url.searchParams.get('status') }) }); }
   if (method === 'POST' && (m = p.match(/^\/api\/investigator\/([^/]+)\/review$/))) { const u = requireRole('investigator'); return json(200, app.workflow.investigatorReview({ principal: u.principal, case_code: dec(m[1]), note: body.note, disposition: body.disposition })); }
+  // Case lifecycle transition (review/escalate/resolve/close) — RBAC+ABAC gated.
+  if (method === 'POST' && (m = p.match(/^\/api\/investigator\/([^/]+)\/transition$/))) { const u = requirePermission('transition-case', { caseCode: dec(m[1]) }); return json(200, app.workflow.transitionCase({ principal: u.principal, case_code: dec(m[1]), event: body.event })); }
+  // Evidence handling lifecycle transition (seal/open/admit/exclude/purge).
+  if (method === 'POST' && (m = p.match(/^\/api\/investigator\/([^/]+)\/evidence\/([^/]+)\/transition$/))) { requirePermission('seal-evidence', { caseCode: dec(m[1]) }); return json(200, app.workflow.evidenceTransition({ case_code: dec(m[1]), evidenceId: dec(m[2]), event: body.event })); }
 
   // --- Oversight (aggregate, read-only) ---
   if (method === 'GET' && p === '/api/oversight/dashboard') return json(200, app.workflow.oversightDashboard({ category: url.searchParams.get('category') }));
