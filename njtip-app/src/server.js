@@ -10,6 +10,8 @@ const openapi = require('./openapi');
 const { newTraceId } = require('./adapters/observability');
 const configMod = require('./config');
 const { twinValidate } = require('./twin-validate');
+const { makePackage } = require('../scripts/evidence-package');
+const { assess } = require('../scripts/readiness');
 
 // Synthetic login credentials → roles. Production: OIDC/FIDO2 assertion verification.
 const CREDS = {
@@ -76,6 +78,10 @@ async function route(app, req, url, body) {
   // --- Evidence + Twin validation ---
   if (method === 'GET' && p === '/api/evidence/bundle') return json(200, app.workflow.generateEvidence());
   if (method === 'GET' && p === '/api/twin/validate') return json(200, twinValidate());
+
+  // --- Assurance (Phase 9/10): deterministic evidence package + human-gated readiness ---
+  if (method === 'GET' && p === '/api/assurance/evidence-package') { requireRole('admin'); return json(200, makePackage()); }
+  if (method === 'GET' && p === '/api/assurance/readiness') { requireRole('admin'); return json(200, assess([])); }
 
   // --- Administration (privileged) ---
   if (method === 'GET' && p === '/api/admin/health') { requireRole('admin'); return json(200, app.health.snapshot()); }

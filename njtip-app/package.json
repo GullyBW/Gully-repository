@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
-    "twin": "node scripts/assure.js"
+    "twin": "node scripts/assure.js",
+    "evidence": "node scripts/evidence-package.js",
+    "readiness": "node scripts/readiness.js"
   },
   "license": "SEE-BLUEPRINT",
   "dependencies": {},
