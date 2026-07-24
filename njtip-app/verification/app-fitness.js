@@ -27,6 +27,8 @@ const { FeatureFlags } = require('../src/adapters/flags');
 const { EventStore } = require('../src/adapters/../eventsourcing/event-store');
 const { CaseAggregate } = require('../src/eventsourcing/case-aggregate');
 const { caseReadModel } = require('../src/eventsourcing/projections');
+const { PolicySet } = require('../src/iam/policy-engine');
+const zeroTrust = require('../src/iam/zero-trust');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -129,6 +131,23 @@ module.exports = [
     // Events carry no denied identity/content keys.
     const denied = ['omang', 'name', 'email', 'phone', 'content', 'body', 'plaintext'];
     if (denied.some((k) => JSON.stringify(es.readAll()).toLowerCase().includes('"' + k + '"'))) v.push('event carried a denied identity/content field');
+  }),
+
+  fit('APP-FIT-POLICY-AS-DATA', 'Policy engine is default-deny + deny-overrides; break-glass needs SoD', (v) => {
+    const ps = new PolicySet([
+      { id: 'p', effect: 'permit', actions: ['x'], conditions: [{ attr: 'subject.role', op: 'eq', value: 'admin' }] },
+      { id: 'd', effect: 'deny', actions: ['x'], conditions: [{ attr: 'subject.suspended', op: 'eq', value: true }] },
+    ]);
+    if (ps.evaluate({ action: 'x', subject: {} }).decision !== 'deny') v.push('no matching permit did not default-deny');
+    if (ps.evaluate({ action: 'x', subject: { role: 'admin' } }).decision !== 'permit') v.push('valid permit was denied');
+    if (ps.evaluate({ action: 'x', subject: { role: 'admin', suspended: true } }).decision !== 'deny') v.push('deny did not override permit');
+    // Zero-trust: sensitive action below the trust floor must NOT be allowed.
+    const low = zeroTrust.trustScore({ mfa: 'none', deviceTrusted: false });
+    if (zeroTrust.continuousAuthz({ action: 'read-evidence', score: low.score }).decision === 'allow') v.push('low-trust actor was allowed a sensitive action');
+    // Break-glass requires a distinct human approver (separation of duties).
+    const bg = new zeroTrust.BreakGlass();
+    let sod = false; try { bg.request({ principal: 'a', justification: 'x', approver: 'a' }); } catch (_) { sod = true; }
+    if (!sod) v.push('break-glass allowed self-approval');
   }),
 
   fit('APP-FIT-WORKFLOW-INTEGRITY', 'Prioritisation is deterministic; assignment stays within the roster', (v) => {

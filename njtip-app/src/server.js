@@ -114,6 +114,13 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/admin/events/verify') { requireRole('admin'); return json(200, app.workflow.verifyEventIntegrity()); }
   if (method === 'GET' && p === '/api/admin/readmodel/rebuild') { requireRole('admin'); return json(200, { rebuilt: app.workflow.rebuildReadModel() }); }
 
+  // --- National IAM (Phase 12) + Zero Trust (Phase 19) ---
+  if (method === 'POST' && p === '/api/authz/evaluate') { requireRole('admin'); return json(200, app.iam.policies.evaluate({ subject: body.subject, action: body.action, resource: body.resource, env: body.env })); }
+  if (method === 'GET' && p === '/api/admin/policies') { requireRole('admin'); return json(200, { policies: app.iam.policies.list() }); }
+  if (method === 'POST' && p === '/api/admin/policies') { requireRole('admin'); app.iam.policies.load(body.policies || []); return json(200, { loaded: app.iam.policies.list().length }); }
+  if (method === 'POST' && p === '/api/breakglass') { const u = requireRole('admin'); return json(201, app.iam.breakGlass.request({ principal: body.principal || u.principal, justification: body.justification, approver: body.approver })); }
+  if (method === 'GET' && p === '/api/admin/breakglass') { requireRole('admin'); return json(200, { grants: app.iam.breakGlass.ledger() }); }
+
   throw err(404, 'not-found');
 }
 
