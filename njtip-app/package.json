@@ -1,8 +1,8 @@
 {
   "name": "njtip-app",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "NJTIP v1.0 MVP — anonymous reporting → governance vertical slice. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin.",
+  "description": "NJTIP — anonymous reporting → governance platform. Production adapters behind stable ports (SQL/KMS/object-store/broker/OIDC/notify). Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin.",
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node src/server.js",

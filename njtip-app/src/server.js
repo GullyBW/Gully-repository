@@ -24,7 +24,8 @@ function err(status, msg) { const e = new Error(msg); e.status = status; return 
 async function route(app, req, url, body) {
   const p = url.pathname, method = req.method;
   const requireRole = (role) => {
-    const u = app.session.verify(bearer(req));
+    // Accept a session token OR a verified OIDC/OAuth2 token (same authorization outcome).
+    const u = app.auth.verify(bearer(req));
     if (!u || u.role !== role) throw err(401, `${role} authentication required`);
     return u;
   };

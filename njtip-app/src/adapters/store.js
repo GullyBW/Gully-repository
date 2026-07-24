@@ -1,14 +1,19 @@
 'use strict';
-// Zone-isolated persistence adapter (repository port). Two interchangeable
+// Zone-isolated persistence adapter (repository port). Interchangeable
 // implementations behind ONE interface — the production transition swaps the
 // implementation without touching business logic:
 //   - MemoryStore: deterministic, in-process (default; test/dev).
 //   - FileStore:   durable, atomic-write, PER-ZONE isolated directories.
-// A real deployment adds a PostgresStore with the SAME interface (see
-// docs/component-transition-matrix.md). Zone isolation is enforced by construction:
+//   - SqlStore:    SQL-backed via a driver port (in-memory reference driver here;
+//                  PostgreSQL in production — db/migrations/001_init.sql).
+// All three share the SAME interface (get/put/values/keys/size/delete), so a real
+// deployment swaps persistence with no business-logic change (see
+// docs/production-adapters.md). Zone isolation is enforced by construction:
 // a store instance is bound to exactly one zone and cannot read another's namespace.
 const fs = require('node:fs');
 const path = require('node:path');
+const { SqlStore } = require('./sql-store');
+const { MemorySqlDriver } = require('./drivers/sql-driver');
 
 class MemoryStore {
   constructor(zone) { this.zone = zone; this._m = new Map(); }
@@ -42,9 +47,22 @@ class FileStore {
   size() { return this.keys().length; }
 }
 
-// Factory bound to a zone + collection. cfg.persistence selects the implementation.
-function makeStore(zone, cfg, collection = 'kv') {
-  return cfg.persistence === 'file' ? new FileStore(zone, cfg.dataDir, collection) : new MemoryStore(zone);
+// One SQL driver per app (shared across all zones/collections; isolation is by table
+// name, `${zone}__${collection}`). Memoized off a WeakMap keyed by cfg so it is NOT a
+// cfg property — it never appears in config.redacted() dumps or logs. In production the
+// factory returns a PostgreSQL driver here (pooled connection) instead of the reference.
+const _sqlDrivers = new WeakMap();
+function sqlDriver(cfg) {
+  let d = _sqlDrivers.get(cfg);
+  if (!d) { d = (cfg.sqlDriverFactory ? cfg.sqlDriverFactory() : new MemorySqlDriver()); _sqlDrivers.set(cfg, d); }
+  return d;
 }
 
-module.exports = { MemoryStore, FileStore, makeStore };
+// Factory bound to a zone + collection. cfg.persistence selects the implementation.
+function makeStore(zone, cfg, collection = 'kv') {
+  if (cfg.persistence === 'file') return new FileStore(zone, cfg.dataDir, collection);
+  if (cfg.persistence === 'sql') return new SqlStore(zone, collection, sqlDriver(cfg));
+  return new MemoryStore(zone);
+}
+
+module.exports = { MemoryStore, FileStore, makeStore, sqlDriver };

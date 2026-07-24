@@ -8,7 +8,9 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
-const { MemoryStore, FileStore } = require('../src/adapters/store');
+const { MemoryStore, FileStore, makeStore } = require('../src/adapters/store');
+const { SqlStore } = require('../src/adapters/sql-store');
+const { MemorySqlDriver } = require('../src/adapters/drivers/sql-driver');
 const { SessionManager } = require('../src/adapters/session');
 const { Logger, Metrics, Health } = require('../src/adapters/observability');
 const config = require('../src/config');
@@ -24,6 +26,38 @@ test('FileStore is durable and zone/collection isolated', () => {
   new FileStore('independent', dir, 'notifications').put('K1', [{ n: 1 }]);
   assert.deepStrictEqual(new FileStore('independent', dir, 'reports').get('K1'), { a: 1 });
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('SqlStore: durable via driver, zone + collection isolated, same interface', () => {
+  const driver = new MemorySqlDriver();
+  const reports = new SqlStore('independent', 'reports', driver);
+  reports.put('K1', { a: 1 });
+  // New store instance on the SAME driver → durable read (survives the object).
+  assert.deepStrictEqual(new SqlStore('independent', 'reports', driver).get('K1'), { a: 1 });
+  // Same key, different collection → no collision (distinct table).
+  new SqlStore('independent', 'notifications', driver).put('K1', [{ n: 1 }]);
+  assert.deepStrictEqual(reports.get('K1'), { a: 1 });
+  // Same key, different zone → no collision, and a store cannot address another zone.
+  new SqlStore('executive', 'reports', driver).put('K1', { a: 99 });
+  assert.deepStrictEqual(reports.get('K1'), { a: 1 });
+  // Interface parity: keys/values/size/delete behave like the other stores.
+  assert.deepStrictEqual(reports.keys(), ['K1']);
+  assert.strictEqual(reports.size(), 1);
+  assert.strictEqual(reports.delete('K1'), true);
+  assert.strictEqual(reports.get('K1'), null);
+  // Migration was recorded exactly once regardless of store instance count.
+  assert.deepStrictEqual(driver.migrations(), ['001_init']);
+  // Isolation is by table name; no queryable identity column exists by design.
+  assert.ok(driver.tables().every((t) => /^[a-z]+__[a-z]+$/.test(t)));
+});
+
+test('makeStore selects sql and shares ONE driver per cfg (no leak into redacted)', () => {
+  const cfg = config.load({ NJTIP_PERSISTENCE: 'sql' });
+  const a = makeStore('independent', cfg, 'reports');
+  const b = makeStore('independent', cfg, 'reports');
+  a.put('K1', { v: 1 });
+  assert.deepStrictEqual(b.get('K1'), { v: 1 }); // same underlying driver
+  assert.ok(!('sqlDriver' in config.redacted(cfg)) && !('_sqlDriver' in config.redacted(cfg)));
 });
 
 test('MemoryStore returns deep copies (no aliasing)', () => {
@@ -114,6 +148,18 @@ test('session login → investigator queue; admin config redacted; unauthorized 
   assert.strictEqual(noAuth.status, 401);
   const cfg = await req('GET', '/api/admin/config', null, 'admin-token-synthetic');
   assert.strictEqual(cfg.body.SESSION_SECRET, '***REDACTED***');
+});
+
+test('server accepts an OIDC-issued bearer token on a privileged route', async () => {
+  const { OidcVerifier } = require('../src/adapters/oidc');
+  const cfg = config.load({ NJTIP_PERSISTENCE: 'memory' });
+  const idp = new OidcVerifier({ secret: cfg.SESSION_SECRET }); // same trust anchor as the app
+  const token = idp.issue({ sub: 'inv-777', role: 'investigator' });
+  const q = await req('GET', '/api/reports?status=received', null, token);
+  assert.strictEqual(q.status, 200);
+  // A forged token (wrong secret) is rejected.
+  const forged = new OidcVerifier({ secret: 'wrong' }).issue({ sub: 'x', role: 'investigator' });
+  assert.strictEqual((await req('GET', '/api/reports', null, forged)).status, 401);
 });
 
 test('identity is rejected at the API (400) and twin invariants held', async () => {
