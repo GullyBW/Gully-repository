@@ -21,6 +21,7 @@ const { makeIntegrationGateway } = require('./adapters/integrations');
 const { makeFeatureFlags } = require('./adapters/flags');
 const { Workflow } = require('./workflow');
 const { EventStore } = require('./eventsourcing/event-store');
+const { EventRegistry, seedCaseEvents } = require('./eventsourcing/event-governance');
 const authz = require('./authz');
 const { PolicySet, DEFAULT_POLICIES } = require('./iam/policy-engine');
 const zeroTrust = require('./iam/zero-trust');
@@ -78,6 +79,8 @@ function createApp(overrides = {}) {
   // Event store (Phase 11): immutable, hash-chained write-side log. Additive — the read
   // models keep serving queries; every workflow transition also appends a PII-free event.
   const events = new EventStore();
+  // Event governance (Phase 26): registry/catalog of event contracts over the log.
+  const eventRegistry = seedCaseEvents(new EventRegistry());
 
   const workflow = overrides.workflow || new Workflow({
     seed: overrides.seed ?? 1, ledgerFile: overrides.ledgerFile, statusRepo, notifications, metrics, workloadRepo, events,
@@ -125,7 +128,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, custody, gis, compliance, twin2, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, custody, gis, compliance, twin2, fabric, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

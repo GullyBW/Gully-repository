@@ -27,6 +27,7 @@ const { FeatureFlags } = require('../src/adapters/flags');
 const { EventStore } = require('../src/adapters/../eventsourcing/event-store');
 const { CaseAggregate } = require('../src/eventsourcing/case-aggregate');
 const { caseReadModel } = require('../src/eventsourcing/projections');
+const { EventRegistry, seedCaseEvents } = require('../src/eventsourcing/event-governance');
 const { PolicySet } = require('../src/iam/policy-engine');
 const zeroTrust = require('../src/iam/zero-trust');
 const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../src/tenancy/tenant');
@@ -217,6 +218,22 @@ module.exports = [
     // Small cells suppressed.
     const hm = si.heatmap({ k: 5 });
     if (hm.cells[cell].suppressed !== true) v.push('small GIS cell not suppressed');
+  }),
+
+  fit('APP-FIT-EVENT-GOVERNANCE', 'Event contracts are governed; breaking schema evolution refused', (v) => {
+    let t = 0; const es = new EventStore({ clock: () => (t += 1) });
+    es.append('NJ-G', [{ type: 'CaseSubmitted', data: { category: 'police', recipient: 'ombudsman', stage: 'intake-review' } }]);
+    const reg = seedCaseEvents(new EventRegistry());
+    // Every event type in the log is registered (governance coverage).
+    const val = reg.validate(es);
+    if (!val.ok) v.push('event log has unregistered types or a broken chain: ' + JSON.stringify(val));
+    // A breaking schema evolution is refused (no existing contract may break).
+    reg.register('X', { owner: 'o', schema: { fields: { a: 'string' }, required: ['a'] } });
+    let refused = false; try { reg.evolve('X', { fields: { a: 'number' }, required: ['a'] }); } catch (_) { refused = true; }
+    if (!refused) v.push('breaking event-schema evolution was accepted');
+    // Retirement requires prior deprecation (lifecycle discipline).
+    let lifecycle = false; try { reg.retire('X'); } catch (_) { lifecycle = true; }
+    if (!lifecycle) v.push('event retired without deprecation');
   }),
 
   fit('APP-FIT-WORKFLOW-INTEGRITY', 'Prioritisation is deterministic; assignment stays within the roster', (v) => {

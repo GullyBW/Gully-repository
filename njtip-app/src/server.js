@@ -113,6 +113,9 @@ async function route(app, req, url, body) {
   if (method === 'GET' && (m = p.match(/^\/api\/reports\/([^/]+)\/events$/))) { requireRole('investigator'); return json(200, { events: app.workflow.caseEvents(dec(m[1])), replayState: app.workflow.replayCase(dec(m[1])) }); }
   if (method === 'GET' && p === '/api/admin/events/verify') { requireRole('admin'); return json(200, app.workflow.verifyEventIntegrity()); }
   if (method === 'GET' && p === '/api/admin/readmodel/rebuild') { requireRole('admin'); return json(200, { rebuilt: app.workflow.rebuildReadModel() }); }
+  // Event governance (Phase 26): catalog, discovery, dependency map, retention, integrity.
+  if (method === 'GET' && p === '/api/events/catalog') { requireRole('investigator'); return json(200, { catalog: app.eventRegistry.catalog(), dependencies: app.eventRegistry.dependencyMap() }); }
+  if (method === 'GET' && p === '/api/admin/events/governance') { requireRole('admin'); return json(200, { validate: app.eventRegistry.validate(app.events), retention: app.eventRegistry.retentionReport(app.events.readAll()) }); }
 
   // --- National IAM (Phase 12) + Zero Trust (Phase 19) ---
   if (method === 'POST' && p === '/api/authz/evaluate') { requireRole('admin'); return json(200, app.iam.policies.evaluate({ subject: body.subject, action: body.action, resource: body.resource, env: body.env })); }
