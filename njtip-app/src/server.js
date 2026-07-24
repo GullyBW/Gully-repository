@@ -139,6 +139,13 @@ async function route(app, req, url, body) {
   if (method === 'POST' && (m = p.match(/^\/api\/orchestration\/([^/]+)\/fire$/))) { const u = requireRole('investigator'); return json(200, app.orchestration.fire(dec(m[1]), body.event, { by: u.principal })); }
   if (method === 'GET' && p === '/api/orchestration/analytics') { requireRole('oversight-board'); return json(200, app.orchestration.analytics()); }
 
+  // --- Chain of custody (Phase 16), GIS (Phase 15), compliance (Phase 25) ---
+  if (method === 'POST' && p === '/api/custody/record') { const u = requireRole('investigator'); return json(201, app.custody.record({ evidenceId: body.evidenceId, action: body.action, actor: u.principal, contentHash: body.contentHash, witness: body.witness })); }
+  if (method === 'GET' && p === '/api/admin/custody/verify') { requireRole('admin'); return json(200, app.custody.verify()); }
+  if (method === 'GET' && p === '/api/admin/custody/archive') { requireRole('admin'); return json(200, app.custody.archive()); }
+  if (method === 'GET' && p === '/api/geo/heatmap') { requireRole('oversight-board'); return json(200, app.gis.heatmap()); }
+  if (method === 'GET' && p === '/api/compliance/assess') { requireRole('admin'); return json(200, app.compliance.assess()); }
+
   throw err(404, 'not-found');
 }
 

@@ -29,6 +29,10 @@ const { KnowledgeGraph } = require('./graph/graph');
 const advisor = require('./ai/advisor');
 const { RecommendationQueue } = require('./ai/approval');
 const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-engine');
+const { CustodyLedger } = require('./custody/ledger');
+const complianceMod = require('./compliance/compliance');
+const { SpatialIndex } = require('./geo/gis');
+const { runTwin, runApp, runInfra } = require('./twin-validate');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
 
@@ -101,12 +105,17 @@ function createApp(overrides = {}) {
   const ai = { advisor, queue: new RecommendationQueue() };
   const orchestration = new WorkflowEngine();
   orchestration.register(DEFAULT_WORKFLOW);
+  // Enterprise chain of custody (Phase 16), GIS (Phase 15), and compliance automation
+  // (Phase 25). Compliance assesses from the live fitness gate; it never authorizes.
+  const custody = new CustodyLedger();
+  const gis = new SpatialIndex();
+  const compliance = { assess: () => complianceMod.assess([...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }))) };
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, graph, ai, orchestration, custody, gis, compliance, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, workflow };
 }
 
 module.exports = { createApp };
