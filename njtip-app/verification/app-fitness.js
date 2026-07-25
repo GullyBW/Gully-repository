@@ -61,6 +61,8 @@ const { AiRegistry, governedRecommendation } = require('../src/ai/ai-governance'
 const { makeCryptoAgility } = require('../src/adapters/crypto-agility');
 const { QuantumMigrationRegistry } = require('../src/adapters/quantum-transition');
 const observatory = require('../src/observatory/performance');
+const { LifecycleRegistry } = require('../src/sustainability/lifecycle');
+const strategicTwin = require('../src/twin2/strategic-twin');
 const privacy = require('../src/privacy/privacy-engineering');
 const threat = require('../src/security/threat-intel');
 const { CustodyLedger } = require('../src/custody/ledger');
@@ -290,6 +292,20 @@ module.exports = [
     const pred = graphIntel.predictLinks(g, 'a');
     if (pred.advisoryOnly !== true || pred.requiresHumanApproval !== true || pred.autonomous !== false) v.push('graph inference not marked advisory/human-gated');
     if (!Array.isArray(pred.explanation) || !pred.explanation.length) v.push('graph inference not explainable');
+  }),
+
+  fit('APP-FIT-SUSTAINABILITY-STRATEGIC', 'Longevity assessment human-gated; strategic projections never authorize', (v) => {
+    const lc = new LifecycleRegistry({ clock: () => 0 });
+    lc.register('legacy-db', { category: 'database', adoptedAt: 0, eolAt: 100, criticality: 'critical' });
+    // Obsolescence is detected past EOL.
+    if (lc.obsolescence(200).length < 1) v.push('obsolescence not detected past end-of-life');
+    if (lc.longevityAssessment(0).humanGate !== true) v.push('longevity assessment is not human-gated');
+    // Strategic projections are deterministic, explainable, and never authorize.
+    const p = strategicTwin.demographicChange({ years: 5 });
+    if (p.authorizes !== false || p.informationalOnly !== true || p.explainable !== true) v.push('strategic projection is not informational/explainable');
+    if (typeof p.confidence !== 'number' || !Array.isArray(p.assumptions)) v.push('strategic projection lacks confidence/assumption tracking');
+    if (JSON.stringify(strategicTwin.demographicChange({ years: 5 })) !== JSON.stringify(p)) v.push('strategic projection is not deterministic');
+    if ('authorized' in strategicTwin.executiveReport()) v.push('strategic executive report emitted an authorization');
   }),
 
   fit('APP-FIT-QUANTUM-OBSERVATORY', 'PQ migration is compatibility-gated + human-gated; observatory is informational', (v) => {

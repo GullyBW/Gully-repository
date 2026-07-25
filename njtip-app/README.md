@@ -29,14 +29,15 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.7 — Autonomous Sovereign Government Ecosystem.** Additive bounded-context extensions:
-> national digital identity, infrastructure governance, digital legislation, human-governed
-> recovery, data marketplace, process mining, quantum-resilient transition, national
-> performance observatory, cross-domain intelligence, and a sovereign command center.
-> Self-governing, never self-authorizing. Combined gate: **65 invariants** (14 twin + 43 app +
-> 8 infra), 150 tests. Full summary: [`docs/autonomous.md`](./docs/autonomous.md) ·
-> v1.6: [`docs/sovereign.md`](./docs/sovereign.md) · v1.5: [`docs/ecosystem.md`](./docs/ecosystem.md) ·
-> v1.4: [`docs/national-platform.md`](./docs/national-platform.md) ·
+> **v1.8 — National Digital Ecosystem Intelligence Platform.** Additive bounded-context
+> extensions governing the whole national digital ecosystem: ecosystem federation, digital
+> asset governance, national crisis management, service portfolio, supply-chain governance,
+> adaptive governance, an immutable knowledge repository, a capability marketplace,
+> sustainability/lifecycle, and Strategic Twin 5.0. Combined gate: **70 invariants** (14 twin +
+> 48 app + 8 infra), 161 tests. Full summary: [`docs/ecosystem-intelligence.md`](./docs/ecosystem-intelligence.md) ·
+> production migration: [`docs/migration-guidance.md`](./docs/migration-guidance.md) ·
+> v1.7: [`docs/autonomous.md`](./docs/autonomous.md) · v1.6: [`docs/sovereign.md`](./docs/sovereign.md) ·
+> v1.5: [`docs/ecosystem.md`](./docs/ecosystem.md) · v1.4: [`docs/national-platform.md`](./docs/national-platform.md) ·
 > v1.3: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).
 
 ## v1.2 — operational production platform (ports & adapters)

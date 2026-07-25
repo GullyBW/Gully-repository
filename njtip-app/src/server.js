@@ -151,6 +151,9 @@ async function route(app, req, url, body) {
   // Quantum-resilient transition (Phase 57) + national performance observatory (Phase 58).
   if (method === 'GET' && p === '/api/admin/quantum-transition') { requireRole('admin'); return json(200, { roadmap: app.quantumTransition.roadmap(), audit: app.quantumTransition.auditTrail() }); }
   if (method === 'GET' && p === '/api/observatory') { requireRole('oversight-board'); return json(200, app.workflow.observatoryReport()); }
+  // Sustainability & lifecycle (Phase 69) + strategic twin 5.0 (Phase 70).
+  if (method === 'GET' && p === '/api/admin/sustainability') { requireRole('admin'); return json(200, { metrics: app.sustainability.sustainabilityMetrics(), roadmap: app.sustainability.modernizationRoadmap(), longevity: app.sustainability.longevityAssessment() }); }
+  if (method === 'GET' && p === '/api/strategic-twin/report') { requireRole('oversight-board'); return json(200, app.strategic.executiveReport()); }
   if (method === 'POST' && (m = p.match(/^\/api\/ai\/decide\/([^/]+)$/))) { const u = requireRole('oversight-board'); return json(200, app.ai.queue.decide(dec(m[1]), { by: body.by || u.principal, decision: body.decision, note: body.note })); }
 
   // --- Workflow orchestration (Phase 20) — configurable, versioned ---

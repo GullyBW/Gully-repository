@@ -43,6 +43,8 @@ const { RecommendationQueue } = require('./ai/approval');
 const { AiRegistry } = require('./ai/ai-governance');
 const { makeCryptoAgility } = require('./adapters/crypto-agility');
 const { QuantumMigrationRegistry } = require('./adapters/quantum-transition');
+const { LifecycleRegistry } = require('./sustainability/lifecycle');
+const strategicTwin = require('./twin2/strategic-twin');
 const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-engine');
 const workflowSim = require('./orchestration/workflow-simulator');
 const twin3 = require('./twin2/monte-carlo');
@@ -196,6 +198,11 @@ function createApp(overrides = {}) {
   // Quantum-resilient transition (Phase 57): migration planning over the crypto policy registry.
   const quantumTransition = new QuantumMigrationRegistry({ cryptoRegistry: cryptoAgility.registry });
   cryptoAgility.quantum = quantumTransition;
+  // Long-term sustainability & lifecycle management (Phase 69): decades-long stewardship (advisory).
+  const sustainability = new LifecycleRegistry();
+  sustainability.register('node-runtime', { category: 'runtime', adoptedAt: 0, eolAt: 10 * 365 * 24 * 3600_000, criticality: 'high' });
+  // National Strategic Digital Twin 5.0 (Phase 70): long-term strategic simulation (informs only).
+  const strategic = strategicTwin;
   const orchestration = new WorkflowEngine();
   // Phase 27: a workflow VERSION must pass simulation before activation (the Twin is the
   // authoritative validation environment). Fail-closed: an invalid workflow is not registered.
@@ -292,7 +299,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
