@@ -71,6 +71,8 @@ const openapiSpec = require('../src/openapi');
 const capabilityMod = require('../src/capability/model');
 const maturityMod = require('../src/maturity/maturity');
 const devplatform = require('../src/devplatform/sdk');
+const { CapabilityMarketplace } = require('../src/devplatform/capability-marketplace');
+const { KnowledgeRepository } = require('../src/knowledge/repository');
 const evolution = require('../src/evolution/evolution');
 const { GovernanceOpsCenter } = require('../src/govops/center');
 const { CommandCenter } = require('../src/govops/command-center');
@@ -452,6 +454,29 @@ module.exports = [
     if (snap.humanGate.required !== true) v.push('governance ops center is not human-gated');
     if (!/never authorizes/.test(center.strategicReadiness().note)) v.push('ops center strategic readiness is not human-gated');
     if ('authorized' in snap) v.push('ops center emitted an authorization');
+  }),
+
+  fit('APP-FIT-KNOWLEDGE-CAPABILITY', 'Knowledge records immutable/tamper-evident; marketplace publication human-gated', (v) => {
+    const kr = new KnowledgeRepository({ clock: () => 1 });
+    kr.record({ type: 'adr', title: 'ADR one', tags: ['x'] });
+    kr.record({ type: 'governance-decision', title: 'GD one', refs: ['KN-00001'] });
+    if (!kr.verify().ok) v.push('knowledge chain does not verify');
+    if (!Object.isFrozen(kr._records[0])) v.push('knowledge record is mutable');
+    // Personal data is refused (privacy).
+    let refused = false; try { kr.record({ type: 'lesson-learned', title: 'x', attributes: { email: 'a@b.c' } }); } catch (_) { refused = true; }
+    if (!refused) v.push('knowledge repository accepted personal data');
+    // Decision traceability follows refs.
+    if (kr.trace('KN-00002').length < 2) v.push('knowledge decision traceability broken');
+    // Capability marketplace: publication requires certification + human approval.
+    const mkt = new CapabilityMarketplace();
+    mkt.register('cap', { type: 'workflow', owner: 'o', spec: { a: 1 } });
+    let gate = false; try { mkt.publish('cap', { by: 'x', rationale: 'y' }); } catch (_) { gate = true; }
+    if (!gate) v.push('capability published without certification');
+    mkt.certify('cap');
+    let human = false; try { mkt.publish('cap', { by: 'x' }); } catch (_) { human = true; }
+    if (!human) v.push('capability published without a rationale');
+    mkt.publish('cap', { by: 'steward', rationale: 'reviewed' });
+    if (mkt.discover().length !== 1) v.push('published capability not discoverable');
   }),
 
   fit('APP-FIT-PLATFORM-INTELLIGENCE', 'Capability/maturity human-gated; SDK deterministic; metadata classified', (v) => {

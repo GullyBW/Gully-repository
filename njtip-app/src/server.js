@@ -210,6 +210,9 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/command-center/readiness') { requireRole('oversight-board'); return json(200, app.commandCenter.nationalReadinessScore()); }
   if (method === 'GET' && p === '/api/developer/sdk') { requireRole('admin'); return { status: 200, body: app.devPlatform.generateClientSdk(), type: 'text/plain' }; }
   if (method === 'GET' && p === '/api/developer/harness') { requireRole('admin'); return json(200, app.devPlatform.testHarness()); }
+  // Knowledge repository (Phase 67) + capability marketplace (Phase 68).
+  if (method === 'GET' && p === '/api/knowledge') { requireRole('oversight-board'); return json(200, { search: app.knowledge.search(url.searchParams.get('q') || 'adr'), integrity: app.knowledge.verify().ok }); }
+  if (method === 'GET' && p === '/api/capability-marketplace') { requireRole('investigator'); return json(200, { catalog: app.capabilityMarketplace.discover() }); }
   if (method === 'GET' && p === '/api/decision-support') { requireRole('oversight-board'); const k = app.workflow.analytics().kpis; return json(200, { predictiveKpis: app.decisionSupport.predictiveKpis({ openCases: k.backlog, arrivalPerDay: 20, resolvedPerDay: 18 }), completion: app.decisionSupport.completionForecast({ openCases: k.backlog, resolvedPerDay: 18 }) }); }
   if (method === 'POST' && p === '/api/twin2/simulate') {
     requireRole('admin');

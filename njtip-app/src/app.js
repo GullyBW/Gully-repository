@@ -68,6 +68,8 @@ const { MetadataGovernance } = require('./fabric/metadata');
 const capabilityMod = require('./capability/model');
 const maturityMod = require('./maturity/maturity');
 const devplatform = require('./devplatform/sdk');
+const { CapabilityMarketplace } = require('./devplatform/capability-marketplace');
+const { KnowledgeRepository } = require('./knowledge/repository');
 const openapiSpec = require('./openapi');
 const evolution = require('./evolution/evolution');
 const { GovernanceOpsCenter } = require('./govops/center');
@@ -247,6 +249,11 @@ function createApp(overrides = {}) {
   const capability = { map: capabilityMod.capabilityMap, dependencies: capabilityMod.dependencies, ownership: capabilityMod.ownership, heatMap: () => { const f = _fitness(); return capabilityMod.heatMap([...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass }))); } };
   const maturity = { assess: () => { const f = _fitness(); return maturityMod.assess({ ...f, docs: 20 }); } };
   const devPlatform = { generateClientSdk: () => devplatform.generateClientSdk(openapiSpec.spec()), mockService: () => devplatform.mockService(openapiSpec.spec()), testHarness: () => devplatform.testHarness(openapiSpec.spec()), integrationTemplate: devplatform.integrationTemplate };
+  // Government capability marketplace (Phase 68): publication governed + human-approved.
+  const capabilityMarketplace = new CapabilityMarketplace();
+  // National knowledge & decision repository (Phase 67): immutable, hash-chained institutional memory.
+  const knowledge = new KnowledgeRepository();
+  knowledge.record({ type: 'adr', title: 'Freeze architecture at v1.7; only additive evolution', tags: ['architecture', 'governance'] });
   // Platform evolution intelligence (Phase 49): advisory; observes, never changes architecture.
   const evolutionIntel = { ...evolution, adrLog: new evolution.ArchitectureDecisionLog(), lifecycle: new evolution.CapabilityLifecycle(), report: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass })); return { dependencyHealth: evolution.dependencyHealth(), technicalDebt: evolution.technicalDebt(all), recommendations: evolution.recommendations(all) }; } };
   // National Governance Operations Center (Phase 50): unified ADVISORY oversight over all
@@ -285,7 +292,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
