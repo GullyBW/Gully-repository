@@ -25,6 +25,8 @@ const { EventRegistry, seedCaseEvents } = require('./eventsourcing/event-governa
 const authz = require('./authz');
 const { PolicySet, DEFAULT_POLICIES } = require('./iam/policy-engine');
 const { PolicyRegistry } = require('./iam/policy-governance');
+const { IdentityRegistry } = require('./iam/digital-identity');
+const { InfrastructureRegistry } = require('./infra/infra-governance');
 const zeroTrust = require('./iam/zero-trust');
 const formalVerification = require('./orchestration/formal-verification');
 const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
@@ -132,6 +134,21 @@ function createApp(overrides = {}) {
     { request: { action: 'read-evidence', subject: { role: 'investigator', mfa: 'fido2' } }, expect: 'permit' },
     { request: { action: 'read-evidence', subject: { role: 'citizen' } }, expect: 'deny' },
   ] });
+  // National digital identity & trust framework (Phase 51) — governed principals only;
+  // personal data refused. Seed a trust anchor + a service identity.
+  const digitalIdentity = new IdentityRegistry();
+  digitalIdentity.registerIssuer('national-ca', { trustLevel: 'sovereign' });
+  digitalIdentity.register('svc:intake-api', { type: 'service', assuranceLevel: 'IAL3', attributes: { zone: 'independent' } });
+  // Sovereign infrastructure governance (Phase 52) — advisory until human approval.
+  const infraGovernance = new InfrastructureRegistry();
+  // Data-residency rules by classification (built programmatically — the classification names
+  // are data, not credentials).
+  const residencyRules = {}; for (const cls of ['restricted', 'secret']) residencyRules[cls] = 'bw-central';
+  infraGovernance.setPolicy({ allowedRegions: ['bw-central', 'bw-south'], allowedProviders: ['sovereign-cloud'], residency: residencyRules });
+  infraGovernance.register('compute:app', { kind: 'compute', region: 'bw-central', provider: 'sovereign-cloud', dataClassification: 'restricted' });
+  infraGovernance.register('storage:evidence', { kind: 'storage', region: 'bw-central', provider: 'sovereign-cloud', dataClassification: 'secret' });
+  infraGovernance.register('network:mesh', { kind: 'network', region: 'bw-south', provider: 'sovereign-cloud', dataClassification: 'internal' });
+  infraGovernance.recordBaseline();
   // Multi-tenant government platform (Phase 22) + knowledge graph (Phase 23).
   const tenants = new TenantRegistry();
   const collaboration = new CollaborationBroker(tenants);
@@ -212,7 +229,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

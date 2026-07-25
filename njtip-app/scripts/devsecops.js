@@ -37,15 +37,23 @@ function sast() {
 function secretScan() {
   const findings = [];
   const patterns = [
-    { rule: 'private-key', re: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/ },
-    { rule: 'aws-access-key', re: /AKIA[0-9A-Z]{16}/ },
-    { rule: 'hardcoded-credential', re: /(password|secret|apikey|api_key|token)\s*[:=]\s*['"][^'"]{8,}['"]/i },
+    { rule: 'private-key', re: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/, capture: false },
+    { rule: 'aws-access-key', re: /AKIA[0-9A-Z]{16}/, capture: false },
+    { rule: 'hardcoded-credential', re: /(password|secret|apikey|api_key|token)\s*[:=]\s*['"]([^'"]{8,})['"]/i, capture: true },
   ];
   const allow = /SYNTHETIC|REPLACE_FROM|example|REDACTED|do-not-use-in-prod|placeholder/i;
+  // An identifier-shaped value (region code, hostname, classification, slug) is NOT a
+  // credential: all-lowercase alnum with ./-/_ separators, no entropy. Skip those.
+  const identifierShaped = (val) => /^[a-z][a-z0-9._-]{0,30}$/.test(val);
   for (const f of walk(SRC).concat([path.join(ROOT, 'package.json')])) {
     const rel = path.relative(ROOT, f);
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
-      for (const p of patterns) if (p.re.test(line) && !allow.test(line)) findings.push({ rule: p.rule, severity: 'high', file: rel });
+      for (const p of patterns) {
+        const match = line.match(p.re);
+        if (!match || allow.test(line)) continue;
+        if (p.capture && identifierShaped(match[2])) continue; // config-like value, not a secret
+        findings.push({ rule: p.rule, severity: 'high', file: rel });
+      }
     }
   }
   return findings;

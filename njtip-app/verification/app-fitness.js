@@ -34,6 +34,8 @@ const twin3 = require('../src/twin2/monte-carlo');
 const twin4 = require('../src/twin2/national-sim');
 const resilience = require('../src/twin2/resilience-validation');
 const { PolicyRegistry } = require('../src/iam/policy-governance');
+const { IdentityRegistry } = require('../src/iam/digital-identity');
+const { InfrastructureRegistry } = require('../src/infra/infra-governance');
 const { DEFAULT_POLICIES } = require('../src/iam/policy-engine');
 const formalVerification = require('../src/orchestration/formal-verification');
 const { PolicySet } = require('../src/iam/policy-engine');
@@ -399,6 +401,37 @@ module.exports = [
     // Retirement requires prior deprecation (lifecycle discipline).
     let lifecycle = false; try { reg.retire('X'); } catch (_) { lifecycle = true; }
     if (!lifecycle) v.push('event retired without deprecation');
+  }),
+
+  fit('APP-FIT-DIGITAL-IDENTITY', 'Identity refuses personal data; credentials verify + revoke; untrusted issuer refused', (v) => {
+    const reg = new IdentityRegistry({ clock: () => 1 });
+    // Personal data is refused (privacy — governed principals only).
+    let refused = false; try { reg.register('p1', { type: 'person', attributes: { name: 'Real Name' } }); } catch (_) { refused = true; }
+    if (!refused) v.push('identity registry accepted personal data');
+    reg.register('svc1', { type: 'service', assuranceLevel: 'IAL2' });
+    // Credential issuance requires a trusted issuer (fail-closed).
+    let issuerGate = false; try { reg.issueCredential({ credId: 'c1', subject: 'svc1', issuer: 'unknown' }); } catch (_) { issuerGate = true; }
+    if (!issuerGate) v.push('credential issued by an untrusted issuer');
+    reg.registerIssuer('ca');
+    reg.issueCredential({ credId: 'c1', subject: 'svc1', issuer: 'ca' });
+    if (!reg.verifyCredential('c1').valid) v.push('valid credential did not verify');
+    reg.revoke('c1');
+    if (reg.verifyCredential('c1').valid) v.push('revoked credential still verifies');
+  }),
+
+  fit('APP-FIT-INFRA-GOVERNANCE', 'Infrastructure residency enforced; drift detected; readiness human-gated', (v) => {
+    const infra = new InfrastructureRegistry();
+    infra.setPolicy({ allowedRegions: ['bw-central'], residency: { secret: 'bw-central' } });
+    infra.register('s1', { kind: 'storage', region: 'bw-central', dataClassification: 'secret' });
+    if (!infra.validateCompliance().compliant) v.push('compliant infra flagged non-compliant');
+    // A residency violation is detected (fail-closed reporting).
+    infra.register('s2', { kind: 'storage', region: 'off-shore', dataClassification: 'secret' });
+    if (infra.validateCompliance().compliant) v.push('residency violation not detected');
+    // Drift against a baseline is detected.
+    const infra2 = new InfrastructureRegistry(); infra2.register('a', { kind: 'compute', region: 'bw-central' }); infra2.recordBaseline();
+    infra2.register('b', { kind: 'compute', region: 'bw-central' });
+    if (!infra2.detectDrift().drift) v.push('infrastructure drift not detected');
+    if (infra2.readiness().humanGate !== true) v.push('infra readiness is not human-gated');
   }),
 
   fit('APP-FIT-POLICY-GOVERNANCE', 'Policy activation requires validation; rollback works; audited', (v) => {
