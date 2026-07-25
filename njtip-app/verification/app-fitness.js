@@ -46,6 +46,8 @@ const graphIntel = require('../src/graph/intelligence');
 const { MemoryStore } = require('../src/adapters/store');
 const advisor = require('../src/ai/advisor');
 const { RecommendationQueue } = require('../src/ai/approval');
+const { AiRegistry, governedRecommendation } = require('../src/ai/ai-governance');
+const { makeCryptoAgility } = require('../src/adapters/crypto-agility');
 const privacy = require('../src/privacy/privacy-engineering');
 const threat = require('../src/security/threat-intel');
 const { CustodyLedger } = require('../src/custody/ledger');
@@ -232,6 +234,27 @@ module.exports = [
     const pred = graphIntel.predictLinks(g, 'a');
     if (pred.advisoryOnly !== true || pred.requiresHumanApproval !== true || pred.autonomous !== false) v.push('graph inference not marked advisory/human-gated');
     if (!Array.isArray(pred.explanation) || !pred.explanation.length) v.push('graph inference not explainable');
+  }),
+
+  fit('APP-FIT-AI-GOVERNANCE', 'No AI model operates without governance approval; crypto agility is policy-only', (v) => {
+    const reg = new AiRegistry();
+    reg.register('m', { owner: 'o', purpose: 'p' });
+    // An unapproved model may NOT operate (fail-closed).
+    if (reg.canOperate('m').allowed) v.push('unapproved model may operate');
+    let refused = false; try { governedRecommendation(reg, 'm', advisor.riskScore({ category: 'police' })); } catch (_) { refused = true; }
+    if (!refused) v.push('recommendation surfaced from an unapproved model');
+    // Approval requires a named human + rationale.
+    let needsHuman = false; try { reg.approve('m', { by: 'x' }); } catch (_) { needsHuman = true; }
+    if (!needsHuman) v.push('AI model approved without a rationale');
+    reg.approve('m', { by: 'board', rationale: 'ok' });
+    if (!reg.canOperate('m').allowed) v.push('approved model cannot operate');
+    // Crypto agility: reference is synthetic + never emits key material; migration keeps overlap.
+    const ca = makeCryptoAgility();
+    const prov = ca.provider('signature'); const primary = prov.primary();
+    prov.migrate('ml-dsa-65');
+    if (!prov.accepts(primary)) v.push('crypto migration dropped the legacy algorithm before overlap ended');
+    if (!ca.registry.pqReadiness().byPurpose.signature.ready) v.push('no post-quantum readiness interface');
+    if (JSON.stringify(ca).includes('PRIVATE KEY')) v.push('crypto agility exposed key material');
   }),
 
   fit('APP-FIT-AI-ADVISORY-ONLY', 'AI is advisory-only, explainable, and human-approval-gated', (v) => {

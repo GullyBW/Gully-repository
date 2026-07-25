@@ -142,6 +142,9 @@ async function route(app, req, url, body) {
     return json(200, { recommendation: rec, queued: q });
   }
   if (method === 'GET' && p === '/api/ai/pending') { requireRole('oversight-board'); return json(200, { pending: app.ai.queue.pending() }); }
+  // Responsible AI governance (Phase 46) + cryptographic agility (Phase 47).
+  if (method === 'GET' && p === '/api/ai/governance') { requireRole('admin'); return json(200, { models: app.ai.governance.catalog(), audit: app.ai.governance.auditTrail() }); }
+  if (method === 'GET' && p === '/api/admin/crypto-agility') { requireRole('admin'); return json(200, { signature: app.cryptoAgility.registry.catalog('signature'), pqReadiness: app.cryptoAgility.registry.pqReadiness(), keys: app.cryptoAgility.keys.inventory() }); }
   if (method === 'POST' && (m = p.match(/^\/api\/ai\/decide\/([^/]+)$/))) { const u = requireRole('oversight-board'); return json(200, app.ai.queue.decide(dec(m[1]), { by: body.by || u.principal, decision: body.decision, note: body.note })); }
 
   // --- Workflow orchestration (Phase 20) — configurable, versioned ---
