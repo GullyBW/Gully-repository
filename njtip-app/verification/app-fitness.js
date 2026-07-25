@@ -55,6 +55,8 @@ const capabilityMod = require('../src/capability/model');
 const maturityMod = require('../src/maturity/maturity');
 const devplatform = require('../src/devplatform/sdk');
 const { MetadataGovernance } = require('../src/fabric/metadata');
+const { ProvenanceLedger } = require('../src/fabric/provenance');
+const { InteroperabilityProfile } = require('../src/fabric/interoperability');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -283,6 +285,22 @@ module.exports = [
     // Decision support is advisory + human-gated.
     const d = decisionSupport.completionForecast({ openCases: 10, resolvedPerDay: 5 });
     if (d.advisoryOnly !== true || d.autonomous !== false) v.push('decision support is not advisory/non-autonomous');
+  }),
+
+  fit('APP-FIT-PROVENANCE-INTEROP', 'Provenance is traceable + tamper-evident; interop stays backward-compatible', (v) => {
+    let t = 0; const pl = new ProvenanceLedger({ clock: () => (t += 1) });
+    pl.record({ artifactId: 'raw:reports', kind: 'source' });
+    pl.record({ artifactId: 'proj:cases', derivedFrom: ['raw:reports'], transform: 'project' });
+    pl.record({ artifactId: 'report:exec', derivedFrom: ['proj:cases'], transform: 'aggregate' });
+    if (!pl.verify().ok) v.push('provenance chain does not verify');
+    // The generated report traces back to the originating raw source.
+    if (!pl.verifyTraceable('report:exec', { rootPrefix: 'raw:' }).traceable) v.push('generated artifact not traceable to originating data');
+    // Interoperability profile: additive change OK, breaking change refused.
+    const io = new InteroperabilityProfile();
+    io.register('p', { canonical: { a: 'string' }, requiredFields: ['a'] });
+    io.register('p', { canonical: { a: 'string', b: 'string' }, requiredFields: ['a'] }); // additive
+    let refused = false; try { io.register('p', { canonical: { a: 'number' }, requiredFields: ['a'] }); } catch (_) { refused = true; }
+    if (!refused) v.push('interoperability profile allowed a breaking change');
   }),
 
   fit('APP-FIT-PLATFORM-INTELLIGENCE', 'Capability/maturity human-gated; SDK deterministic; metadata classified', (v) => {

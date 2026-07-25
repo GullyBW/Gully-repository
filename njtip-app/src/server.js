@@ -187,6 +187,10 @@ async function route(app, req, url, body) {
     return json(200, { kind: k, result: fn(body.input || {}) });
   }
   if (method === 'GET' && p === '/api/fabric/catalog') { requireRole('admin'); return json(200, { subjects: app.fabric.schemaRegistry.subjects(), services: app.fabric.serviceRegistry.list(), canonical: Object.keys(app.fabric.canonical) }); }
+  // Data provenance (Phase 43) + interoperability (Phase 48).
+  if (method === 'GET' && (m = p.match(/^\/api\/provenance\/([^/]+)$/))) { requireRole('investigator'); return json(200, { trace: app.fabric.provenance.trace(dec(m[1])), roots: app.fabric.provenance.roots(dec(m[1])), verified: app.fabric.provenance.verify().ok }); }
+  if (method === 'GET' && p === '/api/interop/profiles') { requireRole('admin'); return json(200, { profile: app.fabric.interop.latest('case-exchange'), vocabulary: app.fabric.vocabulary.all() }); }
+  if (method === 'POST' && p === '/api/interop/validate') { requireRole('admin'); return json(200, app.fabric.interop.validateExchange(body.profile || 'case-exchange', body.payload || {})); }
 
   // Enterprise event bus (Phase 28) + federation (Phase 34).
   if (method === 'GET' && p === '/api/eventbus/topics') { requireRole('admin'); return json(200, { topics: app.eventBus.topics(), deadLetters: app.eventBus.deadLetters() }); }

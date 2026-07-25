@@ -44,6 +44,8 @@ const simulation = require('./twin2/simulation');
 const privacy = require('./privacy/privacy-engineering');
 const threatIntelMod = require('./security/threat-intel');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
+const { ProvenanceLedger } = require('./fabric/provenance');
+const { InteroperabilityProfile, SemanticMapping, SharedVocabulary } = require('./fabric/interoperability');
 const { ApiRegistry } = require('./apigov/registry');
 const decisionSupport = require('./ai/decision-support');
 const { MetadataGovernance } = require('./fabric/metadata');
@@ -158,7 +160,13 @@ function createApp(overrides = {}) {
   const serviceRegistry = new ServiceRegistry();
   const catalog = new MetadataCatalog();
   const lineage = new DataLineage();
-  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, canonical: CANONICAL_MODEL };
+  // Data provenance (Phase 43) + national interoperability (Phase 48).
+  const provenance = new ProvenanceLedger();
+  const interop = new InteroperabilityProfile();
+  interop.register('case-exchange', { canonical: CANONICAL_MODEL.Case.fields, requiredFields: CANONICAL_MODEL.Case.required });
+  const semanticMapping = new SemanticMapping();
+  const vocabulary = new SharedVocabulary({ 'complaint': 'Case', 'exhibit': 'EvidenceRef', 'department': 'Agency' });
+  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, provenance, interop, semanticMapping, vocabulary, canonical: CANONICAL_MODEL };
   // API governance (Phase 37): registry seeded from the live OpenAPI contract.
   const apiRegistry = new ApiRegistry();
   apiRegistry.fromOpenApi(openapiSpec.spec());
