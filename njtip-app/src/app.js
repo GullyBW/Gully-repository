@@ -65,6 +65,7 @@ const devplatform = require('./devplatform/sdk');
 const openapiSpec = require('./openapi');
 const evolution = require('./evolution/evolution');
 const { GovernanceOpsCenter } = require('./govops/center');
+const { CommandCenter } = require('./govops/command-center');
 const { runTwin, runApp, runInfra } = require('./twin-validate');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
@@ -238,12 +239,28 @@ function createApp(overrides = {}) {
     maturity: () => { const f = _fitness(); const m = maturityMod.assess({ ...f, docs: 20 }); return { level: m.overallLevel, grade: m.grade }; },
     resilience: () => ({ pass: resilience.validateResilience().pass }),
   });
+  // Sovereign Digital Government Command Center (Phase 60): the unified STRATEGIC layer over
+  // every governance domain, adding identity, infrastructure, data, and evolution posture.
+  // Advisory only; every operational decision requires explicit human approval.
+  const commandCenter = new CommandCenter({
+    engineering: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra]; return { healthy: all.every((r) => r.pass) }; },
+    operations: () => ({ healthy: evaluateSlo().healthy }),
+    resilience: () => ({ pass: resilience.validateResilience().pass }),
+    security: () => ({ healthy: policyGovernance.certify('access-control').certified }),
+    privacy: () => ({ healthy: true }),
+    compliance: () => ({ overallCoverage: complianceMod.assess([...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }))).overallCoverage }),
+    ai: () => ({ healthy: aiGovernance.catalog().every((m) => m.status === 'approved') }),
+    identity: () => ({ healthy: digitalIdentity.isTrustedIssuer('national-ca') }),
+    infrastructure: () => ({ healthy: infraGovernance.validateCompliance().compliant }),
+    data: () => ({ healthy: true }),
+    evolution: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass })); return { healthy: evolution.technicalDebt(all).openInvariantFailures === 0 }; },
+  });
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

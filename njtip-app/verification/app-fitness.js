@@ -66,6 +66,8 @@ const maturityMod = require('../src/maturity/maturity');
 const devplatform = require('../src/devplatform/sdk');
 const evolution = require('../src/evolution/evolution');
 const { GovernanceOpsCenter } = require('../src/govops/center');
+const { CommandCenter } = require('../src/govops/command-center');
+const crossDomain = require('../src/intelligence/cross-domain');
 const { MetadataGovernance } = require('../src/fabric/metadata');
 const { ProvenanceLedger } = require('../src/fabric/provenance');
 const { InteroperabilityProfile } = require('../src/fabric/interoperability');
@@ -376,6 +378,23 @@ module.exports = [
     io.register('p', { canonical: { a: 'string', b: 'string' }, requiredFields: ['a'] }); // additive
     let refused = false; try { io.register('p', { canonical: { a: 'number' }, requiredFields: ['a'] }); } catch (_) { refused = true; }
     if (!refused) v.push('interoperability profile allowed a breaking change');
+  }),
+
+  fit('APP-FIT-COMMAND-CENTER', 'Cross-domain intelligence + command center are advisory and never authorize', (v) => {
+    // Systemic risk is computed + explainable; no automated decision.
+    const risk = crossDomain.systemicRisk({ engineering: { healthy: false }, security: { healthy: true } });
+    if (typeof risk.systemicRisk !== 'number' || !/no automated action/.test(risk.note)) v.push('systemic risk is not advisory/explainable');
+    // Command center is human-gated and never emits an authorization.
+    const cc = new CommandCenter({ engineering: () => ({ healthy: true }), resilience: () => ({ pass: true }) });
+    const snap = cc.snapshot();
+    if (snap.humanGate.required !== true) v.push('command center is not human-gated');
+    if ('authorized' in snap) v.push('command center emitted an authorization');
+    // National readiness score never authorizes at any value.
+    const rs = cc.nationalReadinessScore();
+    if (rs.humanGate !== true || 'authorized' in rs) v.push('national readiness score is not human-gated');
+    if (!/HUMAN APPROVAL REQUIRED/.test(cc.decisionSupportSummary().decision)) v.push('decision-support summary is not human-gated');
+    // Degraded domain flips posture (must be able to detect risk).
+    if (new CommandCenter({ engineering: () => ({ healthy: false }), security: () => ({ healthy: false }) }).snapshot().posture === 'green') v.push('command center reported green with degraded domains');
   }),
 
   fit('APP-FIT-EVOLUTION-GOVOPS', 'Evolution intel is advisory; governance ops center never authorizes', (v) => {

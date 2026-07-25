@@ -1,8 +1,8 @@
 {
   "name": "njtip-app",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
-  "description": "NJTIP — Sovereign Digital Government Platform. Policy governance, formal verification, data provenance, national interoperability, Twin 4.0 national simulation, resilience validation, responsible AI governance, cryptographic agility, platform evolution intelligence, and a national governance operations center. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
+  "description": "NJTIP — Autonomous Sovereign Government Ecosystem. National digital identity, infrastructure governance, digital legislation, human-governed recovery, data marketplace, process mining, quantum-resilient transition, national performance observatory, cross-domain intelligence, and a sovereign command center. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node src/server.js",

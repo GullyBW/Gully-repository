@@ -29,12 +29,13 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.6 — Sovereign Digital Government Platform.** Additive bounded-context extensions:
-> policy governance, formal verification, data provenance, national interoperability, Twin 4.0
-> national simulation, resilience validation, responsible AI governance, cryptographic agility,
-> platform evolution intelligence, and a national governance operations center. Combined gate:
-> **58 invariants** (14 twin + 36 app + 8 infra), 137 tests. Full summary:
-> [`docs/sovereign.md`](./docs/sovereign.md) · v1.5: [`docs/ecosystem.md`](./docs/ecosystem.md) ·
+> **v1.7 — Autonomous Sovereign Government Ecosystem.** Additive bounded-context extensions:
+> national digital identity, infrastructure governance, digital legislation, human-governed
+> recovery, data marketplace, process mining, quantum-resilient transition, national
+> performance observatory, cross-domain intelligence, and a sovereign command center.
+> Self-governing, never self-authorizing. Combined gate: **65 invariants** (14 twin + 43 app +
+> 8 infra), 150 tests. Full summary: [`docs/autonomous.md`](./docs/autonomous.md) ·
+> v1.6: [`docs/sovereign.md`](./docs/sovereign.md) · v1.5: [`docs/ecosystem.md`](./docs/ecosystem.md) ·
 > v1.4: [`docs/national-platform.md`](./docs/national-platform.md) ·
 > v1.3: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).
 

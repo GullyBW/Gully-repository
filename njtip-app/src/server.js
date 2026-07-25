@@ -200,6 +200,10 @@ async function route(app, req, url, body) {
   // Platform evolution intelligence (Phase 49) + National Governance Operations Center (Phase 50).
   if (method === 'GET' && p === '/api/admin/evolution') { requireRole('admin'); return json(200, { ...app.evolution.report(), decisions: app.evolution.adrLog.history(), lifecycle: app.evolution.lifecycle.status() }); }
   if (method === 'GET' && p === '/api/governance/center') { requireRole('oversight-board'); return json(200, app.govOps.snapshot()); }
+  // Sovereign Digital Government Command Center (Phase 60) + cross-domain intelligence (Phase 59).
+  if (method === 'GET' && p === '/api/command-center') { requireRole('oversight-board'); return json(200, app.commandCenter.snapshot()); }
+  if (method === 'GET' && p === '/api/command-center/report') { requireRole('oversight-board'); return json(200, app.commandCenter.strategicReport()); }
+  if (method === 'GET' && p === '/api/command-center/readiness') { requireRole('oversight-board'); return json(200, app.commandCenter.nationalReadinessScore()); }
   if (method === 'GET' && p === '/api/developer/sdk') { requireRole('admin'); return { status: 200, body: app.devPlatform.generateClientSdk(), type: 'text/plain' }; }
   if (method === 'GET' && p === '/api/developer/harness') { requireRole('admin'); return json(200, app.devPlatform.testHarness()); }
   if (method === 'GET' && p === '/api/decision-support') { requireRole('oversight-board'); const k = app.workflow.analytics().kpis; return json(200, { predictiveKpis: app.decisionSupport.predictiveKpis({ openCases: k.backlog, arrivalPerDay: 20, resolvedPerDay: 18 }), completion: app.decisionSupport.completionForecast({ openCases: k.backlog, resolvedPerDay: 18 }) }); }
