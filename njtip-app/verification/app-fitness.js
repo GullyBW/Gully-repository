@@ -65,6 +65,8 @@ const { GovernanceOpsCenter } = require('../src/govops/center');
 const { MetadataGovernance } = require('../src/fabric/metadata');
 const { ProvenanceLedger } = require('../src/fabric/provenance');
 const { InteroperabilityProfile } = require('../src/fabric/interoperability');
+const { DataMarketplace } = require('../src/fabric/marketplace');
+const { LegislativeRegistry } = require('../src/legislation/registry');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -314,6 +316,29 @@ module.exports = [
     // Decision support is advisory + human-gated.
     const d = decisionSupport.completionForecast({ openCases: 10, resolvedPerDay: 5 });
     if (d.advisoryOnly !== true || d.autonomous !== false) v.push('decision support is not advisory/non-autonomous');
+  }),
+
+  fit('APP-FIT-LEGISLATION-MARKETPLACE', 'Legal changes are simulatable; marketplace enforces privacy + approval', (v) => {
+    const leg = new LegislativeRegistry();
+    leg.register('act', { title: 'Act', mapsToControls: ['C1'], mapsToSystems: ['sys'] });
+    // Every legal change is simulatable before implementation.
+    const sim = leg.simulate('act', { proposedControls: [] });
+    if (!sim.simulatable || sim.compatibility.breaking !== true) v.push('legal change simulation did not flag a removed control');
+    // Enactment requires a named human.
+    let humanGate = false; try { leg.enact('act', {}); } catch (_) { humanGate = true; }
+    if (!humanGate) v.push('law enacted without a named human authority');
+    // Marketplace: identity fields refused; restricted datasets never publicly listed;
+    // approval required.
+    const mkt = new DataMarketplace();
+    let priv = false; try { mkt.register('d', { owner: 'o', schemaFields: ['email'] }); } catch (_) { priv = true; }
+    if (!priv) v.push('marketplace registered a dataset with identity fields');
+    mkt.register('pub', { owner: 'o', classification: 'public', schemaFields: ['category'] });
+    if (mkt.discover().length !== 0) v.push('unapproved dataset was discoverable');
+    mkt.approve('pub', { by: 'steward', rationale: 'ok' });
+    if (mkt.discover().length !== 1) v.push('approved public dataset not discoverable');
+    mkt.register('sec', { owner: 'o', classification: 'secret', schemaFields: ['category'] });
+    mkt.approve('sec', { by: 'steward', rationale: 'ok' });
+    if (mkt.discover().some((d) => d.id === 'sec')) v.push('secret dataset was publicly listed');
   }),
 
   fit('APP-FIT-PROVENANCE-INTEROP', 'Provenance is traceable + tamper-evident; interop stays backward-compatible', (v) => {

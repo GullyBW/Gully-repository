@@ -52,6 +52,8 @@ const resilience = require('./twin2/resilience-validation');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
 const { ProvenanceLedger } = require('./fabric/provenance');
 const { InteroperabilityProfile, SemanticMapping, SharedVocabulary } = require('./fabric/interoperability');
+const { DataMarketplace } = require('./fabric/marketplace');
+const { LegislativeRegistry } = require('./legislation/registry');
 const { ApiRegistry } = require('./apigov/registry');
 const decisionSupport = require('./ai/decision-support');
 const { MetadataGovernance } = require('./fabric/metadata');
@@ -196,7 +198,12 @@ function createApp(overrides = {}) {
   interop.register('case-exchange', { canonical: CANONICAL_MODEL.Case.fields, requiredFields: CANONICAL_MODEL.Case.required });
   const semanticMapping = new SemanticMapping();
   const vocabulary = new SharedVocabulary({ 'complaint': 'Case', 'exhibit': 'EvidenceRef', 'department': 'Agency' });
-  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, provenance, interop, semanticMapping, vocabulary, canonical: CANONICAL_MODEL };
+  // National data marketplace (Phase 55): privacy-by-design enforced; approval-gated listing.
+  const marketplace = new DataMarketplace();
+  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, provenance, interop, semanticMapping, vocabulary, marketplace, canonical: CANONICAL_MODEL };
+  // Digital legislation & regulatory governance (Phase 53): laws are simulatable before enactment.
+  const legislation = new LegislativeRegistry();
+  legislation.register('data-protection-act', { title: 'Data Protection Act', type: 'act', mapsToControls: ['FIT-IDENTITY-MINIMIZATION', 'APP-FIT-ANONYMITY-BOUNDARY'], mapsToSystems: ['reporting', 'analytics'] });
   // API governance (Phase 37): registry seeded from the live OpenAPI contract.
   const apiRegistry = new ApiRegistry();
   apiRegistry.fromOpenApi(openapiSpec.spec());
@@ -229,7 +236,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

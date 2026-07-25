@@ -208,6 +208,10 @@ async function route(app, req, url, body) {
   if (method === 'GET' && (m = p.match(/^\/api\/provenance\/([^/]+)$/))) { requireRole('investigator'); return json(200, { trace: app.fabric.provenance.trace(dec(m[1])), roots: app.fabric.provenance.roots(dec(m[1])), verified: app.fabric.provenance.verify().ok }); }
   if (method === 'GET' && p === '/api/interop/profiles') { requireRole('admin'); return json(200, { profile: app.fabric.interop.latest('case-exchange'), vocabulary: app.fabric.vocabulary.all() }); }
   if (method === 'POST' && p === '/api/interop/validate') { requireRole('admin'); return json(200, app.fabric.interop.validateExchange(body.profile || 'case-exchange', body.payload || {})); }
+  // Digital legislation (Phase 53) + national data marketplace (Phase 55).
+  if (method === 'GET' && p === '/api/legislation') { requireRole('oversight-board'); return json(200, { instruments: app.legislation.registryList(), dependencyGraph: app.legislation.dependencyGraph() }); }
+  if (method === 'GET' && (m = p.match(/^\/api\/legislation\/([^/]+)\/impact$/))) { requireRole('oversight-board'); return json(200, app.legislation.impact(dec(m[1]))); }
+  if (method === 'GET' && p === '/api/marketplace') { requireRole('investigator'); return json(200, { datasets: app.fabric.marketplace.discover() }); }
 
   // Enterprise event bus (Phase 28) + federation (Phase 34).
   if (method === 'GET' && p === '/api/eventbus/topics') { requireRole('admin'); return json(200, { topics: app.eventBus.topics(), deadLetters: app.eventBus.deadLetters() }); }
