@@ -125,6 +125,9 @@ async function route(app, req, url, body) {
   if (method === 'POST' && p === '/api/authz/evaluate') { requireRole('admin'); return json(200, app.iam.policies.evaluate({ subject: body.subject, action: body.action, resource: body.resource, env: body.env })); }
   if (method === 'GET' && p === '/api/admin/policies') { requireRole('admin'); return json(200, { policies: app.iam.policies.list() }); }
   if (method === 'POST' && p === '/api/admin/policies') { requireRole('admin'); app.iam.policies.load(body.policies || []); return json(200, { loaded: app.iam.policies.list().length }); }
+  // Policy governance (Phase 41) + formal verification (Phase 42).
+  if (method === 'GET' && p === '/api/admin/policy-governance') { requireRole('admin'); return json(200, { active: app.policyGovernance.active('access-control'), certification: app.policyGovernance.certify('access-control'), audit: app.policyGovernance.auditTrail() }); }
+  if (method === 'POST' && p === '/api/orchestration/verify') { requireRole('admin'); return json(200, app.formalVerification.proveCorrectness(body.def || {}, { safety: body.safety })); }
   if (method === 'POST' && p === '/api/breakglass') { const u = requireRole('admin'); return json(201, app.iam.breakGlass.request({ principal: body.principal || u.principal, justification: body.justification, approver: body.approver })); }
   if (method === 'GET' && p === '/api/admin/breakglass') { requireRole('admin'); return json(200, { grants: app.iam.breakGlass.ledger() }); }
 

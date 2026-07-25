@@ -31,6 +31,9 @@ const { EventRegistry, seedCaseEvents } = require('../src/eventsourcing/event-go
 const workflowSim = require('../src/orchestration/workflow-simulator');
 const { DEFAULT_WORKFLOW } = require('../src/orchestration/workflow-engine');
 const twin3 = require('../src/twin2/monte-carlo');
+const { PolicyRegistry } = require('../src/iam/policy-governance');
+const { DEFAULT_POLICIES } = require('../src/iam/policy-engine');
+const formalVerification = require('../src/orchestration/formal-verification');
 const { PolicySet } = require('../src/iam/policy-engine');
 const zeroTrust = require('../src/iam/zero-trust');
 const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../src/tenancy/tenant');
@@ -336,6 +339,31 @@ module.exports = [
     // Retirement requires prior deprecation (lifecycle discipline).
     let lifecycle = false; try { reg.retire('X'); } catch (_) { lifecycle = true; }
     if (!lifecycle) v.push('event retired without deprecation');
+  }),
+
+  fit('APP-FIT-POLICY-GOVERNANCE', 'Policy activation requires validation; rollback works; audited', (v) => {
+    const reg = new PolicyRegistry();
+    reg.register('ac', { owner: 'sec', policies: DEFAULT_POLICIES });
+    // Activation with a failing validation suite is refused (fail-closed).
+    let refused = false; try { reg.activate('ac', 1, { validationSuite: [{ request: { action: 'read-evidence', subject: { role: 'citizen' } }, expect: 'permit' }] }); } catch (_) { refused = true; }
+    if (!refused) v.push('policy activated despite failing validation');
+    // Valid activation succeeds and is audited.
+    reg.activate('ac', 1, { validationSuite: [{ request: { action: 'read-evidence', subject: { role: 'investigator', mfa: 'fido2' } }, expect: 'permit' }] });
+    if (!reg.active('ac')) v.push('valid activation did not take effect');
+    reg.register('ac', { owner: 'sec', policies: [] }); reg.activate('ac', 2);
+    if (reg.rollback('ac', 1).version !== 1) v.push('rollback did not restore the prior version');
+    if (!reg.auditTrail().some((a) => a.event === 'rolled-back')) v.push('rollback not audited');
+  }),
+
+  fit('APP-FIT-FORMAL-VERIFICATION', 'Critical workflow is formally proven; a broken one is not', (v) => {
+    const proof = formalVerification.proveCorrectness(DEFAULT_WORKFLOW);
+    if (!proof.proven) v.push('default workflow failed formal verification: ' + proof.properties.filter((p) => !p.proven).map((p) => p.property).join(', '));
+    // A deadlocking workflow is NOT proven (the prover must be able to reject).
+    const bad = { id: 'b', version: 1, start: 's', terminal: ['done'], states: { s: { on: {} }, done: { on: {} } } };
+    if (formalVerification.proveCorrectness(bad).proven) v.push('formal prover accepted a deadlocking workflow');
+    // Safety obligation is enforced when specified.
+    const unsafe = { id: 'u', version: 1, start: 'a', terminal: ['closed'], states: { a: { on: { skip: 'closed', proper: 'decision' } }, decision: { on: { close: 'closed' } }, closed: { on: {} } } };
+    if (formalVerification.verifySafety(unsafe, { critical: 'closed', requiredBefore: 'decision' }).proven) v.push('safety violation (closed without decision) not detected');
   }),
 
   fit('APP-FIT-WORKFLOW-SIMULATION', 'Default workflow passes activation validation; sims are deterministic', (v) => {

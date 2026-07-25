@@ -24,7 +24,9 @@ const { EventStore } = require('./eventsourcing/event-store');
 const { EventRegistry, seedCaseEvents } = require('./eventsourcing/event-governance');
 const authz = require('./authz');
 const { PolicySet, DEFAULT_POLICIES } = require('./iam/policy-engine');
+const { PolicyRegistry } = require('./iam/policy-governance');
 const zeroTrust = require('./iam/zero-trust');
+const formalVerification = require('./orchestration/formal-verification');
 const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
 const { FederationRegistry } = require('./tenancy/federation');
 const { makeEventBus } = require('./fabric/event-bus');
@@ -115,6 +117,13 @@ function createApp(overrides = {}) {
   const devices = new zeroTrust.DeviceRegistry();
   const breakGlass = new zeroTrust.BreakGlass();
   const iam = { policies, devices, breakGlass, trustScore: zeroTrust.trustScore, continuousAuthz: zeroTrust.continuousAuthz };
+  // Policy governance (Phase 41): registry + versioning; a change is validated before activation.
+  const policyGovernance = new PolicyRegistry();
+  policyGovernance.register('access-control', { owner: 'security-domain', policies: DEFAULT_POLICIES });
+  policyGovernance.activate('access-control', 1, { validationSuite: [
+    { request: { action: 'read-evidence', subject: { role: 'investigator', mfa: 'fido2' } }, expect: 'permit' },
+    { request: { action: 'read-evidence', subject: { role: 'citizen' } }, expect: 'deny' },
+  ] });
   // Multi-tenant government platform (Phase 22) + knowledge graph (Phase 23).
   const tenants = new TenantRegistry();
   const collaboration = new CollaborationBroker(tenants);
@@ -131,6 +140,9 @@ function createApp(overrides = {}) {
   // authoritative validation environment). Fail-closed: an invalid workflow is not registered.
   const activationGate = workflowSim.validateForActivation(DEFAULT_WORKFLOW);
   if (!activationGate.ok) throw new Error('default workflow failed activation validation: ' + activationGate.issues.join('; '));
+  // Phase 42: a critical workflow must satisfy FORMAL safety properties before deployment.
+  const proof = formalVerification.proveCorrectness(DEFAULT_WORKFLOW);
+  if (!proof.proven) throw new Error('default workflow failed formal verification: ' + proof.properties.filter((p) => !p.proven).map((p) => p.property).join(', '));
   orchestration.register(DEFAULT_WORKFLOW);
   // Enterprise chain of custody (Phase 16), GIS (Phase 15), and compliance automation
   // (Phase 25). Compliance assesses from the live fitness gate; it never authorizes.
@@ -162,7 +174,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, metadata, apiRegistry, capability, maturity, devPlatform, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, metadata, apiRegistry, capability, maturity, devPlatform, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
