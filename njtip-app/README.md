@@ -29,12 +29,12 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.5 — National Digital Governance Ecosystem.** Additive bounded-context extensions:
-> event governance, workflow simulation, enterprise event bus + federation, Twin 3.0
-> Monte-Carlo, semantic search, graph intelligence, privacy engineering, threat intelligence,
-> API governance, decision support, metadata, capability model, developer platform, and
-> maturity intelligence. Combined gate: **52 invariants** (14 twin + 30 app + 8 infra),
-> 123 tests. Full summary: [`docs/ecosystem.md`](./docs/ecosystem.md) ·
+> **v1.6 — Sovereign Digital Government Platform.** Additive bounded-context extensions:
+> policy governance, formal verification, data provenance, national interoperability, Twin 4.0
+> national simulation, resilience validation, responsible AI governance, cryptographic agility,
+> platform evolution intelligence, and a national governance operations center. Combined gate:
+> **58 invariants** (14 twin + 36 app + 8 infra), 137 tests. Full summary:
+> [`docs/sovereign.md`](./docs/sovereign.md) · v1.5: [`docs/ecosystem.md`](./docs/ecosystem.md) ·
 > v1.4: [`docs/national-platform.md`](./docs/national-platform.md) ·
 > v1.3: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).
 

@@ -58,6 +58,8 @@ const openapiSpec = require('../src/openapi');
 const capabilityMod = require('../src/capability/model');
 const maturityMod = require('../src/maturity/maturity');
 const devplatform = require('../src/devplatform/sdk');
+const evolution = require('../src/evolution/evolution');
+const { GovernanceOpsCenter } = require('../src/govops/center');
 const { MetadataGovernance } = require('../src/fabric/metadata');
 const { ProvenanceLedger } = require('../src/fabric/provenance');
 const { InteroperabilityProfile } = require('../src/fabric/interoperability');
@@ -326,6 +328,21 @@ module.exports = [
     io.register('p', { canonical: { a: 'string', b: 'string' }, requiredFields: ['a'] }); // additive
     let refused = false; try { io.register('p', { canonical: { a: 'number' }, requiredFields: ['a'] }); } catch (_) { refused = true; }
     if (!refused) v.push('interoperability profile allowed a breaking change');
+  }),
+
+  fit('APP-FIT-EVOLUTION-GOVOPS', 'Evolution intel is advisory; governance ops center never authorizes', (v) => {
+    // Refactoring impact is advisory + computes a blast radius from the capability map.
+    const impact = evolution.refactoringImpact('Anonymous Reporting');
+    if (impact.blastRadius < 1) v.push('refactoring impact found no dependents for a depended-on capability');
+    if (!/human-governed/.test(impact.note)) v.push('refactoring impact is not marked advisory/human-governed');
+    // Recommendations never auto-apply.
+    if (evolution.recommendations([{ id: 'X', pass: false }]).advisoryOnly !== true) v.push('evolution recommendations are not advisory');
+    // Governance ops center aggregates posture and is ALWAYS human-gated (never authorizes).
+    const center = new GovernanceOpsCenter({ fitness: () => ({ healthy: true }), resilience: () => ({ pass: true }) });
+    const snap = center.snapshot();
+    if (snap.humanGate.required !== true) v.push('governance ops center is not human-gated');
+    if (!/never authorizes/.test(center.strategicReadiness().note)) v.push('ops center strategic readiness is not human-gated');
+    if ('authorized' in snap) v.push('ops center emitted an authorization');
   }),
 
   fit('APP-FIT-PLATFORM-INTELLIGENCE', 'Capability/maturity human-gated; SDK deterministic; metadata classified', (v) => {

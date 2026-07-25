@@ -57,6 +57,8 @@ const capabilityMod = require('./capability/model');
 const maturityMod = require('./maturity/maturity');
 const devplatform = require('./devplatform/sdk');
 const openapiSpec = require('./openapi');
+const evolution = require('./evolution/evolution');
+const { GovernanceOpsCenter } = require('./govops/center');
 const { runTwin, runApp, runInfra } = require('./twin-validate');
 const { invariantsHeld } = require('./twin-validate');
 const { ZONES } = require('./twin');
@@ -188,12 +190,29 @@ function createApp(overrides = {}) {
   const capability = { map: capabilityMod.capabilityMap, dependencies: capabilityMod.dependencies, ownership: capabilityMod.ownership, heatMap: () => { const f = _fitness(); return capabilityMod.heatMap([...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass }))); } };
   const maturity = { assess: () => { const f = _fitness(); return maturityMod.assess({ ...f, docs: 20 }); } };
   const devPlatform = { generateClientSdk: () => devplatform.generateClientSdk(openapiSpec.spec()), mockService: () => devplatform.mockService(openapiSpec.spec()), testHarness: () => devplatform.testHarness(openapiSpec.spec()), integrationTemplate: devplatform.integrationTemplate };
+  // Platform evolution intelligence (Phase 49): advisory; observes, never changes architecture.
+  const evolutionIntel = { ...evolution, adrLog: new evolution.ArchitectureDecisionLog(), lifecycle: new evolution.CapabilityLifecycle(), report: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass })); return { dependencyHealth: evolution.dependencyHealth(), technicalDebt: evolution.technicalDebt(all), recommendations: evolution.recommendations(all) }; } };
+  // National Governance Operations Center (Phase 50): unified ADVISORY oversight over all
+  // domains — reads existing subsystems through source functions; never mutates or authorizes.
+  const govOps = new GovernanceOpsCenter({
+    fitness: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra]; return { invariants: all.length, held: all.filter((r) => r.pass).length, healthy: all.every((r) => r.pass) }; },
+    slo: () => ({ healthy: evaluateSlo().healthy }),
+    security: () => ({ policiesCertified: policyGovernance.certify('access-control').certified, threatIntel: 'trust-lowering-only' }),
+    privacy: () => ({ minimizationEnforced: true, differentialPrivacy: 'available' }),
+    compliance: () => ({ overallCoverage: complianceMod.assess([...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }))).overallCoverage }),
+    ai: () => ({ models: aiGovernance.catalog().length, allApproved: aiGovernance.catalog().every((m) => m.status === 'approved') }),
+    policy: () => ({ certified: policyGovernance.certify('access-control').certified }),
+    api: () => apiRegistry.qualityMetrics(),
+    events: () => ({ governedTypes: eventRegistry.catalog().length, integrity: events.verifyChain().ok }),
+    maturity: () => { const f = _fitness(); const m = maturityMod.assess({ ...f, docs: 20 }); return { level: m.overallLevel, grade: m.grade }; },
+    resilience: () => ({ pass: resilience.validateResilience().pass }),
+  });
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

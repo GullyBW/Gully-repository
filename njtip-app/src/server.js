@@ -187,6 +187,9 @@ async function route(app, req, url, body) {
   // Capability model (Phase 38), maturity intelligence (Phase 40), developer platform (Phase 39).
   if (method === 'GET' && p === '/api/capability/map') { requireRole('oversight-board'); return json(200, { map: app.capability.map(), heatMap: app.capability.heatMap() }); }
   if (method === 'GET' && p === '/api/admin/maturity') { requireRole('admin'); return json(200, app.maturity.assess()); }
+  // Platform evolution intelligence (Phase 49) + National Governance Operations Center (Phase 50).
+  if (method === 'GET' && p === '/api/admin/evolution') { requireRole('admin'); return json(200, { ...app.evolution.report(), decisions: app.evolution.adrLog.history(), lifecycle: app.evolution.lifecycle.status() }); }
+  if (method === 'GET' && p === '/api/governance/center') { requireRole('oversight-board'); return json(200, app.govOps.snapshot()); }
   if (method === 'GET' && p === '/api/developer/sdk') { requireRole('admin'); return { status: 200, body: app.devPlatform.generateClientSdk(), type: 'text/plain' }; }
   if (method === 'GET' && p === '/api/developer/harness') { requireRole('admin'); return json(200, app.devPlatform.testHarness()); }
   if (method === 'GET' && p === '/api/decision-support') { requireRole('oversight-board'); const k = app.workflow.analytics().kpis; return json(200, { predictiveKpis: app.decisionSupport.predictiveKpis({ openCases: k.backlog, arrivalPerDay: 20, resolvedPerDay: 18 }), completion: app.decisionSupport.completionForecast({ openCases: k.backlog, resolvedPerDay: 18 }) }); }
