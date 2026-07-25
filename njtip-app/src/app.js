@@ -31,6 +31,8 @@ const zeroTrust = require('./iam/zero-trust');
 const formalVerification = require('./orchestration/formal-verification');
 const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
 const { FederationRegistry } = require('./tenancy/federation');
+const { EcosystemFederation } = require('./tenancy/ecosystem-federation');
+const { AssetRegistry } = require('./governance/asset-governance');
 const { makeEventBus } = require('./fabric/event-bus');
 const { KnowledgeGraph } = require('./graph/graph');
 const graphIntel = require('./graph/intelligence');
@@ -158,6 +160,14 @@ function createApp(overrides = {}) {
   const tenants = new TenantRegistry();
   const collaboration = new CollaborationBroker(tenants);
   const federation = new FederationRegistry({ registry: tenants }); // Phase 34: isolation default
+  // National digital ecosystem federation (Phase 61): typed members; explicit, human-approved.
+  const ecosystemFederation = new EcosystemFederation();
+  ecosystemFederation.registerMember('national-gov', { type: 'government', jurisdiction: 'national', trustTier: 'sovereign' });
+  ecosystemFederation.registerMember('gaborone-city', { type: 'municipality', jurisdiction: 'south-east' });
+  // National digital asset governance (Phase 62): every governed asset is lifecycle-traceable.
+  const assetGovernance = new AssetRegistry();
+  assetGovernance.register('asset:reports-api', { type: 'api', owner: 'independent', riskClass: 'medium' });
+  assetGovernance.register('asset:priority-advisor', { type: 'ai-model', owner: 'analytics-domain', riskClass: 'high', dependsOn: ['asset:reports-api'] });
   const graph = new KnowledgeGraph();
   // Phase 28: enterprise event bus (pub/sub, ordering, replay, DLQ governance, federation).
   const eventBus = makeEventBus(cfg);
@@ -260,7 +270,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

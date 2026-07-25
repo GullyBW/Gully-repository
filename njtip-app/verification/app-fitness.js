@@ -44,6 +44,8 @@ const { PolicySet } = require('../src/iam/policy-engine');
 const zeroTrust = require('../src/iam/zero-trust');
 const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../src/tenancy/tenant');
 const { FederationRegistry } = require('../src/tenancy/federation');
+const { EcosystemFederation } = require('../src/tenancy/ecosystem-federation');
+const { AssetRegistry } = require('../src/governance/asset-governance');
 const { EnterpriseEventBus } = require('../src/fabric/event-bus');
 const { KnowledgeGraph } = require('../src/graph/graph');
 const graphIntel = require('../src/graph/intelligence');
@@ -206,6 +208,25 @@ module.exports = [
     const cb = new CollaborationBroker(reg);
     let refused = false; try { cb.share({ fromTenant: 'agency-a', toTenant: 'agency-b', ref: { content: 'secret' } }); } catch (_) { refused = true; }
     if (!refused) v.push('cross-tenant share carried case content');
+  }),
+
+  fit('APP-FIT-ECOSYSTEM-ASSETS', 'Ecosystem federation is explicit/SoD; assets are lifecycle-traceable', (v) => {
+    const ef = new EcosystemFederation();
+    ef.registerMember('gov', { type: 'government' }); ef.registerMember('city', { type: 'municipality' });
+    // Federation defaults to isolation; requires explicit scopes + distinct approver.
+    if (ef.isFederated('gov', 'city', 'services')) v.push('ecosystem members federated by default');
+    let sod = false; try { ef.establishAgreement({ from: 'gov', to: 'city', scopes: ['services'], approver: 'x', requester: 'x' }); } catch (_) { sod = true; }
+    if (!sod) v.push('ecosystem federation allowed self-approval');
+    // Cross-domain policy enforcement refuses PII crossing a federation boundary.
+    let piiRefused = false; try { ef.enforceCrossDomain({ email: 'a@b.c' }); } catch (_) { piiRefused = true; }
+    if (!piiRefused) v.push('ecosystem federation allowed PII across a boundary');
+    // Asset governance: lifecycle order enforced + full traceability.
+    const ar = new AssetRegistry({ clock: () => 1 });
+    ar.register('a', { type: 'policy', owner: 'o' });
+    let lifecycle = false; try { ar.retire('a'); } catch (_) { lifecycle = true; }
+    if (!lifecycle) v.push('asset retired without deprecation');
+    ar.activate('a'); ar.amend('a', { summary: 'v2' });
+    if (ar.trace('a').length < 3) v.push('asset lifecycle not fully traceable');
   }),
 
   fit('APP-FIT-EVENTBUS-FEDERATION', 'Event bus stays PII-free; federation defaults to isolation', (v) => {

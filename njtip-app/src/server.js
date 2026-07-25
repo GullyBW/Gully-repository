@@ -229,6 +229,10 @@ async function route(app, req, url, body) {
   if (method === 'GET' && (m = p.match(/^\/api\/eventbus\/([^/]+)\/replay$/))) { requireRole('admin'); return json(200, { replay: app.eventBus.replay(dec(m[1]), { fromSeq: Number(url.searchParams.get('fromSeq') || 0) }) }); }
   if (method === 'GET' && p === '/api/federation/grants') { requireRole('admin'); return json(200, { grants: app.federation.grants(), audit: app.federation.auditTrail() }); }
   if (method === 'POST' && p === '/api/federation/authorize') { const u = requireRole('admin'); return json(201, app.federation.authorize({ fromTenant: body.fromTenant, toTenant: body.toTenant, scopes: body.scopes, approver: u.principal, requester: body.requester })); }
+  // National ecosystem federation (Phase 61) + digital asset governance (Phase 62).
+  if (method === 'GET' && p === '/api/ecosystem/federation') { requireRole('admin'); return json(200, { members: app.ecosystemFederation.members(), agreements: app.ecosystemFederation.agreements() }); }
+  if (method === 'GET' && p === '/api/assets') { requireRole('admin'); return json(200, { catalog: app.assetGovernance.catalog(), portfolioHealth: app.assetGovernance.portfolioHealth(), dependencies: app.assetGovernance.dependencyMap() }); }
+  if (method === 'GET' && (m = p.match(/^\/api\/assets\/([^/]+)\/trace$/))) { requireRole('admin'); return json(200, { trace: app.assetGovernance.trace(dec(m[1])), health: app.assetGovernance.health(dec(m[1])) }); }
 
   throw err(404, 'not-found');
 }
