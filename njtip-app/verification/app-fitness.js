@@ -31,6 +31,8 @@ const { EventRegistry, seedCaseEvents } = require('../src/eventsourcing/event-go
 const workflowSim = require('../src/orchestration/workflow-simulator');
 const { DEFAULT_WORKFLOW } = require('../src/orchestration/workflow-engine');
 const twin3 = require('../src/twin2/monte-carlo');
+const twin4 = require('../src/twin2/national-sim');
+const resilience = require('../src/twin2/resilience-validation');
 const { PolicyRegistry } = require('../src/iam/policy-governance');
 const { DEFAULT_POLICIES } = require('../src/iam/policy-engine');
 const formalVerification = require('../src/orchestration/formal-verification');
@@ -382,6 +384,19 @@ module.exports = [
     // Safety obligation is enforced when specified.
     const unsafe = { id: 'u', version: 1, start: 'a', terminal: ['closed'], states: { a: { on: { skip: 'closed', proper: 'decision' } }, decision: { on: { close: 'closed' } }, closed: { on: {} } } };
     if (formalVerification.verifySafety(unsafe, { critical: 'closed', requiredBefore: 'decision' }).proven) v.push('safety violation (closed without decision) not detected');
+  }),
+
+  fit('APP-FIT-NATIONAL-RESILIENCE', 'Default resilience suite passes; national sims deterministic + human-gated', (v) => {
+    // The platform must pass the resilience validation suite (Twin verifies before deploy).
+    const res = resilience.validateResilience();
+    if (!res.pass) v.push('resilience suite failed: ' + res.results.filter((r) => !r.pass).map((r) => r.scenario).join(', '));
+    if (res.humanGate !== true) v.push('resilience validation is not human-gated');
+    // A genuinely fatal scenario is REJECTED (validator can fail).
+    if (resilience.validateCyberIncident({ compromised: ['keys'], critical: ['keys'] }).pass) v.push('cyber-incident validator passed a critical compromise');
+    // National (Twin 4.0) simulations are deterministic + advisory + human-gated.
+    const a = twin4.longTermCapacity({ years: 5, seed: 1 }); const b = twin4.longTermCapacity({ years: 5, seed: 1 });
+    if (JSON.stringify(a) !== JSON.stringify(b)) v.push('national simulation is not deterministic');
+    if (a.advisoryOnly !== true || a.humanGate !== true) v.push('national simulation is not advisory/human-gated');
   }),
 
   fit('APP-FIT-WORKFLOW-SIMULATION', 'Default workflow passes activation validation; sims are deterministic', (v) => {

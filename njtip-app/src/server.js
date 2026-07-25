@@ -157,6 +157,14 @@ async function route(app, req, url, body) {
     if (!fn) throw err(400, 'unknown forecast kind');
     return json(200, fn(body.input || {}));
   }
+  // Twin 4.0 national simulation (Phase 44) + resilience validation (Phase 45).
+  if (method === 'POST' && p === '/api/twin4/simulate') {
+    requireRole('admin');
+    const fn = { policy: app.twin4.nationalPolicyChange, budget: app.twin4.budgetReduction, restructuring: app.twin4.agencyRestructuring, legislative: app.twin4.legislativeReform, emergency: app.twin4.emergencyResponse, capacity: app.twin4.longTermCapacity, transformation: app.twin4.nationalTransformation }[body.kind];
+    if (!fn) throw err(400, 'unknown national simulation kind');
+    return json(200, fn(body.input || {}));
+  }
+  if (method === 'GET' && p === '/api/admin/resilience') { requireRole('admin'); return json(200, app.resilience.validateResilience()); }
 
   // --- Chain of custody (Phase 16), GIS (Phase 15), compliance (Phase 25) ---
   if (method === 'POST' && p === '/api/custody/record') { const u = requireRole('investigator'); return json(201, app.custody.record({ evidenceId: body.evidenceId, action: body.action, actor: u.principal, contentHash: body.contentHash, witness: body.witness })); }

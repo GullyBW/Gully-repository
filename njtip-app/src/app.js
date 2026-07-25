@@ -43,6 +43,8 @@ const { SpatialIndex } = require('./geo/gis');
 const simulation = require('./twin2/simulation');
 const privacy = require('./privacy/privacy-engineering');
 const threatIntelMod = require('./security/threat-intel');
+const twin4 = require('./twin2/national-sim');
+const resilience = require('./twin2/resilience-validation');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
 const { ProvenanceLedger } = require('./fabric/provenance');
 const { InteroperabilityProfile, SemanticMapping, SharedVocabulary } = require('./fabric/interoperability');
@@ -182,7 +184,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, fabric, metadata, apiRegistry, capability, maturity, devPlatform, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, fabric, metadata, apiRegistry, capability, maturity, devPlatform, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
