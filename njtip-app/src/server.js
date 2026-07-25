@@ -178,6 +178,10 @@ async function route(app, req, url, body) {
   if (method === 'POST' && p === '/api/recovery/recommend') { requireRole('admin'); return json(200, app.recovery.recommend({ incidentType: body.incidentType, context: body.context })); }
   if (method === 'POST' && (m = p.match(/^\/api\/recovery\/([^/]+)\/authorize$/))) { const u = requireRole('admin'); return json(200, app.recovery.authorize(dec(m[1]), { by: u.principal, rationale: body.rationale })); }
   if (method === 'GET' && p === '/api/admin/process-mining') { requireRole('oversight-board'); return json(200, app.workflow.mineProcess()); }
+  // National crisis management (Phase 63) + service portfolio (Phase 64).
+  if (method === 'POST' && p === '/api/crisis/declare') { requireRole('admin'); return json(201, app.crisis.declare({ type: body.type, severity: body.severity, affectedAgencies: body.affectedAgencies })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/crisis\/([^/]+)\/authorize$/))) { const u = requireRole('admin'); return json(200, app.crisis.authorizeOperation(dec(m[1]), { by: u.principal, rationale: body.rationale })); }
+  if (method === 'GET' && p === '/api/portfolio') { requireRole('oversight-board'); return json(200, { catalog: app.servicePortfolio.catalog(), recommendations: app.servicePortfolio.recommendations() }); }
 
   // --- Chain of custody (Phase 16), GIS (Phase 15), compliance (Phase 25) ---
   if (method === 'POST' && p === '/api/custody/record') { const u = requireRole('investigator'); return json(201, app.custody.record({ evidenceId: body.evidenceId, action: body.action, actor: u.principal, contentHash: body.contentHash, witness: body.witness })); }

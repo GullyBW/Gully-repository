@@ -53,6 +53,8 @@ const threatIntelMod = require('./security/threat-intel');
 const twin4 = require('./twin2/national-sim');
 const resilience = require('./twin2/resilience-validation');
 const { RecoveryPlatform, seedPlaybooks } = require('./twin2/recovery');
+const { NationalCrisisPlatform } = require('./twin2/crisis');
+const { ServicePortfolio } = require('./portfolio/service-portfolio');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
 const { ProvenanceLedger } = require('./fabric/provenance');
 const { InteroperabilityProfile, SemanticMapping, SharedVocabulary } = require('./fabric/interoperability');
@@ -203,6 +205,12 @@ function createApp(overrides = {}) {
   const twin2 = simulation;
   // Human-governed autonomous recovery (Phase 54): recommends; never executes without approval.
   const recovery = seedPlaybooks(new RecoveryPlatform());
+  // National mission & crisis management (Phase 63): deterministic sims; human-authorised ops.
+  const crisis = new NationalCrisisPlatform();
+  // Government service portfolio management (Phase 64): services as strategic products (advisory).
+  const servicePortfolio = new ServicePortfolio();
+  servicePortfolio.register('svc:anonymous-reporting', { owner: 'independent', fundingPerYear: 500000, maturity: 'defined', strategicValue: 'high' });
+  servicePortfolio.register('svc:oversight-analytics', { owner: 'oversight', fundingPerYear: 200000, maturity: 'managed', strategicValue: 'medium', dependsOn: ['svc:anonymous-reporting'] });
   // Privacy engineering (Phase 35) + threat intelligence (Phase 36).
   const threatIntel = { feed: new threatIntelMod.ThreatFeed(), deviceRisk: threatIntelMod.deviceRisk, credentialRisk: threatIntelMod.credentialRisk, behavioralAnomaly: threatIntelMod.behavioralAnomaly, enrichTrust: threatIntelMod.enrichTrust, correlate: threatIntelMod.correlate, recommend: threatIntelMod.recommend };
   const schemaRegistry = new SchemaRegistry();
@@ -270,7 +278,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

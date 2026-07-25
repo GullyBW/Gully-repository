@@ -34,6 +34,8 @@ const twin3 = require('../src/twin2/monte-carlo');
 const twin4 = require('../src/twin2/national-sim');
 const resilience = require('../src/twin2/resilience-validation');
 const { RecoveryPlatform, seedPlaybooks } = require('../src/twin2/recovery');
+const { NationalCrisisPlatform } = require('../src/twin2/crisis');
+const { ServicePortfolio } = require('../src/portfolio/service-portfolio');
 const processMining = require('../src/orchestration/process-mining');
 const { PolicyRegistry } = require('../src/iam/policy-governance');
 const { IdentityRegistry } = require('../src/iam/digital-identity');
@@ -543,6 +545,23 @@ module.exports = [
     // Safety obligation is enforced when specified.
     const unsafe = { id: 'u', version: 1, start: 'a', terminal: ['closed'], states: { a: { on: { skip: 'closed', proper: 'decision' } }, decision: { on: { close: 'closed' } }, closed: { on: {} } } };
     if (formalVerification.verifySafety(unsafe, { critical: 'closed', requiredBefore: 'decision' }).proven) v.push('safety violation (closed without decision) not detected');
+  }),
+
+  fit('APP-FIT-CRISIS-PORTFOLIO', 'Crisis ops need human authorization; portfolio recommendations advisory', (v) => {
+    const cp = new NationalCrisisPlatform({ clock: () => 1 });
+    const inc = cp.declare({ type: 'cyber-incident', severity: 'severe' });
+    // Operational execution without authorization is refused (fail-closed).
+    let failClosed = false; try { cp.executeOperation(inc.id); } catch (e) { failClosed = !!e.failClosed; }
+    if (!failClosed) v.push('crisis operation executed without human authorization');
+    let needsHuman = false; try { cp.authorizeOperation(inc.id, { by: 'x' }); } catch (_) { needsHuman = true; }
+    if (!needsHuman) v.push('crisis operation authorized without a rationale');
+    cp.authorizeOperation(inc.id, { by: 'ops-lead', rationale: 'declared incident' });
+    if (!/no production action/.test(cp.executeOperation(inc.id).note)) v.push('crisis execution is not a synthetic record');
+    // Simulation is deterministic.
+    if (JSON.stringify(cp.simulate(inc.id)) !== JSON.stringify(cp.simulate(inc.id))) v.push('crisis simulation is not deterministic');
+    // Service portfolio recommendations are advisory.
+    const sp = new ServicePortfolio(); sp.register('s', { owner: 'o', strategicValue: 'high', maturity: 'managed' }); sp.transition('s', 'live');
+    if (sp.recommendations().advisoryOnly !== true) v.push('portfolio recommendations are not advisory');
   }),
 
   fit('APP-FIT-RECOVERY-HUMAN-GATED', 'Recovery recommends only; never executes without human authorization', (v) => {
