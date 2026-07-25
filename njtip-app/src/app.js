@@ -38,6 +38,7 @@ const advisor = require('./ai/advisor');
 const { RecommendationQueue } = require('./ai/approval');
 const { AiRegistry } = require('./ai/ai-governance');
 const { makeCryptoAgility } = require('./adapters/crypto-agility');
+const { QuantumMigrationRegistry } = require('./adapters/quantum-transition');
 const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-engine');
 const workflowSim = require('./orchestration/workflow-simulator');
 const twin3 = require('./twin2/monte-carlo');
@@ -170,6 +171,9 @@ function createApp(overrides = {}) {
   ai.governance = aiGovernance;
   // Cryptographic agility (Phase 47): 🔒 policy/lifecycle only — never key material.
   const cryptoAgility = makeCryptoAgility();
+  // Quantum-resilient transition (Phase 57): migration planning over the crypto policy registry.
+  const quantumTransition = new QuantumMigrationRegistry({ cryptoRegistry: cryptoAgility.registry });
+  cryptoAgility.quantum = quantumTransition;
   const orchestration = new WorkflowEngine();
   // Phase 27: a workflow VERSION must pass simulation before activation (the Twin is the
   // authoritative validation environment). Fail-closed: an invalid workflow is not registered.
@@ -239,7 +243,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

@@ -279,6 +279,8 @@ class Workflow {
   }
   // Executive intelligence scorecard (Phase 21): governance-level, privacy-preserving.
   executiveScorecard() { return analytics.executiveScorecard(this._analyticsRows(), this.clock()); }
+  // National Performance Observatory report (Phase 58): informational, cross-agency, aggregate.
+  observatoryReport() { const observatory = require('./observatory/performance'); return observatory.executiveReport(this._analyticsRows(), { now: this.clock() }); }
   exportCases({ format = 'json', filter = {} } = {}) {
     const rows = analytics.filter(this._analyticsRows(), filter);
     return analytics.exportRows(rows, { format });

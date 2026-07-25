@@ -52,6 +52,8 @@ const advisor = require('../src/ai/advisor');
 const { RecommendationQueue } = require('../src/ai/approval');
 const { AiRegistry, governedRecommendation } = require('../src/ai/ai-governance');
 const { makeCryptoAgility } = require('../src/adapters/crypto-agility');
+const { QuantumMigrationRegistry } = require('../src/adapters/quantum-transition');
+const observatory = require('../src/observatory/performance');
 const privacy = require('../src/privacy/privacy-engineering');
 const threat = require('../src/security/threat-intel');
 const { CustodyLedger } = require('../src/custody/ledger');
@@ -242,6 +244,23 @@ module.exports = [
     const pred = graphIntel.predictLinks(g, 'a');
     if (pred.advisoryOnly !== true || pred.requiresHumanApproval !== true || pred.autonomous !== false) v.push('graph inference not marked advisory/human-gated');
     if (!Array.isArray(pred.explanation) || !pred.explanation.length) v.push('graph inference not explainable');
+  }),
+
+  fit('APP-FIT-QUANTUM-OBSERVATORY', 'PQ migration is compatibility-gated + human-gated; observatory is informational', (v) => {
+    const q = new QuantumMigrationRegistry();
+    // A non-PQ target is refused (fail-closed compatibility).
+    let refused = false; try { q.plan('m', { purpose: 'signature', fromAlgo: 'ed25519', toAlgo: 'ecdsa-p256' }); } catch (_) { refused = true; }
+    if (!refused) v.push('quantum migration accepted a non-PQ target');
+    q.plan('m', { purpose: 'signature', fromAlgo: 'ed25519', toAlgo: 'ml-dsa-65' });
+    q.advance('m'); // assess -> hybrid-deploy
+    // Cannot migrate before hybrid is tested (fail-closed).
+    let gated = false; try { q.advance('m'); } catch (_) { gated = true; }
+    if (!gated) v.push('quantum migration advanced past hybrid without verification');
+    if (q.readiness('m').humanGate !== true) v.push('quantum migration readiness is not human-gated');
+    // Observatory report is informational only + privacy-preserving.
+    const rep = observatory.executiveReport([{ category: 'police', status: 'resolved', recipient: 'ombudsman', createdAt: 0, slaBreached: false }]);
+    if (rep.informationalOnly !== true) v.push('observatory report is not marked informational');
+    if (/"email"|"omang"|"name"/.test(JSON.stringify(rep))) v.push('observatory leaked identity');
   }),
 
   fit('APP-FIT-AI-GOVERNANCE', 'No AI model operates without governance approval; crypto agility is policy-only', (v) => {
