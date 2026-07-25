@@ -33,6 +33,8 @@ const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
 const { FederationRegistry } = require('./tenancy/federation');
 const { EcosystemFederation } = require('./tenancy/ecosystem-federation');
 const { AssetRegistry } = require('./governance/asset-governance');
+const { SupplyChainGovernance } = require('./supplychain/supply-chain');
+const adaptiveGovernanceMod = require('./governance/adaptive');
 const { makeEventBus } = require('./fabric/event-bus');
 const { KnowledgeGraph } = require('./graph/graph');
 const graphIntel = require('./graph/intelligence');
@@ -170,6 +172,11 @@ function createApp(overrides = {}) {
   const assetGovernance = new AssetRegistry();
   assetGovernance.register('asset:reports-api', { type: 'api', owner: 'independent', riskClass: 'medium' });
   assetGovernance.register('asset:priority-advisor', { type: 'ai-model', owner: 'analytics-domain', riskClass: 'high', dependsOn: ['asset:reports-api'] });
+  // National digital supply-chain governance (Phase 65): no deployment bypasses it (fail-closed).
+  const supplyChain = new SupplyChainGovernance();
+  supplyChain.registerSupplier('anthropic-nodejs-builtins', { trustLevel: 'sovereign-approved', risk: 'low' });
+  // Adaptive governance framework (Phase 66): continuous improvement; adoption human-approved.
+  const adaptiveGovernance = adaptiveGovernanceMod;
   const graph = new KnowledgeGraph();
   // Phase 28: enterprise event bus (pub/sub, ordering, replay, DLQ governance, federation).
   const eventBus = makeEventBus(cfg);
@@ -278,7 +285,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, cryptoAgility, quantumTransition, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

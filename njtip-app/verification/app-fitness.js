@@ -48,6 +48,9 @@ const { TenantRegistry, TenantScopedStore, CollaborationBroker } = require('../s
 const { FederationRegistry } = require('../src/tenancy/federation');
 const { EcosystemFederation } = require('../src/tenancy/ecosystem-federation');
 const { AssetRegistry } = require('../src/governance/asset-governance');
+const { SupplyChainGovernance } = require('../src/supplychain/supply-chain');
+const adaptiveGovernance = require('../src/governance/adaptive');
+const { sbom: devsecopsSbom } = require('../scripts/devsecops');
 const { EnterpriseEventBus } = require('../src/fabric/event-bus');
 const { KnowledgeGraph } = require('../src/graph/graph');
 const graphIntel = require('../src/graph/intelligence');
@@ -210,6 +213,22 @@ module.exports = [
     const cb = new CollaborationBroker(reg);
     let refused = false; try { cb.share({ fromTenant: 'agency-a', toTenant: 'agency-b', ref: { content: 'secret' } }); } catch (_) { refused = true; }
     if (!refused) v.push('cross-tenant share carried case content');
+  }),
+
+  fit('APP-FIT-SUPPLY-CHAIN-GOVERNANCE', 'No deployment bypasses supply-chain governance; adaptive gov is human-gated', (v) => {
+    const sc = new SupplyChainGovernance();
+    // The platform SBOM has zero third-party dependencies → trivially passes (safest posture).
+    const sbom = devsecopsSbom();
+    const deploy = sc.validateForDeployment((sbom.dependencies || []).map((d) => ({ name: d, version: '*' })));
+    if (!deploy.pass) v.push('zero-dependency SBOM failed supply-chain validation');
+    // An UNTRUSTED component is rejected (fail-closed deployment gate).
+    if (sc.validateForDeployment([{ name: 'evil-lib', version: '1.0.0' }]).pass) v.push('untrusted component passed the deployment gate');
+    // A component from an unregistered supplier is refused at registration.
+    let refused = false; try { sc.registerComponent('x', { version: '1', supplier: 'unknown' }); } catch (_) { refused = true; }
+    if (!refused) v.push('component from an unregistered supplier was accepted');
+    // Adaptive governance assessment + legislative-review recs are advisory + human-gated.
+    if (adaptiveGovernance.assess({ effectivenessScore: 1 }).humanGate !== true) v.push('adaptive governance assessment is not human-gated');
+    if (adaptiveGovernance.legislativeReviewRecommendations([{ id: 'a', mapsToControls: ['C1'] }], new Set(['C1'])).requiresHumanApproval !== true) v.push('legislative-review recommendation is not human-gated');
   }),
 
   fit('APP-FIT-ECOSYSTEM-ASSETS', 'Ecosystem federation is explicit/SoD; assets are lifecycle-traceable', (v) => {

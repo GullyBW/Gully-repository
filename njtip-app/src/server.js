@@ -237,6 +237,9 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/ecosystem/federation') { requireRole('admin'); return json(200, { members: app.ecosystemFederation.members(), agreements: app.ecosystemFederation.agreements() }); }
   if (method === 'GET' && p === '/api/assets') { requireRole('admin'); return json(200, { catalog: app.assetGovernance.catalog(), portfolioHealth: app.assetGovernance.portfolioHealth(), dependencies: app.assetGovernance.dependencyMap() }); }
   if (method === 'GET' && (m = p.match(/^\/api\/assets\/([^/]+)\/trace$/))) { requireRole('admin'); return json(200, { trace: app.assetGovernance.trace(dec(m[1])), health: app.assetGovernance.health(dec(m[1])) }); }
+  // Supply-chain governance (Phase 65) + adaptive governance (Phase 66).
+  if (method === 'GET' && p === '/api/admin/supply-chain') { requireRole('admin'); const { sbom } = require('../scripts/devsecops'); const s = sbom(); return json(200, { deploymentGate: app.supplyChain.validateForDeployment((s.dependencies || []).map((d) => ({ name: d, version: '*' }))), audit: app.supplyChain.auditTrail() }); }
+  if (method === 'GET' && p === '/api/admin/adaptive-governance') { requireRole('admin'); return json(200, app.adaptiveGovernance.assess({ effectivenessScore: 1 })); }
 
   throw err(404, 'not-found');
 }
