@@ -33,6 +33,8 @@ const { DEFAULT_WORKFLOW } = require('../src/orchestration/workflow-engine');
 const twin3 = require('../src/twin2/monte-carlo');
 const twin4 = require('../src/twin2/national-sim');
 const resilience = require('../src/twin2/resilience-validation');
+const { RecoveryPlatform, seedPlaybooks } = require('../src/twin2/recovery');
+const processMining = require('../src/orchestration/process-mining');
 const { PolicyRegistry } = require('../src/iam/policy-governance');
 const { IdentityRegistry } = require('../src/iam/digital-identity');
 const { InfrastructureRegistry } = require('../src/infra/infra-governance');
@@ -482,6 +484,37 @@ module.exports = [
     // Safety obligation is enforced when specified.
     const unsafe = { id: 'u', version: 1, start: 'a', terminal: ['closed'], states: { a: { on: { skip: 'closed', proper: 'decision' } }, decision: { on: { close: 'closed' } }, closed: { on: {} } } };
     if (formalVerification.verifySafety(unsafe, { critical: 'closed', requiredBefore: 'decision' }).proven) v.push('safety violation (closed without decision) not detected');
+  }),
+
+  fit('APP-FIT-RECOVERY-HUMAN-GATED', 'Recovery recommends only; never executes without human authorization', (v) => {
+    const rp = seedPlaybooks(new RecoveryPlatform({ clock: () => 1 }));
+    const rec = rp.recommend({ incidentType: 'regional-outage' });
+    if (rec.requiresHumanAuthorization !== true || rec.advisoryOnly !== true) v.push('recovery recommendation is not advisory/human-gated');
+    // Execution without authorization is refused (fail-closed).
+    let failClosed = false; try { rp.execute(rec.id); } catch (e) { failClosed = !!e.failClosed; }
+    if (!failClosed) v.push('recovery executed without human authorization');
+    // Authorization needs a named human + rationale; then execution is a synthetic record only.
+    let needsHuman = false; try { rp.authorize(rec.id, { by: 'x' }); } catch (_) { needsHuman = true; }
+    if (!needsHuman) v.push('recovery authorized without a rationale');
+    rp.authorize(rec.id, { by: 'ops-lead', rationale: 'declared incident' });
+    const ex = rp.execute(rec.id);
+    if (!/no production change/.test(ex.note)) v.push('recovery execution is not a synthetic record');
+  }),
+
+  fit('APP-FIT-PROCESS-MINING', 'Process mining is deterministic + advisory over non-identifying events', (v) => {
+    const events = [
+      { streamId: 'NJ-1', type: 'CaseSubmitted', meta: { at: 0, actor: 'system' } },
+      { streamId: 'NJ-1', type: 'CaseReviewed', meta: { at: 10, actor: 'inv-001' } },
+      { streamId: 'NJ-1', type: 'CaseTransitioned', meta: { at: 30, actor: 'inv-001' } },
+      { streamId: 'NJ-2', type: 'CaseSubmitted', meta: { at: 0, actor: 'system' } },
+      { streamId: 'NJ-2', type: 'CaseReviewed', meta: { at: 5, actor: 'inv-002' } },
+    ];
+    const d = processMining.discover(events);
+    if (d.cases !== 2 || !d.edges['CaseSubmitted->CaseReviewed']) v.push('process discovery did not build the directly-follows graph');
+    if (JSON.stringify(processMining.bottlenecks(events)) !== JSON.stringify(processMining.bottlenecks(events))) v.push('process mining is not deterministic');
+    if (processMining.recommendations(events).advisoryOnly !== true) v.push('process mining recommendations are not advisory');
+    // No identity leaks (events are non-identifying already; ensure output has no denied keys).
+    if (/"email"|"omang"|"name"/.test(JSON.stringify(d))) v.push('process mining leaked identity');
   }),
 
   fit('APP-FIT-NATIONAL-RESILIENCE', 'Default resilience suite passes; national sims deterministic + human-gated', (v) => {

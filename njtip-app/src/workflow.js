@@ -303,6 +303,13 @@ class Workflow {
   // Event-log tamper-evidence (hash chain) — used by health + fitness.
   verifyEventIntegrity() { return this._events ? this._events.verifyChain() : { ok: true, length: 0, note: 'no event store wired' }; }
 
+  // Process mining (Phase 56): discover the process model + performance from the event log.
+  mineProcess() {
+    const pm = require('./orchestration/process-mining');
+    const events = this._events ? this._events.readAll() : [];
+    return { discovery: pm.discover(events), bottlenecks: pm.bottlenecks(events), performance: pm.performance(events), recommendations: pm.recommendations(events) };
+  }
+
   oversightDashboard({ category } = {}) {
     const rows = this._statusRepo.values().filter((s) => !category || s.category === category);
     const byStatus = {}; const byCategory = {};

@@ -171,6 +171,10 @@ async function route(app, req, url, body) {
     return json(200, fn(body.input || {}));
   }
   if (method === 'GET' && p === '/api/admin/resilience') { requireRole('admin'); return json(200, app.resilience.validateResilience()); }
+  // Human-governed recovery (Phase 54) + process mining (Phase 56).
+  if (method === 'POST' && p === '/api/recovery/recommend') { requireRole('admin'); return json(200, app.recovery.recommend({ incidentType: body.incidentType, context: body.context })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/recovery\/([^/]+)\/authorize$/))) { const u = requireRole('admin'); return json(200, app.recovery.authorize(dec(m[1]), { by: u.principal, rationale: body.rationale })); }
+  if (method === 'GET' && p === '/api/admin/process-mining') { requireRole('oversight-board'); return json(200, app.workflow.mineProcess()); }
 
   // --- Chain of custody (Phase 16), GIS (Phase 15), compliance (Phase 25) ---
   if (method === 'POST' && p === '/api/custody/record') { const u = requireRole('investigator'); return json(201, app.custody.record({ evidenceId: body.evidenceId, action: body.action, actor: u.principal, contentHash: body.contentHash, witness: body.witness })); }
