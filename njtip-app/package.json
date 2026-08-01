@@ -1,8 +1,8 @@
 {
   "name": "njtip-app",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
-  "description": "NJTIP — National Digital Ecosystem Intelligence Platform. Ecosystem federation, digital asset governance, national crisis management, service portfolio, supply-chain governance, adaptive governance, knowledge repository, capability marketplace, sustainability/lifecycle, and Strategic Twin 5.0. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
+  "description": "NJTIP — production engineering and stabilization on a frozen architecture (Baseline v1.7). Verified bounded-context map, institutional ownership, stable integration contracts, component migration roadmap, infrastructure assurance, legislative impact analysis, recovery strategy evaluation, the National Data Exchange, process governance mining, quantum migration roadmap, audience-specific observability, correlation governance and usability evidence. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node src/server.js",
@@ -14,7 +14,8 @@
     "health": "node scripts/engineering-health.js",
     "infra-baseline": "node scripts/infra-baseline.js",
     "devsecops": "node scripts/devsecops.js",
-    "contracts": "node scripts/contracts.js"
+    "contracts": "node scripts/contracts.js",
+    "slice": "node scripts/slice.js"
   },
   "license": "SEE-BLUEPRINT",
   "dependencies": {},

@@ -27,6 +27,15 @@ jobs:
       - name: Product build gate — Twin architecture fitness
         working-directory: njtip-app
         run: node scripts/assure.js
+      - name: End-to-end vertical slice (deterministic)
+        working-directory: njtip-app
+        run: node scripts/slice.js
+      - name: Integration contracts — valid and fully covered
+        working-directory: njtip-app
+        run: node scripts/contracts.js
+      - name: DevSecOps — SAST, classified secret scan, SBOM, SCA, IaC
+        working-directory: njtip-app
+        run: node scripts/devsecops.js
       - name: Upload assurance evidence
         if: always()
         uses: actions/upload-artifact@v4

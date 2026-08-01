@@ -137,6 +137,12 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/contracts') { requireRole('admin'); return json(200, app.contracts.catalogue()); }
   if (method === 'GET' && (m = p.match(/^\/api\/contracts\/([^/]+)$/))) { requireRole('admin'); return json(200, { ...app.contracts.describe(dec(m[1])), history: app.contracts.history(dec(m[1])) }); }
   if (method === 'GET' && p === '/api/contracts/openapi') { requireRole('admin'); return json(200, app.contracts.toOpenApi()); }
+  // --- Stabilization: audience dashboards, correlation governance, usability evidence ---
+  if (method === 'GET' && p === '/api/observability/dashboards') { requireRole('admin'); return json(200, { audiences: app.observability.audiences(), dashboards: app.observability.all() }); }
+  if (method === 'GET' && (m = p.match(/^\/api\/observability\/dashboards\/([^/]+)$/))) { requireRole('admin'); return json(200, app.observability.dashboard(dec(m[1]))); }
+  if (method === 'GET' && p === '/api/intelligence/correlation-governance') { requireRole('oversight-board'); return json(200, app.correlationGovernance.report()); }
+  if (method === 'POST' && p === '/api/intelligence/correlations') { const u = requireRole('oversight-board'); return json(201, app.correlationGovernance.authorize({ domains: body.domains, purpose: body.purpose, requestedBy: body.requestedBy || u.principal })); }
+  if (method === 'GET' && p === '/api/ux/validation') { requireRole('admin'); return json(200, app.usability.report()); }
   // --- Stabilization: legislative impact, recovery strategy, data exchange, process governance ---
   if (method === 'GET' && p === '/api/legislation/impact') { requireRole('admin'); const fitnessResults = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); return json(200, app.legislation.impact.report({ fitnessResults })); }
   if (method === 'POST' && (m = p.match(/^\/api\/legislation\/([^/]+)\/simulate$/))) { requireRole('admin'); const fitnessResults = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); return json(200, app.legislation.impact.simulateChange(dec(m[1]), { proposedControls: body.proposedControls || null, proposedSystems: body.proposedSystems || null, fitnessResults })); }

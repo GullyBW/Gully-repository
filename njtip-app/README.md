@@ -16,12 +16,15 @@ quality gate.
 
 ```bash
 cd njtip-app
-npm test           # 74 tests (vertical slice + API + enterprise adapters + domain + fitness + assurance)
+npm test           # 237 tests (vertical slice + API + adapters + domain + fitness + assurance)
 npm start          # serve the app + UI at http://localhost:8087
-npm run twin       # combined gate: 36 invariants (14 twin + 15 app + 7 infrastructure)
+npm run twin       # combined gate: 85 invariants (14 twin + 62 app + 9 infrastructure)
+npm run slice      # end-to-end vertical slice through the real composition root (deterministic)
+npm run contracts  # deterministic, signed integration-contract snapshot + OpenAPI fragment
 npm run perf       # load + soak + chaos resilience harness (Phase 5)
 npm run evidence   # deterministic, signed assurance evidence package (Phase 9)
 npm run readiness  # human-gated operational readiness assessment (Phase 10 — never authorizes)
+npm run devsecops  # SAST + classified secret scan + SBOM + SCA + IaC
 npm run health     # engineering-health score + transparent trend (Phase 8)
 # container (build context = repo root, so it can copy the Twin it validates against):
 docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 njtip-app
@@ -29,13 +32,24 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.8 — National Digital Ecosystem Intelligence Platform.** Additive bounded-context
-> extensions governing the whole national digital ecosystem: ecosystem federation, digital
-> asset governance, national crisis management, service portfolio, supply-chain governance,
-> adaptive governance, an immutable knowledge repository, a capability marketplace,
-> sustainability/lifecycle, and Strategic Twin 5.0. Combined gate: **70 invariants** (14 twin +
-> 48 app + 8 infra), 161 tests. Full summary: [`docs/ecosystem-intelligence.md`](./docs/ecosystem-intelligence.md) ·
+> **v1.9 — Production engineering & stabilization.** The architecture is **frozen** at
+> [Architecture Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md); no new government domain and no
+> new bounded context. v1.9 hardens what exists: a verified [context map](./docs/context-map.md) that
+> owns every source module, an [institutional ownership model](./docs/governance-ownership.md),
+> [stable integration contracts](./docs/integration-contracts.md) that refuse silent breaking changes,
+> a [component migration roadmap](./docs/component-migration-roadmap.md) with rollback per subsystem,
+> [infrastructure assurance](./docs/infrastructure-assurance.md), a classified DevSecOps scanner,
+> [legislative impact analysis](./docs/legislative-impact.md), a
+> [recovery strategy framework](./docs/recovery-framework.md), the
+> [National Data Exchange](./docs/data-exchange.md),
+> [process governance mining](./docs/process-governance.md), a
+> [quantum migration roadmap](./docs/quantum-migration-roadmap.md),
+> [audience-specific dashboards](./docs/observability-dashboards.md),
+> [correlation governance](./docs/cross-domain-governance.md) and
+> [user validation](./docs/user-validation-report.md).
+> Combined gate: **85 invariants**, 237 tests. Full summary: [`docs/stabilization.md`](./docs/stabilization.md) ·
 > production migration: [`docs/migration-guidance.md`](./docs/migration-guidance.md) ·
+> v1.8: [`docs/ecosystem-intelligence.md`](./docs/ecosystem-intelligence.md) ·
 > v1.7: [`docs/autonomous.md`](./docs/autonomous.md) · v1.6: [`docs/sovereign.md`](./docs/sovereign.md) ·
 > v1.5: [`docs/ecosystem.md`](./docs/ecosystem.md) · v1.4: [`docs/national-platform.md`](./docs/national-platform.md) ·
 > v1.3: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).

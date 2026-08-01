@@ -8,6 +8,7 @@ const { makeStore } = require('./adapters/store');
 const { SessionManager } = require('./adapters/session');
 const { Logger, Metrics, Health, Tracer } = require('./adapters/observability');
 const slo = require('./observability/slo');
+const dashboards = require('./observability/dashboards');
 const { NotificationService } = require('./adapters/notifications');
 const { makeKeyManager } = require('./adapters/kms');
 const { makeObjectStore } = require('./adapters/object-store');
@@ -73,6 +74,8 @@ const { DataMarketplace } = require('./fabric/marketplace');
 const { NationalDataExchange } = require('./fabric/data-exchange');
 const { LegislativeRegistry } = require('./legislation/registry');
 const { LegislativeImpactAnalyzer } = require('./legislation/impact');
+const { CorrelationGovernance } = require('./intelligence/correlation-governance');
+const { UsabilityValidation, seedRound } = require('./ux/usability-validation');
 const { ApiRegistry } = require('./apigov/registry');
 const decisionSupport = require('./ai/decision-support');
 const { MetadataGovernance } = require('./fabric/metadata');
@@ -312,6 +315,18 @@ function createApp(overrides = {}) {
     evolution: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass })); return { healthy: evolution.technicalDebt(all).openInvariantFailures === 0 }; },
   });
 
+  // Audience-specific observability (Part 12), correlation governance (Part 13) and usability
+  // evidence (Part 15). Dashboards inform; correlation is default-deny; user evidence guides
+  // refinement. None of the three authorizes anything.
+  const observability = {
+    slo, dashboards,
+    dashboard: (id) => dashboards.dashboard(id, dashboardSources()),
+    all: () => dashboards.all(dashboardSources()),
+    audiences: () => dashboards.audiences(),
+  };
+  const correlationGovernance = new CorrelationGovernance();
+  const usability = seedRound(new UsabilityValidation());
+
   // Infrastructure assurance (Part 6): IaC validation, SBOM, certificate lifecycle,
   // dependency inventory, backup verification, drift detection and platform lifecycle.
   // Advisory only — provisioning, upgrades and remediation remain human-approved.
@@ -333,11 +348,67 @@ function createApp(overrides = {}) {
   const migrationValidation = migration.validate();
   if (!migrationValidation.valid) throw new Error('migration roadmap invalid: ' + migrationValidation.violations.join('; '));
 
+  // Live sources for the audience-specific dashboards (Part 12). Each accessor is defensive:
+  // an unavailable source degrades visibly on the dashboard rather than rendering a false zero.
+  function dashboardSources() {
+    const safe = (fn, fallback = undefined) => { try { return fn(); } catch (_) { return fallback; } };
+    const f = safe(() => { const all = [...runTwin(), ...runApp(), ...runInfra()]; return { held: all.filter((r) => r.pass).length, total: all.length, failing: all.filter((r) => !r.pass).map((r) => r.id) }; }, { held: 0, total: 0, failing: [] });
+    const sloNow = safe(() => evaluateSlo(), { results: [], alerts: [], healthy: true });
+    const oversight = safe(() => workflow.oversightDashboard(), { totalReports: 0, auditIntegrity: null });
+    const iaReport = safe(() => infraAssurance.report(), null);
+    const availability = safe(() => sloNow.results.find((r) => r.type === 'availability'), null);
+    return {
+      fitness: f,
+      architecture: { valid: safe(() => architecture.validate().valid, null) },
+      contracts: { covered: safe(() => contracts.coverage().covered.length, null) },
+      evolution: { openInvariantFailures: f.failing.length },
+      maturity: { grade: safe(() => maturity.assess().grade, null) },
+      security: {
+        policiesCertified: safe(() => policyGovernance.certify('access-control').certified, null),
+        credentialFindings: safe(() => require('../scripts/devsecops').secretScan().length, null),
+        certificatesDue: safe(() => certs.dueForRotation().length, null),
+        algorithmIndependence: safe(() => quantumTransition.algorithmIndependence().independent, null),
+        thirdPartyDependencies: safe(() => infraAssurance.dependencyInventory().thirdPartyCount, null),
+        threatPosture: 'trust-lowering-only',
+      },
+      operations: {
+        sloHealthy: sloNow.healthy,
+        availability: availability ? availability.attained : null,
+        p95: safe(() => slo.computeSlis({ latencies: metrics.samples('njtip_http_latency_ms') }).p95, null),
+        errorBudgetConsumed: availability ? availability.errorBudgetConsumed : null,
+        alerts: sloNow.alerts.length,
+        resiliencePass: safe(() => resilience.validateResilience().pass, null),
+      },
+      governance: {
+        decisionsRecorded: safe(() => workflow.ledger.history().length, null),
+        humanGovernanceDensity: safe(() => require('./observatory/performance').governanceEffectiveness({ decisionsRecorded: workflow.ledger.history().length, automatedActions: 0 }).humanGovernanceDensity, null),
+        pendingApprovals: safe(() => ai.queue.pending().length, null),
+        ledgerIntegrity: safe(() => workflow.audit.verifyIntegrity().ok, null),
+        ownedSubsystems: safe(() => ownership.subsystems().length, null),
+        complianceCoverage: safe(() => compliance.assess().overallCoverage, null),
+      },
+      service: {
+        total: oversight.totalReports,
+        resolutionRate: safe(() => { const b = oversight.byStatus || {}; const done = (b.resolved || 0) + (b.closed || 0); return oversight.totalReports ? +(done / oversight.totalReports).toFixed(3) : null; }, null),
+        slaCompliance: null, backlog: safe(() => (oversight.byStatus || {}).received || 0, null), avgTimeToFirstReviewMs: null,
+        usabilityBlockers: safe(() => usability.report().blockers.length, null),
+      },
+      infrastructure: {
+        compliant: safe(() => infraGovernance.validateCompliance().compliant, null),
+        drift: safe(() => infraGovernance.detectDrift().drift, null),
+        iacValid: iaReport ? iaReport.iac.valid : null,
+        backupVerified: iaReport ? iaReport.backup.verified : null,
+        unsupported: iaReport ? iaReport.unsupported.unsupported.length : null,
+        approachingEol: iaReport ? iaReport.unsupported.approaching.length : null,
+      },
+    };
+  }
+
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

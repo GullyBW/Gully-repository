@@ -1090,6 +1090,93 @@ module.exports = [
     if (/"email"|"omang"|"nationalId"|@/.test(JSON.stringify(full))) v.push('process governance leaked identity');
   }),
 
+  fit('APP-FIT-OBSERVABILITY-DOMAINS', 'Each observability domain has a named audience and stays identity-free', (v) => {
+    const dash = require('../src/observability/dashboards');
+    const boards = ownership.boards().map((b) => b.id);
+    for (const violation of dash.validate({ boards }).violations) v.push(violation);
+    // Six distinct domains, each answering a different question for a different audience.
+    const required = ['engineering-health', 'security-posture', 'operational-performance', 'governance-effectiveness', 'citizen-service-delivery', 'infrastructure-health'];
+    for (const id of required) if (!dash.ids().includes(id)) v.push(`missing observability domain '${id}'`);
+    const audiences = new Set(dash.audiences().map((a) => a.audience));
+    if (audiences.size !== dash.ids().length) v.push('two domains share an audience — they are one dashboard, not two');
+    // Rendering is deterministic and refuses identity values outright.
+    const sources = { fitness: { held: 82, total: 82, failing: [] }, architecture: { valid: true }, contracts: { covered: 15 }, service: { total: 42, resolutionRate: 0.8 } };
+    if (JSON.stringify(dash.all(sources)) !== JSON.stringify(dash.all(sources))) v.push('dashboard rendering is not deterministic');
+    const leak = dash.renderWidget({ id: 'x', title: 'x', source: 'leak', type: 'label' }, { leak: 'reporter@example.com' });
+    if (leak.status !== 'refused') v.push('a dashboard rendered an identity value');
+    // Small-cell suppression applies at the dashboard too, not only in analytics.
+    const small = dash.renderWidget({ id: 'c', title: 'c', source: 'n', type: 'count' }, { n: 2 });
+    if (!small.suppressed || small.value !== null) v.push('a small cell was not suppressed on a dashboard');
+    // An unavailable source degrades visibly rather than rendering a misleading zero.
+    if (dash.renderWidget({ id: 'm', title: 'm', source: 'nope.here', type: 'count' }, {}).status !== 'unavailable') v.push('a missing source did not degrade visibly');
+    // No dashboard authorizes anything.
+    for (const id of dash.ids()) { const d = dash.dashboard(id, sources); if (d.informationalOnly !== true || d.authorizes !== false) v.push(`${id}: dashboard claims authority`); }
+  }),
+
+  fit('APP-FIT-CORRELATION-GOVERNANCE', 'Cross-domain correlation is default-deny, purpose-limited and time-bound', (v) => {
+    const { CorrelationGovernance } = require('../src/intelligence/correlation-governance');
+    const cg = new CorrelationGovernance({ clock: () => 0 });
+    const boards = ownership.boards().map((b) => b.id);
+    for (const violation of cg.validate({ boards }).violations) v.push(violation);
+    // Every permitted correlation is a COMPLETE governance record.
+    for (const p of cg.register().permitted) {
+      if (!p.purpose || !p.retentionDays || !p.oversight || !p.accountable) v.push(`${p.id}: incomplete correlation governance record`);
+    }
+    // Prohibited correlations are named, reasoned and refused (not merely unimplemented).
+    if (cg.register().prohibited.length < 3) v.push('fewer than three correlations are explicitly prohibited');
+    let prohibited = false;
+    try { cg.authorize({ domains: ['privacy', 'service-delivery'], purpose: 'anything', requestedBy: 'analyst' }); } catch (e) { prohibited = !!e.failClosed && !!e.prohibited; }
+    if (!prohibited) v.push('a prohibited correlation was authorized');
+    // Default-deny: an unregistered pair is refused.
+    let unregistered = false;
+    try { cg.authorize({ domains: ['engineering', 'legislation'], purpose: 'curiosity', requestedBy: 'analyst' }); } catch (e) { unregistered = !!e.failClosed; }
+    if (!unregistered) v.push('an unregistered correlation was authorized (not default-deny)');
+    // Purpose and requester are mandatory.
+    for (const bad of [{ domains: ['engineering', 'operations'], requestedBy: 'x' }, { domains: ['engineering', 'operations'], purpose: 'platform-reliability' }]) {
+      let refused = false; try { cg.authorize(bad); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push('a correlation was authorized without a purpose or a named requester');
+    }
+    const auth = cg.authorize({ domains: ['engineering', 'operations'], purpose: 'platform-reliability', requestedBy: 'Office of the CTO' });
+    if (!auth.oversight || !auth.accountable || !auth.expiresAt) v.push('an authorization lacks oversight, accountability or a retention bound');
+    // Purpose limitation and retention are enforced at USE time.
+    if (cg.guard(auth.id, { purpose: 'security-operations' }).permitted) v.push('an authorization was reused for another purpose');
+    if (!cg.guard(auth.id, { purpose: 'platform-reliability' }).permitted) v.push('the authorized purpose was refused');
+    if (cg.guard(auth.id, { purpose: 'platform-reliability', now: auth.expiresAt + 1 }).permitted) v.push('a correlation was used after its retention elapsed');
+    // Refusals are audited too — an attempt is itself governance-relevant.
+    const events = cg.auditTrail().map((a) => a.event);
+    for (const required of ['refused', 'authorized', 'used']) if (!events.includes(required)) v.push(`correlation audit is missing '${required}'`);
+    if (cg.report().defaultDeny !== true || cg.report().authorizes !== false) v.push('correlation governance does not declare default-deny / claims authority');
+  }),
+
+  fit('APP-FIT-USABILITY-VALIDATION', 'User evidence is recorded, role-coded, and traced to a context', (v) => {
+    const { UsabilityValidation, PERSONAS, seedRound } = require('../src/ux/usability-validation');
+    const uv = seedRound(new UsabilityValidation());
+    // Every representative role is engaged, and every task traces to a real bounded context.
+    const contexts = new Set(contextMap.ids());
+    for (const p of uv.personas()) if (!contexts.has(p.context)) v.push(`persona '${p.id}' maps to unknown context '${p.context}'`);
+    for (const required of ['investigator', 'auditor', 'administrator', 'governance-official', 'oversight-board', 'operational-staff']) {
+      if (!PERSONAS[required]) v.push(`missing representative role '${required}'`);
+    }
+    if (!uv.coverage().complete) v.push('some representative role has no observed session: ' + uv.coverage().uncovered.join(', '));
+    // Participant identity is refused — role codes only.
+    let identityRefused = false;
+    try { uv.recordSession({ participant: 'P-INV-09', taskId: 'triage-queue', completed: true, email: 'a@b.c' }); } catch (e) { identityRefused = !!e.failClosed; }
+    if (!identityRefused) v.push('a usability session accepted an identifying field');
+    let codeRequired = false;
+    try { uv.recordSession({ participant: 'a real person', taskId: 'triage-queue', completed: true }); } catch (e) { codeRequired = !!e.failClosed; }
+    if (!codeRequired) v.push('a usability session accepted a non-role-coded participant');
+    // Findings are derived from observation, cite their evidence, and are deterministic.
+    const findings = uv.findings();
+    if (!findings.length) v.push('no findings derived from the observed sessions');
+    for (const f of findings) { if (!f.evidence) v.push(`finding on '${f.task}' cites no evidence`); if (!contexts.has(f.context)) v.push(`finding on '${f.task}' maps to unknown context`); }
+    if (JSON.stringify(uv.findings()) !== JSON.stringify(uv.findings())) v.push('usability findings are not deterministic');
+    // A task nobody completed is a blocker, ranked first.
+    const report = uv.report();
+    if (!report.blockers.length) v.push('a task with no completions was not raised as a blocker');
+    if (findings[0].severity !== 'blocker') v.push('findings are not ranked by severity');
+    if (/@|omang|nationalId/i.test(JSON.stringify(report))) v.push('usability evidence leaked an identifying value');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });
