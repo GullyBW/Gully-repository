@@ -33,30 +33,78 @@ function sast() {
   return findings;
 }
 
-// Secret scanning: real secret patterns, excluding clearly-labelled synthetic placeholders.
-function secretScan() {
-  const findings = [];
+// Secret scanning with FINDING CLASSIFICATION. A scanner that cannot tell a credential from
+// a configuration value trains people to ignore it. Every candidate match is classified as a
+// credential, an identifier, a data classification label, or a configuration value; only a
+// CREDENTIAL is a security finding. Classification is evidence-based and fail-safe: a value
+// that matches none of the benign shapes is treated as a credential.
+const CLASSIFICATION_LABELS = new Set(['public', 'internal', 'restricted', 'secret', 'confidential', 'official', 'top-secret']);
+// Clearly-labelled synthetic/placeholder material (never real credential material).
+const PLACEHOLDER_MARKER = /SYNTHETIC|REPLACE_FROM|REPLACE_ME|CHANGEME|example|REDACTED|do-not-use-in-prod|placeholder/i;
+
+// Shannon entropy per character — the signal that separates a random secret from a slug.
+function entropy(value) {
+  if (!value.length) return 0;
+  const freq = {};
+  for (const ch of value) freq[ch] = (freq[ch] || 0) + 1;
+  let h = 0;
+  for (const n of Object.values(freq)) { const p = n / value.length; h -= p * Math.log2(p); }
+  return h;
+}
+
+// Classify a captured value: 'credential' | 'identifier' | 'classification' | 'configuration'.
+function classifyValue(value, { key = '' } = {}) {
+  const val = String(value);
+  if (PLACEHOLDER_MARKER.test(val) || PLACEHOLDER_MARKER.test(key)) return 'configuration';
+  if (CLASSIFICATION_LABELS.has(val.toLowerCase())) return 'classification';
+  // URLs, filesystem paths, hostnames, env-var references and template expressions.
+  if (/^(?:https?:\/\/|\/|\.\/|\$\{|process\.env\.)/.test(val)) return 'configuration';
+  if (/^[a-z0-9-]+(?:\.[a-z0-9-]+){1,}$/i.test(val) && !/^[0-9a-f]{16,}$/i.test(val)) return 'configuration';
+  // Slug-shaped, low-entropy identifiers: region codes, zone names, ids, algorithm names.
+  if (/^[a-z][a-z0-9._-]{0,30}$/.test(val) && entropy(val) < 3.5) return 'identifier';
+  // Anything else that a credential pattern matched is treated as a credential (fail-safe).
+  return 'credential';
+}
+
+// Every candidate match with its classification (the full picture, for the report).
+function scanCandidates() {
+  const candidates = [];
   const patterns = [
     { rule: 'private-key', re: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/, capture: false },
     { rule: 'aws-access-key', re: /AKIA[0-9A-Z]{16}/, capture: false },
     { rule: 'hardcoded-credential', re: /(password|secret|apikey|api_key|token)\s*[:=]\s*['"]([^'"]{8,})['"]/i, capture: true },
   ];
-  const allow = /SYNTHETIC|REPLACE_FROM|example|REDACTED|do-not-use-in-prod|placeholder/i;
-  // An identifier-shaped value (region code, hostname, classification, slug) is NOT a
-  // credential: all-lowercase alnum with ./-/_ separators, no entropy. Skip those.
-  const identifierShaped = (val) => /^[a-z][a-z0-9._-]{0,30}$/.test(val);
   for (const f of walk(SRC).concat([path.join(ROOT, 'package.json')])) {
     const rel = path.relative(ROOT, f);
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       for (const p of patterns) {
         const match = line.match(p.re);
-        if (!match || allow.test(line)) continue;
-        if (p.capture && identifierShaped(match[2])) continue; // config-like value, not a secret
-        findings.push({ rule: p.rule, severity: 'high', file: rel });
+        if (!match) continue;
+        // A non-capturing pattern (raw key material) is always a credential.
+        const classification = p.capture ? classifyValue(match[2], { key: match[1] }) : 'credential';
+        candidates.push({ rule: p.rule, file: rel, key: p.capture ? match[1].toLowerCase() : null, classification });
       }
     }
   }
-  return findings;
+  return candidates;
+}
+
+// Security findings only: a candidate classified as a credential.
+function secretScan() {
+  return scanCandidates().filter((c) => c.classification === 'credential')
+    .map((c) => ({ rule: c.rule, severity: 'high', file: c.file, classification: c.classification }));
+}
+
+// What the scanner decided and why — so a suppressed candidate is visible, not invisible.
+function classificationReport() {
+  const candidates = scanCandidates();
+  const byClassification = {};
+  for (const c of candidates) byClassification[c.classification] = (byClassification[c.classification] || 0) + 1;
+  return {
+    candidates: candidates.length, byClassification,
+    suppressed: candidates.filter((c) => c.classification !== 'credential').map((c) => ({ file: c.file, key: c.key, classification: c.classification })),
+    note: 'Only credential-classified candidates are security findings. Identifiers, data classification labels and configuration values are recorded, never raised.',
+  };
 }
 
 // SBOM: zero third-party dependencies by design; record built-in modules used.
@@ -78,7 +126,7 @@ function main() {
   const iac = infraFitness.map((f) => f.check()).filter((r) => !r.pass).map((r) => ({ rule: r.id, severity: 'high', violations: r.violations }));
   const high = [...sastFindings, ...secretFindings, ...iac].filter((x) => x.severity === 'high');
   // Deterministic release-evidence core (no timestamps): what was scanned + findings.
-  const core = { sast: sastFindings, secrets: secretFindings, sbom: sbomOut, sca: scaOut, iac, clean: high.length === 0 };
+  const core = { sast: sastFindings, secrets: secretFindings, secretClassification: classificationReport(), sbom: sbomOut, sca: scaOut, iac, clean: high.length === 0 };
   const digest = hash.sha256(core);
   const report = { platform: 'NJTIP', kind: 'devsecops-release-evidence', core, digest, signature: signing.sign(digest), highSeverity: high.length, note: 'Deterministic security evidence. Synthetic signature. Evidence ≠ authorization.' };
   console.log(JSON.stringify(report, null, 2));
@@ -88,6 +136,6 @@ function main() {
 
 // Export BEFORE running main(): main() re-enters infra fitness (IaC step) which lazily
 // requires this module back — assigning exports first avoids a circular-dependency stub.
-module.exports = { sast, secretScan, sbom, sca };
+module.exports = { sast, secretScan, scanCandidates, classifyValue, classificationReport, entropy, sbom, sca };
 
 if (require.main === module) main();

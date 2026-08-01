@@ -29,7 +29,7 @@ const ITEMS = {
     target: 'HSM/KMS-backed envelope encryption, M-of-N threshold custody, and human-built signing identities. Keys never leave the HSM.',
     strategy: 'Implement encrypt/decrypt/isCiphertext and the signing port against the real KMS. Key material is generated and custodied by humans under ISRB sign-off — never machine-generated. Re-wrap existing ciphertext under the new master key before cutover.',
     dependsOn: [], risks: ['Key mismanagement makes historical evidence unreadable (irreversible).', 'A synthetic key mistaken for a real one.', 'Re-wrap interrupted mid-flight leaves mixed key generations.'],
-    validations: ['APP-FIT-CIPHERTEXT-ONLY', 'APP-FIT-CUSTODY-SIGNED-CHAIN', 'FIT-ENCRYPTION', 'FIT-GOVERNANCE'],
+    validations: ['APP-FIT-CIPHERTEXT-ONLY', 'APP-FIT-CUSTODY-SIGNED-CHAIN', 'APP-FIT-CRYPTO-ALGORITHM-INDEPENDENCE', 'FIT-ENCRYPTION', 'FIT-GOVERNANCE'],
     rollback: 'Retain the previous key generation in the HSM for the full re-wrap window and keep both decryptable (dual-generation read). Rollback is only possible while both generations exist — the window is a governance decision, not a technical default.',
   },
   secrets: {
@@ -38,7 +38,7 @@ const ITEMS = {
     target: 'Vault or cloud KMS-secrets with leasing, automatic rotation and audit.',
     strategy: 'Implement the same lease/rotate contract; rotate the session signing key first, then per-adapter credentials.',
     dependsOn: ['cryptography'], risks: ['Rotation invalidates live sessions unexpectedly.', 'A secret is logged during adapter bring-up.'],
-    validations: ['APP-FIT-SECRETS-REDACTED', 'INFRA-FIT-DEVSECOPS'],
+    validations: ['APP-FIT-SECRETS-REDACTED', 'INFRA-FIT-DEVSECOPS', 'APP-FIT-DEVSECOPS-CLASSIFICATION'],
     rollback: 'NJTIP_SECRETS=env restores the reference manager; secrets are re-read at composition, so a restart is sufficient.',
   },
   certificates: {
@@ -47,7 +47,7 @@ const ITEMS = {
     target: 'Real CA/ACME issuance with automated renewal, revocation checking and an inventory that alerts before expiry.',
     strategy: 'Implement issuance/renewal behind the certificate port; keep the rotation health check as the invariant.',
     dependsOn: ['cryptography'], risks: ['An expired certificate causes an outage.', 'Revocation is not checked, so a compromised certificate stays trusted.'],
-    validations: ['INFRA-FIT-K8S-HARDENING'],
+    validations: ['INFRA-FIT-K8S-HARDENING', 'APP-FIT-INFRA-ASSURANCE'],
     rollback: 'Reference manager plus a manually issued certificate; the port is unchanged.',
   },
   storage: {
@@ -164,7 +164,7 @@ const ITEMS = {
     target: 'Provisioned sovereign-cloud infrastructure managed as code, with drift detection against the human-reviewed baseline.',
     strategy: 'Apply the manifests, review every placeholder, record the infra baseline after human review, then let INFRA-FIT-DRIFT hold it.',
     dependsOn: ['storage', 'messaging', 'certificates'], risks: ['An unreviewed manifest change lands in production.', 'Residency policy is violated by a provider default.', 'A deployment bypasses the supply-chain gate.'],
-    validations: ['INFRA-FIT-K8S-HARDENING', 'INFRA-FIT-NETWORK-DEFAULT-DENY', 'INFRA-FIT-DRIFT', 'APP-FIT-INFRA-GOVERNANCE', 'APP-FIT-SUPPLY-CHAIN-GOVERNANCE'],
+    validations: ['INFRA-FIT-K8S-HARDENING', 'INFRA-FIT-NETWORK-DEFAULT-DENY', 'INFRA-FIT-DRIFT', 'INFRA-FIT-PLATFORM-LIFECYCLE', 'APP-FIT-INFRA-GOVERNANCE', 'APP-FIT-SUPPLY-CHAIN-GOVERNANCE'],
     rollback: 'Re-apply the previous reviewed baseline revision; manifests are declarative, and the drift check names exactly what changed.',
   },
 };

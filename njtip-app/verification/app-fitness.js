@@ -841,6 +841,100 @@ module.exports = [
     for (const item of migration.items()) for (const dep of item.dependsOn) if (order.indexOf(dep) > order.indexOf(item.id)) v.push(`${item.id} is sequenced before its dependency ${dep}`);
   }),
 
+  fit('APP-FIT-INFRA-ASSURANCE', 'IaC, SBOM, certificates, backups and platform lifecycle are governed', (v) => {
+    const { InfrastructureAssurance } = require('../src/infra/infrastructure-assurance');
+    const { InfrastructureRegistry } = require('../src/infra/infra-governance');
+    const { CertificateManager } = require('../src/adapters/certificates');
+    let now = Date.UTC(2026, 7, 1);
+    const registry = new InfrastructureRegistry({ clock: () => now });
+    registry.register('compute:app', { kind: 'compute', region: 'bw-central', provider: 'sovereign-cloud' });
+    registry.recordBaseline();
+    const certs = new CertificateManager({ clock: () => now });
+    certs.issue({ subject: 'njtip-app' });
+    const ia = new InfrastructureAssurance({ registry, certificates: certs });
+
+    // Infrastructure-as-Code: every declared invariant is asserted in the manifests.
+    const iac = ia.validateIac();
+    for (const f of iac.findings.filter((x) => x.severity === 'high')) v.push(`IaC ${f.rule} in ${f.file}: ${f.detail}`);
+    if (!iac.valid) v.push('IaC validation failed');
+    // The placeholder detector must actually be able to fire (reference manifests carry them).
+    if (!iac.unresolvedPlaceholders.length) v.push('placeholder detection is not exercised — it cannot fail');
+    // SBOM + dependency inventory: zero third-party supply-chain surface.
+    if (ia.dependencyInventory().thirdPartyCount !== 0) v.push('third-party dependencies present (supply-chain surface must stay built-ins only)');
+    if (!ia.sbom().builtinsUsed.length) v.push('SBOM records no built-in modules');
+    // Backup verification: a restore must reproduce the source exactly.
+    const backup = ia.verifyBackup();
+    if (!backup.verified || backup.sourceDigest !== backup.restoredDigest) v.push('backup/restore round-trip did not verify');
+    // Certificate lifecycle: nothing past due for rotation.
+    if (!ia.certificateLifecycle().healthy) v.push('a certificate is past due for rotation');
+    // Drift against the human-reviewed baseline; and the detector must be able to fire.
+    if (ia.detectDrift().drift) v.push('unreviewed infrastructure drift');
+    registry.register('compute:rogue', { kind: 'compute', region: 'bw-south', provider: 'sovereign-cloud' });
+    if (!ia.detectDrift().drift) v.push('drift detection did not notice a new resource');
+    // Unsupported-software detection: nothing past its support window, and it can fail.
+    if (!ia.detectUnsupported({ now }).clean) v.push('unsupported platform component in use');
+    if (ia.detectUnsupported({ now: Date.UTC(2035, 0, 1) }).clean) v.push('unsupported-software detection cannot fail');
+    // The whole report is advisory and never authorizes.
+    const rep = ia.report({ now });
+    if (rep.humanGate !== true || rep.authorizes !== false) v.push('infrastructure assurance claims authority');
+  }),
+
+  fit('APP-FIT-DEVSECOPS-CLASSIFICATION', 'Scanner separates credentials from identifiers, labels and config', (v) => {
+    const ds = require('../scripts/devsecops');
+    // A credential is detected; benign shapes are classified, recorded and not raised.
+    const cases = [
+      ['xK9$mQ2vLp7RtZ4wB3nH', 'password', 'credential'],
+      ['aGVsbG8gd29ybGQgc2VjcmV0IHZhbHVl', 'token', 'credential'],
+      ['bw-central', 'secret', 'identifier'],
+      ['restricted', 'classification', 'classification'],
+      ['secret', 'classification', 'classification'],
+      ['https://idp.example.gov.bw/', 'oidcIssuer', 'configuration'],
+      ['SYNTHETIC-SESSION-SIGNING-KEY-do-not-use-in-prod', 'secret', 'configuration'],
+      ['REPLACE_FROM_SECRETS_MANAGER', 'password', 'configuration'],
+    ];
+    for (const [value, key, expected] of cases) {
+      const got = ds.classifyValue(value, { key });
+      if (got !== expected) v.push(`classified '${value}' as ${got}, expected ${expected}`);
+    }
+    // Fail-safe: an unrecognised shape that a credential pattern matched stays a credential.
+    if (ds.classifyValue('this is my actual passphrase', { key: 'password' }) !== 'credential') v.push('classifier is not fail-safe on an unrecognised value');
+    // Entropy separates a random secret from a slug.
+    if (!(ds.entropy('xK9$mQ2vLp7RtZ4wB3nH') > ds.entropy('bw-central'))) v.push('entropy does not separate random values from slugs');
+    // Suppressed candidates are RECORDED, never invisible.
+    const rep = ds.classificationReport();
+    if (!Array.isArray(rep.suppressed)) v.push('suppressed candidates are not recorded');
+    if (rep.candidates !== rep.suppressed.length + ds.secretScan().length) v.push('classification report does not account for every candidate');
+    // And the security scan itself stays clean.
+    for (const f of ds.secretScan()) v.push(`credential ${f.rule} in ${f.file}`);
+  }),
+
+  fit('APP-FIT-CRYPTO-ALGORITHM-INDEPENDENCE', 'No module outside the crypto policy registry names an algorithm', (v) => {
+    const { QuantumMigrationRegistry } = require('../src/adapters/quantum-transition');
+    const { makeCryptoAgility } = require('../src/adapters/crypto-agility');
+    const agility = makeCryptoAgility();
+    const q = new QuantumMigrationRegistry({ cryptoRegistry: agility.registry });
+    // Algorithm selection is data: business logic must never name an algorithm.
+    const ind = q.algorithmIndependence();
+    if (!ind.independent) v.push('algorithm identifiers leaked outside the crypto policy registry: ' + ind.leaks.join(', '));
+    // The migration plan documents its assumptions, requirements and abstraction layers.
+    const plan = q.transitionPlan();
+    if (plan.assumptions.length < 4) v.push('quantum migration assumptions are not documented');
+    if (!plan.assumptions.some((a) => a.id === 'harvest-now-decrypt-later')) v.push('harvest-now-decrypt-later assumption is missing');
+    if (plan.compatibilityRequirements.length < 4) v.push('compatibility requirements are not documented');
+    if (!plan.abstractionLayers.some((l) => /never leaves the HSM/.test(l.neverKnows))) v.push('key material is not excluded from every abstraction layer');
+    if (plan.phases.length !== 4 || plan.phases.some((p) => !p.exitCriterion)) v.push('transition phases lack exit criteria');
+    if (plan.humanGate !== true || plan.authorizes !== false) v.push('the quantum transition plan claims authority');
+    // Migration to a non-post-quantum target is refused (fail-closed).
+    let refused = false;
+    try { q.plan('bad', { purpose: 'signature', fromAlgo: agility.registry.permitted('signature')[0], toAlgo: agility.registry.permitted('signature')[1] }); } catch (_) { refused = true; }
+    if (!refused) v.push('a non-post-quantum migration target was accepted');
+    // A provider keeps accepting the legacy algorithm during the overlap window.
+    const provider = agility.provider('signature');
+    const legacy = provider.primary();
+    provider.migrate(agility.registry.catalog('signature').find((a) => a.pq).id);
+    if (!provider.accepts(legacy)) v.push('the overlap window does not accept legacy-signed artifacts');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

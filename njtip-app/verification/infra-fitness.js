@@ -103,6 +103,24 @@ module.exports = [
     for (const f of secretScan()) v.push(`secret ${f.rule} in ${f.file}`);
   }),
 
+  fit('INFRA-FIT-PLATFORM-LIFECYCLE', 'IaC invariants asserted, no secrets in config, supported platform, zero third-party deps', (v) => {
+    const { InfrastructureAssurance } = require('../src/infra/infrastructure-assurance');
+    const ia = new InfrastructureAssurance();
+    // Every declared Infrastructure-as-Code invariant is present in the manifests.
+    const iac = ia.validateIac();
+    for (const f of iac.findings) v.push(`IaC ${f.rule} in ${f.file}: ${f.detail}`);
+    // Dependency inventory: the supply-chain surface stays built-ins only.
+    const deps = ia.dependencyInventory();
+    if (deps.thirdPartyCount !== 0) v.push(`third-party dependencies present: ${deps.thirdPartyCount}`);
+    if (!deps.engines || !deps.engines.node) v.push('no engine constraint declared for the runtime');
+    // Platform lifecycle: nothing in use past its support window (assessed at a fixed epoch
+    // so the check is deterministic; the operational view uses real time).
+    const unsupported = ia.detectUnsupported({ now: Date.UTC(2026, 7, 1) });
+    for (const c of unsupported.unsupported) v.push(`unsupported platform component: ${c.component}`);
+    // A restore must reproduce the source — an unverified backup is not a backup.
+    if (!ia.verifyBackup().verified) v.push('backup/restore verification failed');
+  }),
+
   fit('INFRA-FIT-DRIFT', 'Infrastructure matches the recorded baseline (no unreviewed drift)', (v) => {
     const baselineFile = path.join(__dirname, 'infra-baseline.json');
     const current = infraSignature();

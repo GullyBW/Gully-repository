@@ -27,6 +27,7 @@ const { PolicySet, DEFAULT_POLICIES } = require('./iam/policy-engine');
 const { PolicyRegistry } = require('./iam/policy-governance');
 const { IdentityRegistry } = require('./iam/digital-identity');
 const { InfrastructureRegistry } = require('./infra/infra-governance');
+const { InfrastructureAssurance } = require('./infra/infrastructure-assurance');
 const architecture = require('./architecture/context-map');
 const ownership = require('./governance/ownership');
 const { ContractRegistry } = require('./contracts/integration-contracts');
@@ -160,10 +161,9 @@ function createApp(overrides = {}) {
   digitalIdentity.register('svc:intake-api', { type: 'service', assuranceLevel: 'IAL3', attributes: { zone: 'independent' } });
   // Sovereign infrastructure governance (Phase 52) — advisory until human approval.
   const infraGovernance = new InfrastructureRegistry();
-  // Data-residency rules by classification (built programmatically — the classification names
-  // are data, not credentials).
-  const residencyRules = {}; for (const cls of ['restricted', 'secret']) residencyRules[cls] = 'bw-central';
-  infraGovernance.setPolicy({ allowedRegions: ['bw-central', 'bw-south'], allowedProviders: ['sovereign-cloud'], residency: residencyRules });
+  // Data-residency rules keyed by data classification. The scanner classifies these values
+  // as identifiers, not credentials (Part 6), so the rules read plainly again.
+  infraGovernance.setPolicy({ allowedRegions: ['bw-central', 'bw-south'], allowedProviders: ['sovereign-cloud'], residency: { restricted: 'bw-central', secret: 'bw-central' } });
   infraGovernance.register('compute:app', { kind: 'compute', region: 'bw-central', provider: 'sovereign-cloud', dataClassification: 'restricted' });
   infraGovernance.register('storage:evidence', { kind: 'storage', region: 'bw-central', provider: 'sovereign-cloud', dataClassification: 'secret' });
   infraGovernance.register('network:mesh', { kind: 'network', region: 'bw-south', provider: 'sovereign-cloud', dataClassification: 'internal' });
@@ -299,6 +299,11 @@ function createApp(overrides = {}) {
     evolution: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass })); return { healthy: evolution.technicalDebt(all).openInvariantFailures === 0 }; },
   });
 
+  // Infrastructure assurance (Part 6): IaC validation, SBOM, certificate lifecycle,
+  // dependency inventory, backup verification, drift detection and platform lifecycle.
+  // Advisory only — provisioning, upgrades and remediation remain human-approved.
+  const infraAssurance = new InfrastructureAssurance({ registry: infraGovernance, certificates: certs, lifecycle: sustainability });
+
   // Architecture stabilization (v1.9): the context map is the architecture-of-record and the
   // ownership model is the organisational accountability record. Both are descriptive and
   // validated by fitness — a startup gate refuses to compose an invalid architecture-of-record.
@@ -319,7 +324,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
