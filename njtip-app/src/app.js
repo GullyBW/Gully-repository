@@ -52,6 +52,7 @@ const { LifecycleRegistry } = require('./sustainability/lifecycle');
 const strategicTwin = require('./twin2/strategic-twin');
 const { WorkflowEngine, DEFAULT_WORKFLOW } = require('./orchestration/workflow-engine');
 const workflowSim = require('./orchestration/workflow-simulator');
+const processGovernance = require('./orchestration/process-governance');
 const twin3 = require('./twin2/monte-carlo');
 const { CustodyLedger } = require('./custody/ledger');
 const complianceMod = require('./compliance/compliance');
@@ -62,13 +63,16 @@ const threatIntelMod = require('./security/threat-intel');
 const twin4 = require('./twin2/national-sim');
 const resilience = require('./twin2/resilience-validation');
 const { RecoveryPlatform, seedPlaybooks } = require('./twin2/recovery');
+const { RecoveryStrategyEvaluator } = require('./twin2/recovery-strategies');
 const { NationalCrisisPlatform } = require('./twin2/crisis');
 const { ServicePortfolio } = require('./portfolio/service-portfolio');
 const { SchemaRegistry, ServiceRegistry, MetadataCatalog, DataLineage, CANONICAL_MODEL } = require('./fabric/registry');
 const { ProvenanceLedger } = require('./fabric/provenance');
 const { InteroperabilityProfile, SemanticMapping, SharedVocabulary } = require('./fabric/interoperability');
 const { DataMarketplace } = require('./fabric/marketplace');
+const { NationalDataExchange } = require('./fabric/data-exchange');
 const { LegislativeRegistry } = require('./legislation/registry');
+const { LegislativeImpactAnalyzer } = require('./legislation/impact');
 const { ApiRegistry } = require('./apigov/registry');
 const decisionSupport = require('./ai/decision-support');
 const { MetadataGovernance } = require('./fabric/metadata');
@@ -225,6 +229,9 @@ function createApp(overrides = {}) {
   const twin2 = simulation;
   // Human-governed autonomous recovery (Phase 54): recommends; never executes without approval.
   const recovery = seedPlaybooks(new RecoveryPlatform());
+  // Recovery strategy evaluation (Part 8): multiple strategies compared on RTO/RPO, disruption,
+  // resources, data integrity and continuity. Advisory until a named human authority authorizes.
+  recovery.strategies = new RecoveryStrategyEvaluator();
   // National mission & crisis management (Phase 63): deterministic sims; human-authorised ops.
   const crisis = new NationalCrisisPlatform();
   // Government service portfolio management (Phase 64): services as strategic products (advisory).
@@ -246,9 +253,15 @@ function createApp(overrides = {}) {
   const vocabulary = new SharedVocabulary({ 'complaint': 'Case', 'exhibit': 'EvidenceRef', 'department': 'Agency' });
   // National data marketplace (Phase 55): privacy-by-design enforced; approval-gated listing.
   const marketplace = new DataMarketplace();
-  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, provenance, interop, semanticMapping, vocabulary, marketplace, canonical: CANONICAL_MODEL };
+  // National Data Exchange (Part 9, ADR-0003): purpose limitation, purpose-scoped approval and
+  // retention over the same registry. Commercial exchange is a named, refused purpose.
+  const dataExchange = new NationalDataExchange({ registry: marketplace });
+  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, provenance, interop, semanticMapping, vocabulary, marketplace, dataExchange, canonical: CANONICAL_MODEL };
   // Digital legislation & regulatory governance (Phase 53): laws are simulatable before enactment.
   const legislation = new LegislativeRegistry();
+  // Legislative impact analysis (Part 7): transitive reach, control traceability, simulation
+  // and obsolescence — advisory; enactment stays a human legal decision.
+  legislation.impact = new LegislativeImpactAnalyzer(legislation);
   legislation.register('data-protection-act', { title: 'Data Protection Act', type: 'act', mapsToControls: ['FIT-IDENTITY-MINIMIZATION', 'APP-FIT-ANONYMITY-BOUNDARY'], mapsToSystems: ['reporting', 'analytics'] });
   // API governance (Phase 37): registry seeded from the live OpenAPI contract.
   const apiRegistry = new ApiRegistry();
@@ -324,7 +337,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

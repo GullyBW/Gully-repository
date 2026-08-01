@@ -12,16 +12,17 @@ class LegislativeRegistry {
   register(id, { title, type = 'regulation', dependsOn = [], mapsToControls = [], mapsToSystems = [] } = {}) {
     if (!id || !title) throw new Error('legal instrument id and title are required');
     if (this._instruments.has(id)) throw new Error('instrument already registered (use amend)');
-    this._instruments.set(id, { id, title, type, status: 'draft', versions: [{ version: 1, at: this._clock(), summary: 'initial' }], dependsOn: [...dependsOn], mapsToControls: [...mapsToControls], mapsToSystems: [...mapsToSystems] });
+    this._instruments.set(id, { id, title, type, status: 'draft', versions: [{ version: 1, at: this._clock(), summary: 'initial', mapsToControls: [...mapsToControls], mapsToSystems: [...mapsToSystems] }], dependsOn: [...dependsOn], mapsToControls: [...mapsToControls], mapsToSystems: [...mapsToSystems] });
     this._log('registered', id);
     return this.describe(id);
   }
   // Amend (version) an instrument with a change summary (legal change tracking).
   amend(id, { summary, mapsToControls, mapsToSystems } = {}) {
     const i = this._must(id); const version = i.versions.length + 1;
-    i.versions.push({ version, at: this._clock(), summary: summary || 'amendment' });
     if (mapsToControls) i.mapsToControls = [...mapsToControls];
     if (mapsToSystems) i.mapsToSystems = [...mapsToSystems];
+    // Each version snapshots the mappings in force, so version history is diffable.
+    i.versions.push({ version, at: this._clock(), summary: summary || 'amendment', mapsToControls: [...i.mapsToControls], mapsToSystems: [...i.mapsToSystems] });
     this._log('amended', id);
     return { id, version };
   }

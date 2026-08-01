@@ -935,6 +935,161 @@ module.exports = [
     if (!provider.accepts(legacy)) v.push('the overlap window does not accept legacy-signed artifacts');
   }),
 
+  fit('APP-FIT-LEGISLATIVE-IMPACT', 'A legal change is fully simulatable, traceable to controls, and never self-enacting', (v) => {
+    const { LegislativeImpactAnalyzer } = require('../src/legislation/impact');
+    const reg = new LegislativeRegistry({ clock: () => 0 });
+    reg.register('dpa', { title: 'Data Protection Act', type: 'act', mapsToControls: ['FIT-IDENTITY-MINIMIZATION'], mapsToSystems: ['reporting'] });
+    reg.register('reg-report', { title: 'Reporting Regulations', dependsOn: ['dpa'], mapsToControls: ['APP-FIT-ANONYMITY-BOUNDARY'], mapsToSystems: ['reporting', 'analytics'] });
+    reg.register('reg-analytics', { title: 'Analytics Directive', dependsOn: ['reg-report'], mapsToControls: ['APP-FIT-ANALYTICS-PRIVACY'], mapsToSystems: ['analytics'] });
+    const an = new LegislativeImpactAnalyzer(reg);
+    // Transitive regulatory dependency graph, in both directions, with no cycles.
+    if (!an.descendants('dpa').includes('reg-analytics')) v.push('transitive dependents not resolved');
+    if (!an.ancestors('reg-analytics').includes('dpa')) v.push('transitive dependencies not resolved');
+    if (an.cycles().length) v.push('cycle between legal instruments');
+    // Policy impact reaches every dependent instrument, system and control.
+    const impact = an.policyImpact('dpa');
+    if (!impact.affectedControls.includes('APP-FIT-ANALYTICS-PRIVACY')) v.push('policy impact did not reach a transitive control');
+    if (impact.advisoryOnly !== true) v.push('policy impact is not advisory');
+    // Service dependency mapping resolves system → governing instruments.
+    if (!(an.serviceDependencyMap().reporting || []).length) v.push('service dependency map is empty for a governed system');
+    // Fitness-function impact separates unimplemented controls from failing ones.
+    const fi = an.fitnessImpact('dpa', [{ id: 'FIT-IDENTITY-MINIMIZATION', pass: true }, { id: 'APP-FIT-ANONYMITY-BOUNDARY', pass: false }]);
+    if (!fi.failing.includes('APP-FIT-ANONYMITY-BOUNDARY')) v.push('a failing mandated control was not reported');
+    if (!fi.unimplemented.includes('APP-FIT-ANALYTICS-PRIVACY')) v.push('an unimplemented mandated control was not reported');
+    // Version history is diffable and flags an amendment that WEAKENS the mandate.
+    reg.amend('dpa', { summary: 'narrow scope', mapsToControls: [] });
+    if (!an.versionHistory('dpa').weakeningAmendments.includes(2)) v.push('a weakening amendment was not detected');
+    // Change simulation is possible, risk-banded, and never enacts.
+    const sim = an.simulateChange('reg-report', { proposedControls: [] });
+    if (sim.simulatable !== true || sim.enacts !== false) v.push('legal change simulation is not advisory-only');
+    if (sim.risk.band !== 'high') v.push('removing a mandated control was not banded high risk');
+    if (!sim.risk.reasons.length) v.push('risk band has no explanation');
+    // Obsolete policy detection: a repealed instrument still governing a live system is high.
+    reg.repeal('reg-analytics', { by: 'Attorney General' });
+    if (!an.obsolete().findings.some((f) => f.severity === 'high')) v.push('obsolete policy detection missed a repealed-but-mapped instrument');
+    // Enactment still requires a named human authority.
+    let refused = false; try { reg.enact('dpa', {}); } catch (_) { refused = true; }
+    if (!refused) v.push('an instrument was enacted without a named human authority');
+  }),
+
+  fit('APP-FIT-RECOVERY-STRATEGIES', 'Recovery strategies are compared on RTO/RPO and selected only by a human', (v) => {
+    const { RecoveryStrategyEvaluator } = require('../src/twin2/recovery-strategies');
+    const ev = new RecoveryStrategyEvaluator({ clock: () => 0 });
+    // Every strategy declares all six evaluation dimensions plus its trade-off.
+    for (const s of ev.catalogue()) {
+      for (const dim of ['rtoMinutes', 'rpoMinutes', 'operationalDisruption', 'resourceEfficiency', 'dataIntegrity', 'businessContinuity']) {
+        if (typeof s[dim] !== 'number') v.push(`${s.id}: ${dim} is not quantified`);
+      }
+      if (!s.tradeoff || !s.prerequisites.length) v.push(`${s.id}: no named trade-off or prerequisites`);
+    }
+    if (ev.catalogue().length < 4) v.push('fewer than four recovery strategies are available');
+    // Evaluation is deterministic and explainable (each score shows its terms).
+    const a = ev.evaluate({ incidentType: 'regional-outage' });
+    const b = ev.evaluate({ incidentType: 'regional-outage' });
+    if (JSON.stringify(a) !== JSON.stringify(b)) v.push('strategy evaluation is not deterministic');
+    if (a.strategies.some((s) => !s.terms || Object.keys(s.terms).length !== 6)) v.push('strategy scores are not explainable');
+    // Objectives are enforced: a strategy that cannot meet the RTO is marked, with a reason.
+    const constrained = ev.evaluate({ incidentType: 'regional-outage', constraints: { maxRtoMinutes: 60 } });
+    const violating = constrained.strategies.filter((s) => !s.meetsConstraints);
+    if (!violating.length || violating.some((s) => !s.violations.length)) v.push('RTO constraint was not enforced with an explanation');
+    if (constrained.strategies[0] && !constrained.strategies[0].meetsConstraints) v.push('a constraint-violating strategy was ranked first');
+    // Recommendation is advisory and requires human authorization.
+    const rec = ev.recommend({ incidentType: 'regional-outage', constraints: { maxRtoMinutes: 60 } });
+    if (rec.advisoryOnly !== true || rec.requiresHumanAuthorization !== true) v.push('recovery recommendation is not advisory');
+    if (!rec.explanation) v.push('recommendation has no explanation');
+    // Selection without authorization is refused (fail-closed).
+    let refused = false; try { ev.selected(rec.id); } catch (e) { refused = !!e.failClosed; }
+    if (!refused) v.push('a recovery strategy was selected without human authorization');
+    // Authorization requires a NAMED human and a rationale.
+    let needsHuman = false; try { ev.authorize(rec.id, { by: 'ops' }); } catch (_) { needsHuman = true; }
+    if (!needsHuman) v.push('authorization accepted without a rationale');
+    ev.authorize(rec.id, { by: 'National Disaster Management Office', rationale: 'meets the 60-minute RTO objective' });
+    if (ev.selected(rec.id).strategy !== rec.recommended) v.push('the authorized strategy was not the selected one');
+    if (!ev.auditTrail().some((x) => x.event === 'authorized')) v.push('authorization was not audited');
+  }),
+
+  fit('APP-FIT-DATA-EXCHANGE-PURPOSE', 'Data exchange is purpose-limited, classified, approved and non-commercial', (v) => {
+    const { NationalDataExchange, PROHIBITED_PURPOSES } = require('../src/fabric/data-exchange');
+    const x = new NationalDataExchange({ clock: () => 0 });
+    // Commercial exchange is a named, refused purpose — not merely unimplemented.
+    if (!PROHIBITED_PURPOSES['commercial-exchange']) v.push('commercial exchange is not explicitly prohibited');
+    let refusedCommercial = false;
+    try { x.registerDataset('bad', { owner: 'a', permittedPurposes: ['commercial-exchange'] }); } catch (e) { refusedCommercial = !!e.failClosed; }
+    if (!refusedCommercial) v.push('a dataset was registered for a prohibited purpose');
+    // A dataset must declare its permitted purposes — purpose limitation is never implied.
+    let requiresPurpose = false;
+    try { x.registerDataset('nopurpose', { owner: 'a', permittedPurposes: [] }); } catch (e) { requiresPurpose = !!e.failClosed; }
+    if (!requiresPurpose) v.push('a dataset was registered with no permitted purpose');
+    // Identity fields are still refused at registration (privacy validation is unchanged).
+    let identityRefused = false;
+    try { x.registerDataset('pii', { owner: 'a', schemaFields: ['email'], permittedPurposes: ['analytics'] }); } catch (_) { identityRefused = true; }
+    if (!identityRefused) v.push('a dataset carrying an identity field was registered');
+    x.registerDataset('ds', { owner: 'dcec', classification: 'internal', schemaFields: ['category', 'status'], permittedPurposes: ['analytics'], retentionDays: 30 });
+    // An unapproved dataset cannot be exchanged.
+    let unapproved = false;
+    try { x.requestExchange({ datasetId: 'ds', consumer: 'stats', purpose: 'analytics', approver: 'DGB', justification: 'j' }); } catch (e) { unapproved = !!e.failClosed; }
+    if (!unapproved) v.push('an unapproved dataset was exchanged');
+    x.approveDataset('ds', { by: 'Data Steward', rationale: 'non-identifying aggregate schema' });
+    // A purpose the dataset does not permit is refused.
+    let limited = false;
+    try { x.requestExchange({ datasetId: 'ds', consumer: 'stats', purpose: 'open-government-data' }); } catch (e) { limited = !!e.failClosed; }
+    if (!limited) v.push('purpose limitation was not enforced at request time');
+    // A permitted purpose still requires a named approver and a written justification.
+    let needsApprover = false;
+    try { x.requestExchange({ datasetId: 'ds', consumer: 'stats', purpose: 'analytics' }); } catch (e) { needsApprover = !!e.failClosed; }
+    if (!needsApprover) v.push('an exchange was granted without a named approver');
+    const ag = x.requestExchange({ datasetId: 'ds', consumer: 'stats', purpose: 'analytics', approver: 'DGB Chair', justification: 'national statistics' });
+    if (!ag.purposeLimited || !ag.expiresAt) v.push('the agreement is not purpose-limited or has no retention bound');
+    // Purpose limitation at USE time: reuse for another purpose is refused.
+    if (x.checkUse({ agreementId: ag.id, purpose: 'inter-agency-exchange' }).permitted) v.push('exchanged data was reusable for another purpose');
+    if (!x.checkUse({ agreementId: ag.id, purpose: 'analytics' }).permitted) v.push('the agreed purpose was not permitted');
+    // Retention is enforced: after the window the agreement no longer permits use.
+    const after = ag.expiresAt + 1;
+    if (x.checkUse({ agreementId: ag.id, purpose: 'analytics', now: after }).permitted) v.push('use was permitted after the retention period elapsed');
+    if (!x.retentionDue({ now: after }).length) v.push('retention-due agreements are not reported');
+    // Every step is audited across both the registry and the exchange.
+    const events = x.auditTrail().map((e) => e.event);
+    for (const required of ['dataset-registered', 'dataset-approved', 'exchange-granted']) if (!events.includes(required)) v.push(`exchange audit is missing '${required}'`);
+  }),
+
+  fit('APP-FIT-PROCESS-GOVERNANCE', 'Process mining detects governance deviation and fraud signals without identifying anyone', (v) => {
+    const pg = require('../src/orchestration/process-governance');
+    const ev = (streamId, type, at, actor) => ({ streamId, type, meta: { at, actor } });
+    const events = [
+      ev('C1', 'CaseSubmitted', 0, 'sys'), ev('C1', 'CaseReviewed', 1000, 'inv-1'), ev('C1', 'GovernanceDecided', 2000, 'inv-1'),
+      ev('C2', 'CaseSubmitted', 0, 'sys'), ev('C2', 'CaseReviewed', 600_000, 'inv-2'), ev('C2', 'CaseTransitioned', 1_200_000, 'inv-3'),
+      ev('C3', 'GovernanceDecided', 0, 'gov-1'),
+    ];
+    // Governance deviation: a case that skipped a mandated step.
+    const dev = pg.governanceDeviations(events, { requiredSequence: ['CaseSubmitted', 'CaseReviewed'] });
+    if (!dev.findings.some((f) => f.caseId === 'C3' && /missing/.test(f.reason))) v.push('a skipped mandated step was not detected');
+    // Policy violation from a data-defined rule.
+    const pol = pg.policyViolations(events, { rules: [{ id: 'review-before-decision', requires: { activity: 'GovernanceDecided', precededBy: 'CaseReviewed' } }] });
+    if (!pol.findings.some((f) => f.caseId === 'C3')) v.push('a policy rule violation was not detected');
+    // Separation of duties: one actor reviewed and decided the same case.
+    const sod = pg.segregationOfDutiesBreaches(events);
+    if (!sod.findings.some((f) => f.caseId === 'C1')) v.push('a separation-of-duties breach was not detected');
+    // Approval anomaly: an approval faster than any plausible review.
+    const app = pg.approvalAnomalies(events, { minDwellMs: 60_000 });
+    if (!app.findings.some((f) => /faster than/.test(f.reason))) v.push('rubber-stamped approval was not detected');
+    // Fraud indicators are composite, explainable and advisory.
+    const fraud = pg.fraudIndicators(events, { minDwellMs: 60_000 });
+    const c1 = fraud.findings.find((f) => f.caseId === 'C1');
+    if (!c1 || c1.signalCount < 2 || c1.severity !== 'high') v.push('coinciding governance signals did not raise an indicator');
+    if (fraud.advisoryOnly !== true) v.push('fraud indicators are not advisory');
+    // Compliance failures: SLA breach and cases that never terminated.
+    const comp = pg.complianceFailures(events, { slaMs: 1000 });
+    if (!comp.findings.length) v.push('compliance failures were not detected');
+    // Correlation with the fitness gate explains, never re-classifies.
+    const full = pg.report(events, { requiredSequence: ['CaseSubmitted', 'CaseReviewed'], fitnessResults: [{ id: 'APP-FIT-AUTHZ-DEFAULT-DENY', pass: true }] });
+    const corr = full.correlation.correlations.find((c) => c.control === 'APP-FIT-AUTHZ-DEFAULT-DENY');
+    if (!corr || !/does not cover this path/.test(corr.interpretation)) v.push('a finding under a green control was not flagged as a scope gap');
+    if (full.advisoryOnly !== true || full.authorizes !== false) v.push('the process governance report claims authority');
+    // Deterministic, and no identity ever appears in a finding.
+    if (JSON.stringify(pg.report(events)) !== JSON.stringify(pg.report(events))) v.push('process governance is not deterministic');
+    if (/"email"|"omang"|"nationalId"|@/.test(JSON.stringify(full))) v.push('process governance leaked identity');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

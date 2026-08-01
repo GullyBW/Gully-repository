@@ -119,7 +119,7 @@ const ITEMS = {
     target: 'Persistent registry federated with participating agencies, purpose-limited access tokens, and retention enforcement.',
     strategy: 'Persist the registry, then federate discovery per agreement. Purpose limitation and named approval stay in the exchange, never in the consumer.',
     dependsOn: ['storage', 'identity'], risks: ['Purpose creep: data shared for one purpose is reused for another.', 'A restricted dataset becomes discoverable through a federated catalogue.', 'Retention is not enforced after the agreement expires.'],
-    validations: ['APP-FIT-LEGISLATION-MARKETPLACE', 'APP-FIT-PRIVACY-ENGINEERING'],
+    validations: ['APP-FIT-DATA-EXCHANGE-PURPOSE', 'APP-FIT-LEGISLATION-MARKETPLACE', 'APP-FIT-PRIVACY-ENGINEERING'],
     rollback: 'Suspend federation and revert to owner-local catalogues; existing agreements remain valid and auditable.',
   },
   processmining: {
@@ -128,7 +128,7 @@ const ITEMS = {
     target: 'Mining over the durable event store at national volume, incremental rather than full-scan, with findings correlated to fitness functions.',
     strategy: 'Point the miner at the persisted log, add windowed incremental computation, keep every output advisory and explainable.',
     dependsOn: ['audit', 'messaging'], risks: ['Volume makes full-scan mining infeasible and silently truncates.', 'An actor identifier becomes personally identifying at scale.', 'A finding is treated as a verdict rather than a signal.'],
-    validations: ['APP-FIT-PROCESS-MINING', 'APP-FIT-ANALYTICS-PRIVACY'],
+    validations: ['APP-FIT-PROCESS-MINING', 'APP-FIT-PROCESS-GOVERNANCE', 'APP-FIT-ANALYTICS-PRIVACY'],
     rollback: 'Fall back to windowed mining over a bounded replay; outputs are advisory, so degradation has no authorization impact.',
   },
   observatory: {
