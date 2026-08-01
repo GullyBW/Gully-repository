@@ -86,6 +86,8 @@ const { DataMarketplace } = require('../src/fabric/marketplace');
 const { LegislativeRegistry } = require('../src/legislation/registry');
 const contextMap = require('../src/architecture/context-map');
 const ownership = require('../src/governance/ownership');
+const { ContractRegistry, CANONICAL_ERRORS } = require('../src/contracts/integration-contracts');
+const migration = require('../src/migration/roadmap');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -780,6 +782,63 @@ module.exports = [
     if (!a.dataSteward || !a.purpose) v.push('accountability lookup did not resolve through the context map');
     // The ownership model records accountability; it must not carry personal data.
     if (/@|omang|nationalId/i.test(JSON.stringify(ownership.model()))) v.push('ownership model leaked personal data (roles only)');
+  }),
+
+  fit('APP-FIT-INTEGRATION-CONTRACTS', 'Every boundary crossing has a versioned contract; breaking changes are refused', (v) => {
+    const reg = new ContractRegistry();
+    for (const violation of reg.validate().violations) v.push(violation);
+    // Every context that crosses a boundary by event or HTTP is covered by a contract.
+    if (reg.coverage().uncovered.length) v.push('uncovered boundary contexts: ' + reg.coverage().uncovered.join(', '));
+    // Contracts declare only canonical errors, so consumers handle failure uniformly.
+    for (const c of reg.list()) for (const e of c.errors) if (!CANONICAL_ERRORS[e]) v.push(`${c.id}: non-canonical error ${e}`);
+    // A backward-compatible addition is a minor version; removing a field is major.
+    if (reg.compatibility('api.reports.submit', { fields: { required: ['category'], optional: ['extra', 'locale'] } }).requiredBump !== 'minor') v.push('adding an optional field was not classified as minor');
+    if (reg.compatibility('api.reports.submit', { fields: { required: ['category', 'urgency'], optional: ['extra'] } }).breaking !== true) v.push('adding a required field was not classified as breaking');
+    // A breaking revision is REFUSED unless a major version + sunset are declared (fail-closed).
+    let refused = false;
+    try { reg.revise('api.case.transition', { fields: { required: ['case_code'], optional: [] } }); } catch (e) { refused = !!e.failClosed; }
+    if (!refused) v.push('a breaking contract revision was accepted without a major version');
+    let sunsetRequired = false;
+    try { reg.revise('api.case.transition', { fields: { required: ['case_code'], optional: [] } }, { major: true }); } catch (e) { sunsetRequired = !!e.failClosed; }
+    if (!sunsetRequired) v.push('a major contract version was accepted without a recorded sunset');
+    // Changing authentication is always breaking and always security-reviewed.
+    const authChange = reg.compatibility('api.oversight.dashboard', { authentication: 'anonymous' });
+    if (!authChange.breaking || !authChange.securityReview) v.push('an authentication change was not treated as a breaking, security-relevant change');
+    // A contract may never carry an identity/content field on its surface.
+    let identityRefused = false;
+    try { reg.register('api.bad', { kind: 'api', operation: 'POST /x', owner: 'intake', consumers: ['external-consumer'], fields: { required: ['email'] }, authentication: 'anonymous', errors: ['VALIDATION_FAILED'] }); } catch (e) { identityRefused = !!e.failClosed; }
+    if (!identityRefused) v.push('a contract accepted an identity field');
+    // Generated artifacts stay in step with the registry and are deterministic.
+    if (JSON.stringify(reg.toOpenApi()) !== JSON.stringify(new ContractRegistry().toOpenApi())) v.push('generated OpenAPI is not deterministic');
+    if (reg.eventDefinitions().some((e) => !e.ordered || !e.piiFree)) v.push('an event definition lost its ordering or PII-free guarantee');
+  }),
+
+  fit('APP-FIT-MIGRATION-ROADMAP', 'Every synthetic subsystem has a validated, reversible migration path', (v) => {
+    for (const violation of migration.validate().violations) v.push(violation);
+    // Each of the named subsystems in the transition plan is covered.
+    const covered = migration.items().map((i) => i.subsystem.replace(' 🔒', ''));
+    for (const required of ['Identity', 'Cryptography', 'Storage', 'Messaging', 'Audit', 'Policy Engine', 'Governance Portal', 'Data Exchange', 'Process Mining', 'Performance Observatory']) {
+      if (!covered.some((s) => s.startsWith(required))) v.push(`migration roadmap does not cover ${required}`);
+    }
+    // Every required validation must name a fitness function that actually exists.
+    const known = new Set([
+      ...require('../../njtip-twin/verification/fitness').map((f) => f.id),
+      ...require('./app-fitness').map((f) => f.id),
+      ...require('./infra-fitness').map((f) => f.id),
+    ]);
+    for (const item of migration.items()) for (const id of item.validations) if (!known.has(id)) v.push(`${item.id}: validation '${id}' is not a real fitness function`);
+    // Every item is reversible and its risks are named — no unrehearsed cutover.
+    for (const item of migration.items()) {
+      if (!migration.rollbackPlan(item.id).rollback) v.push(`${item.id}: no rollback strategy`);
+      if (!item.risks.length) v.push(`${item.id}: no named risks`);
+    }
+    // Readiness is advisory and never authorizes, even when everything passes.
+    const r = migration.readiness('identity', { fitnessResults: [...known].map((id) => ({ id, pass: true })) });
+    if (r.humanGate !== true || r.authorizes !== false) v.push('migration readiness is not human-gated / claims authority');
+    // Incremental order holds: dependencies are sequenced before their dependents.
+    const order = migration.sequence().order;
+    if (migration.sequence().unresolved.length) v.push('migration sequence has an unresolved cycle');
+    for (const item of migration.items()) for (const dep of item.dependsOn) if (order.indexOf(dep) > order.indexOf(item.id)) v.push(`${item.id} is sequenced before its dependency ${dep}`);
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

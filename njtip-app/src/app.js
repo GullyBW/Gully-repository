@@ -29,6 +29,8 @@ const { IdentityRegistry } = require('./iam/digital-identity');
 const { InfrastructureRegistry } = require('./infra/infra-governance');
 const architecture = require('./architecture/context-map');
 const ownership = require('./governance/ownership');
+const { ContractRegistry } = require('./contracts/integration-contracts');
+const migration = require('./migration/roadmap');
 const zeroTrust = require('./iam/zero-trust');
 const formalVerification = require('./orchestration/formal-verification');
 const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
@@ -304,12 +306,20 @@ function createApp(overrides = {}) {
   if (!architectureValidation.valid) throw new Error('context map invalid: ' + architectureValidation.violations.join('; '));
   const ownershipValidation = ownership.validate();
   if (!ownershipValidation.valid) throw new Error('governance ownership model invalid: ' + ownershipValidation.violations.join('; '));
+  // Stable integration contracts (Part 3) + the component migration roadmap (Part 4). The
+  // contract registry is the published interface surface; a boundary crossing without a
+  // contract, or a migration item without a rollback, refuses composition.
+  const contracts = new ContractRegistry();
+  const contractValidation = contracts.validate();
+  if (!contractValidation.valid) throw new Error('integration contracts invalid: ' + contractValidation.violations.join('; '));
+  const migrationValidation = migration.validate();
+  if (!migrationValidation.valid) throw new Error('migration roadmap invalid: ' + migrationValidation.violations.join('; '));
 
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

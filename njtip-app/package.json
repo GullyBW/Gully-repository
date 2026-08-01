@@ -13,7 +13,8 @@
     "perf": "node scripts/perf.js",
     "health": "node scripts/engineering-health.js",
     "infra-baseline": "node scripts/infra-baseline.js",
-    "devsecops": "node scripts/devsecops.js"
+    "devsecops": "node scripts/devsecops.js",
+    "contracts": "node scripts/contracts.js"
   },
   "license": "SEE-BLUEPRINT",
   "dependencies": {},

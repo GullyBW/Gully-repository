@@ -9,7 +9,7 @@ const { createApp } = require('./app');
 const openapi = require('./openapi');
 const { newTraceId } = require('./adapters/observability');
 const configMod = require('./config');
-const { twinValidate } = require('./twin-validate');
+const { twinValidate, runTwin, runApp, runInfra } = require('./twin-validate');
 const { makePackage } = require('../scripts/evidence-package');
 const { assess } = require('../scripts/readiness');
 
@@ -134,6 +134,10 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/architecture/context-map') { requireRole('admin'); return json(200, app.architecture.contextMap()); }
   if (method === 'GET' && (m = p.match(/^\/api\/architecture\/contexts\/([^/]+)$/))) { requireRole('admin'); const id = dec(m[1]); return json(200, { ...app.architecture.describe(id), ...app.architecture.coupling(id), cohesion: app.architecture.cohesion(id), relations: app.architecture.upstreamDownstream(id), accountability: app.ownership.describe(id) }); }
   if (method === 'GET' && p === '/api/governance/ownership') { requireRole('admin'); return json(200, app.ownership.model()); }
+  if (method === 'GET' && p === '/api/contracts') { requireRole('admin'); return json(200, app.contracts.catalogue()); }
+  if (method === 'GET' && (m = p.match(/^\/api\/contracts\/([^/]+)$/))) { requireRole('admin'); return json(200, { ...app.contracts.describe(dec(m[1])), history: app.contracts.history(dec(m[1])) }); }
+  if (method === 'GET' && p === '/api/contracts/openapi') { requireRole('admin'); return json(200, app.contracts.toOpenApi()); }
+  if (method === 'GET' && p === '/api/migration/roadmap') { requireRole('admin'); const fitnessResults = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); return json(200, app.migration.roadmap({ fitnessResults })); }
   if (method === 'POST' && p === '/api/orchestration/verify') { requireRole('admin'); return json(200, app.formalVerification.proveCorrectness(body.def || {}, { safety: body.safety })); }
   if (method === 'POST' && p === '/api/breakglass') { const u = requireRole('admin'); return json(201, app.iam.breakGlass.request({ principal: body.principal || u.principal, justification: body.justification, approver: body.approver })); }
   if (method === 'GET' && p === '/api/admin/breakglass') { requireRole('admin'); return json(200, { grants: app.iam.breakGlass.ledger() }); }
