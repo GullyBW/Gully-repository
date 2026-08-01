@@ -130,6 +130,10 @@ async function route(app, req, url, body) {
   // National digital identity (Phase 51) + infrastructure governance (Phase 52).
   if (method === 'GET' && (m = p.match(/^\/api\/identity\/credential\/([^/]+)\/verify$/))) { requireRole('admin'); return json(200, app.digitalIdentity.verifyCredential(dec(m[1]))); }
   if (method === 'GET' && p === '/api/admin/infra-governance') { requireRole('admin'); return json(200, { resources: app.infraGovernance.list(), compliance: app.infraGovernance.validateCompliance(), readiness: app.infraGovernance.readiness() }); }
+  // --- Architecture stabilization (v1.9): architecture-of-record + institutional accountability ---
+  if (method === 'GET' && p === '/api/architecture/context-map') { requireRole('admin'); return json(200, app.architecture.contextMap()); }
+  if (method === 'GET' && (m = p.match(/^\/api\/architecture\/contexts\/([^/]+)$/))) { requireRole('admin'); const id = dec(m[1]); return json(200, { ...app.architecture.describe(id), ...app.architecture.coupling(id), cohesion: app.architecture.cohesion(id), relations: app.architecture.upstreamDownstream(id), accountability: app.ownership.describe(id) }); }
+  if (method === 'GET' && p === '/api/governance/ownership') { requireRole('admin'); return json(200, app.ownership.model()); }
   if (method === 'POST' && p === '/api/orchestration/verify') { requireRole('admin'); return json(200, app.formalVerification.proveCorrectness(body.def || {}, { safety: body.safety })); }
   if (method === 'POST' && p === '/api/breakglass') { const u = requireRole('admin'); return json(201, app.iam.breakGlass.request({ principal: body.principal || u.principal, justification: body.justification, approver: body.approver })); }
   if (method === 'GET' && p === '/api/admin/breakglass') { requireRole('admin'); return json(200, { grants: app.iam.breakGlass.ledger() }); }

@@ -84,6 +84,8 @@ const { ProvenanceLedger } = require('../src/fabric/provenance');
 const { InteroperabilityProfile } = require('../src/fabric/interoperability');
 const { DataMarketplace } = require('../src/fabric/marketplace');
 const { LegislativeRegistry } = require('../src/legislation/registry');
+const contextMap = require('../src/architecture/context-map');
+const ownership = require('../src/governance/ownership');
 const configMod = require('../src/config');
 const { ZONES } = require('../src/twin');
 
@@ -742,6 +744,42 @@ module.exports = [
     // Kill-switch overrides rollout.
     ff.set('f', { enabled: false, rolloutPct: 100 });
     if (ff.isEnabled('f', { subject: 'x' })) v.push('kill-switch did not disable the feature');
+  }),
+
+  fit('APP-FIT-CONTEXT-MAP', 'The context map is complete, acyclic, and owns every source module', (v) => {
+    // The architecture-of-record must stay true: purposes, rationale, known relationship
+    // patterns, no dependency cycles, no unreviewed responsibility overlap.
+    const res = contextMap.validate();
+    for (const violation of res.violations) v.push(violation);
+    // Every module under src/ belongs to exactly one bounded context (no orphan code).
+    const mo = contextMap.moduleOwnership();
+    if (mo.modules === 0) v.push('module ownership resolved no modules');
+    // Boundaries must be crossed through a declared mechanism, never implicitly.
+    for (const p of contextMap.communicationPaths()) {
+      if (!contextMap.RELATIONSHIPS.has(p.relationship)) v.push(`undeclared relationship on ${p.from}→${p.to}`);
+      if (!contextMap.MECHANISMS.has(p.mechanism)) v.push(`undeclared mechanism on ${p.from}→${p.to}`);
+    }
+    // The assurance context must never be downstream of a context it validates (no capture).
+    const assurance = contextMap.upstreamDownstream('assurance');
+    if (assurance.upstream.includes('governance-oversight')) v.push('assurance depends on governance-oversight (regulator capture)');
+    // Deterministic: the map renders identically on repeated reads.
+    if (JSON.stringify(contextMap.contextMap()) !== JSON.stringify(contextMap.contextMap())) v.push('context map is not deterministic');
+  }),
+
+  fit('APP-FIT-GOVERNANCE-OWNERSHIP', 'Every bounded context has a complete, SoD-respecting institutional owner', (v) => {
+    const res = ownership.validate();
+    for (const violation of res.violations) v.push(violation);
+    // Separation of duties is structural: nobody approves their own subsystem.
+    for (const s of ownership.subsystems()) {
+      const o = ownership.describe(s);
+      if (o.responsibleAuthority === o.approvingAuthority) v.push(`${s}: responsible authority also approves`);
+      if (ownership.escalationPath(s).terminatesAt !== o.governanceBoard) v.push(`${s}: escalation does not terminate at its governance board`);
+    }
+    // Accountability resolves from the context map (technical and organisational models agree).
+    const a = ownership.accountabilityFor('intake');
+    if (!a.dataSteward || !a.purpose) v.push('accountability lookup did not resolve through the context map');
+    // The ownership model records accountability; it must not carry personal data.
+    if (/@|omang|nationalId/i.test(JSON.stringify(ownership.model()))) v.push('ownership model leaked personal data (roles only)');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

@@ -27,6 +27,8 @@ const { PolicySet, DEFAULT_POLICIES } = require('./iam/policy-engine');
 const { PolicyRegistry } = require('./iam/policy-governance');
 const { IdentityRegistry } = require('./iam/digital-identity');
 const { InfrastructureRegistry } = require('./infra/infra-governance');
+const architecture = require('./architecture/context-map');
+const ownership = require('./governance/ownership');
 const zeroTrust = require('./iam/zero-trust');
 const formalVerification = require('./orchestration/formal-verification');
 const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
@@ -295,11 +297,19 @@ function createApp(overrides = {}) {
     evolution: () => { const f = _fitness(); const all = [...f.twin, ...f.app, ...f.infra].map((r) => ({ id: r.id, pass: r.pass })); return { healthy: evolution.technicalDebt(all).openInvariantFailures === 0 }; },
   });
 
+  // Architecture stabilization (v1.9): the context map is the architecture-of-record and the
+  // ownership model is the organisational accountability record. Both are descriptive and
+  // validated by fitness — a startup gate refuses to compose an invalid architecture-of-record.
+  const architectureValidation = architecture.validate();
+  if (!architectureValidation.valid) throw new Error('context map invalid: ' + architectureValidation.violations.join('; '));
+  const ownershipValidation = ownership.validate();
+  if (!ownershipValidation.valid) throw new Error('governance ownership model invalid: ' + ownershipValidation.violations.join('; '));
+
   logger.info('app.initialized', { mode: cfg.mode, persistence: cfg.persistence, version: cfg.version });
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
