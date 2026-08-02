@@ -89,7 +89,8 @@ test('ADR: each ADR is held to the schema in force when it was written', () => {
 });
 
 test('ADR: an unmeasurable success criterion fails validation', () => {
-  const fs = require('node:fs'); const path = require('node:path');
+  // Validated in memory: writing a probe into the real catalogue would make this test a source of
+  // non-determinism for every other process reading that directory.
   const filler = 'This section carries enough prose to clear the minimum-content threshold comfortably.';
   const craft = (criterion) => {
     let doc = '# ADR-0098: crafted probe\n\n- **Status:** Accepted\n\n';
@@ -100,18 +101,13 @@ test('ADR: an unmeasurable success criterion fails validation', () => {
     }
     return doc;
   };
-  const file = '0098-measurability-probe.md';
-  const p = path.join(adr.ADR_DIR, file);
-  try {
-    fs.writeFileSync(p, craft('We will improve reliability and make everything better for everyone.'));
-    const vague = adr.validateAdr(file);
-    assert.strictEqual(vague.valid, false);
-    assert.ok(vague.violations.some((x) => /no measurable value/.test(x)));
-    fs.writeFileSync(p, craft('p95 latency under 500 ms across a 30-day window.'));
-    const ok = adr.validateAdr(file);
-    assert.strictEqual(ok.valid, true, ok.violations.join('; '));
-    assert.strictEqual(ok.schema, 'extended');
-  } finally { fs.rmSync(p, { force: true }); }
+  const probe = (criterion) => adr.validateParsed(adr.parseText(craft(criterion), { file: '0098-probe.md', number: 98 }));
+  const vague = probe('We will improve reliability and make everything better for everyone.');
+  assert.strictEqual(vague.valid, false);
+  assert.ok(vague.violations.some((x) => /no measurable value/.test(x)));
+  const ok = probe('p95 latency under 500 ms across a 30-day window.');
+  assert.strictEqual(ok.valid, true, ok.violations.join('; '));
+  assert.strictEqual(ok.schema, 'extended');
 });
 
 test('ADR: lifecycle and architectural debt are queryable', () => {

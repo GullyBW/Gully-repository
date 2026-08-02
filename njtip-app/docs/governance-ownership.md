@@ -1,4 +1,4 @@
-# Governance Ownership Model (Stabilization Part 14)
+# Governance Ownership Model (Stabilization Part 14 · Phase 11, Part 13)
 
 Technical architecture must reflect **organisational accountability**. Every bounded context in the
 [context map](./context-map.md) has exactly one accountability record naming who is responsible, who
@@ -82,3 +82,70 @@ identity: Platform Security Operations → National Identity Authority → ISRB
 
 **Roles only.** The model never stores a named individual, an email address or any personal
 identifier — a fitness check asserts it.
+
+---
+
+# Governance Continuity (Phase 11, Part 13)
+
+An owner who is on leave is an owner who cannot decide, and a governance object with nobody
+available to decide is a governance object that has quietly stopped being governed. Continuity
+makes that visible instead of leaving it to be discovered.
+
+Gated by `APP-FIT-GOVERNANCE-CONTINUITY`. Live: `GET /api/governance/continuity`.
+
+## Deputies are derived, not listed
+
+> **The rule:** *Deputy &lt;primary office&gt;*, unless an override records a different named deputy.
+
+Deriving them from a stated rule rather than hand-listing thirty records means **a new bounded
+context cannot be added without a deputy** — there is nothing to forget to fill in. Overrides exist
+where the deputy is genuinely a different office: a board's deputy is its **vice-chair**, not a
+"Deputy Board".
+
+Two structural rules are checked as part of ownership validation itself, because a continuity model
+that quietly breaks separation of duties is worse than none:
+
+- A deputy may never be the primary.
+- **Substitution must not collapse separation of duties** — the deputy responsible authority may not
+  be the approving authority or its deputy. Otherwise one person's absence dissolves the separation
+  the primary structure exists to keep.
+
+## Availability and the effective owner
+
+An absence names a person, a reason, the human who recorded it, and **a start and an end**. An
+open-ended absence is refused: that is an unfilled post, not an absence.
+
+```
+effectiveOwner(subsystem, role, at)
+  primary available  → the primary holds it
+  primary away       → the named deputy holds it
+  both away          → OWNERSHIP GAP; escalates to the governance board
+```
+
+Nothing defaults to whoever happens to be around. `coverageScore()` reports the fraction of
+(subsystem × role) pairs with somebody actually able to decide — 120 pairs across the platform — and
+`ownershipGaps()` names every one that is uncovered, structurally defective, or overdue for review.
+
+## Succession
+
+```
+1. primary accountable office
+2. named deputy
+3. the governance board — the terminal authority
+```
+
+Every chain has exactly this shape and always ends at a board. **A succession chain that ends in a
+person can end in nobody.** Where the accountable office *is* the board, the chain reads chair →
+vice-chair → the board sitting as a body: a chair acting alone and a quorate board are different
+authorities, and only the second can act when the first two cannot.
+
+## Review cadence
+
+| Board | Cadence |
+|---|---|
+| ISRB · OB | 90 days |
+| ARB · DGB · ORB | 180 days |
+| SDB | 365 days |
+
+**A never-reviewed record is `overdue`, not `pending`.** A record nobody has ever checked is the
+least trustworthy kind, so it cannot sit in a softer bucket than one merely reviewed too long ago.

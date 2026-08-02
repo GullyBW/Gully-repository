@@ -2662,7 +2662,8 @@ module.exports = [
     // MEASURABILITY IS CHECKED, NOT REQUESTED. The rule must be able to fail, so it is fed a
     // criterion that reads well and commits to nothing.
     if (!adr.schema().measurableSections.includes('Measurable success criteria')) v.push('the measurable-content check does not cover the success criteria section');
-    const fsX = require('node:fs'); const pathX = require('node:path');
+    // The probe is validated IN MEMORY. Writing it into the real catalogue would make this check
+    // a source of non-determinism for anything else reading that directory concurrently.
     const filler = 'This section carries enough prose to clear the minimum-content threshold comfortably.';
     const craft = (criterion) => {
       let doc = '# ADR-0099: crafted probe\n\n- **Status:** Accepted\n\n';
@@ -2673,18 +2674,13 @@ module.exports = [
       }
       return doc;
     };
-    const probeFile = '0099-measurability-probe.md';
-    const probePath = pathX.join(adr.ADR_DIR, probeFile);
-    try {
-      fsX.writeFileSync(probePath, craft('We will improve reliability and make everything better for everyone involved.'));
-      const vague = adr.validateAdr(probeFile);
-      if (vague.valid) v.push('an ADR whose success criteria contain no measurable value was accepted');
-      if (!vague.violations.some((x) => /no measurable value/.test(x))) v.push('the measurability failure was not named');
-      fsX.writeFileSync(probePath, craft('p95 latency stays under 500 ms across a 30-day window; 108 invariants hold.'));
-      const measurable = adr.validateAdr(probeFile);
-      if (!measurable.valid) v.push('a genuinely measurable criterion was rejected: ' + measurable.violations.join('; '));
-      if (measurable.schema !== 'extended') v.push('ADR-0099 was not held to the extended schema');
-    } finally { fsX.rmSync(probePath, { force: true }); }
+    const probe = (criterion) => adr.validateParsed(adr.parseText(craft(criterion), { file: '0099-probe.md', number: 99 }));
+    const vague = probe('We will improve reliability and make everything better for everyone involved.');
+    if (vague.valid) v.push('an ADR whose success criteria contain no measurable value was accepted');
+    if (!vague.violations.some((x) => /no measurable value/.test(x))) v.push('the measurability failure was not named');
+    const measurable = probe('p95 latency stays under 500 ms across a 30-day window; 108 invariants hold.');
+    if (!measurable.valid) v.push('a genuinely measurable criterion was rejected: ' + measurable.violations.join('; '));
+    if (measurable.schema !== 'extended') v.push('ADR-0099 was not held to the extended schema');
     // The real catalogue satisfies the rule, or it is decorative here.
     for (const a of res.adrs.filter((x) => x.schema === 'extended')) {
       const crit = adr.parse(a.file).sections['measurable success criteria'];
@@ -2949,6 +2945,286 @@ module.exports = [
     if (prod.productionReady !== false) v.push('the production readiness package declared the platform production-ready');
     if (prod.outstandingHumanItems < 5) v.push('the human items required before production are not enumerated');
     if (!prod.humanItems.some((i) => /cryptography/i.test(i.item))) v.push('human-built cryptography is not listed as a human item');
+  }),
+
+  fit('APP-FIT-GOVERNANCE-CONTINUITY', 'Every accountable role has a deputy, availability is recorded, and a role nobody can fill is an ownership gap', (v) => {
+    const own = require('../src/governance/ownership');
+
+    // Every subsystem has a deputy for every accountable role, and a deputy is never the primary.
+    for (const id of own.subsystems()) {
+      const o = own.OWNERSHIP[id];
+      const dep = own.deputies(id);
+      for (const role of own.DEPUTY_ROLES) {
+        if (!dep[role]) v.push(`${id}/${role}: no deputy`);
+        if (dep[role] === o[role]) v.push(`${id}/${role}: the deputy is the primary`);
+      }
+      // Substitution must not collapse separation of duties.
+      if (dep.responsibleAuthority === o.approvingAuthority || dep.responsibleAuthority === dep.approvingAuthority) {
+        v.push(`${id}: substituting the deputy responsible authority collapses separation of duties`);
+      }
+    }
+    // The deputy rule is stated, not implicit.
+    if (!own.DEPUTY_RULE) v.push('the deputy derivation rule is not stated');
+    // Structural continuity defects fail ownership validation itself.
+    for (const violation of own.validate().violations) v.push(violation);
+
+    // Succession chains terminate at a board — a chain that ends in a person can end in nobody.
+    for (const id of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        const plan = own.successionPlan(id, role);
+        if (plan.chain.length < 3) v.push(`${id}/${role}: succession chain is shorter than primary → deputy → board`);
+        if (!plan.terminatesAtBoard) v.push(`${id}/${role}: succession does not terminate at a board`);
+        const terminal = plan.chain[plan.chain.length - 1].holder;
+        if (!own.boards().some((b) => b.name === terminal)) v.push(`${id}/${role}: succession terminates at '${terminal}', which is not a board`);
+        for (const step of plan.chain) if (!step.basis) v.push(`${id}/${role}: a succession step states no basis`);
+      }
+    }
+
+    // Availability: an absence must be named, reasoned, recorded by a human and TIME-BOUNDED.
+    const reg = new own.AvailabilityRegister({ clock: () => 1_000 });
+    for (const bad of [{}, { person: 'X' }, { person: 'X', by: 'Y', reason: 'r' }, { person: 'X', by: 'Y', reason: 'r', from: 100, until: 50 }]) {
+      let refused = false;
+      try { reg.recordAbsence(bad); } catch (_) { refused = true; }
+      if (!refused) v.push(`an invalid absence was accepted: ${JSON.stringify(bad)}`);
+    }
+    let unbounded = false;
+    try { reg.recordAbsence({ person: 'X', by: 'Y', reason: 'sabbatical', from: 0, until: Infinity }); } catch (_) { unbounded = true; }
+    if (!unbounded) v.push('an open-ended absence was accepted — that is an unfilled post, not an absence');
+
+    // Full coverage with nobody absent.
+    const clean = own.coverageScore({ availability: reg, now: 1_000 });
+    if (!clean.complete || clean.coverage !== 1) v.push('coverage is incomplete with nobody recorded absent');
+    if (clean.uncovered !== 0) v.push('a role was uncovered with nobody absent');
+    if (clean.pairs !== own.subsystems().length * own.DEPUTY_ROLES.length) v.push('coverage does not span every subsystem and role');
+
+    // THE CHAIN MUST WORK: with the primary away, the deputy holds it.
+    const primary = own.OWNERSHIP['intake'].approvingAuthority;
+    const deputy = own.deputyOf(primary);
+    reg.recordAbsence({ person: primary, from: 0, until: 5_000, reason: 'recess', by: 'Oversight Board Secretariat' });
+    const viaDeputy = reg.effectiveOwner('intake', 'approvingAuthority', 1_000);
+    if (!viaDeputy.covered || viaDeputy.via !== 'deputy' || viaDeputy.holder !== deputy) v.push('an absent primary did not hand over to the named deputy');
+    // …and after the absence ends, the primary holds it again without anyone doing anything.
+    const restored = reg.effectiveOwner('intake', 'approvingAuthority', 6_000);
+    if (restored.via !== 'primary') v.push('the primary did not resume once the absence ended');
+
+    // AND IT MUST FAIL: with both away, this is an ownership GAP that escalates.
+    reg.recordAbsence({ person: deputy, from: 0, until: 5_000, reason: 'recess', by: 'Oversight Board Secretariat' });
+    const gapped = reg.effectiveOwner('intake', 'approvingAuthority', 1_000);
+    if (gapped.covered) v.push('a role with neither primary nor deputy available was reported as covered');
+    if (gapped.holder !== null) v.push('an uncovered role named a holder anyway');
+    if (!gapped.escalateTo) v.push('an uncovered role did not escalate to a board');
+    const degraded = own.coverageScore({ availability: reg, now: 1_000 });
+    if (degraded.complete || degraded.coverage >= 1) v.push('coverage stayed complete with an uncovered role');
+    if (!degraded.uncovered) v.push('the uncovered role was not counted');
+    const gaps = own.ownershipGaps({ availability: reg, now: 1_000, lastReviewed: Object.fromEntries(own.subsystems().map((s) => [s, 1_000])) });
+    if (gaps.clean) v.push('an estate with an uncovered role reported clean');
+    if (!gaps.gaps.some((g) => g.kind === 'availability' && g.subsystem === 'intake')) v.push('the availability gap was not named');
+
+    // Review schedule: never-reviewed is OVERDUE, not pending.
+    const never = own.reviewSchedule({ now: 0 });
+    if (!never.every((r) => r.overdue)) v.push('a never-reviewed governance record was not treated as overdue');
+    if (!never.every((r) => r.cadenceDays > 0 && r.board)) v.push('a review row is missing its cadence or board');
+    const day = 24 * 3600_000;
+    const justReviewed = own.reviewSchedule({ now: day, lastReviewed: Object.fromEntries(own.subsystems().map((s) => [s, day])) });
+    if (justReviewed.some((r) => r.overdue)) v.push('a just-reviewed record was reported overdue');
+    const longAgo = own.reviewSchedule({ now: 400 * day, lastReviewed: Object.fromEntries(own.subsystems().map((s) => [s, 0])) });
+    if (!longAgo.every((r) => r.overdue)) v.push('a record reviewed 400 days ago is not overdue at any cadence');
+    // The strictest boards review most often.
+    if (!(own.REVIEW_CADENCE_DAYS.ISRB <= own.REVIEW_CADENCE_DAYS.ARB)) v.push('the security board reviews less often than the architecture board');
+
+    const report = own.continuityReport({ availability: reg, now: 1_000 });
+    if (report.authorizes !== false || report.informationalOnly !== true) v.push('the continuity report claims authority');
+    if (report.deputies.length !== own.subsystems().length) v.push('the continuity report omits a subsystem');
+  }),
+
+  fit('APP-FIT-EVIDENCE-CONFIDENCE', 'Confidence is computed from source, completeness and freshness — and can never be entered by hand', (v) => {
+    const ec = require('../src/assurance/evidence-confidence');
+    for (const violation of ec.validate().violations) v.push(violation);
+
+    // THE REQUIREMENT: no manual confidence, ever.
+    let manual = false;
+    try { ec.assess({ id: 'x', source: 'executable-check', confidence: 1 }); } catch (e) { manual = !!e.failClosed; }
+    if (!manual) v.push('a hand-entered confidence score was accepted');
+
+    // Source weighting is ordered by how re-checkable the source is.
+    if (!(ec.SOURCE_KINDS['executable-check'].weight > ec.SOURCE_KINDS['derived-computation'].weight)) v.push('an executable check does not outweigh a derived computation');
+    if (!(ec.SOURCE_KINDS['derived-computation'].weight > ec.SOURCE_KINDS['declared-configuration'].weight)) v.push('a derived computation does not outweigh a declared configuration');
+    if (!(ec.SOURCE_KINDS['declared-configuration'].weight > ec.SOURCE_KINDS['human-attestation'].weight)) v.push('declared configuration does not outweigh a human attestation');
+    if (ec.SOURCE_KINDS.absent.weight !== 0) v.push('absent evidence carries weight');
+
+    const now = 10_000_000;
+    // Every assessment records source, completeness, freshness, method and last verification.
+    const fresh = ec.assess({ id: 'a', source: 'executable-check', completeness: 1, verifiedAt: now, now });
+    for (const f of ['source', 'completeness', 'freshness', 'method', 'lastVerifiedAt', 'calculation', 'band']) {
+      if (fresh[f] === undefined || fresh[f] === null) v.push(`an assessment is missing '${f}'`);
+    }
+    if (fresh.confidence !== 1 || fresh.band !== 'high') v.push('a freshly verified executable check did not score full confidence');
+    if (fresh.manualEntry !== false) v.push('an assessment did not declare itself machine-computed');
+    // The calculation is reproducible from the record.
+    if (fresh.calculation !== `${fresh.sourceWeight} × ${fresh.completeness} × ${fresh.freshness} = ${fresh.confidence}`) v.push('the recorded calculation does not reproduce the confidence');
+
+    // FRESHNESS DECAYS, and stale evidence stops counting.
+    const halfLife = ec.assess({ id: 'b', source: 'executable-check', completeness: 1, verifiedAt: now - 12 * 3600_000, now });
+    if (!(halfLife.confidence > 0.4 && halfLife.confidence < 0.6)) v.push(`half-aged evidence scored ${halfLife.confidence}, not about half`);
+    const stale = ec.assess({ id: 'c', source: 'executable-check', completeness: 1, verifiedAt: now - 5 * 24 * 3600_000, now });
+    if (stale.confidence !== 0 || stale.usable) v.push('evidence well past its staleness horizon still carried confidence');
+    const neverVerified = ec.assess({ id: 'd', source: 'executable-check', completeness: 1, verifiedAt: null, now });
+    if (neverVerified.confidence !== 0) v.push('never-verified evidence scored above zero');
+    const absent = ec.assess({ id: 'e', source: 'absent', completeness: 0, verifiedAt: null, now });
+    if (absent.confidence !== 0 || absent.band !== 'unusable') v.push('absent evidence was not unusable');
+    // Incompleteness reduces confidence proportionally.
+    const partial = ec.assess({ id: 'f', source: 'executable-check', completeness: 0.5, verifiedAt: now, now });
+    if (partial.confidence !== 0.5) v.push('completeness does not scale confidence');
+    let badCompleteness = false;
+    try { ec.assess({ id: 'g', source: 'executable-check', completeness: 2, verifiedAt: now, now }); } catch (_) { badCompleteness = true; }
+    if (!badCompleteness) v.push('an out-of-range completeness was accepted');
+    let unknownSource = false;
+    try { ec.assess({ id: 'h', source: 'a-feeling', verifiedAt: now, now }); } catch (_) { unknownSource = true; }
+    if (!unknownSource) v.push('an unknown evidence source was accepted');
+
+    // AGGREGATION IS WEAKEST-LINK, not average — otherwise one unusable input hides behind nine.
+    const reg = new ec.EvidenceRegister({ clock: () => now });
+    for (let i = 0; i < 9; i++) reg.record({ id: `strong-${i}`, source: 'executable-check', completeness: 1, verifiedAt: now });
+    reg.record({ id: 'weak', source: 'human-attestation', completeness: 0.2, verifiedAt: now - 170 * 24 * 3600_000 });
+    const agg = reg.aggregate();
+    if (agg.weakest !== 'weak') v.push('the weakest evidence was not identified');
+    if (agg.confidence !== reg.get('weak').confidence) v.push('aggregate confidence is not the weakest link');
+    if (!(agg.mean > agg.confidence)) v.push('the mean does not exceed the weakest link — the test data is not exercising the difference');
+    if (reg.aggregate([]).confidence !== 0) v.push('an empty aggregate reported non-zero confidence');
+    if (new ec.EvidenceRegister().aggregate().confidence !== 0) v.push('an empty register reported confidence');
+    if (reg.digest() !== reg.digest()) v.push('the evidence register digest is not reproducible');
+  }),
+
+  fit('APP-FIT-READINESS-MODEL', 'Ten independent readiness dimensions, and authorization is never derived from any of them', (v) => {
+    const ec = require('../src/assurance/evidence-confidence');
+
+    if (Object.keys(ec.READINESS_DIMENSIONS).length !== 10) v.push('the readiness model does not have exactly ten dimensions');
+    for (const required of ['technical', 'security', 'privacy', 'operational', 'reliability', 'data', 'governance', 'legal', 'supplyChain', 'organisational']) {
+      if (!ec.READINESS_DIMENSIONS[required]) v.push(`missing readiness dimension '${required}'`);
+    }
+    // Every dimension declares its owner, its question and the SIGNALS it reads — a dimension
+    // scored by inference is a dimension that will eventually be scored wrongly.
+    for (const [id, d] of Object.entries(ec.READINESS_DIMENSIONS)) {
+      if (!d.owner || !d.question || !d.evidence) v.push(`${id}: incompletely declared`);
+      if (!d.signals || !d.signals.length) v.push(`${id}: declares no signals`);
+    }
+    if (ec.READINESS_DIMENSIONS.authorization) v.push('authorization is modelled as a readiness dimension');
+
+    const now = 0;
+    const evidence = new ec.EvidenceRegister({ clock: () => now });
+    for (const id of Object.keys(ec.READINESS_DIMENSIONS)) evidence.record({ id: `readiness:${id}`, source: 'executable-check', completeness: 1, verifiedAt: now });
+    const healthy = {
+      fitness: { allHold: true, heldRatio: 1, failingCount: 0 },
+      security: { policiesCertified: true, algorithmIndependence: true, credentialFindings: 0 },
+      privacy: { identityMinimized: true, correlationDefaultDeny: true },
+      operations: { readinessScore: 1 },
+      reliability: { allSlosMet: true, sloHealthy: true },
+      data: { tracedRatio: 1, qualityAcceptable: true, qualityReadiness: 1 },
+      governance: { ownershipComplete: true, noSelfApproval: true },
+      legislation: { unimplementedMandates: 0, mandatesImplementedRatio: 1 },
+      supplyChain: { attestationsVerified: true, thirdPartyCount: 0 },
+      continuity: { coverageComplete: true, noStructuralGaps: true },
+    };
+    const green = ec.readinessModel({ sources: healthy, evidence });
+    if (!green.allDimensionsReady) v.push('a fully healthy platform had a dimension that was not ready: ' + JSON.stringify(green.notReady));
+    if (green.readyCount !== 10) v.push(`only ${green.readyCount} of 10 dimensions were ready on healthy evidence`);
+
+    // THE INVARIANT: TEN GREEN DIMENSIONS STILL PRINT NOT AUTHORIZED.
+    if (green.authorizationStatus !== 'NOT AUTHORIZED') v.push('a fully ready platform reported something other than NOT AUTHORIZED');
+    if (green.derivedFromReadiness !== false) v.push('authorization status claims to be derived from readiness');
+    if (green.authorizes !== false) v.push('the readiness model claims authority');
+    if (!/recorded decision/.test(green.authorizationBasis)) v.push('the authorization basis does not name a human decision');
+    // …and there is no input that changes it.
+    for (const attempt of [{}, { sources: healthy }, { sources: { ...healthy, authorization: { granted: true } } }]) {
+      if (ec.readinessModel({ evidence, ...attempt }).authorizationStatus !== 'NOT AUTHORIZED') v.push('an input changed the authorization status');
+    }
+
+    // Dimensions are INDEPENDENT: breaking one leaves the others exactly as they were.
+    const oneBroken = ec.readinessModel({ sources: { ...healthy, privacy: { identityMinimized: false, correlationDefaultDeny: true } }, evidence });
+    if (oneBroken.allDimensionsReady) v.push('a broken privacy dimension left the model fully ready');
+    if (oneBroken.readyCount !== 9) v.push('breaking one dimension changed the readiness of others');
+    if (!oneBroken.notReady.some((d) => d.dimension === 'privacy' && d.owner)) v.push('the failing dimension did not name its owner');
+    if (oneBroken.authorizationStatus !== 'NOT AUTHORIZED') v.push('a broken dimension changed the authorization status');
+    // A COUNT signal of zero must read as good, not as a score of zero.
+    const zeroCounts = ec.scoreDimension('security', { sources: healthy, evidence });
+    if (!zeroCounts.ready) v.push('zero credential findings was scored as a failing security signal');
+    const someFindings = ec.scoreDimension('security', { sources: { security: { policiesCertified: true, algorithmIndependence: true, credentialFindings: 3 } }, evidence });
+    if (someFindings.ready) v.push('three credential findings still scored ready');
+
+    // Missing evidence is not readiness.
+    const blind = ec.readinessModel({ sources: {}, evidence: null });
+    if (blind.allDimensionsReady) v.push('a model with no evidence at all reported every dimension ready');
+    if (!blind.dimensions.every((d) => d.status === 'no-evidence')) v.push('a dimension with no evidence did not say so');
+    if (blind.authorizationStatus !== 'NOT AUTHORIZED') v.push('an unevidenced model reported something other than NOT AUTHORIZED');
+    // Full marks on weak evidence is not readiness either.
+    const weak = new ec.EvidenceRegister({ clock: () => now });
+    for (const id of Object.keys(ec.READINESS_DIMENSIONS)) weak.record({ id: `readiness:${id}`, source: 'human-attestation', completeness: 0.2, verifiedAt: now - 170 * 24 * 3600_000 });
+    const weakly = ec.readinessModel({ sources: healthy, evidence: weak });
+    if (weakly.allDimensionsReady) v.push('every dimension scored ready on evidence too weak to rely on');
+    if (!weakly.lowConfidence.length) v.push('low-confidence dimensions were not flagged');
+  }),
+
+  fit('APP-FIT-ENGINEERING-METRICS', 'Engineering metrics are computed from countable inputs, an unmeasured metric is null, and maturity cannot inflate', (v) => {
+    const ec = require('../src/assurance/evidence-confidence');
+
+    // AN UNMEASURED METRIC IS NULL, NOT ZERO. Zero is a measurement; null is an admission.
+    const empty = ec.engineeringMetrics({});
+    for (const k of ['coverage', 'mutationScore', 'mttdHours', 'mttrHours']) if (empty[k] !== null && empty.dora[k] === undefined) v.push(`${k} defaulted to something other than null`);
+    if (empty.dora.deploymentFrequency.perDay !== null) v.push('deployment frequency defaulted to a number with nothing measured');
+    if (empty.dora.deploymentFrequency.band !== 'unknown') v.push('an unmeasured DORA metric was banded');
+    if (empty.unmeasured.length < 5) v.push('unmeasured metrics were not enumerated');
+
+    // DORA banding is correct at the boundaries.
+    if (ec.bandFor('deploymentFrequency', 2).band !== 'elite') v.push('twice-daily deployment is not elite');
+    if (ec.bandFor('deploymentFrequency', 1 / 60).band !== 'low') v.push('deploying every two months is not low');
+    if (ec.bandFor('leadTimeHours', 2).band !== 'elite') v.push('a two-hour lead time is not elite');
+    if (ec.bandFor('leadTimeHours', 24 * 60).band !== 'low') v.push('a two-month lead time is not low');
+    if (ec.bandFor('changeFailureRate', 0.02).band !== 'elite') v.push('a 2% change failure rate is not elite');
+    if (ec.bandFor('changeFailureRate', 0.5).band !== 'low') v.push('a 50% change failure rate is not low');
+    if (ec.bandFor('mttrHours', 0.5).band !== 'elite') v.push('a 30-minute MTTR is not elite');
+    if (ec.bandFor('mttrHours', 24 * 30).band !== 'low') v.push('a month-long MTTR is not low');
+    if (ec.bandFor('mttrHours', null).band !== 'unknown') v.push('an unmeasured metric was banded');
+
+    // Counting and derivation.
+    const measured = ec.engineeringMetrics({
+      tests: { unit: 300, integration: 80, contract: 38 }, invariants: { twin: 14, app: 92, infra: 9 },
+      coverage: 0.86, mutationScore: 0.74, deployments: 30, windowDays: 30, failedDeployments: 1,
+      leadTimeHours: 100, mttdHours: 0.5, mttrHours: 5,
+      debtTrend: [10, 8, 6, 4], riskTrend: [5, 4, 3, 2], assuranceTrend: [0.8, 0.9, 0.95, 1],
+    });
+    if (measured.tests.total !== 418) v.push('test counts were not summed by type');
+    if (measured.invariants.total !== 115) v.push('invariant counts were not summed by layer');
+    if (measured.dora.deploymentFrequency.perDay !== 1) v.push('deployment frequency was miscomputed');
+    if (measured.dora.deploymentFrequency.band !== 'elite') v.push('daily deployment was not banded elite');
+    if (measured.dora.changeFailureRate.value !== 0.0333) v.push('change failure rate was miscomputed');
+    if (measured.unmeasured.length) v.push('a fully measured run still reported unmeasured metrics: ' + measured.unmeasured.join(', '));
+    if (JSON.stringify(ec.engineeringMetrics({ tests: { unit: 1 } })) !== JSON.stringify(ec.engineeringMetrics({ tests: { unit: 1 } }))) v.push('engineering metrics are not deterministic');
+
+    // Trend polarity is stated so a direction is never read the wrong way round.
+    if (measured.trends.technicalDebt.direction !== 'falling' || measured.trends.technicalDebt.better !== 'falling') v.push('falling technical debt was not recognised as an improvement');
+    if (measured.trends.assurance.direction !== 'rising' || measured.trends.assurance.better !== 'rising') v.push('rising assurance was not recognised as an improvement');
+    if (ec.engineeringMetrics({ debtTrend: [1] }).trends.technicalDebt.direction !== 'insufficient-data') v.push('a single observation was treated as a trend');
+
+    // MATURITY CANNOT INFLATE: an unmeasured metric cannot raise a level.
+    if (ec.maturity(empty).level !== 0) v.push('an entirely unmeasured platform was assigned a maturity level');
+    const counted = ec.engineeringMetrics({ tests: { unit: 10 }, invariants: { app: 5 } });
+    if (ec.maturity(counted).level !== 2) v.push('counting tests and invariants alone did not reach level 2');
+    if (!ec.maturity(counted).blockedBy.length) v.push('a level below the top named nothing blocking it');
+    const automated = ec.engineeringMetrics({ tests: { unit: 10 }, invariants: { app: 5 }, deployments: 10, windowDays: 30, failedDeployments: 0 });
+    if (ec.maturity(automated).level !== 3) v.push('measuring deployment frequency and change failure rate did not reach level 3');
+    if (measured.dora.leadTimeHours.band === 'elite' || measured.dora.mttrHours.band === 'elite') v.push('the level-4 probe is accidentally elite — it cannot distinguish level 4 from 5');
+    if (ec.maturity(measured).level !== 4) v.push('a fully measured but non-elite platform did not reach level 4: ' + ec.maturity(measured).blockedBy.join('; '));
+    const elite = ec.engineeringMetrics({
+      tests: { unit: 400 }, invariants: { app: 100 }, coverage: 0.95, mutationScore: 0.9,
+      deployments: 60, windowDays: 30, failedDeployments: 1, leadTimeHours: 2, mttrHours: 0.5, mttdHours: 0.2,
+      debtTrend: [10, 5, 2], riskTrend: [9, 5, 1], assuranceTrend: [0.9, 0.95, 1],
+    });
+    if (ec.maturity(elite).level !== 5) v.push('an elite, improving platform did not reach level 5: ' + ec.maturity(elite).blockedBy.join('; '));
+    if (ec.maturity(elite).blockedBy.length) v.push('the top maturity level still reported blockers');
+    if (ec.maturity(elite).authorizes !== false) v.push('the maturity report claims authority');
+    // Elite bands alone are not enough — rising debt blocks the top level.
+    const eliteButRotting = ec.engineeringMetrics({ ...{ tests: { unit: 400 }, invariants: { app: 100 }, coverage: 0.95, mutationScore: 0.9, deployments: 60, windowDays: 30, failedDeployments: 1, leadTimeHours: 2, mttrHours: 0.5 }, debtTrend: [2, 5, 10], riskTrend: [1, 5, 9] });
+    if (ec.maturity(eliteButRotting).level === 5) v.push('rising debt and risk did not block the top maturity level');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

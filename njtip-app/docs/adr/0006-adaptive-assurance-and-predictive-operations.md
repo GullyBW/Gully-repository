@@ -118,7 +118,7 @@ them counterexamples.
 
 ## Operational cost
 
-No new infrastructure. CI time grew by roughly 25% (401 tests, 108 invariants, 17 chaos
+No new infrastructure. CI time grew by roughly 25% (435 tests, 115 invariants, 17 chaos
 experiments), all within a single-process Node run. In production the additions imply: a
 transparency log to operate, a decision cache to size, and per-model monitoring series to retain.
 The dominant recurring cost is human — quality remediation, risk review cadence and AI
@@ -206,8 +206,8 @@ four batches. No procurement, no infrastructure and no third-party dependency.
 
 ## Success metrics
 
-- 108 executable invariants hold on every commit (14 twin + 85 app + 9 infra).
-- 401 deterministic tests pass.
+- 115 executable invariants hold on every commit (14 twin + 92 app + 9 infra).
+- 435 deterministic tests pass.
 - 17 chaos experiments prove both detection and recovery in CI.
 - 16 formal properties proven over ~11,958 states.
 - Zero runtime dependencies retained.
@@ -216,8 +216,8 @@ four batches. No procurement, no infrastructure and no third-party dependency.
 
 | Criterion | Target | Where it is checked |
 |---|---|---|
-| Executable invariants holding | 108 / 108 | `node scripts/assure.js` |
-| Deterministic tests passing | 401 / 401 | `node --test` |
+| Executable invariants holding | 115 / 115 | `node scripts/assure.js` |
+| Deterministic tests passing | 435 / 435 | `node --test` |
 | Chaos scenarios proving detection **and** recovery | 17 / 17 | `APP-FIT-CHAOS-DETECT-RECOVER` |
 | Artifact trust score for a fully attested release | ≥ 80 (100 achieved) | `APP-FIT-SUPPLY-CHAIN-TRUST` |
 | Data-quality readiness with the estate measured | 1.0 | `APP-FIT-DATA-QUALITY` |

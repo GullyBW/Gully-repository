@@ -68,9 +68,12 @@ function adrFiles() {
 }
 
 // Parse one ADR into { number, title, status, sections }.
-function parse(file) {
-  const text = fs.readFileSync(path.join(ADR_DIR, file), 'utf8');
-  const number = Number(file.slice(0, 4));
+function parse(file) { return parseText(fs.readFileSync(path.join(ADR_DIR, file), 'utf8'), { file, number: Number(file.slice(0, 4)) }); }
+
+// Parse ADR text without touching the filesystem. Validation must be exercisable on crafted
+// content — writing a probe into the real catalogue to prove the validator works would make the
+// validator's own test a source of non-determinism for anything else reading that directory.
+function parseText(text, { file = '(in-memory)', number = 0 } = {}) {
   const titleMatch = text.match(/^#\s*ADR-\d{4}:\s*(.+)$/m);
   const statusMatch = text.match(/\*\*Status:\*\*\s*([A-Za-z]+)/);
   const sections = {};
@@ -95,8 +98,11 @@ function schemaFor(number) {
 function schemaNameFor(number) { return number >= EXTENDED_SCHEMA_FROM ? 'extended' : number >= FULL_SCHEMA_FROM ? 'full' : 'legacy'; }
 
 // Validate one ADR against the schema that applies to it.
-function validateAdr(file, { minSectionChars = 40 } = {}) {
-  const adr = parse(file);
+function validateAdr(file, opts = {}) { return validateParsed(parse(file), opts); }
+
+// Validate an already-parsed ADR — the form the crafted-content checks use.
+function validateParsed(adr, { minSectionChars = 40 } = {}) {
+  const file = adr.file;
   const violations = [];
   if (!adr.title) violations.push('no `# ADR-NNNN: title` heading');
   if (!adr.status) violations.push('no **Status:** line');
@@ -220,6 +226,6 @@ function schema() {
 module.exports = {
   ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, FULL_SCHEMA_FROM, EXTENDED_SCHEMA_FROM,
   MEASURABLE_SECTIONS, STATUSES,
-  adrFiles, parse, schemaFor, schemaNameFor, validateAdr, validateCatalogue,
+  adrFiles, parse, parseText, schemaFor, schemaNameFor, validateAdr, validateParsed, validateCatalogue,
   lifecycle, architecturalDebt, template, schema,
 };

@@ -34,25 +34,25 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.10 — operational excellence & continuous assurance.** The architecture stays **frozen** at
+> **v1.11 — adaptive assurance & predictive operations.** The architecture stays **frozen** at
 > [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md) — no new bounded context, every capability
-> added inside an existing one ([ADR-0004](./docs/adr/0004-operational-excellence-and-continuous-assurance.md)).
-> Phase 10 adds [Zero Trust](./docs/zero-trust.md) (PAP→PDP→PEP, workload identity, short-lived
-> credentials), an [enterprise threat model](./docs/threat-model.md) with executable
-> threat→control→evidence→owner traceability, [formal policy verification](./docs/formal-policy.md)
-> (10 properties proven over ~11,900 states, with counterexamples),
-> [reliability engineering](./docs/reliability-engineering.md) whose release gate fails when an SLO
-> is violated, [enterprise observability](./docs/observability.md),
-> [chaos engineering in CI](./docs/resilience-engineering.md),
-> [enterprise data governance](./docs/data-governance.md),
-> [SLSA supply-chain attestation](./docs/supply-chain-security.md),
-> [AI governance](./docs/ai-governance.md) with no autonomous action surface,
-> [multi-region resilience](./docs/multi-region.md),
-> [ADR governance](./docs/operational-governance.md),
-> [consumer-driven contracts](./docs/consumer-contracts.md),
-> [RACI governance](./docs/operational-governance.md), an
-> [evidence-traced executive dashboard and 16-domain continuous assurance framework](./docs/continuous-assurance.md).
-> Combined gate: **100 invariants**, 332 tests. Full summary: [`docs/high-assurance.md`](./docs/high-assurance.md) ·
+> added inside an existing one ([ADR-0006](./docs/adr/0006-adaptive-assurance-and-predictive-operations.md)).
+> Phase 11 answers the question Phase 10 left over — *is it getting worse?* — and turns four
+> advisory signals into controls that block: [predictive SRE](./docs/reliability-engineering.md)
+> with two-window burn-rate alerting and recovery forecasting,
+> [business observability](./docs/business-observability.md) that refuses identity-bearing events,
+> [17 chaos scenarios](./docs/resilience-engineering.md) each proving **detection and recovery**,
+> [data-quality governance](./docs/data-governance.md) where poor quality reduces readiness,
+> [supply-chain trust scoring](./docs/supply-chain-security.md) that fails deployment for an
+> untrusted artifact, [AI confidence floors, hallucination monitoring and drift detection](./docs/ai-governance.md),
+> [per-context consistency governance](./docs/multi-region.md),
+> [an extended ADR schema](./docs/architecture-governance.md) that rejects an unmeasurable success
+> criterion, [consumer impact analysis](./docs/consumer-contracts.md),
+> [governance continuity](./docs/governance-ownership.md) with deputies and ownership-gap detection,
+> and an [evidence confidence framework, ten-dimension readiness model and engineering metrics
+> intelligence](./docs/evidence-confidence.md).
+> Combined gate: **115 invariants**, 435 tests. Full summary: [`docs/adaptive-assurance.md`](./docs/adaptive-assurance.md) ·
+> v1.10: [`docs/high-assurance.md`](./docs/high-assurance.md) ·
 > v1.9: [`docs/stabilization.md`](./docs/stabilization.md) ·
 > production migration: [`docs/migration-guidance.md`](./docs/migration-guidance.md) ·
 > v1.8: [`docs/ecosystem-intelligence.md`](./docs/ecosystem-intelligence.md) ·

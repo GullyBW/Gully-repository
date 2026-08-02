@@ -40,6 +40,7 @@ const ownership = require('./governance/ownership');
 const raci = require('./governance/raci');
 const { ContractRegistry } = require('./contracts/integration-contracts');
 const { ConsumerContracts } = require('./contracts/consumer-contracts');
+const evidenceConfidence = require('./assurance/evidence-confidence');
 const migration = require('./migration/roadmap');
 const zeroTrust = require('./iam/zero-trust');
 const { makeZeroTrust } = require('./iam/zero-trust-architecture');
@@ -467,7 +468,50 @@ function createApp(overrides = {}) {
     authorizationPackage: (opts = {}) => { const e = assuranceEvidence(); return continuousAssurance.deploymentAuthorizationPackage({ sources: e.sources, residualRisk: e.residualRisk, mandates: e.mandates, ...opts }); },
     productionReadiness: (opts = {}) => { const e = assuranceEvidence(); return continuousAssurance.productionReadinessPackage({ sources: e.sources, residualRisk: e.residualRisk, mandates: e.mandates, ...opts }); },
     executiveDashboard: () => { const e = assuranceEvidence(); const domains = continuousAssurance.evaluate(e.sources); return executive.dashboard({ ...e.sources, assurance: { allDomainsPass: domains.allPass } }); },
+    // Phase 11, Parts 14–16. Evidence carries its own confidence; readiness is ten independent
+    // dimensions; engineering metrics are derived. None of it authorizes anything.
+    confidence: evidenceConfidence,
+    evidenceRegister: (extraSources = null) => {
+      const e = assuranceEvidence();
+      const src = extraSources || readinessSources(e);
+      const reg = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+      // Each readiness dimension's evidence is registered with the SOURCE that actually produced
+      // it — fitness results are executable checks, ownership and consistency are declared
+      // configuration, and anything absent is recorded as absent rather than omitted.
+      const kindFor = { technical: 'executable-check', security: 'executable-check', privacy: 'executable-check', operational: 'derived-computation', reliability: 'derived-computation', data: 'derived-computation', governance: 'declared-configuration', legal: 'declared-configuration', supplyChain: 'executable-check', organisational: 'declared-configuration' };
+      for (const [dim, spec] of Object.entries(evidenceConfidence.READINESS_DIMENSIONS)) {
+        const present = src[spec.evidence] !== undefined && src[spec.evidence] !== null;
+        reg.record({ id: `readiness:${dim}`, source: present ? kindFor[dim] : 'absent', completeness: present ? 1 : 0, verifiedAt: present ? 0 : null, detail: spec.evidence });
+      }
+      return reg;
+    },
+    readiness: () => {
+      const sources = readinessSources(assuranceEvidence());
+      return evidenceConfidence.readinessModel({ sources, evidence: assurance.evidenceRegister(sources) });
+    },
+    engineeringMetrics: (extra = {}) => {
+      const f = safeCall(() => { const all = [...runTwin(), ...runApp(), ...runInfra()]; return all; }, []);
+      return evidenceConfidence.engineeringMetrics({
+        tests: extra.tests || {},
+        invariants: { twin: safeCall(() => runTwin().length, 0), app: safeCall(() => runApp().length, 0), infra: safeCall(() => runInfra().length, 0) },
+        ...extra,
+        debtTrend: extra.debtTrend || [f.filter((r) => !r.pass).length],
+      });
+    },
+    engineeringMaturity: (extra = {}) => evidenceConfidence.maturity(assurance.engineeringMetrics(extra)),
   };
+  function safeCall(fn, fallback) { try { return fn(); } catch (_) { return fallback; } }
+  // Organisational readiness is the one dimension not already in the assurance bundle: it comes
+  // from the continuity model rather than from a fitness result.
+  function readinessSources(e) {
+    return {
+      ...e.sources,
+      continuity: {
+        coverageComplete: safeCall(() => ownership.coverageScore().complete, false),
+        noStructuralGaps: safeCall(() => ownership.ownershipGaps().gaps.every((g) => g.kind !== 'structural'), false),
+      },
+    };
+  }
 
   // Live sources for the audience-specific dashboards (Part 12). Each accessor is defensive:
   // an unavailable source degrades visibly on the dashboard rather than rendering a false zero.

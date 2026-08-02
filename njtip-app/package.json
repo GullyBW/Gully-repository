@@ -1,6 +1,6 @@
 {
   "name": "njtip-app",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "private": true,
   "description": "NJTIP — high-assurance government platform on a frozen architecture (Baseline v1.7): Zero Trust, enterprise threat modelling, formal policy verification, SRE, OpenTelemetry-shaped observability, chaos engineering in CI, enterprise data governance, SLSA supply-chain attestation, AI governance, multi-region resilience, consumer-driven contracts, RACI governance, an evidence-traced executive dashboard and a sixteen-domain continuous assurance framework. Production engineering and stabilization. Verified bounded-context map, institutional ownership, stable integration contracts, component migration roadmap, infrastructure assurance, legislative impact analysis, recovery strategy evaluation, the National Data Exchange, process governance mining, quantum migration roadmap, audience-specific observability, correlation governance and usability evidence. Zero runtime dependencies; SYNTHETIC ONLY; continuously validated by the Digital Engineering Twin (architecture + app + infrastructure).",
   "engines": { "node": ">=18" },

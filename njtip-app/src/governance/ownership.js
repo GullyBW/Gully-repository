@@ -89,17 +89,206 @@ function validate() {
     if (!mapped.has(id)) violations.push(`${id}: ownership recorded for a subsystem that is not in the context map`);
   }
   for (const ctx of contextMap.ids()) if (!OWNERSHIP[ctx]) violations.push(`bounded context '${ctx}' has no institutional owner`);
+  // Phase 11, Part 13: continuity is part of ownership. A structural gap in the deputy model is
+  // an ownership defect, not a continuity footnote.
+  for (const g of ownershipGaps().gaps.filter((x) => x.kind === 'structural')) {
+    violations.push(`${g.subsystem}/${g.role}: ${g.detail}`);
+  }
   return { valid: violations.length === 0, violations, subsystems: subsystems().length, boards: Object.keys(BOARDS).length };
+}
+
+// --- Governance continuity (Phase 11, Part 13) ---------------------------------------------------
+//
+// An owner who is on leave is an owner who cannot decide, and a governance object with nobody
+// available to decide is a governance object that has quietly stopped being governed. Continuity
+// makes that visible: every accountable role has a named DEPUTY, availability is recorded, and a
+// role with neither an available primary nor an available deputy is an OWNERSHIP GAP, not a
+// footnote.
+//
+// Deputies are DERIVED by a stated rule rather than hand-listed, so a new context cannot be added
+// without one. The rule is the ordinary government structure: every office has a deputy.
+const DEPUTY_RULE = 'Deputy <primary office>, unless an override records a different named deputy.';
+const DEPUTY_ROLES = ['responsibleAuthority', 'approvingAuthority', 'operationalOwner', 'dataSteward'];
+// Overrides where the deputy is genuinely a different institution rather than a deputy of the same
+// one — a board's deputy is its vice-chair, not a "Deputy Board".
+const DEPUTY_OVERRIDES = {
+  'Architecture Review Board': 'ARB Vice-Chair',
+  'Information Security Review Board': 'ISRB Vice-Chair',
+  'Oversight Board': 'Oversight Board Vice-Chair',
+  'Data Governance Board': 'DGB Vice-Chair',
+  'Operations Review Board': 'ORB Vice-Chair',
+  'Service Delivery Board': 'SDB Vice-Chair',
+  'AI Governance Board': 'AI Governance Board Vice-Chair',
+};
+function deputyOf(primary) { return DEPUTY_OVERRIDES[primary] || `Deputy ${primary}`; }
+function deputies(subsystem) {
+  const o = OWNERSHIP[subsystem];
+  if (!o) throw new Error('no ownership record for subsystem: ' + subsystem);
+  return Object.fromEntries(DEPUTY_ROLES.map((r) => [r, deputyOf(o[r])]));
+}
+
+// Review cadence per board. A governance record nobody revisits is a record that describes the
+// organisation as it was, which is the state most ownership documents are in.
+const REVIEW_CADENCE_DAYS = { ISRB: 90, OB: 90, ARB: 180, DGB: 180, ORB: 180, SDB: 365 };
+
+// Availability register: who is unavailable, from when, until when, and who recorded it.
+// Unavailability is time-bounded on purpose — an open-ended absence is an unfilled post.
+class AvailabilityRegister {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._absences = []; }
+  recordAbsence({ person, from, until, reason, by }) {
+    if (!person) throw new Error('an absence must name a person or office');
+    if (!by || !reason) throw new Error('an absence must be recorded by a named human, with a reason');
+    if (!(Number.isFinite(from) && Number.isFinite(until))) throw new Error('an absence must be time-bounded — an open-ended absence is an unfilled post');
+    if (!(until > from)) throw new Error('an absence must end after it starts');
+    const rec = { id: `ABS-${String(this._absences.length + 1).padStart(4, '0')}`, person, from, until, reason, by, at: this._clock() };
+    this._absences.push(rec);
+    return { ...rec };
+  }
+  absences() { return this._absences.map((a) => ({ ...a })); }
+  isAvailable(person, at = null) {
+    const t = at ?? this._clock();
+    return !this._absences.some((a) => a.person === person && t >= a.from && t < a.until);
+  }
+  // Who actually decides right now: the primary if available, otherwise the deputy, otherwise
+  // nobody — and "nobody" escalates rather than defaulting to whoever is around.
+  effectiveOwner(subsystem, role, at = null) {
+    const o = OWNERSHIP[subsystem];
+    if (!o) throw new Error('no ownership record for subsystem: ' + subsystem);
+    if (!DEPUTY_ROLES.includes(role)) throw new Error(`role '${role}' has no continuity chain`);
+    const t = at ?? this._clock();
+    const primary = o[role];
+    const deputy = deputyOf(primary);
+    if (this.isAvailable(primary, t)) return { subsystem, role, holder: primary, via: 'primary', covered: true };
+    if (this.isAvailable(deputy, t)) return { subsystem, role, holder: deputy, via: 'deputy', covered: true };
+    return {
+      subsystem, role, holder: null, via: 'none', covered: false,
+      escalateTo: BOARDS[o.governanceBoard].name,
+      reason: `neither ${primary} nor ${deputy} is available — this decision escalates to ${BOARDS[o.governanceBoard].name}`,
+    };
+  }
+}
+
+// Succession: the ordered chain of who decides when the person above is unavailable. It always
+// terminates at a board, because a chain that ends in a person can end in nobody.
+function successionPlan(subsystem, role = 'approvingAuthority') {
+  const o = OWNERSHIP[subsystem];
+  if (!o) throw new Error('no ownership record for subsystem: ' + subsystem);
+  if (!DEPUTY_ROLES.includes(role)) throw new Error(`role '${role}' has no succession chain`);
+  const primary = o[role];
+  const boardName = BOARDS[o.governanceBoard].name;
+  // Where the accountable office IS the board, the chain is chair → vice-chair → the board sitting
+  // as a body. That is not a duplicate: a chair acting alone and a quorate board are different
+  // authorities, and only the second can act when the first two cannot.
+  const chain = [
+    { order: 1, holder: primary, basis: primary === boardName ? 'board chair, acting under delegated authority' : 'primary accountable office' },
+    { order: 2, holder: deputyOf(primary), basis: 'named deputy' },
+    { order: 3, holder: boardName, basis: primary === boardName ? 'the board sitting as a body — quorum required' : 'governance board — the terminal authority' },
+  ];
+  return {
+    subsystem, role, chain, terminatesAtBoard: true,
+    depth: chain.length,
+    note: 'A succession chain that ends in a person can end in nobody. This one ends at a board.',
+  };
+}
+
+// Review schedule per subsystem, from its board's cadence and the last recorded review.
+function reviewSchedule({ now = 0, lastReviewed = {} } = {}) {
+  return subsystems().map((id) => {
+    const board = OWNERSHIP[id].governanceBoard;
+    const cadence = REVIEW_CADENCE_DAYS[board] ?? 365;
+    const last = lastReviewed[id] ?? null;
+    const dueAt = last === null ? null : last + cadence * 24 * 3600_000;
+    return {
+      subsystem: id, board, cadenceDays: cadence, lastReviewed: last, dueAt,
+      // Never reviewed is OVERDUE, not pending. A record nobody has ever checked is the least
+      // trustworthy kind, so it cannot sit in a softer bucket than one reviewed too long ago.
+      overdue: last === null || now > dueAt,
+      daysUntilDue: dueAt === null ? null : Math.floor((dueAt - now) / (24 * 3600_000)),
+      reason: last === null ? 'never reviewed' : now > dueAt ? 'review is overdue' : 'within cadence',
+    };
+  });
+}
+
+// Coverage: the fraction of (subsystem, role) pairs with somebody actually available to decide.
+function coverageScore({ availability = null, now = 0 } = {}) {
+  const reg = availability || new AvailabilityRegister({ clock: () => now });
+  const pairs = [];
+  for (const id of subsystems()) for (const role of DEPUTY_ROLES) pairs.push(reg.effectiveOwner(id, role, now));
+  const covered = pairs.filter((p) => p.covered);
+  const byVia = pairs.reduce((acc, p) => ((acc[p.via] = (acc[p.via] || 0) + 1), acc), {});
+  return {
+    pairs: pairs.length, covered: covered.length,
+    coverage: pairs.length ? +(covered.length / pairs.length).toFixed(4) : 0,
+    onPrimary: byVia.primary || 0, onDeputy: byVia.deputy || 0, uncovered: byVia.none || 0,
+    complete: covered.length === pairs.length,
+  };
+}
+
+// Ownership gaps: every place where nobody is available to decide, plus every structural defect
+// in the continuity model itself.
+function ownershipGaps({ availability = null, now = 0, lastReviewed = {} } = {}) {
+  const reg = availability || new AvailabilityRegister({ clock: () => now });
+  const gaps = [];
+  for (const id of subsystems()) {
+    const o = OWNERSHIP[id];
+    const dep = deputies(id);
+    for (const role of DEPUTY_ROLES) {
+      // Structural: a deputy identical to the primary is not a deputy.
+      if (dep[role] === o[role]) gaps.push({ subsystem: id, role, kind: 'structural', detail: 'the deputy is the primary' });
+      // Structural: separation of duties must survive substitution — the deputy responsible
+      // authority may not be the approving authority or its deputy, or an absence quietly
+      // collapses the separation the primary structure exists to keep.
+      if (role === 'responsibleAuthority') {
+        if (dep.responsibleAuthority === o.approvingAuthority || dep.responsibleAuthority === dep.approvingAuthority) {
+          gaps.push({ subsystem: id, role, kind: 'structural', detail: 'substitution collapses separation of duties' });
+        }
+      }
+      const eff = reg.effectiveOwner(id, role, now);
+      if (!eff.covered) gaps.push({ subsystem: id, role, kind: 'availability', detail: eff.reason, escalateTo: eff.escalateTo });
+    }
+  }
+  for (const r of reviewSchedule({ now, lastReviewed })) {
+    if (r.overdue) gaps.push({ subsystem: r.subsystem, role: 'governanceBoard', kind: 'review', detail: r.reason });
+  }
+  return {
+    gaps, count: gaps.length,
+    byKind: gaps.reduce((acc, g) => ((acc[g.kind] = (acc[g.kind] || 0) + 1), acc), {}),
+    clean: gaps.length === 0,
+    note: 'A governance object with nobody available to decide is not governed, whatever the record says.',
+  };
+}
+
+function continuityReport({ availability = null, now = 0, lastReviewed = {} } = {}) {
+  const reg = availability || new AvailabilityRegister({ clock: () => now });
+  return {
+    deputyRule: DEPUTY_RULE,
+    deputies: subsystems().map((id) => ({ subsystem: id, ...deputies(id) })),
+    succession: subsystems().map((id) => successionPlan(id)),
+    availability: reg.absences(),
+    effectiveOwners: subsystems().map((id) => ({ subsystem: id, roles: Object.fromEntries(DEPUTY_ROLES.map((r) => [r, reg.effectiveOwner(id, r, now)])) })),
+    reviewSchedule: reviewSchedule({ now, lastReviewed }),
+    coverage: coverageScore({ availability: reg, now }),
+    gaps: ownershipGaps({ availability: reg, now, lastReviewed }),
+    escalation: subsystems().map(escalationPath),
+    informationalOnly: true, authorizes: false,
+    note: 'Continuity records who can decide, not what they decide. Every accountable role has a deputy, and every chain terminates at a board.',
+  };
 }
 
 // The full ownership model as served to the API and rendered into docs/governance-ownership.md.
 function model() {
   return {
-    subsystems: subsystems().map(describe),
+    subsystems: subsystems().map((id) => ({ ...describe(id), deputies: deputies(id) })),
     boards: boards(),
+    continuity: continuityReport(),
     validation: validate(),
     note: 'Records institutional accountability. Approval and escalation are performed by named humans; this module never approves anything.',
   };
 }
 
-module.exports = { OWNERSHIP, BOARDS, ROLES, subsystems, describe, boards, escalationPath, accountabilityFor, validate, model };
+module.exports = {
+  OWNERSHIP, BOARDS, ROLES, DEPUTY_ROLES, DEPUTY_RULE, DEPUTY_OVERRIDES, REVIEW_CADENCE_DAYS,
+  subsystems, describe, boards, escalationPath, accountabilityFor, validate, model,
+  deputyOf, deputies, AvailabilityRegister, successionPlan, reviewSchedule,
+  coverageScore, ownershipGaps, continuityReport,
+};
