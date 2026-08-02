@@ -11,6 +11,7 @@ const slo = require('./observability/slo');
 const dashboards = require('./observability/dashboards');
 const sre = require('./observability/sre');
 const telemetry = require('./observability/telemetry');
+const business = require('./observability/business');
 const executive = require('./observability/executive');
 const continuousAssurance = require('./assurance/continuous');
 const { NotificationService } = require('./adapters/notifications');
@@ -362,9 +363,12 @@ function createApp(overrides = {}) {
   // evidence (Part 15). Dashboards inform; correlation is default-deny; user evidence guides
   // refinement. None of the three authorizes anything.
   const observability = {
-    slo, dashboards, sre, telemetry,
+    slo, dashboards, sre, telemetry, business,
     // Reliability from the live metric snapshot: SLIs → SLOs → error budgets → release gate.
     reliability: () => { const c = metrics.counters(); let total = 0, failed = 0; for (const [k, val] of Object.entries(c)) { if (k.startsWith('njtip_http_requests_total')) { total += val; if (/status="?5\d\d"?/.test(k)) failed += val; } } return sre.reliabilityReport({ measurements: sre.fromSliSnapshot({ total, failed, latencies: metrics.samples('njtip_http_latency_ms'), services: Object.keys(sre.SERVICE_LEVELS) }) }); },
+    // Business observability (Phase 11, Part 5): the same event log the ledger is built from,
+    // read as "is justice moving?" rather than "is the system up?". PII-free by construction.
+    businessMetrics: () => business.report({ events: business.fromEventLog(workflow.eventLog()), periods: 1 }),
     dashboard: (id) => dashboards.dashboard(id, dashboardSources()),
     all: () => dashboards.all(dashboardSources()),
     audiences: () => dashboards.audiences(),

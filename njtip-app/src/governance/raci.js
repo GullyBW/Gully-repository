@@ -67,7 +67,7 @@ function controlOwnership(fitnessIds = []) {
     { match: /^APP-FIT-CIPHERTEXT|^APP-FIT-CRYPTO|^APP-FIT-QUANTUM|^FIT-ENCRYPTION/, context: 'crypto-agility' },
     { match: /^APP-FIT-CUSTODY|^FIT-CHAIN-OF-CUSTODY/, context: 'custody' },
     { match: /^APP-FIT-EVENT|^APP-FIT-PII-FREE|^FIT-SECURE-DATA-FLOWS/, context: 'platform-events' },
-    { match: /^APP-FIT-SRE|^APP-FIT-OBSERVABILITY|^APP-FIT-EXECUTIVE/, context: 'observability' },
+    { match: /^APP-FIT-SRE|^APP-FIT-OBSERVABILITY|^APP-FIT-EXECUTIVE|^APP-FIT-BUSINESS/, context: 'observability' },
     { match: /^APP-FIT-CHAOS|^APP-FIT-NATIONAL-RESILIENCE|^APP-FIT-RECOVERY|^APP-FIT-MULTI-REGION|^APP-FIT-CRISIS/, context: 'resilience' },
     { match: /^APP-FIT-SUPPLY-CHAIN/, context: 'supply-chain' },
     { match: /^APP-FIT-DATA-GOVERNANCE|^APP-FIT-PROVENANCE/, context: 'data-fabric' },

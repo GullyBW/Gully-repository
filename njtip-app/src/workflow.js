@@ -304,6 +304,8 @@ class Workflow {
   }
   // Event-log tamper-evidence (hash chain) — used by health + fitness.
   verifyEventIntegrity() { return this._events ? this._events.verifyChain() : { ok: true, length: 0, note: 'no event store wired' }; }
+  // The whole immutable log, read-only — the source business observability derives KPIs from.
+  eventLog({ untilAt } = {}) { return this._events ? this._events.readAll(untilAt != null ? { untilAt } : {}) : []; }
 
   // Process mining (Phase 56): discover the process model + performance from the event log.
   mineProcess() {

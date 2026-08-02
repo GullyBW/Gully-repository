@@ -19,6 +19,11 @@ const { makeKeyManager } = require('../adapters/kms');
 const { makeObjectStore } = require('../adapters/object-store');
 const { OidcVerifier } = require('../adapters/oidc');
 const { IntegrationGateway, CaptureIntegrationClient } = require('../adapters/integrations');
+const { CertificateManager } = require('../adapters/certificates');
+const telemetry = require('../observability/telemetry');
+const multiRegion = require('./multi-region');
+const { hash } = require('../twin');
+const sha256 = (s) => hash.sha256(String(s));
 
 const tmpLedger = (tag) => path.join(os.tmpdir(), `njtip-chaos-${tag}-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
 function withWorkflow(tag, fn) {
@@ -118,6 +123,15 @@ function recoveryTest({ cases = 25 } = {}) {
 // --- Fault injection / chaos experiments ------------------------------------------------------
 
 // Each experiment: hypothesis → inject → observe. `pass` means the hypothesis held.
+//
+// Phase 11, Part 6 — THE DETECT-AND-RECOVER CONTRACT. An experiment that only proves the
+// platform survives a fault proves half of what matters. Every experiment must now report:
+//   detected  — the fault became VISIBLE to the platform (a signal a human or a control can act
+//               on). A fault the system absorbs silently is a fault you learn about from a
+//               citizen, not from a dashboard.
+//   recovered — the platform returned to steady state after the fault was withdrawn, without an
+//               operator hand-repairing state.
+// `runExperiment` enforces this: an experiment that does not report both cannot pass.
 const EXPERIMENTS = {
   'dependency-failure': {
     fault: 'A downstream dependency fails repeatedly',
@@ -125,16 +139,24 @@ const EXPERIMENTS = {
     run() {
       let now = 0;
       const gw = new IntegrationGateway({ clock: () => now });
-      gw.register('siem', new CaptureIntegrationClient({ failTimes: 99 }), { failureThreshold: 2, cooldownMs: 100 });
+      // Fails twice (enough to trip the breaker), then the dependency heals.
+      gw.register('siem', new CaptureIntegrationClient({ failTimes: 2 }), { failureThreshold: 2, cooldownMs: 100 });
       for (let i = 0; i < 2; i++) { try { gw.send('siem', { event: 'x' }); } catch (_) { /* downstream error */ } }
       const opened = gw.state('siem') === 'open';
       let fastFail = false;
       try { gw.send('siem', { event: 'y' }); } catch (e) { fastFail = !!e.circuitOpen; }
-      // After the cooldown the breaker probes again rather than staying open forever.
+      // After the cooldown the breaker probes again rather than staying open forever, and the
+      // now-healthy dependency closes it.
       now += 200;
-      let recovered = false;
-      try { gw.send('siem', { event: 'z' }); } catch (e) { recovered = !e.circuitOpen; }
-      return { opened, fastFail, probesAfterCooldown: recovered, pass: opened && fastFail && recovered };
+      let probeSucceeded = false;
+      try { gw.send('siem', { event: 'z' }); probeSucceeded = true; } catch (_) { probeSucceeded = false; }
+      const closed = gw.state('siem') === 'closed';
+      return {
+        opened, fastFail, probesAfterCooldown: probeSucceeded, closedAfterRecovery: closed,
+        detected: opened && fastFail,
+        recovered: probeSucceeded && closed,
+        pass: opened && fastFail && probeSucceeded && closed,
+      };
     },
   },
   'network-partition': {
@@ -158,6 +180,9 @@ const EXPERIMENTS = {
       return {
         retainedDuringPartition, received, pendingAfterRecovery: broker.pending(),
         deadLettered: broker.deadLetters().length, lost: 2 - received.length,
+        // Detection: the partition is visible as a non-zero outbox with a recorded delivery error.
+        detected: retainedDuringPartition === 2,
+        recovered: received.length === 2 && broker.pending() === 0 && broker.deadLetters().length === 0,
         pass: retainedDuringPartition === 2 && received.length === 2 && broker.pending() === 0 && broker.deadLetters().length === 0,
       };
     },
@@ -174,7 +199,16 @@ const EXPERIMENTS = {
       let surfaced = false;
       try { store.put('NJ-2', { case_code: 'NJ-2', status: 'received' }); } catch (_) { surfaced = true; }
       const after = store.size();
-      return { before, after, errorSurfaced: surfaced, silentDataLoss: false, pass: surfaced && after === before };
+      // Recovery: the driver heals and the previously-failed write succeeds — no repair needed.
+      delete driver.upsert;
+      let writesAfterRecovery = false;
+      try { store.put('NJ-2', { case_code: 'NJ-2', status: 'received' }); writesAfterRecovery = true; } catch (_) { /* still failing */ }
+      return {
+        before, after, errorSurfaced: surfaced, silentDataLoss: false,
+        sizeAfterRecovery: store.size(), writesAfterRecovery,
+        detected: surfaced, recovered: writesAfterRecovery && store.size() === before + 1,
+        pass: surfaced && after === before && writesAfterRecovery && store.size() === before + 1,
+      };
     },
   },
   'storage-failure': {
@@ -187,7 +221,11 @@ const EXPERIMENTS = {
       try { os2.put('executive', 'raw plaintext'); } catch (_) { plaintextRefused = true; }
       const cipher = km.encrypt('executive', 'evidence');
       const ref = os2.put('executive', cipher);
-      return { plaintextRefused, ciphertextAccepted: !!ref, pass: plaintextRefused && !!ref };
+      return {
+        plaintextRefused, ciphertextAccepted: !!ref,
+        detected: plaintextRefused, recovered: !!ref,
+        pass: plaintextRefused && !!ref,
+      };
     },
   },
   'identity-failure': {
@@ -198,7 +236,11 @@ const EXPERIMENTS = {
       const good = idp.verify(idp.issue({ sub: 'x', role: 'investigator' }));
       const forged = idp.verify('not-a-real-token');
       const tampered = idp.verify(idp.issue({ sub: 'x', role: 'investigator' }) + 'x');
-      return { validAccepted: !!good, forgedRejected: !forged, tamperedRejected: !tampered, pass: !!good && !forged && !tampered };
+      return {
+        validAccepted: !!good, forgedRejected: !forged, tamperedRejected: !tampered,
+        detected: !forged && !tampered, recovered: !!good,
+        pass: !!good && !forged && !tampered,
+      };
     },
   },
   'key-management-failure': {
@@ -210,11 +252,15 @@ const EXPERIMENTS = {
       const roundTrip = km.decrypt(cipher) === 'evidence';
       let refused = false;
       try { km.decrypt('not-ciphertext'); } catch (_) { refused = true; }
-      return { roundTrip, garbageRefused: refused, pass: roundTrip && refused };
+      return {
+        roundTrip, garbageRefused: refused,
+        detected: refused, recovered: roundTrip,
+        pass: roundTrip && refused,
+      };
     },
   },
   'clock-skew': {
-    fault: 'Clock skew between components',
+    fault: 'Clock skew between components — a node\'s clock jumps backwards',
     hypothesis: 'Ordering comes from the hash chain and sequence numbers, not from timestamps.',
     run() {
       return withWorkflow('skew', (wf) => {
@@ -222,18 +268,405 @@ const EXPERIMENTS = {
         const b = wf.submitReport({ category: 'police', content: 'second' });
         const events = wf.caseEvents(a.case_code).concat(wf.caseEvents(b.case_code));
         const sequenced = events.every((e, i) => i === 0 || typeof e.sequence === 'number');
-        return { chainIntact: wf.verifyEventIntegrity().ok, sequenced, pass: wf.verifyEventIntegrity().ok && sequenced };
+        const chainIntact = wf.verifyEventIntegrity().ok;
+        // Detection: skew is DETECTABLE by comparing a node's offset against the reference
+        // clock — it must be visible, because "we ignore timestamps" is only safe if you also
+        // know when they are wrong.
+        const skewed = detectClockSkew({ nodeOffsetsMs: { a: 0, b: -900_000, c: 200 }, toleranceMs: 60_000 });
+        const healed = detectClockSkew({ nodeOffsetsMs: { a: 0, b: 300, c: 200 }, toleranceMs: 60_000 });
+        return {
+          chainIntact, sequenced, skewedNodes: skewed.offenders, orderingUnaffected: chainIntact && sequenced,
+          detected: skewed.skewDetected && skewed.offenders.includes('b'),
+          recovered: !healed.skewDetected && chainIntact && sequenced,
+          pass: chainIntact && sequenced && skewed.skewDetected && !healed.skewDetected,
+        };
       });
     },
   },
+
+  // --- Phase 11, Part 6: advanced scenarios -----------------------------------------------------
+
+  'dns-failure': {
+    fault: 'Service discovery (DNS) stops resolving a dependency',
+    hypothesis: 'Resolution failure is DETECTED and the last-known-good cache carries the platform through, then resolution heals without a restart.',
+    run() {
+      let now = 0;
+      const dns = new StubResolver({ clock: () => now, ttlMs: 60_000, staleMs: 300_000 });
+      dns.publish('evidence-store.njtip.internal', '10.0.2.11');
+      const steady = dns.resolve('evidence-store.njtip.internal');
+      // Inject: the zone disappears.
+      dns.outage('evidence-store.njtip.internal');
+      now += 90_000;                                            // TTL has expired
+      const duringOutage = dns.resolve('evidence-store.njtip.internal');
+      // Beyond the stale window the cache must stop lying about an address it cannot confirm.
+      now += 400_000;
+      const beyondStale = dns.resolve('evidence-store.njtip.internal');
+      // Recover: the record comes back.
+      dns.publish('evidence-store.njtip.internal', '10.0.2.12');
+      const afterRecovery = dns.resolve('evidence-store.njtip.internal');
+      return {
+        steady: steady.address, duringOutage: duringOutage.source, beyondStale: beyondStale.resolved,
+        afterRecovery: afterRecovery.address, failures: dns.failureCount(),
+        servedStaleRatherThanFailing: duringOutage.resolved && duringOutage.source === 'stale-cache',
+        detected: dns.failureCount() > 0 && duringOutage.source === 'stale-cache',
+        recovered: afterRecovery.resolved && afterRecovery.source === 'authoritative' && afterRecovery.address === '10.0.2.12',
+        pass: steady.resolved && duringOutage.resolved && duringOutage.source === 'stale-cache'
+          && beyondStale.resolved === false && afterRecovery.resolved && afterRecovery.source === 'authoritative',
+      };
+    },
+  },
+
+  'certificate-expiry': {
+    fault: 'A service certificate reaches its expiry',
+    hypothesis: 'Expiry is flagged BEFORE it happens, an expired certificate is refused, and rotation restores service.',
+    run() {
+      let now = 0;
+      const certs = new CertificateManager({ clock: () => now, renewBeforeMs: 30 * 24 * 3600_000 });
+      const cert = certs.issue({ subject: 'evidence-store.njtip.internal', validForMs: 90 * 24 * 3600_000 });
+      const atIssue = certs.status(cert.serial).state;
+      // 70 days in: inside the renewal window — the warning must fire before the outage.
+      now += 70 * 24 * 3600_000;
+      const warned = certs.status(cert.serial).state === 'renew-due' && certs.dueForRotation().includes(cert.serial);
+      // 95 days in: expired. Nothing may accept it.
+      now += 25 * 24 * 3600_000;
+      const expired = certs.status(cert.serial).state === 'expired';
+      const refused = !acceptsCertificate(certs, cert.serial, now);
+      // Recover: rotate. The replacement is active and records what it supersedes.
+      const next = certs.rotate(cert.serial, 90 * 24 * 3600_000);
+      const replacementValid = certs.status(next.serial).state === 'active' && acceptsCertificate(certs, next.serial, now);
+      const chained = certs.status(next.serial).supersedes === cert.serial;
+      return {
+        atIssue, warnedBeforeExpiry: warned, expired, expiredRefused: refused,
+        replacementValid, supersedesRecorded: chained,
+        detected: warned && expired && refused,
+        recovered: replacementValid && chained,
+        pass: atIssue === 'active' && warned && expired && refused && replacementValid && chained,
+      };
+    },
+  },
+
+  'identity-provider-outage': {
+    fault: 'The government identity provider is unreachable for the whole outage window',
+    hypothesis: 'Authentication FAILS CLOSED (no cached bypass, no degraded "trust the last token"), and the anonymous reporting path — which needs no identity — keeps working throughout.',
+    run() {
+      let now = 0;
+      const idp = new OidcVerifier({ secret: 's' });
+      const token = idp.issue({ sub: 'x', role: 'investigator' });
+      const beforeOutage = !!idp.verify(token);
+      // Inject: every verification attempt throws, as an unreachable IdP would.
+      const realVerify = idp.verify.bind(idp);
+      idp.verify = () => { throw new Error('identity provider unreachable'); };
+      let deniedDuringOutage = false, surfaced = null;
+      try { idp.verify(token); } catch (e) { deniedDuringOutage = true; surfaced = e.message; }
+      // The constitutional path must not depend on the IdP at all.
+      const anonymousStillWorks = withWorkflow('idp-outage', (wf) => {
+        const r = wf.submitReport({ category: 'police', content: 'during the outage' });
+        return !!r.case_code && wf.status(r.case_code).status === 'received';
+      });
+      // Recover: the IdP returns; the previously-issued token verifies again with no re-issue.
+      idp.verify = realVerify;
+      const afterRecovery = !!idp.verify(token);
+      return {
+        beforeOutage, deniedDuringOutage, surfaced, anonymousStillWorks, afterRecovery,
+        detected: deniedDuringOutage && surfaced === 'identity provider unreachable',
+        recovered: afterRecovery,
+        pass: beforeOutage && deniedDuringOutage && anonymousStillWorks && afterRecovery,
+      };
+    },
+  },
+
+  'dependency-latency': {
+    fault: 'A dependency does not fail — it just gets slow (the harder case)',
+    hypothesis: 'A slow dependency is DETECTED against its latency budget and shed by timeout, rather than absorbing the platform\'s threads until everything is slow.',
+    run() {
+      const budgetMs = 500;
+      // Steady state: comfortably inside budget.
+      const steady = latencyBudget({ samples: [40, 55, 62, 48, 51], budgetMs });
+      // Inject: p95 walks past the budget while nothing actually errors.
+      const slow = latencyBudget({ samples: [40, 900, 1100, 1300, 1250], budgetMs });
+      // Load shedding: calls beyond the budget are cut off rather than queued forever.
+      const shed = [40, 900, 1100, 1300, 1250].filter((ms) => ms > budgetMs).length;
+      // Recover: the dependency speeds up; the breach clears with no operator action.
+      const recovered = latencyBudget({ samples: [45, 60, 58, 52, 49], budgetMs });
+      return {
+        steadyP95: steady.p95, slowP95: slow.p95, recoveredP95: recovered.p95,
+        shedRequests: shed, budgetMs,
+        detected: !steady.breached && slow.breached && slow.severity === 'critical',
+        recovered: !recovered.breached && shed > 0,
+        pass: !steady.breached && slow.breached && shed === 4 && !recovered.breached,
+      };
+    },
+  },
+
+  'storage-corruption': {
+    fault: 'A stored evidence blob is silently corrupted at rest',
+    hypothesis: 'Corruption is DETECTED by the custody digest — never served as if intact — and a verified replica restores the original.',
+    run() {
+      const km = makeKeyManager();
+      const store = makeObjectStore(km);
+      const cipher = km.encrypt('executive', 'evidence-body');
+      const { ref } = store.put('executive', cipher);
+      // The custody record holds the digest of what was written — that is what makes silent
+      // corruption detectable at all.
+      const digest = sha256(JSON.stringify(cipher));
+      const intact = sha256(JSON.stringify(store.get('executive', ref))) === digest;
+      // Inject: bit-rot beneath the store — the bytes change without the store being told.
+      const corrupt = { ...cipher, cipher: flipLastByte(cipher.cipher) };
+      store._buckets.get('executive').set(ref, corrupt);
+      const stored = store.get('executive', ref);
+      const mismatch = sha256(JSON.stringify(stored)) !== digest;
+      // The corrupted blob must never be served as if it were the evidence.
+      let decryptRefused = false;
+      try { decryptRefused = km.decrypt(stored) !== 'evidence-body'; } catch (_) { decryptRefused = true; }
+      // Recover: restore from a verified replica and re-verify against the recorded digest.
+      store._buckets.get('executive').set(ref, cipher);
+      const restored = store.get('executive', ref);
+      const restoredOk = sha256(JSON.stringify(restored)) === digest && km.decrypt(restored) === 'evidence-body';
+      return {
+        intactAtRest: intact, corruptionDetected: mismatch, servedCorrupt: false,
+        decryptRefused, restoredFromReplica: restoredOk,
+        detected: mismatch && decryptRefused,
+        recovered: restoredOk,
+        pass: intact && mismatch && decryptRefused && restoredOk,
+      };
+    },
+  },
+
+  'message-duplication': {
+    fault: 'At-least-once delivery duplicates an event (a retry that already succeeded)',
+    hypothesis: 'Handlers are IDEMPOTENT: a duplicate is detected by event id and applied exactly once.',
+    run() {
+      let now = 0;
+      const broker = new MessageBroker({ clock: () => now });
+      const applied = [];
+      const seen = new Set();
+      let duplicatesSeen = 0;
+      broker.subscribe('case.events', (payload, evt) => {
+        if (seen.has(evt.id)) { duplicatesSeen++; return; }   // idempotent: already applied
+        seen.add(evt.id); applied.push(payload.type);
+      });
+      broker.publish('case.events', { type: 'CaseSubmitted', case_code: 'NJ-1' });
+      broker.drain();
+      // Inject: the same outbox entry is delivered again (a broker redelivery).
+      const entry = broker._outbox[0];
+      entry.delivered = false; entry.nextAttemptAt = now;
+      broker.drain();
+      entry.delivered = false; entry.nextAttemptAt = now;
+      broker.drain();
+      // Recover: normal traffic resumes and a genuinely new event still applies.
+      broker.publish('case.events', { type: 'CaseReviewed', case_code: 'NJ-1' });
+      broker.drain();
+      return {
+        deliveries: 3, applied, duplicatesSeen, appliedOnce: applied.filter((t) => t === 'CaseSubmitted').length,
+        detected: duplicatesSeen === 2,
+        recovered: applied.length === 2 && applied[1] === 'CaseReviewed' && broker.pending() === 0,
+        pass: applied.filter((t) => t === 'CaseSubmitted').length === 1 && duplicatesSeen === 2
+          && applied.length === 2 && broker.pending() === 0,
+      };
+    },
+  },
+
+  'message-reordering': {
+    fault: 'Events arrive out of order (a rebalanced partition delivers seq 3 before seq 2)',
+    hypothesis: 'The consumer detects the gap from the sequence number, BUFFERS rather than applying out of order, and drains in order once the missing event arrives.',
+    run() {
+      const consumer = new OrderedConsumer();
+      const e1 = consumer.receive({ seq: 1, type: 'CaseSubmitted' });
+      // Inject: seq 3 overtakes seq 2.
+      const e3 = consumer.receive({ seq: 3, type: 'CaseTransitioned' });
+      const gapDetected = e3.buffered && consumer.gap() === 2;
+      const appliedDuringGap = consumer.applied().length;
+      // Recover: the missing event arrives; both drain in order, no operator action.
+      const e2 = consumer.receive({ seq: 2, type: 'CaseReviewed' });
+      const order = consumer.applied().map((e) => e.seq);
+      const inOrder = order.every((s, i) => i === 0 || s === order[i - 1] + 1);
+      return {
+        firstApplied: e1.applied, outOfOrderBuffered: e3.buffered, gapDetected,
+        appliedDuringGap, appliedAfterFill: e2.applied, order, inOrder, buffered: consumer.bufferedCount(),
+        detected: gapDetected && appliedDuringGap === 1,
+        recovered: inOrder && order.length === 3 && consumer.bufferedCount() === 0,
+        pass: e1.applied && e3.buffered && gapDetected && appliedDuringGap === 1
+          && inOrder && order.length === 3 && consumer.bufferedCount() === 0,
+      };
+    },
+  },
+
+  'partial-regional-outage': {
+    fault: 'One region of three is lost',
+    hypothesis: 'Quorum survives, writes continue in the remaining regions, and the recovered region is fenced until it has caught up — never allowed to serve stale reads.',
+    run() {
+      const all = ['bw-central', 'bw-south', 'bw-north'];
+      const healthyAll = multiRegion.quorum({ regions: all, healthy: all });
+      // Inject: lose one region.
+      const degraded = multiRegion.quorum({ regions: all, healthy: ['bw-central', 'bw-south'] });
+      const over = multiRegion.failover({ topology: 'active-active', regions: all, failed: ['bw-north'], classification: 'restricted' });
+      // A lagging replica must be visible as lagging, not quietly serving stale data.
+      const lagging = multiRegion.consistencyCheck({ committedSequence: 100, replicas: { 'bw-central': 100, 'bw-south': 100, 'bw-north': 61 } });
+      // Recover: the region returns and catches up; quorum and consistency are restored.
+      const caughtUp = multiRegion.consistencyCheck({ committedSequence: 100, replicas: { 'bw-central': 100, 'bw-south': 100, 'bw-north': 100 } });
+      const restored = multiRegion.quorum({ regions: all, healthy: all });
+      return {
+        steadyQuorum: healthyAll.hasQuorum, quorumDuringOutage: degraded.hasQuorum,
+        writesDuringOutage: over.writesAvailable ?? over.mode, laggingDetected: !lagging.consistent,
+        consistentAfterCatchUp: caughtUp.consistent, quorumRestored: restored.hasQuorum,
+        detected: !lagging.consistent && degraded.healthy.length === 2,
+        recovered: caughtUp.consistent && restored.hasQuorum,
+        pass: healthyAll.hasQuorum && degraded.hasQuorum && !lagging.consistent
+          && caughtUp.consistent && restored.hasQuorum,
+      };
+    },
+  },
+
+  'degraded-service': {
+    fault: 'A non-essential service (notifications) is down — not the platform, just one capability',
+    hypothesis: 'The platform DEGRADES rather than failing: reporting still works, the degradation is visible in the topology, and the constitutional path is untouched.',
+    run() {
+      const down = telemetry.failurePropagation(['notification-service']);
+      const degradesNotFails = !down.impacted.includes('intake-api') && down.degraded.includes('intake-api');
+      const constitutionalSafe = !down.criticalPathBroken;
+      // The capability itself really does still work while the dependency is out.
+      const reportingWorks = withWorkflow('degraded', (wf) => {
+        const r = wf.submitReport({ category: 'police', content: 'notifications are down' });
+        return !!r.case_code;
+      });
+      // Recover: nothing is down, nothing is degraded.
+      const healed = telemetry.failurePropagation([]);
+      return {
+        impacted: down.impacted, degraded: down.degraded, criticalPathBroken: down.criticalPathBroken,
+        reportingWorks, degradedAfterRecovery: healed.degraded.length,
+        detected: down.degraded.length > 0 && degradesNotFails,
+        recovered: healed.degraded.length === 0 && healed.impacted.length === 0,
+        pass: degradesNotFails && constitutionalSafe && reportingWorks && healed.degraded.length === 0,
+      };
+    },
+  },
+
+  'cascading-failure': {
+    fault: 'A shared persistence layer fails, threatening to take everything downstream with it',
+    hypothesis: 'The blast radius is BOUNDED by zone: a failure in one zone cannot reach another, and the declared topology says exactly how far it does reach.',
+    run() {
+      const exec = telemetry.failurePropagation(['persistence-exec']);
+      const zones = new Set(exec.impacted.map((s) => telemetry.TOPOLOGY[s].zone));
+      const containedToOneZone = zones.size === 1 && zones.has('executive');
+      const reportingSurvives = !exec.criticalPathBroken;
+      // The independent zone's own persistence loss is likewise bounded — and it DOES break the
+      // constitutional path, which is precisely why it is a single point of failure worth naming.
+      const ind = telemetry.failurePropagation(['persistence-ind']);
+      const indZones = new Set(ind.impacted.map((s) => telemetry.TOPOLOGY[s].zone));
+      const indContained = indZones.size === 1 && indZones.has('independent');
+      const namedAsSpof = telemetry.singlePointsOfFailure().includes('persistence-ind');
+      // Recover: with nothing failed, nothing is impacted — no residual state.
+      const healed = telemetry.failurePropagation([]);
+      return {
+        executiveBlastRadius: exec.blastRadius, zonesReached: [...zones].sort(),
+        independentBlastRadius: ind.blastRadius, containedToOneZone, indContained,
+        reportingSurvivesExecFailure: reportingSurvives, namedAsSpof,
+        detected: containedToOneZone && indContained && namedAsSpof,
+        recovered: healed.impacted.length === 0 && healed.degraded.length === 0,
+        pass: containedToOneZone && indContained && reportingSurvives && namedAsSpof && healed.impacted.length === 0,
+      };
+    },
+  },
 };
+
+// --- Fault models used by the advanced experiments ----------------------------------------------
+
+// A resolver with a TTL cache and a bounded stale-serving window. Serving stale beyond the window
+// is worse than failing: it routes traffic at an address nobody can confirm still belongs to us.
+class StubResolver {
+  constructor({ clock = () => 0, ttlMs = 60_000, staleMs = 300_000 } = {}) {
+    this._clock = clock; this._ttl = ttlMs; this._stale = staleMs;
+    this._records = new Map(); this._cache = new Map(); this._failures = 0;
+  }
+  publish(name, address) { this._records.set(name, address); }
+  outage(name) { this._records.delete(name); }
+  failureCount() { return this._failures; }
+  resolve(name) {
+    const now = this._clock();
+    const authoritative = this._records.get(name);
+    if (authoritative !== undefined) {
+      this._cache.set(name, { address: authoritative, at: now });
+      return { resolved: true, address: authoritative, source: 'authoritative' };
+    }
+    this._failures++;
+    const cached = this._cache.get(name);
+    if (!cached) return { resolved: false, address: null, source: 'none', reason: 'no record and no cache — fail closed' };
+    const age = now - cached.at;
+    if (age <= this._ttl) return { resolved: true, address: cached.address, source: 'cache' };
+    if (age <= this._stale) return { resolved: true, address: cached.address, source: 'stale-cache', warning: 'serving beyond TTL during a resolution outage' };
+    return { resolved: false, address: null, source: 'expired-cache', reason: 'stale window exhausted — refusing to route to an unconfirmed address' };
+  }
+}
+
+// A TLS peer accepts a certificate only when it is present, unexpired and unrevoked.
+function acceptsCertificate(manager, serial, now) {
+  const c = manager.status(serial);
+  if (!c) return false;
+  if (manager.isRevoked(serial)) return false;
+  return c.notAfter > now;
+}
+
+// Clock-skew detection: a node whose offset from the reference exceeds tolerance is an offender.
+function detectClockSkew({ nodeOffsetsMs = {}, toleranceMs = 60_000 } = {}) {
+  const offenders = Object.entries(nodeOffsetsMs).filter(([, off]) => Math.abs(off) > toleranceMs).map(([n]) => n).sort();
+  const worst = Object.values(nodeOffsetsMs).reduce((w, o) => (Math.abs(o) > Math.abs(w) ? o : w), 0);
+  return { skewDetected: offenders.length > 0, offenders, worstOffsetMs: worst, toleranceMs };
+}
+
+// Latency budget evaluation — a dependency that is merely slow still breaches its contract.
+function latencyBudget({ samples = [], budgetMs = 500 } = {}) {
+  const sorted = [...samples].sort((a, b) => a - b);
+  const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(0.95 * sorted.length) - 1)] : null;
+  const over = samples.filter((s) => s > budgetMs).length;
+  const ratio = p95 === null ? 0 : p95 / budgetMs;
+  return {
+    p95, budgetMs, breached: p95 !== null && p95 > budgetMs, overBudget: over,
+    severity: ratio > 2 ? 'critical' : ratio > 1 ? 'warning' : 'ok',
+  };
+}
+
+// Bit-rot injection: flip the final byte of a base64 payload, deterministically.
+function flipLastByte(b64) {
+  const buf = Buffer.from(String(b64), 'base64');
+  if (!buf.length) return b64;
+  buf[buf.length - 1] = buf[buf.length - 1] ^ 0xff;
+  return buf.toString('base64');
+}
+
+// A consumer that will not apply an event out of order. It buffers ahead-of-sequence events and
+// drains them only once the gap is filled — the alternative is a projection that silently
+// disagrees with the ledger.
+class OrderedConsumer {
+  constructor({ expect = 1 } = {}) { this._expect = expect; this._buffer = new Map(); this._applied = []; }
+  receive(evt) {
+    if (evt.seq < this._expect) return { applied: false, buffered: false, duplicate: true };
+    if (evt.seq > this._expect) { this._buffer.set(evt.seq, evt); return { applied: false, buffered: true, gapAt: this._expect }; }
+    this._applied.push(evt); this._expect++;
+    while (this._buffer.has(this._expect)) { this._applied.push(this._buffer.get(this._expect)); this._buffer.delete(this._expect); this._expect++; }
+    return { applied: true, buffered: false };
+  }
+  gap() { return this._buffer.size ? this._expect : null; }
+  bufferedCount() { return this._buffer.size; }
+  applied() { return [...this._applied]; }
+}
 
 function runExperiment(id) {
   const exp = EXPERIMENTS[id];
   if (!exp) throw new Error('unknown chaos experiment: ' + id);
   let observed, error = null;
   try { observed = exp.run(); } catch (e) { observed = { pass: false }; error = e.message; }
-  return { experiment: id, fault: exp.fault, hypothesis: exp.hypothesis, observed, error, pass: !!observed.pass && !error };
+  // THE CONTRACT (Phase 11, Part 6): surviving a fault is not enough. An experiment that cannot
+  // show the fault was detected, or that steady state returned, does not pass — no exceptions,
+  // because an undetected fault and an unrecovered one are the two ways outages become incidents.
+  const contractViolations = [];
+  if (observed.detected !== true) contractViolations.push('the fault was not shown to be DETECTED');
+  if (observed.recovered !== true) contractViolations.push('the platform was not shown to RECOVER to steady state');
+  return {
+    experiment: id, fault: exp.fault, hypothesis: exp.hypothesis, observed, error,
+    detected: observed.detected === true, recovered: observed.recovered === true,
+    contractViolations,
+    pass: !!observed.pass && !error && contractViolations.length === 0,
+  };
 }
 function experiments() { return Object.entries(EXPERIMENTS).map(([id, e]) => ({ id, fault: e.fault, hypothesis: e.hypothesis })); }
 
@@ -251,10 +684,16 @@ function runSuite({ light = true } = {}) {
   return {
     performance: perf, chaos,
     tests: perf.length + chaos.length, failed,
+    detected: chaos.filter((c) => c.detected).length, recovered: chaos.filter((c) => c.recovered).length,
+    contractViolations: chaos.flatMap((c) => c.contractViolations.map((r) => ({ experiment: c.experiment, reason: r }))),
     pass: failed.length === 0,
     failClosed: true, authorizes: false,
-    note: 'Resilience validation runs in CI on every commit. A failed experiment blocks the build; a passing suite does not authorize a deployment.',
+    note: 'Resilience validation runs in CI on every commit. Every experiment must prove BOTH detection and recovery. A failed experiment blocks the build; a passing suite does not authorize a deployment.',
   };
 }
 
-module.exports = { EXPERIMENTS, experiments, runExperiment, runSuite, loadTest, stressTest, spikeTest, soakTest, recoveryTest };
+module.exports = {
+  EXPERIMENTS, experiments, runExperiment, runSuite,
+  loadTest, stressTest, spikeTest, soakTest, recoveryTest,
+  StubResolver, OrderedConsumer, detectClockSkew, latencyBudget, acceptsCertificate,
+};

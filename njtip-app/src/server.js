@@ -161,6 +161,9 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/admin/telemetry') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()]; const held = f.filter((r) => r.pass).length / f.length; return json(200, app.observability.telemetry.report({ signals: { architecture: held, reliability: app.evaluateSlo().healthy, security: true, privacy: true, infrastructure: app.infraAssurance.report().healthy, governance: true }, spans: app.tracer.recent(50) })); }
   if (method === 'GET' && (m = p.match(/^\/api\/admin\/telemetry\/failure\/([^/]+)$/))) { requireRole('admin'); return json(200, app.observability.telemetry.failurePropagation([dec(m[1])])); }
   if (method === 'GET' && p === '/api/admin/resilience/suite') { requireRole('admin'); return json(200, app.chaos.runSuite({ light: true })); }
+  // --- Phase 11: predictive reliability & business observability ---
+  if (method === 'GET' && p === '/api/observability/dependency-risk') { requireRole('admin'); return json(200, app.observability.sre.dependencyRisk()); }
+  if (method === 'GET' && p === '/api/observability/business') { requireRole('oversight-board'); return json(200, app.observability.businessMetrics()); }
   // --- Phase 10: zero trust, threat model, formal policy verification ---
   if (method === 'GET' && p === '/api/security/zero-trust') { requireRole('admin'); return json(200, { architecture: app.iam.zeroTrust.architecture(), policyVersion: app.iam.zeroTrust.pap.version(), policies: app.iam.zeroTrust.pap.registry(), workloads: app.iam.zeroTrust.workloads.list(), boundaries: app.iam.zeroTrust.boundaries.flows() }); }
   if (method === 'POST' && p === '/api/security/zero-trust/decide') { requireRole('admin'); return json(200, app.iam.zeroTrust.pdp.decide(body.request || {})); }

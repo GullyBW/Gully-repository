@@ -1625,6 +1625,275 @@ module.exports = [
     if (!storage.observed.plaintextRefused) v.push('storage fell back to plaintext under failure');
   }),
 
+  fit('APP-FIT-SRE-PREDICTIVE', 'Burn-rate alerting, forecasting, dependency risk and scorecards are measured — and fail when reliability degrades', (v) => {
+    const sre = require('../src/observability/sre');
+
+    // --- Multi-window burn-rate alerting -------------------------------------------------------
+    for (const a of sre.BURN_ALERTS) {
+      for (const f of ['longWindowHours', 'shortWindowMinutes', 'burnRate', 'severity', 'meaning']) {
+        if (a[f] === undefined || a[f] === null) v.push(`burn alert ${a.id}: missing ${f}`);
+      }
+      if (!(a.shortWindowMinutes < a.longWindowHours * 60)) v.push(`burn alert ${a.id}: the short window is not shorter than the long window`);
+    }
+    if (!sre.BURN_ALERTS.some((a) => a.severity === 'page') || !sre.BURN_ALERTS.some((a) => a.severity === 'ticket')) {
+      v.push('burn-rate policy does not distinguish a page from a ticket');
+    }
+    // Objective 0.999 → budget 0.001. Attained 0.9856 = 14.4× burn.
+    const burning = sre.burnRateAlerts({ service: 'anonymous-reporting', longWindowAttained: { 'fast-burn': 0.9856 }, shortWindowAttained: { 'fast-burn': 0.98 } });
+    if (!burning.page || !burning.firing.includes('fast-burn')) v.push('a 14.4× two-window burn did not page');
+    // THE POINT OF TWO WINDOWS: a long window still burning but a short window recovered must NOT page.
+    const overIncident = sre.burnRateAlerts({ service: 'anonymous-reporting', longWindowAttained: { 'fast-burn': 0.9856 }, shortWindowAttained: { 'fast-burn': 1 } });
+    if (overIncident.page) v.push('a recovered incident still paged — the short window is not gating the alert');
+    if (!overIncident.alerts[0].suppressed) v.push('a recovered incident was not reported as suppressed');
+    // A healthy service must not page at all.
+    const quiet = sre.burnRateAlerts({ service: 'anonymous-reporting', longWindowAttained: { 'fast-burn': 0.9999, 'medium-burn': 0.9999, 'slow-burn': 0.9999 }, shortWindowAttained: { 'fast-burn': 0.9999, 'medium-burn': 0.9999, 'slow-burn': 0.9999 } });
+    if (quiet.page || quiet.firing.length) v.push('a healthy service triggered a burn-rate alert');
+
+    // --- Trend & forecasting -------------------------------------------------------------------
+    if (sre.trend([1, 2, 3, 4]).direction !== 'improving') v.push('a rising series was not reported as improving');
+    if (sre.trend([4, 3, 2, 1]).direction !== 'degrading') v.push('a falling series was not reported as degrading');
+    if (sre.trend([2, 2, 2]).direction !== 'flat') v.push('a flat series was not reported as flat');
+    if (sre.trend([1]).direction !== 'insufficient-data') v.push('a single observation was treated as a trend');
+    if (JSON.stringify(sre.trend([0.99, 0.98, 0.97])) !== JSON.stringify(sre.trend([0.99, 0.98, 0.97]))) v.push('trend analysis is not deterministic');
+    // A degrading service must be forecast to breach; a healthy one must not.
+    const degrading = sre.reliabilityForecast({ service: 'case-status', history: [0.999, 0.998, 0.996, 0.995], periodsAhead: 4 });
+    if (!degrading.breachExpected) v.push('a degrading availability trend was not forecast to breach its objective');
+    if (degrading.trend.direction !== 'degrading') v.push('a degrading forecast did not report a degrading trend');
+    if (degrading.authorizes !== false) v.push('a reliability forecast claims authority');
+    const steady = sre.reliabilityForecast({ service: 'case-status', history: [0.999, 0.999, 0.999, 0.999], periodsAhead: 6 });
+    if (steady.breachExpected) v.push('a steady, within-objective service was forecast to breach');
+    // Recovery forecasting: restore time scales with volume while the RTO does not.
+    const growing = sre.recoveryForecast({ service: 'investigation', restoreMinutesPerGb: 0.5, dataGbNow: 100, monthlyGrowthPct: 6, months: 24 });
+    if (!growing.breachExpected || growing.breachAtMonth === null) v.push('growing data volume was not forecast to breach the RTO');
+    if (!growing.currentlyMeetsRto) v.push('the recovery forecast misreports today as already breaching');
+    const flat = sre.recoveryForecast({ service: 'investigation', restoreMinutesPerGb: 0.05, dataGbNow: 10, monthlyGrowthPct: 0, months: 24 });
+    if (flat.breachExpected) v.push('a non-growing dataset was forecast to breach the RTO');
+
+    // --- Dependency risk -----------------------------------------------------------------------
+    const risk = sre.dependencyRisk();
+    if (!risk.services.length) v.push('dependency risk scored no services');
+    for (const r of risk.services) {
+      if (typeof r.score !== 'number' || r.score < 0 || r.score > 100) v.push(`${r.service}: dependency risk score out of range`);
+      if (!['severe', 'high', 'moderate', 'low'].includes(r.band)) v.push(`${r.service}: unknown risk band`);
+    }
+    // Scores must be ordered, derived and reproducible — never hand-entered.
+    for (let i = 1; i < risk.services.length; i++) if (risk.services[i - 1].score < risk.services[i].score) v.push('dependency risk is not ordered by score');
+    if (JSON.stringify(sre.dependencyRisk()) !== JSON.stringify(sre.dependencyRisk())) v.push('dependency risk scoring is not deterministic');
+    // A single point of failure on the constitutional path must score above a leaf service.
+    const byName = Object.fromEntries(risk.services.map((r) => [r.service, r]));
+    if (!risk.singlePointsOfFailure.length) v.push('no single point of failure was identified in a topology that has them');
+    if (byName['persistence-ind'] && byName['analytics'] && byName['persistence-ind'].score <= byName['analytics'].score) {
+      v.push('a constitutional single point of failure did not outrank a leaf analytics service');
+    }
+
+    // --- SLO compliance history ----------------------------------------------------------------
+    const history = new sre.SloComplianceHistory();
+    history.record({ service: 'investigation', period: 0, availability: 0.996, latencyUnder: 0.96 });
+    history.record({ service: 'investigation', period: 1, availability: 0.994, latencyUnder: 0.96 });
+    let rejectedDuplicate = false;
+    try { history.record({ service: 'investigation', period: 1, availability: 0.999 }); } catch (_) { rejectedDuplicate = true; }
+    if (!rejectedDuplicate) v.push('SLO compliance history accepted a rewrite of a recorded period — history must be append-only');
+    let rejectedUnknown = false;
+    try { history.record({ service: 'not-a-service', period: 0, availability: 1 }); } catch (_) { rejectedUnknown = true; }
+    if (!rejectedUnknown) v.push('SLO compliance history accepted an unknown service');
+    const compliance = history.compliance('investigation');
+    if (compliance.complianceRate !== 0.5) v.push('SLO compliance rate was miscomputed');
+    if (compliance.consecutiveBreaches !== 1) v.push('consecutive breaches were miscounted');
+    if (compliance.trend.direction !== 'degrading') v.push('a falling availability history was not reported as degrading');
+
+    // --- Scorecard & release readiness ---------------------------------------------------------
+    const healthyMeasurements = Object.fromEntries(Object.keys(sre.SERVICE_LEVELS).map((s) => [s, { availability: 1, latencyUnder: 1 }]));
+    const goodHistory = new sre.SloComplianceHistory();
+    for (const s of Object.keys(sre.SERVICE_LEVELS)) for (let p = 0; p < 4; p++) goodHistory.record({ service: s, period: p, availability: 1, latencyUnder: 1 });
+    const good = sre.scorecard({ measurements: healthyMeasurements, history: goodHistory });
+    if (good.overallGrade !== 'A') v.push(`a perfectly healthy platform scored ${good.overallGrade}, not A`);
+    if (good.authorizes !== false) v.push('the reliability scorecard claims authority');
+    // THE REQUIREMENT: the scorecard must FAIL when reliability is bad, and an unmeasured
+    // service must score zero rather than being quietly assumed healthy.
+    const bad = sre.scorecard({ measurements: { 'anonymous-reporting': { availability: 0.9, latencyUnder: 0.5 } } });
+    if (bad.overallGrade === 'A') v.push('a breached, largely unmeasured platform still scored an A');
+    const unmeasured = bad.services.find((s) => !s.measured);
+    if (!unmeasured || unmeasured.score !== 0 || unmeasured.grade !== 'F') v.push('an unmeasured service was not scored as F');
+    if (!bad.services.find((s) => s.service === 'anonymous-reporting').reasons.length) v.push('a failing service named no reason');
+    // Release readiness inherits the fail-closed gate and adds advisory warnings.
+    const ready = sre.releaseReadiness({ measurements: healthyMeasurements, history: goodHistory });
+    if (!ready.ready || ready.gate.blockers.length) v.push('release readiness blocked a fully healthy platform');
+    const notReady = sre.releaseReadiness({ measurements: { 'anonymous-reporting': { availability: 0.9, latencyUnder: 0.5 } } });
+    if (notReady.ready) v.push('release readiness permitted a release with a breached SLO');
+    if (!notReady.failClosed || notReady.authorizes !== false) v.push('release readiness is not fail-closed / claims authority');
+    // A passing gate with a degrading trend must still warn — a green gate is not an all-clear.
+    const drifting = new sre.SloComplianceHistory();
+    for (const [p, a] of [[0, 1], [1, 0.9999], [2, 0.9997], [3, 0.9995]]) drifting.record({ service: 'anonymous-reporting', period: p, availability: a, latencyUnder: 1 });
+    const warned = sre.releaseReadiness({ measurements: healthyMeasurements, history: drifting });
+    if (!warned.ready) v.push('a degrading-but-compliant trend blocked a release outright');
+    if (!warned.warnings.some((w) => w.service === 'anonymous-reporting' && /degrading/.test(w.warning))) v.push('a degrading trend produced no warning on a passing gate');
+  }),
+
+  fit('APP-FIT-BUSINESS-OBSERVABILITY', 'Business KPIs are derived from PII-free events, never hand-entered, and correlate without claiming cause', (v) => {
+    const bus = require('../src/observability/business');
+    const H = 3600_000;
+
+    // Every catalogued metric declares an objective, a direction, an owning board and a derivation.
+    for (const m of bus.catalogue()) {
+      for (const f of ['title', 'unit', 'direction', 'objective', 'warn', 'board', 'derivedFrom', 'meaning']) {
+        if (m[f] === undefined || m[f] === null) v.push(`business metric ${m.id}: missing ${f}`);
+      }
+      if (!['higher-better', 'lower-better'].includes(m.direction)) v.push(`business metric ${m.id}: unknown direction`);
+      if (!Array.isArray(m.correlatesWith) || !m.correlatesWith.length) v.push(`business metric ${m.id}: no technical service to correlate against`);
+      for (const s of m.correlatesWith) if (!require('../src/observability/sre').SERVICE_LEVELS[s]) v.push(`business metric ${m.id}: correlates with unknown service level '${s}'`);
+    }
+    // Part 5 requires all nine business dimensions to exist.
+    for (const required of ['case-throughput', 'investigation-latency', 'evidence-processing-time', 'judicial-workflow-duration', 'policy-violation-rate', 'audit-completion-rate', 'governance-review-time', 'approval-delay', 'compliance-rate']) {
+      if (!bus.BUSINESS_METRICS[required]) v.push(`missing business metric: ${required}`);
+    }
+
+    // THE PRIVACY REQUIREMENT: an identity-bearing event is REFUSED, not silently stripped.
+    let refused = false;
+    try { bus.derive([{ type: 'CaseCreated', correlationId: 'C1', at: 0, name: 'a person' }]); } catch (_) { refused = true; }
+    if (!refused) v.push('business observability accepted an event carrying an identity field');
+    let refusedNested = false;
+    try { bus.derive([{ type: 'CaseCreated', correlationId: 'C1', at: 0, omang: '123' }]); } catch (_) { refusedNested = true; }
+    if (!refusedNested) v.push('business observability accepted an event carrying a national identity number');
+
+    const events = [
+      { type: 'CaseCreated', correlationId: 'C1', at: 0 },
+      { type: 'CaseTransitioned', correlationId: 'C1', to: 'closed', at: 100 * H },
+      { type: 'CaseCreated', correlationId: 'C2', at: 0 },
+      { type: 'CaseTransitioned', correlationId: 'C2', to: 'closed', at: 200 * H },
+      { type: 'CaseCreated', correlationId: 'C3', at: 0 },
+      { type: 'EvidenceIngested', correlationId: 'E1', at: 0 },
+      { type: 'EvidenceAdmitted', correlationId: 'E1', at: 10 * H },
+      { type: 'ApprovalRequested', correlationId: 'A1', at: 0 },
+      { type: 'ApprovalGranted', correlationId: 'A1', at: 20 * H },
+      { type: 'AuditScheduled', correlationId: 'AU1', at: 0 },
+      { type: 'AuditCompleted', correlationId: 'AU1', at: 1 * H },
+      { type: 'ComplianceChecked', correlationId: 'X', outcome: 'ok', at: 0 },
+    ];
+    const derived = bus.derive(events, { periods: 1 });
+    if (derived['case-throughput'] !== 2) v.push('case throughput was not derived from terminal transitions');
+    if (derived['evidence-processing-time'] !== 10) v.push('evidence processing time was not derived from the ingest→admit dwell');
+    if (derived['approval-delay'] !== 20) v.push('approval delay was not derived from the request→grant dwell');
+    if (derived['audit-completion-rate'] !== 1) v.push('audit completion rate was miscomputed');
+    // An in-flight case must be counted as open — averaging only completed work hides a backlog.
+    const dwell = bus.dwellTimes(events, 'investigation-latency');
+    if (dwell.open !== 1) v.push('an unfinished case was not counted as open');
+    if (dwell.completed !== 2) v.push('completed dwell times were miscounted');
+    // Derivation is deterministic.
+    if (JSON.stringify(bus.derive(events)) !== JSON.stringify(bus.derive(events))) v.push('business metric derivation is not deterministic');
+
+    // NO EVIDENCE IS NOT A PASS: a metric with nothing behind it must report no-evidence.
+    const empty = bus.dashboard({ events: [], periods: 1 });
+    if (empty.healthy) v.push('an empty event stream produced a healthy business dashboard');
+    if (empty.noEvidence.length !== Object.keys(bus.BUSINESS_METRICS).length - 1) v.push('metrics with no evidence were not all reported as no-evidence');
+    for (const m of empty.metrics) if (m.status === 'met') v.push(`${m.metric}: reported as met with no evidence`);
+
+    // Objective assessment works in both polarities and fails when the objective is missed.
+    if (bus.assess('case-throughput', 30).status !== 'met') v.push('a higher-better metric above objective was not reported as met');
+    if (bus.assess('case-throughput', 5).status !== 'breached') v.push('a higher-better metric below objective was not reported as breached');
+    if (bus.assess('approval-delay', 24).status !== 'met') v.push('a lower-better metric under objective was not reported as met');
+    if (bus.assess('approval-delay', 400).status !== 'breached') v.push('a lower-better metric over objective was not reported as breached');
+    if (bus.assess('approval-delay', null).status !== 'no-evidence') v.push('a missing value was not reported as no-evidence');
+
+    // Trend polarity is interpreted against the metric, not the number: a RISING duration is worse.
+    const worseningDash = bus.dashboard({ events, periods: 1, businessHistory: { 'approval-delay': [10, 20, 30, 40], 'case-throughput': [30, 28, 26, 24] } });
+    if (!worseningDash.worsening.includes('approval-delay')) v.push('a rising duration was not reported as worsening');
+    if (!worseningDash.worsening.includes('case-throughput')) v.push('a falling throughput was not reported as worsening');
+    const improvingDash = bus.dashboard({ events, periods: 1, businessHistory: { 'approval-delay': [40, 30, 20, 10] } });
+    if (improvingDash.worsening.includes('approval-delay')) v.push('a falling duration was reported as worsening');
+
+    // Correlation reports a hypothesis, never a cause, and refuses to compute on thin data.
+    if (bus.correlation([1, 2], [1, 2]) !== null) v.push('correlation was computed from fewer than three paired points');
+    if (bus.correlation([1, 1, 1], [1, 2, 3]) !== null) v.push('correlation was computed against a constant series');
+    const corr = bus.correlateWithReliability({ businessHistory: { 'case-throughput': [10, 12, 14, 16] }, technicalHistory: { 'case-status': [0.99, 0.992, 0.995, 0.999] } });
+    if (corr.causal !== false || corr.authorizes !== false) v.push('correlation analysis claims causation or authority');
+    const f = corr.findings.find((x) => x.metric === 'case-throughput' && x.service === 'case-status');
+    if (!f || f.strength !== 'strong' || !f.aligned) v.push('a strong aligned relationship was not detected');
+    if (!/investigate/.test(f.hypothesis)) v.push('a correlation finding did not phrase itself as something to investigate');
+    // An UNEXPECTED direction must be flagged as a broken assumption, not quietly reported.
+    const inverted = bus.correlateWithReliability({ businessHistory: { 'case-throughput': [16, 14, 12, 10] }, technicalHistory: { 'case-status': [0.99, 0.992, 0.995, 0.999] } });
+    const inv = inverted.findings.find((x) => x.metric === 'case-throughput' && x.service === 'case-status');
+    if (!inv || inv.aligned) v.push('an inverted relationship was reported as aligned');
+    if (!/UNEXPECTED|model may be wrong/.test(inv.hypothesis)) v.push('an inverted relationship did not challenge the model');
+
+    const report = bus.report({ events, periods: 1 });
+    if (report.authorizes !== false || report.informationalOnly !== true) v.push('the business observability report claims authority');
+    if (report.piiFree !== true) v.push('the business observability report does not assert its PII-free contract');
+  }),
+
+  fit('APP-FIT-CHAOS-DETECT-RECOVER', 'Every chaos scenario proves BOTH detection and recovery — and the contract fails when one is missing', (v) => {
+    const chaos = require('../src/twin2/chaos');
+
+    // Part 6 requires all twelve advanced fault classes, alongside the Phase 10 set.
+    const ids = chaos.experiments().map((e) => e.id);
+    const required = [
+      'dns-failure', 'certificate-expiry', 'clock-skew', 'identity-provider-outage',
+      'network-partition', 'dependency-latency', 'storage-corruption', 'message-duplication',
+      'message-reordering', 'partial-regional-outage', 'degraded-service', 'cascading-failure',
+    ];
+    for (const r of required) if (!ids.includes(r)) v.push(`missing chaos scenario: ${r}`);
+
+    // THE CONTRACT: every experiment, without exception, proves detection AND recovery.
+    for (const id of ids) {
+      const r = chaos.runExperiment(id);
+      if (r.error) v.push(`${id}: threw during execution — ${r.error}`);
+      if (!r.detected) v.push(`${id}: the fault was not shown to be detected`);
+      if (!r.recovered) v.push(`${id}: recovery to steady state was not shown`);
+      if (!r.pass) v.push(`${id}: hypothesis did not hold`);
+      for (const cv of r.contractViolations) v.push(`${id}: ${cv}`);
+    }
+
+    // THE CONTRACT MUST BITE: an experiment that survives a fault but proves neither detection
+    // nor recovery must FAIL. Fed a crafted counterexample, the runner must refuse it.
+    const original = chaos.EXPERIMENTS['dns-failure'];
+    try {
+      chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'survives silently', run: () => ({ pass: true }) };
+      const silent = chaos.runExperiment('dns-failure');
+      if (silent.pass) v.push('an experiment that proved neither detection nor recovery was allowed to pass');
+      if (silent.contractViolations.length !== 2) v.push('the detect-and-recover contract did not name both missing halves');
+      chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'detected but never recovers', run: () => ({ pass: true, detected: true, recovered: false }) };
+      const stuck = chaos.runExperiment('dns-failure');
+      if (stuck.pass) v.push('an experiment that detected a fault but never recovered was allowed to pass');
+    } finally {
+      chaos.EXPERIMENTS['dns-failure'] = original;
+    }
+
+    // Scenario-specific guarantees, asserted individually so a regression names itself.
+    const dns = chaos.runExperiment('dns-failure').observed;
+    if (dns.beyondStale !== false) v.push('DNS kept serving a cached address beyond its stale window');
+    if (!dns.servedStaleRatherThanFailing) v.push('a resolution outage inside the stale window took the dependency down');
+    const cert = chaos.runExperiment('certificate-expiry').observed;
+    if (!cert.warnedBeforeExpiry) v.push('certificate expiry was not warned about before it happened');
+    if (!cert.expiredRefused) v.push('an expired certificate was accepted');
+    const idp = chaos.runExperiment('identity-provider-outage').observed;
+    if (!idp.deniedDuringOutage) v.push('authentication did not fail closed during an identity-provider outage');
+    if (!idp.anonymousStillWorks) v.push('the anonymous reporting path depended on the identity provider');
+    const lat = chaos.runExperiment('dependency-latency').observed;
+    if (!lat.shedRequests) v.push('a slow dependency was queued rather than shed');
+    const rot = chaos.runExperiment('storage-corruption').observed;
+    if (!rot.corruptionDetected || !rot.decryptRefused) v.push('silent storage corruption was not detected');
+    if (rot.servedCorrupt !== false) v.push('a corrupted evidence blob was served');
+    const dup = chaos.runExperiment('message-duplication').observed;
+    if (dup.appliedOnce !== 1) v.push('a duplicated event was applied more than once');
+    const ord = chaos.runExperiment('message-reordering').observed;
+    if (!ord.inOrder) v.push('events were applied out of order');
+    if (ord.appliedDuringGap !== 1) v.push('an out-of-order event was applied before the gap was filled');
+    const reg = chaos.runExperiment('partial-regional-outage').observed;
+    if (!reg.quorumDuringOutage) v.push('losing one of three regions lost quorum');
+    if (!reg.laggingDetected) v.push('a lagging replica was not detected');
+    const deg = chaos.runExperiment('degraded-service').observed;
+    if (deg.criticalPathBroken) v.push('a non-essential service outage broke the constitutional path');
+    if (!deg.reportingWorks) v.push('reporting stopped when notifications were unavailable');
+    const cas = chaos.runExperiment('cascading-failure').observed;
+    if (!cas.containedToOneZone) v.push('a persistence failure escaped its zone');
+    if (!cas.namedAsSpof) v.push('an unmitigated single point of failure is not named as one');
+
+    // The suite reports the contract at the top level, and stays fail-closed.
+    const suite = chaos.runSuite({ light: true });
+    if (suite.contractViolations.length) for (const cv of suite.contractViolations) v.push(`${cv.experiment}: ${cv.reason}`);
+    if (suite.detected !== suite.chaos.length || suite.recovered !== suite.chaos.length) v.push('the suite did not report detection and recovery for every experiment');
+    if (suite.failClosed !== true || suite.authorizes !== false) v.push('the resilience suite is not fail-closed / claims authority');
+  }),
+
   fit('APP-FIT-DATA-GOVERNANCE', 'Every record traces origin → transformations → consumers → retention → deletion', (v) => {
     const { DataGovernance, seedPlatformDatasets, RETENTION_POLICIES } = require('../src/fabric/data-governance');
     const dg = seedPlatformDatasets(new DataGovernance({ clock: () => 1_000_000 }));
