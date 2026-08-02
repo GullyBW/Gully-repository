@@ -144,7 +144,7 @@ const CONTEXTS = {
   'ai-advisory': {
     kind: 'supporting', domain: 'Insight',
     purpose: 'Explainable, advisory-only recommendations with a mandatory human-approval queue.',
-    responsibilities: ['recommendation', 'explainability', 'model-governance', 'human-approval-queue'],
+    responsibilities: ['recommendation', 'explainability', 'model-governance', 'human-approval-queue', 'ai-risk-classification', 'inference-audit'],
     modules: ['src/ai/'],
     dependsOn: [d('analytics', 'customer-supplier', 'read-model-query'), d('privacy', 'shared-kernel', 'in-process-port')],
     acl: [], sharedKernel: ['privacy-invariants'], status: 'stable',
@@ -207,7 +207,7 @@ const CONTEXTS = {
   'assurance': {
     kind: 'core-domain', domain: 'Governance',
     purpose: 'The Digital Engineering Twin: fitness gate, compliance, maturity, capability, evolution and the architecture-of-record.',
-    responsibilities: ['fitness-gate', 'compliance-assessment', 'maturity-assessment', 'capability-model', 'evolution-intelligence', 'context-map', 'migration-roadmap'],
+    responsibilities: ['fitness-gate', 'compliance-assessment', 'maturity-assessment', 'capability-model', 'evolution-intelligence', 'context-map', 'migration-roadmap', 'adr-governance'],
     modules: ['src/twin.js', 'src/twin-validate.js', 'src/compliance/', 'src/maturity/', 'src/capability/', 'src/evolution/', 'src/architecture/', 'src/migration/'],
     dependsOn: [d('orchestration', 'conformist', 'in-process-port'), d('identity-access', 'conformist', 'in-process-port'), d('privacy', 'shared-kernel', 'in-process-port'), d('platform-events', 'published-language', 'read-model-query'), d('infrastructure', 'customer-supplier', 'read-model-query')],
     acl: [], sharedKernel: ['fitness-contract', 'privacy-invariants'], status: 'stable',
@@ -225,7 +225,7 @@ const CONTEXTS = {
   'api-governance': {
     kind: 'supporting', domain: 'Platform',
     purpose: 'API and event contracts, versioning strategy, quality metrics and outbound integration.',
-    responsibilities: ['api-registry', 'contract-registry', 'versioning-strategy', 'contract-compatibility', 'outbound-integration'],
+    responsibilities: ['api-registry', 'contract-registry', 'versioning-strategy', 'contract-compatibility', 'outbound-integration', 'consumer-driven-contracts'],
     modules: ['src/apigov/', 'src/openapi.js', 'src/contracts/', 'src/adapters/integrations.js'],
     dependsOn: [d('identity-access', 'conformist', 'in-process-port'), d('data-fabric', 'shared-kernel', 'in-process-port')],
     acl: ['external-consumer'], sharedKernel: ['canonical-model'], status: 'stable',
@@ -261,7 +261,7 @@ const CONTEXTS = {
   'governance-oversight': {
     kind: 'core-domain', domain: 'Governance',
     purpose: 'Human governance: decision recording, institutional ownership, asset and adaptive governance, oversight centres.',
-    responsibilities: ['governance-decision', 'institutional-ownership', 'asset-governance', 'adaptive-governance', 'oversight-dashboard'],
+    responsibilities: ['governance-decision', 'institutional-ownership', 'asset-governance', 'adaptive-governance', 'oversight-dashboard', 'raci-and-decision-traceability'],
     modules: ['src/govops/', 'src/governance/'],
     dependsOn: [d('assurance', 'conformist', 'read-model-query'), d('intelligence', 'customer-supplier', 'read-model-query'), d('observability', 'customer-supplier', 'read-model-query'), d('identity-access', 'conformist', 'in-process-port')],
     acl: [], sharedKernel: ['fitness-contract'], status: 'stable',

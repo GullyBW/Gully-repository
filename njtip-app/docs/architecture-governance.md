@@ -16,7 +16,15 @@ without a demonstrated, implementation-driven need.
 | [0001](./adr/0001-baseline-and-mvp.md) | Freeze Architecture Baseline v1.0, select the MVP, reuse Twin components | Accepted | Constitutional invariants, MVP selection, zero-dependency stance |
 | [0002](./adr/0002-freeze-architecture-baseline-v1.7.md) | Freeze Architecture Baseline v1.7 and transition to production engineering | Accepted | Structural freeze; architecture-of-record and ownership as verified data |
 | [0003](./adr/0003-context-consolidation-and-data-exchange-terminology.md) | Boundary consolidation and "National Data Exchange" terminology | Accepted | Federation merge, exchange governance model, responsibility scoping |
+| [0004](./adr/0004-operational-excellence-and-continuous-assurance.md) | Operational excellence, continuous assurance, and the expanded ADR schema | Accepted | Phase 10 capabilities; ADR schema expansion applied from 0004 onward |
 | [template](./adr/000-template.md) | ADR template | — | Required format for every new decision |
+
+**Schema:** ADRs numbered **0004 and later** must record business justification, risk assessment,
+performance / security / operational / compliance impact, rollback strategy, migration strategy,
+estimated implementation cost, success metrics, decision owner and approval history — validated
+automatically by `APP-FIT-ADR-GOVERNANCE` (`src/architecture/adr-governance.js`). ADRs 0001–0003
+predate the expansion and are held to the legacy schema; rewriting them to a later standard would
+destroy the record of what was known at the time.
 
 ## When an ADR is required
 Any change to a **frozen baseline component** (`ARCHITECTURE-BASELINE-v1.7.md`), the **bounded-context

@@ -32,8 +32,11 @@ const { IdentityRegistry } = require('./iam/digital-identity');
 const { InfrastructureRegistry } = require('./infra/infra-governance');
 const { InfrastructureAssurance } = require('./infra/infrastructure-assurance');
 const architecture = require('./architecture/context-map');
+const adrGovernance = require('./architecture/adr-governance');
 const ownership = require('./governance/ownership');
+const raci = require('./governance/raci');
 const { ContractRegistry } = require('./contracts/integration-contracts');
+const { ConsumerContracts } = require('./contracts/consumer-contracts');
 const migration = require('./migration/roadmap');
 const zeroTrust = require('./iam/zero-trust');
 const { makeZeroTrust } = require('./iam/zero-trust-architecture');
@@ -53,6 +56,7 @@ const graphIntel = require('./graph/intelligence');
 const advisor = require('./ai/advisor');
 const { RecommendationQueue } = require('./ai/approval');
 const { AiRegistry } = require('./ai/ai-governance');
+const { AiLifecycle } = require('./ai/ai-lifecycle');
 const { makeCryptoAgility } = require('./adapters/crypto-agility');
 const { QuantumMigrationRegistry } = require('./adapters/quantum-transition');
 const { LifecycleRegistry } = require('./sustainability/lifecycle');
@@ -227,6 +231,13 @@ function createApp(overrides = {}) {
   aiGovernance.register('priority-advisor', { owner: 'analytics-domain', purpose: 'case prioritisation recommendations' });
   aiGovernance.approve('priority-advisor', { by: 'AI Governance Board', rationale: 'explainable, advisory-only, deterministic' });
   ai.governance = aiGovernance;
+  // AI lifecycle governance (Phase 10 Part 9): model/dataset/prompt registries, risk
+  // classification, explainability, bias monitoring, inference audit and human override.
+  // There is no apply() — the only exit from an inference is a recorded human decision.
+  const aiLifecycle = new AiLifecycle();
+  aiLifecycle.register('model', 'priority-advisor', { owner: 'analytics-domain', purpose: 'case-prioritisation', riskClass: 'high' });
+  aiLifecycle.approve('model', 'priority-advisor', { by: 'AI Governance Board', rationale: 'explainable, advisory-only, deterministic' });
+  ai.lifecycle = aiLifecycle;
   // Cryptographic agility (Phase 47): 🔒 policy/lifecycle only — never key material.
   const cryptoAgility = makeCryptoAgility();
   // Quantum-resilient transition (Phase 57): migration planning over the crypto policy registry.
@@ -372,8 +383,12 @@ function createApp(overrides = {}) {
   // contract registry is the published interface surface; a boundary crossing without a
   // contract, or a migration item without a rollback, refuses composition.
   const contracts = new ContractRegistry();
+  // Consumer-driven contracts (Part 12): what each consumer actually depends on.
+  contracts.consumers = new ConsumerContracts({ registry: contracts });
   const contractValidation = contracts.validate();
   if (!contractValidation.valid) throw new Error('integration contracts invalid: ' + contractValidation.violations.join('; '));
+  const consumerValidation = contracts.consumers.verifyAll();
+  if (!consumerValidation.allSatisfied) throw new Error('consumer contracts unmet: ' + JSON.stringify(consumerValidation.broken));
   const migrationValidation = migration.validate();
   if (!migrationValidation.valid) throw new Error('migration roadmap invalid: ' + migrationValidation.violations.join('; '));
 
@@ -437,7 +452,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, ownership, raci, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

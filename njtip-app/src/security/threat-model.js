@@ -120,7 +120,7 @@ const THREATS = {
       { goal: 'Record model output directly in the governance ledger' },
       t('Manipulate the model', 'OR', [{ goal: 'Poison the input' }, { goal: 'Inject instructions through content' }]),
     ]),
-    controls: ['APP-FIT-AI-ADVISORY-ONLY', 'APP-FIT-AI-GOVERNANCE', 'FIT-GOVERNANCE'],
+    controls: ['APP-FIT-AI-ADVISORY-ONLY', 'APP-FIT-AI-GOVERNANCE', 'APP-FIT-AI-LIFECYCLE', 'FIT-GOVERNANCE'],
     evidence: 'Every recommendation exits only through a human approval queue; models are registered and approved before use; the governance ledger records human decisions only.',
   },
   'TH-AVAILABILITY': {

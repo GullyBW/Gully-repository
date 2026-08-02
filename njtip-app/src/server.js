@@ -137,6 +137,14 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/contracts') { requireRole('admin'); return json(200, app.contracts.catalogue()); }
   if (method === 'GET' && (m = p.match(/^\/api\/contracts\/([^/]+)$/))) { requireRole('admin'); return json(200, { ...app.contracts.describe(dec(m[1])), history: app.contracts.history(dec(m[1])) }); }
   if (method === 'GET' && p === '/api/contracts/openapi') { requireRole('admin'); return json(200, app.contracts.toOpenApi()); }
+  // --- Phase 10: AI lifecycle, ADR governance, consumer contracts, operational governance ---
+  if (method === 'GET' && p === '/api/ai/lifecycle') { requireRole('admin'); return json(200, app.ai.lifecycle.report()); }
+  if (method === 'GET' && p === '/api/ai/pending-decisions') { requireRole('oversight-board'); return json(200, { pending: app.ai.lifecycle.pendingDecisions() }); }
+  if (method === 'POST' && (m = p.match(/^\/api\/ai\/inferences\/([^/]+)\/decide$/))) { const u = requireRole('oversight-board'); return json(200, app.ai.lifecycle.decide(dec(m[1]), { by: body.by || u.principal, decision: body.decision, rationale: body.rationale })); }
+  if (method === 'GET' && p === '/api/architecture/adr') { requireRole('admin'); return json(200, app.adrGovernance.validateCatalogue()); }
+  if (method === 'GET' && p === '/api/contracts/consumers') { requireRole('admin'); return json(200, app.contracts.consumers.report()); }
+  if (method === 'POST' && p === '/api/contracts/impact') { requireRole('admin'); return json(200, app.contracts.consumers.impactOfChange(body.contract, body.change || {})); }
+  if (method === 'GET' && p === '/api/governance/raci') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()]; return json(200, app.raci.report({ fitnessIds: f.map((r) => r.id), fitnessResults: f.map((r) => ({ id: r.id, pass: r.pass })) })); }
   // --- Phase 10: data governance, supply-chain attestation, multi-region ---
   if (method === 'GET' && p === '/api/data-governance') { requireRole('admin'); return json(200, app.fabric.dataGovernance.report()); }
   if (method === 'GET' && (m = p.match(/^\/api\/data-governance\/([^/]+)\/trace$/))) { requireRole('admin'); return json(200, app.fabric.dataGovernance.traceRecord(dec(m[1]))); }

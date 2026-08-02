@@ -1559,6 +1559,168 @@ module.exports = [
     if (mr.report().authorizes !== false) v.push('the multi-region report claims authority');
   }),
 
+  fit('APP-FIT-AI-LIFECYCLE', 'AI output is an input to a human decision and nothing else', (v) => {
+    const { AiLifecycle, PROHIBITED_USES } = require('../src/ai/ai-lifecycle');
+    const ai2 = new AiLifecycle({ clock: () => 1000 });
+    // There is no apply(): the surface itself forbids autonomous action.
+    if (typeof ai2.apply === 'function' || typeof ai2.execute === 'function') v.push('the AI lifecycle exposes an autonomous action method');
+    // Prohibited uses are refused by name, not merely unimplemented.
+    if (!PROHIBITED_USES['automated-case-decision'] || !PROHIBITED_USES['reporter-identification']) v.push('the prohibited-use register is incomplete');
+    for (const purpose of ['automated-case-decision', 'reporter-identification', 'predictive-policing']) {
+      let refused = false;
+      try { ai2.register('model', 'm', { owner: 'o', purpose }); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(`a model was registered for the prohibited purpose '${purpose}'`);
+    }
+    // Identity is refused in artifacts and in inference inputs.
+    let identityRefused = false;
+    try { ai2.register('dataset', 'd', { owner: 'o', purpose: 'case-prioritisation', fields: ['omang'] }); } catch (e) { identityRefused = !!e.failClosed; }
+    if (!identityRefused) v.push('an AI dataset accepted an identity field');
+    // Model, dataset and prompt registries all exist and require approval above minimal risk.
+    ai2.register('model', 'priority-advisor', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'high' });
+    ai2.register('dataset', 'historic-cases', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'limited', fields: ['category', 'status'] });
+    ai2.register('prompt', 'summarise', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'limited', text: 'Summarise the case metadata.' });
+    if (ai2.isApproved('model', 'priority-advisor').approved) v.push('a high-risk model was usable before human approval');
+    let unapprovedRefused = false;
+    try { ai2.infer({ model: 'priority-advisor', output: 'x', explanation: 'y', requestedBy: 'inv-001' }); } catch (e) { unapprovedRefused = !!e.failClosed; }
+    if (!unapprovedRefused) v.push('inference ran on an unapproved model');
+    let needsHuman = false;
+    try { ai2.approve('model', 'priority-advisor', { by: 'AI Governance Board' }); } catch (_) { needsHuman = true; }
+    if (!needsHuman) v.push('an AI artifact was approved without a rationale');
+    ai2.approve('model', 'priority-advisor', { by: 'AI Governance Board', rationale: 'explainable, advisory-only, deterministic' });
+    ai2.approve('prompt', 'summarise', { by: 'AI Governance Board', rationale: 'no instruction injection surface' });
+    // Explainability is mandatory for the risk class.
+    let needsExplanation = false;
+    try { ai2.infer({ model: 'priority-advisor', output: 'high', requestedBy: 'inv-001' }); } catch (e) { needsExplanation = !!e.failClosed; }
+    if (!needsExplanation) v.push('a high-risk inference ran with no explanation');
+    let inputIdentityRefused = false;
+    try { ai2.infer({ model: 'priority-advisor', output: 'high', explanation: 'e', requestedBy: 'inv-001', inputSummary: { email: 'a@b.c' } }); } catch (e) { inputIdentityRefused = !!e.failClosed; }
+    if (!inputIdentityRefused) v.push('an inference accepted identity in its input');
+    const inf = ai2.infer({ model: 'priority-advisor', promptId: 'summarise', output: 'high', explanation: 'age + escalation flag', confidence: 0.9, requestedBy: 'inv-001', inputSummary: { category: 'police' } });
+    if (inf.advisoryOnly !== true || inf.authorizes !== false || inf.status !== 'advisory') v.push('an inference did not present as advisory');
+    // The only exit is a recorded human decision, and override is always available.
+    if (!ai2.pendingDecisions().some((p) => p.id === inf.id)) v.push('an inference did not queue for a human decision');
+    let decisionNeedsHuman = false;
+    try { ai2.decide(inf.id, { decision: 'accepted' }); } catch (_) { decisionNeedsHuman = true; }
+    if (!decisionNeedsHuman) v.push('an inference was decided without a named human and a rationale');
+    ai2.decide(inf.id, { by: 'inv-001', decision: 'accepted', rationale: 'consistent with the file' });
+    ai2.override(inf.id, { by: 'Oversight Board', rationale: 'reviewed on appeal' });
+    if (!ai2.inference(inf.id).overridden) v.push('a human override was not recorded');
+    // Evidence preservation: the inference record is fixed by its digest.
+    if (!ai2.verifyEvidence(inf.id).valid) v.push('inference evidence did not verify');
+    ai2._inferences.find((i) => i.id === inf.id).output = 'tampered';
+    if (ai2.verifyEvidence(inf.id).valid) v.push('a tampered inference record still verified');
+    // A new model version resets approval — approving v1 never approves v2.
+    ai2.register('model', 'priority-advisor', { version: 2, owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'high' });
+    if (ai2.isApproved('model', 'priority-advisor').approved) v.push('a new model version inherited the previous version approval');
+    // Bias monitoring suppresses small groups and reports disparity.
+    const ai3 = new AiLifecycle({ clock: () => 1000 });
+    ai3.register('model', 'm2', { owner: 'o', purpose: 'case-prioritisation', riskClass: 'high' });
+    ai3.observeBias('m2', { group: 'region-a', outcomeRate: 0.8, sampleSize: 100 });
+    ai3.observeBias('m2', { group: 'region-b', outcomeRate: 0.4, sampleSize: 100 });
+    ai3.observeBias('m2', { group: 'region-c', outcomeRate: 0.9, sampleSize: 5 });
+    const bias = ai3.biasReport('m2', { threshold: 0.2 });
+    if (!bias.measured || bias.withinThreshold) v.push('a 0.4 outcome disparity was not flagged');
+    if (bias.suppressed !== 1) v.push('a small group was not suppressed from the bias report');
+    // Hallucination safeguards: ungrounded or low-confidence output is withheld.
+    if (ai3.groundingCheck({ output: 'x', groundedIn: [] }).grounded) v.push('an ungrounded output passed the grounding check');
+    if (ai3.groundingCheck({ output: 'x', groundedIn: ['doc'], confidence: 0.1, minConfidence: 0.5 }).grounded) v.push('a low-confidence output passed the grounding check');
+    if (!ai3.groundingCheck({ output: 'x', groundedIn: ['doc'], confidence: 0.9 }).grounded) v.push('a grounded, confident output was withheld');
+  }),
+
+  fit('APP-FIT-ADR-GOVERNANCE', 'Every ADR satisfies its schema and the catalogue is contiguous and published', (v) => {
+    const adr = require('../src/architecture/adr-governance');
+    const res = adr.validateCatalogue();
+    for (const violation of res.violations) v.push(violation);
+    if (res.count < 4) v.push('fewer ADRs than the recorded decision history requires');
+    // The expanded schema is applied from ADR-0004 and demands the full record.
+    const required = ['businessJustification', 'riskAssessment', 'performanceImpact', 'securityImpact', 'operationalImpact', 'complianceImpact', 'rollbackStrategy', 'migrationStrategy', 'implementationCost', 'successMetrics', 'decisionOwner', 'approvalHistory'];
+    const fields = adr.schema().full.map((s) => s.field);
+    for (const f of required) if (!fields.includes(f)) v.push(`the ADR schema is missing '${f}'`);
+    // Each ADR is validated against the schema that applies to it, and at least one uses the full one.
+    if (!res.adrs.some((a) => a.schema === 'full' && a.valid)) v.push('no ADR satisfies the expanded schema');
+    if (!res.adrs.every((a) => a.valid)) v.push('an ADR does not satisfy its schema: ' + res.adrs.filter((a) => !a.valid).map((a) => a.file).join(', '));
+    // Every ADR declares a recognised status and a title.
+    for (const a of res.adrs) { if (!a.status || !adr.STATUSES.includes(a.status)) v.push(`${a.file}: invalid status`); if (!a.title) v.push(`${a.file}: no title`); }
+    // The validator must be able to fail — a missing section is caught.
+    const probe = adr.validateAdr(res.adrs[res.adrs.length - 1].file, { minSectionChars: 1e9 });
+    if (probe.valid) v.push('ADR validation cannot fail — the section-content check is inert');
+    // The template is generated from the schema so the two cannot drift.
+    const tpl = adr.template({ number: '0099' });
+    for (const s of adr.schema().full) if (!tpl.includes(`## ${s.heading}`)) v.push(`the generated template omits '${s.heading}'`);
+  }),
+
+  fit('APP-FIT-CONSUMER-CONTRACTS', 'Every consumer expectation is satisfied and breaking impact is known first', (v) => {
+    const { ConsumerContracts } = require('../src/contracts/consumer-contracts');
+    const cc = new ConsumerContracts();
+    for (const violation of cc.validate().violations) v.push(violation);
+    // Every registered consumer is satisfied by the current provider contracts.
+    const all = cc.verifyAll();
+    if (!all.allSatisfied) v.push('unmet consumer expectations: ' + JSON.stringify(all.broken));
+    if (all.failClosed !== true || all.authorizes !== false) v.push('consumer verification is not fail-closed / claims authority');
+    if (all.consumers < 4) v.push('fewer consumers registered than the platform actually has');
+    // The constitutional consumer is registered and its path stays anonymous.
+    const citizen = cc.describe('citizen-web');
+    if (citizen.criticality !== 'constitutional') v.push('the citizen client is not marked constitutional');
+    if (!citizen.expectations.every((e) => ['anonymous', 'case-code'].includes(e.authentication))) v.push('the citizen client expects an authenticated path');
+    // Impact analysis answers "who breaks?" BEFORE the change.
+    const breaking = cc.impactOfChange('api.case.transition', { fields: { required: ['case_code'], optional: [] } });
+    if (breaking.safe) v.push('removing a field a consumer sends was reported as safe');
+    if (!breaking.affectedConsumers.some((c) => c.consumer === 'investigator-console')) v.push('the affected consumer was not identified');
+    if (!/BREAKS/.test(breaking.verdict)) v.push('a breaking change did not produce a breaking verdict');
+    const additive = cc.impactOfChange('api.reports.submit', { fields: { required: ['category'], optional: ['extra', 'locale'] } });
+    if (!additive.safe) v.push('an additive change was reported as breaking');
+    // Constitutional impact is called out separately when a constitutional consumer breaks.
+    const constitutional = cc.impactOfChange('api.reports.submit', { fields: { required: [], optional: [] } });
+    if (!constitutional.constitutionalImpact) v.push('breaking the citizen client was not flagged as constitutional impact');
+    // Every consumer handles errors; a consumer that ignores failure fails silently.
+    for (const id of cc.consumers()) for (const e of cc.describe(id).expectations) if (!e.handlesErrors.length) v.push(`${id}/${e.contract}: handles no errors`);
+    // Deprecation tracking blocks retirement while a consumer still depends on the contract.
+    const matrix = cc.dependencyMatrix();
+    if (!matrix['api.reports.submit'] || !matrix['api.reports.submit'].length) v.push('the dependency matrix is empty for a live contract');
+    if (!Array.isArray(cc.unconsumedContracts())) v.push('unconsumed contracts are not reported');
+    if (!cc.versionLifecycle().every((x) => typeof x.version === 'number')) v.push('the version lifecycle is incomplete');
+  }),
+
+  fit('APP-FIT-RACI-GOVERNANCE', 'No subsystem approves itself; every control has an owner', (v) => {
+    const raci = require('../src/governance/raci');
+    for (const violation of raci.validate().violations) v.push(violation);
+    // Exactly one accountable role per activity, never the same as responsible.
+    for (const a of raci.activities()) {
+      if (!a.accountable) v.push(`${a.id}: no accountable role`);
+      if (a.accountable === a.responsible) v.push(`${a.id}: responsible and accountable are the same role`);
+      if (!a.evidence) v.push(`${a.id}: names no evidence`);
+      if (a.humanDecision !== true) v.push(`${a.id}: is not a human decision`);
+    }
+    // Resolved to real institutions, no subsystem approves its own work.
+    const selfApprovals = raci.matrix().flatMap((m) => m.rows.filter((r) => r.selfApproval).map((r) => `${m.subsystem}/${r.activity}`));
+    if (selfApprovals.length) v.push('self-approval detected: ' + selfApprovals.join(', '));
+    // Every bounded context has a matrix covering every activity.
+    if (raci.matrix().length !== contextMap.ids().length) v.push('not every bounded context has a RACI matrix');
+    for (const m of raci.matrix()) if (m.rows.length !== raci.activities().length) v.push(`${m.subsystem}: incomplete RACI matrix`);
+    // Every control is owned by a context with a named authority.
+    const ids = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => f.id),
+      ...require('./app-fitness').map((f) => f.id),
+      ...require('./infra-fitness').map((f) => f.id),
+    ];
+    const control = raci.controlOwnership(ids);
+    if (control.unowned.length) v.push('controls with no owning context: ' + control.unowned.join(', '));
+    if (control.coverage !== 1) v.push(`control ownership coverage is ${control.coverage}, not complete`);
+    for (const c of control.controls) if (!c.responsibleAuthority || !c.governanceBoard) v.push(`${c.control}: no responsible authority or board`);
+    // Escalation workflows terminate at the governance board.
+    const wf = raci.escalationWorkflow('custody', 'recovery-authorization');
+    if (wf.steps.length < 4 || wf.terminatesAt !== ownership.describe('custody').governanceBoard) v.push('the escalation workflow does not terminate at the governance board');
+    if (!wf.evidenceRequired) v.push('an escalation workflow names no required evidence');
+    // The scorecard is computed, not entered, and reacts to the live gate.
+    const strong = raci.scorecard({ fitnessIds: ids, fitnessResults: ids.map((id) => ({ id, pass: true })) });
+    if (strong.band !== 'strong') v.push('a fully governed platform did not score strong');
+    const degraded = raci.scorecard({ fitnessIds: ids, fitnessResults: ids.map((id, i) => ({ id, pass: i > 0 })) });
+    if (degraded.score >= strong.score) v.push('the governance scorecard did not react to a failing control');
+    // Maturity is the highest level actually met, and it needs a green gate to reach 5.
+    if (raci.maturity({ fitnessIds: ids, fitnessResults: ids.map((id) => ({ id, pass: true })) }).level !== 5) v.push('a fully assured platform did not reach maturity level 5');
+    if (raci.maturity({ fitnessIds: ids, fitnessResults: ids.map((id, i) => ({ id, pass: i > 0 })) }).level >= 5) v.push('maturity level 5 was claimed with a failing control');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });
