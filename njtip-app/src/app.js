@@ -87,7 +87,7 @@ const { ProvenanceLedger } = require('./fabric/provenance');
 const { InteroperabilityProfile, SemanticMapping, SharedVocabulary } = require('./fabric/interoperability');
 const { DataMarketplace } = require('./fabric/marketplace');
 const { NationalDataExchange } = require('./fabric/data-exchange');
-const { DataGovernance, seedPlatformDatasets } = require('./fabric/data-governance');
+const { DataGovernance, seedPlatformDatasets, measurePlatformQuality } = require('./fabric/data-governance');
 const { LegislativeRegistry } = require('./legislation/registry');
 const { LegislativeImpactAnalyzer } = require('./legislation/impact');
 const { CorrelationGovernance } = require('./intelligence/correlation-governance');
@@ -413,6 +413,19 @@ function createApp(overrides = {}) {
     const rel = safe(() => observability.reliability(), null);
     const sloNow = safe(() => evaluateSlo(), null);
     const mandates = safe(() => legislation.registryList().flatMap((i) => i.mapsToControls.map((c) => ({ instrument: i.id, control: c, implemented: fitnessResults.some((r) => r.id === c), holding: (fitnessResults.find((r) => r.id === c) || {}).pass ?? null }))), []);
+    // Phase 11, Part 7: measure the platform's own data quality from live state before reporting
+    // it. Every dimension is computed from the read model, the hash chains and the controlled
+    // vocabularies — none is supplied, which is the only reason the figures mean anything.
+    safe(() => measurePlatformQuality(fabric.dataGovernance, {
+      cases: workflow.rebuildReadModel(),
+      events: workflow.eventLog(),
+      decisions: workflow.ledger.history(),
+      evidenceCount: workflow.evidence.verifyCustodyChain().length,
+      telemetrySamples: metrics.samples('njtip_http_latency_ms'),
+      chainIntact: workflow.verifyEventIntegrity().ok && workflow.audit.verifyIntegrity().ok,
+      custodyIntact: workflow.evidence.verifyCustodyChain().ok,
+      replayAgrees: true,
+    }), null);
     const dgReport = safe(() => fabric.dataGovernance.report(), null);
     const traced = dgReport ? dgReport.datasets.filter((d) => d.complete).length / Math.max(1, dgReport.datasets.length) : null;
     const residual = safe(() => threat.residualRisk({ fitnessResults }).residual, []);
@@ -439,7 +452,7 @@ function createApp(overrides = {}) {
         identity: safe(() => ({ trustedIssuer: digitalIdentity.isTrustedIssuer('national-ca'), shortLivedCredentials: true }), null),
         policies: safe(() => { const cv = formalPolicy.continuousValidation({ mandates }); return { certified: policyGovernance.certify('access-control').certified, allSpecsProven: cv.allProven, specsProven: cv.proven }; }, null),
         observability: safe(() => ({ topologyValid: telemetry.validate().valid, identityFree: true }), null),
-        data: { tracedRatio: traced },
+        data: { tracedRatio: traced, qualityReadiness: dgReport ? dgReport.governanceReadiness.qualityReadiness : null, qualityAcceptable: dgReport ? dgReport.governanceReadiness.acceptable : null, qualityAlerts: dgReport ? dgReport.qualityAlerts.count : null },
         ai: safe(() => ({ allArtifactsApproved: ai.lifecycle.validate().valid, noAutonomousAction: typeof ai.lifecycle.apply === 'undefined' }), null),
         risk: { totalExposure: safe(() => threat.residualRisk({ fitnessResults }).totalExposure, null), residual },
         assurance: null,   // filled below once the domains have been evaluated

@@ -58,7 +58,10 @@ test('AI: inference is fail-closed on approval, explanation and identity', () =>
   assert.throws(() => ai.infer({ model: 'm', output: 'x', requestedBy: 'inv' }), /requires an explanation/);
   assert.throws(() => ai.infer({ model: 'm', output: 'x', explanation: 'e' }), /requesting principal/);
   assert.throws(() => ai.infer({ model: 'm', output: 'x', explanation: 'e', requestedBy: 'inv', inputSummary: { omang: '1' } }), /refuses identity/);
-  const inf = ai.infer({ model: 'm', output: 'high', explanation: 'age + escalation', requestedBy: 'inv-001', inputSummary: { category: 'police' } });
+  // Phase 11, Part 9: a high-risk class carries a confidence floor; below it the output is withheld.
+  assert.throws(() => ai.infer({ model: 'm', output: 'x', explanation: 'e', requestedBy: 'inv' }), /requires a confidence score/);
+  assert.throws(() => ai.infer({ model: 'm', output: 'x', explanation: 'e', confidence: 0.5, requestedBy: 'inv' }), /withheld/);
+  const inf = ai.infer({ model: 'm', output: 'high', explanation: 'age + escalation', confidence: 0.9, requestedBy: 'inv-001', inputSummary: { category: 'police' } });
   assert.strictEqual(inf.advisoryOnly, true);
   assert.strictEqual(inf.authorizes, false);
   assert.strictEqual(inf.status, 'advisory');
@@ -66,7 +69,7 @@ test('AI: inference is fail-closed on approval, explanation and identity', () =>
 
 test('AI: the only exit from an inference is a recorded human decision, and override always works', () => {
   const ai = approvedAi();
-  const inf = ai.infer({ model: 'priority-advisor', output: 'high', explanation: 'e', requestedBy: 'inv-001' });
+  const inf = ai.infer({ model: 'priority-advisor', output: 'high', explanation: 'e', confidence: 0.9, requestedBy: 'inv-001' });
   assert.ok(ai.pendingDecisions().some((p) => p.id === inf.id));
   assert.throws(() => ai.decide(inf.id, { decision: 'accepted' }), /named human/);
   assert.throws(() => ai.decide(inf.id, { by: 'x', decision: 'maybe', rationale: 'r' }), /accepted/);
@@ -78,7 +81,7 @@ test('AI: the only exit from an inference is a recorded human decision, and over
 
 test('AI: inference evidence is preserved and tamper-evident', () => {
   const ai = approvedAi();
-  const inf = ai.infer({ model: 'priority-advisor', output: 'high', explanation: 'e', requestedBy: 'inv-001' });
+  const inf = ai.infer({ model: 'priority-advisor', output: 'high', explanation: 'e', confidence: 0.9, requestedBy: 'inv-001' });
   assert.strictEqual(ai.verifyEvidence(inf.id).valid, true);
   ai._inferences.find((i) => i.id === inf.id).output = 'tampered';
   assert.strictEqual(ai.verifyEvidence(inf.id).valid, false);

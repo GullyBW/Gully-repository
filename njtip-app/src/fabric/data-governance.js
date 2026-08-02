@@ -12,7 +12,22 @@
 // returning a partial answer. Deterministic; identity fields are refused everywhere.
 const IDENTITY_FIELDS = new Set(['name', 'omang', 'nationalid', 'email', 'phone', 'address', 'dob', 'content', 'reporter']);
 const CLASSIFICATIONS = ['public', 'internal', 'restricted', 'secret'];
-const QUALITY_DIMENSIONS = ['completeness', 'validity', 'consistency', 'timeliness', 'uniqueness'];
+// Eight quality dimensions (Phase 11, Part 7). The first six are OBSERVED from the data; the last
+// two are DERIVED from the governance model itself, and observing them is refused — the platform
+// already knows whether a dataset's lineage and metadata are complete, so accepting a hand-entered
+// figure for either would be accepting a claim in place of a fact it can check.
+const OBSERVED_DIMENSIONS = ['completeness', 'validity', 'consistency', 'timeliness', 'uniqueness', 'accuracy'];
+const DERIVED_DIMENSIONS = ['lineageCompleteness', 'metadataCompleteness'];
+const QUALITY_DIMENSIONS = [...OBSERVED_DIMENSIONS, ...DERIVED_DIMENSIONS];
+// Metadata a governed dataset must carry for its metadata-completeness to score 1.0.
+const REQUIRED_METADATA = ['origin', 'classification', 'retentionClass', 'owner', 'domain', 'purpose', 'fields'];
+// Quality thresholds and what each band means for governance readiness.
+const QUALITY_BANDS = [
+  { floor: 0.95, band: 'good', readinessImpact: 0, action: 'none' },
+  { floor: 0.85, band: 'acceptable', readinessImpact: 0, action: 'monitor' },
+  { floor: 0.70, band: 'degraded', readinessImpact: 0.5, action: 'remediate' },
+  { floor: 0, band: 'poor', readinessImpact: 1, action: 'escalate' },
+];
 
 // Retention policies as data: class → duration, disposition and the legal basis for both.
 const RETENTION_POLICIES = {
@@ -195,24 +210,219 @@ class DataGovernance {
 
   // --- Data quality ---------------------------------------------------------------------------
 
-  // Record a quality observation across the five dimensions (each 0..1).
-  observeQuality(id, observations = {}) {
+  // Record a quality observation across the six OBSERVED dimensions (each 0..1). The two derived
+  // dimensions are refused: they are facts the governance model already holds.
+  //
+  // `recordCount` matters: a dataset with zero rows has no defects, but that is not a quality
+  // achievement. It is reported as `not-applicable` so it can never be mistaken for one.
+  observeQuality(id, observations = {}, { recordCount = null } = {}) {
     this._mustRecord(id);
-    const unknown = Object.keys(observations).filter((d) => !QUALITY_DIMENSIONS.includes(d));
+    const derived = Object.keys(observations).filter((d) => DERIVED_DIMENSIONS.includes(d));
+    if (derived.length) throw new Error(`${derived.join(', ')} is derived from the governance model and cannot be observed — it is computed, not reported`);
+    const unknown = Object.keys(observations).filter((d) => !OBSERVED_DIMENSIONS.includes(d));
     if (unknown.length) throw new Error(`unknown quality dimension(s): ${unknown.join(', ')}`);
-    const rec = { at: this._clock(), ...observations };
+    for (const [d, v] of Object.entries(observations)) {
+      if (typeof v !== 'number' || v < 0 || v > 1) throw new Error(`quality dimension '${d}' must be a number in [0, 1]`);
+    }
+    const rec = { at: this._clock(), recordCount, ...observations };
     if (!this._quality.has(id)) this._quality.set(id, []);
     this._quality.get(id).push(rec);
-    return { dataset: id, observations: this._quality.get(id).length };
+    return { dataset: id, observations: this._quality.get(id).length, recordCount };
   }
+
+  // Derived dimensions: read straight off the governance record, so they cannot be overstated.
+  //
+  // Lineage completeness asks five questions the trace must be able to answer. The fifth is the
+  // one that catches real problems: a transformation whose upstream is not itself governed means
+  // the lineage graph ends at a dataset nobody owns.
+  deriveQualityDimensions(id) {
+    const r = this._mustRecord(id);
+    const trace = this.traceRecord(id);
+    const policy = RETENTION_POLICIES[r.retentionClass];
+    const transformations = trace.transformations || [];
+    const checks = {
+      originRecorded: !!r.origin,
+      retentionResolved: !!policy,
+      dispositionPlanned: !!(trace.deletion && trace.deletion.plan),
+      consumersDeclared: (trace.consumers || []).length > 0,
+      upstreamsGoverned: transformations.every((t) => t.from && this._records.has(t.from) && t.operation && t.by && t.purpose),
+    };
+    const gaps = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
+    const lineageCompleteness = +((Object.keys(checks).length - gaps.length) / Object.keys(checks).length).toFixed(3);
+    const present = REQUIRED_METADATA.filter((f) => {
+      const v = r[f];
+      return Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null && v !== '';
+    });
+    const metadataCompleteness = +(present.length / REQUIRED_METADATA.length).toFixed(3);
+    return {
+      lineageCompleteness, metadataCompleteness, lineageChecks: checks, lineageGaps: gaps,
+      missingMetadata: REQUIRED_METADATA.filter((f) => !present.includes(f)),
+      note: 'Derived from the governance record. Neither figure can be supplied by hand.',
+    };
+  }
+
   qualityScore(id, { threshold = 0.9 } = {}) {
+    const derived = this.deriveQualityDimensions(id);
     const obs = this._quality.get(id) || [];
-    if (!obs.length) return { dataset: id, measured: false, score: null, note: 'no quality observation recorded' };
+    if (!obs.length) {
+      // Derived dimensions still hold even with no observation — but an unobserved dataset is
+      // not a measured one, and must never present as healthy.
+      return {
+        dataset: id, measured: false, score: null, derived,
+        dimensions: { lineageCompleteness: derived.lineageCompleteness, metadataCompleteness: derived.metadataCompleteness },
+        failing: [...OBSERVED_DIMENSIONS], unobserved: [...OBSERVED_DIMENSIONS], meets: false, threshold,
+        band: 'unmeasured', readinessImpact: 1,
+        note: 'no quality observation recorded — an unmeasured dataset is not a clean one',
+      };
+    }
     const latest = obs[obs.length - 1];
-    const measured = QUALITY_DIMENSIONS.filter((d) => typeof latest[d] === 'number');
-    const score = measured.length ? +(measured.reduce((a, d) => a + latest[d], 0) / measured.length).toFixed(3) : null;
-    const failing = measured.filter((d) => latest[d] < threshold);
-    return { dataset: id, measured: true, score, dimensions: Object.fromEntries(measured.map((d) => [d, latest[d]])), failing, meets: failing.length === 0, threshold };
+    const dimensions = {};
+    for (const d of OBSERVED_DIMENSIONS) if (typeof latest[d] === 'number') dimensions[d] = latest[d];
+    dimensions.lineageCompleteness = derived.lineageCompleteness;
+    dimensions.metadataCompleteness = derived.metadataCompleteness;
+    const keys = Object.keys(dimensions);
+    const score = +(keys.reduce((a, d) => a + dimensions[d], 0) / keys.length).toFixed(3);
+    const failing = keys.filter((d) => dimensions[d] < threshold).sort();
+    const unobserved = OBSERVED_DIMENSIONS.filter((d) => dimensions[d] === undefined);
+    const banding = QUALITY_BANDS.find((b) => score >= b.floor);
+    const empty = latest.recordCount === 0;
+    return {
+      dataset: id, measured: true, score, dimensions, derived, failing, unobserved,
+      recordCount: latest.recordCount,
+      meets: empty || (failing.length === 0 && unobserved.length === 0), threshold,
+      band: empty ? 'not-applicable' : banding.band,
+      readinessImpact: empty ? 0 : banding.readinessImpact,
+      action: empty ? 'none' : banding.action,
+      observations: obs.length,
+      ...(empty ? { note: 'the dataset holds no records — no defects are possible, which is not the same as good quality' } : {}),
+    };
+  }
+
+  // --- Quality trend, scorecard, alerts and remediation (Phase 11, Part 7) ----------------------
+
+  // Deterministic least-squares trend over the overall score of each observation.
+  qualityTrend(id) {
+    const obs = this._quality.get(id) || [];
+    const derived = this.deriveQualityDimensions(id);
+    const series = obs.map((o) => {
+      const dims = OBSERVED_DIMENSIONS.filter((d) => typeof o[d] === 'number').map((d) => o[d]);
+      const all = [...dims, derived.lineageCompleteness, derived.metadataCompleteness];
+      return +(all.reduce((a, b) => a + b, 0) / all.length).toFixed(6);
+    });
+    const n = series.length;
+    if (n < 2) return { dataset: id, n, direction: 'insufficient-data', slope: 0, series };
+    const meanX = (n - 1) / 2;
+    const meanY = series.reduce((a, b) => a + b, 0) / n;
+    let sxy = 0, sxx = 0;
+    for (let i = 0; i < n; i++) { const dx = i - meanX; sxy += dx * (series[i] - meanY); sxx += dx * dx; }
+    const slope = sxx === 0 ? 0 : sxy / sxx;
+    return {
+      dataset: id, n, series, slope: +slope.toFixed(8),
+      direction: Math.abs(slope) < 1e-9 ? 'flat' : slope > 0 ? 'improving' : 'degrading',
+      latest: series[n - 1], first: series[0],
+    };
+  }
+
+  // Scorecard across every governed dataset, graded and ordered worst-first so the work is obvious.
+  qualityScorecard({ threshold = 0.9 } = {}) {
+    const rows = this.datasets().map((id) => {
+      const q = this.qualityScore(id, { threshold });
+      const r = this._records.get(id);
+      return {
+        dataset: id, owner: r.owner, classification: r.classification, domain: r.domain,
+        score: q.score, band: q.band, measured: q.measured, meets: q.meets,
+        failing: q.failing, unobserved: q.unobserved || [], readinessImpact: q.readinessImpact,
+        trend: this.qualityTrend(id).direction,
+      };
+    }).sort((a, b) => (a.score ?? -1) - (b.score ?? -1) || a.dataset.localeCompare(b.dataset));
+    const measured = rows.filter((r) => r.measured);
+    const overall = measured.length ? +(measured.reduce((a, r) => a + r.score, 0) / measured.length).toFixed(3) : null;
+    return {
+      datasets: rows, threshold,
+      measuredDatasets: measured.length, totalDatasets: rows.length,
+      coverage: rows.length ? +(measured.length / rows.length).toFixed(3) : 0,
+      overallScore: overall,
+      worst: rows.length ? rows[0].dataset : null,
+      failingDatasets: rows.filter((r) => !r.meets).map((r) => r.dataset),
+      informationalOnly: true, authorizes: false,
+    };
+  }
+
+  // Alerts route to the accountable owner — an unrouted data-quality alert is an unowned dataset.
+  qualityAlerts({ threshold = 0.9 } = {}) {
+    const alerts = [];
+    for (const row of this.qualityScorecard({ threshold }).datasets) {
+      if (row.meets && row.trend !== 'degrading') continue;
+      const severity = !row.measured ? 'high' : row.band === 'poor' ? 'critical' : row.band === 'degraded' ? 'high' : 'medium';
+      alerts.push({
+        dataset: row.dataset, owner: row.owner, severity, band: row.band, score: row.score,
+        failing: row.failing, unobserved: row.unobserved, trend: row.trend,
+        reason: !row.measured
+          ? 'no quality observation has ever been recorded for this dataset'
+          : row.failing.length
+            ? `dimension(s) below threshold: ${row.failing.join(', ')}`
+            : 'quality is within threshold but the trend is degrading',
+      });
+    }
+    return { alerts, count: alerts.length, critical: alerts.filter((a) => a.severity === 'critical').length, authorizes: false };
+  }
+
+  // Remediation workflow. A ticket needs a named human and a due date; closing one needs a named
+  // human and evidence — "we fixed it" without evidence is how a quality problem becomes permanent.
+  openRemediation(id, { dimension, by, dueInDays = 30, rationale = null } = {}) {
+    this._mustRecord(id);
+    if (!QUALITY_DIMENSIONS.includes(dimension)) throw new Error('unknown quality dimension: ' + dimension);
+    if (!by) throw new Error('a remediation must be opened by a named human authority');
+    if (!(dueInDays > 0 && dueInDays <= 365)) throw new Error('remediation due date must be within 365 days');
+    if (!this._remediations) this._remediations = [];
+    const ticket = {
+      id: `DQ-${String(this._remediations.length + 1).padStart(4, '0')}`,
+      dataset: id, dimension, openedBy: by, openedAt: this._clock(), rationale,
+      dueAt: this._clock() + dueInDays * 24 * 3600_000,
+      state: 'open', closedBy: null, closedAt: null, evidence: null,
+    };
+    this._remediations.push(ticket);
+    this._log('remediation-opened', id, by);
+    return { ...ticket };
+  }
+  closeRemediation(ticketId, { by, evidence } = {}) {
+    const t = (this._remediations || []).find((x) => x.id === ticketId);
+    if (!t) throw new Error('unknown remediation ticket: ' + ticketId);
+    if (t.state !== 'open') throw new Error(`remediation ${ticketId} is already ${t.state}`);
+    if (!by) throw new Error('a remediation must be closed by a named human authority');
+    if (!evidence) throw new Error('a remediation cannot be closed without evidence of the fix');
+    t.state = 'closed'; t.closedBy = by; t.closedAt = this._clock(); t.evidence = evidence;
+    this._log('remediation-closed', t.dataset, by);
+    return { ...t };
+  }
+  remediations({ state = null } = {}) { return (this._remediations || []).filter((t) => !state || t.state === state).map((t) => ({ ...t })); }
+  overdueRemediations({ now = null } = {}) {
+    const at = now ?? this._clock();
+    return this.remediations({ state: 'open' }).filter((t) => t.dueAt < at).map((t) => ({ ...t, overdueByMs: at - t.dueAt }));
+  }
+
+  // POOR QUALITY REDUCES GOVERNANCE READINESS. This is the whole point of Part 7: a data-quality
+  // scorecard that nothing consumes is a report; one that moves the readiness number is a control.
+  governanceReadiness({ threshold = 0.9, now = null } = {}) {
+    const card = this.qualityScorecard({ threshold });
+    const alerts = this.qualityAlerts({ threshold });
+    const overdue = this.overdueRemediations({ now });
+    const totalImpact = card.datasets.reduce((a, r) => a + r.readinessImpact, 0);
+    const maxImpact = card.datasets.length || 1;
+    // 1.0 with every dataset good; 0 when every dataset is poor or unmeasured.
+    const qualityReadiness = +Math.max(0, 1 - totalImpact / maxImpact).toFixed(3);
+    const blockers = [
+      ...card.datasets.filter((r) => !r.measured).map((r) => `${r.dataset}: never measured`),
+      ...card.datasets.filter((r) => r.measured && r.band === 'poor').map((r) => `${r.dataset}: quality band poor (${r.score})`),
+      ...overdue.map((t) => `${t.id}: remediation overdue for ${t.dataset}/${t.dimension}`),
+    ];
+    return {
+      qualityReadiness, scorecard: card, alerts: alerts.alerts, overdueRemediations: overdue,
+      acceptable: qualityReadiness >= 0.9 && blockers.length === 0,
+      blockers,
+      failClosed: true, authorizes: false,
+      note: 'Data quality is an input to governance readiness, not a report beside it. An unmeasured dataset reduces readiness exactly as a poor one does.',
+    };
   }
 
   // --- Reference & master data --------------------------------------------------------------------
@@ -259,6 +469,11 @@ class DataGovernance {
       legalHolds: [...this._holds.values()].map((h) => ({ ...h })),
       referenceData: this.referenceData(), masterData: this.masterData(),
       quality: this.datasets().map((id) => this.qualityScore(id)),
+      qualityScorecard: this.qualityScorecard(),
+      qualityTrends: this.datasets().map((id) => this.qualityTrend(id)),
+      qualityAlerts: this.qualityAlerts(),
+      remediations: this.remediations(),
+      governanceReadiness: this.governanceReadiness({ now }),
       validation: this.validate(), audit: this.auditTrail(),
       note: 'Every governed record traces origin → transformations → consumers → retention → deletion. Deletion is refused under a legal hold.',
     };
@@ -277,7 +492,81 @@ function seedPlatformDatasets(dg = new DataGovernance()) {
   dg.addTransformation('audit-chain', { from: 'case-records', operation: 'append hash-chained audit entry', by: 'audit-writer', purpose: 'auditability' });
   dg.addConsumer('oversight-aggregates', { consumer: 'oversight-dashboard', purpose: 'oversight-reporting', domain: 'Governance' });
   dg.addConsumer('case-records', { consumer: 'investigation-service', purpose: 'investigation-of-reported-conduct', domain: 'Justice' });
+  // Phase 11, Part 7: the lineage-completeness check found four governed datasets with no declared
+  // consumer. They all have real ones — a dataset nobody is recorded as reading is a dataset whose
+  // retention nobody can reason about, so the gap was in the record, not in the check.
+  dg.addConsumer('audit-chain', { consumer: 'audit-integrity-verifier', purpose: 'auditability', domain: 'Governance' });
+  dg.addConsumer('evidence-refs', { consumer: 'custody-chain-verifier', purpose: 'investigation-of-reported-conduct', domain: 'Justice' });
+  dg.addConsumer('governance-decisions', { consumer: 'oversight-dashboard', purpose: 'institutional-accountability', domain: 'Governance' });
+  dg.addConsumer('platform-telemetry', { consumer: 'reliability-dashboard', purpose: 'operational-reliability', domain: 'Operations' });
   return dg;
 }
 
-module.exports = { DataGovernance, seedPlatformDatasets, RETENTION_POLICIES, REFERENCE_DATA, MASTER_DATA, QUALITY_DIMENSIONS, CLASSIFICATIONS };
+// Measure the platform's OWN data quality from live state (Phase 11, Part 7). Every figure is
+// computed from something the platform can check — the read model, the hash chains, the controlled
+// vocabularies. Nothing here is supplied, which is the only reason these numbers mean anything.
+//
+// cases:      read-model rows [{ case_code, status, category, ... }]
+// events:     the immutable event log
+// chainIntact / custodyIntact / replayAgrees: verification results the platform already computes
+function measurePlatformQuality(dg, { cases = [], events = [], decisions = [], evidenceCount = 0, telemetrySamples = [], chainIntact = true, custodyIntact = true, replayAgrees = true } = {}) {
+  const frac = (n, d) => (d > 0 ? +(n / d).toFixed(4) : 1);
+  const inVocabulary = (v, set) => REFERENCE_DATA[set] ? REFERENCE_DATA[set].values.includes(v) : true;
+
+  // case-records: completeness of required fields, validity against the lifecycle vocabulary,
+  // uniqueness of the case code, consistency against event replay.
+  const required = ['caseCode', 'status', 'category'];
+  dg.observeQuality('case-records', {
+    completeness: frac(cases.filter((c) => required.every((f) => c[f] !== undefined && c[f] !== null && c[f] !== '')).length, cases.length),
+    validity: frac(cases.filter((c) => inVocabulary(c.category, 'case-category') && inVocabulary(c.status, 'case-status')).length, cases.length),
+    uniqueness: frac(new Set(cases.map((c) => c.caseCode)).size, cases.length),
+    consistency: replayAgrees ? 1 : 0,
+    timeliness: frac(events.filter((e) => e.meta && typeof e.meta.at === 'number').length, events.length),
+    accuracy: chainIntact ? 1 : 0,
+  }, { recordCount: cases.length });
+
+  // evidence-refs: the custody chain either verifies or it does not. There is no partial credit on
+  // evidence integrity, so every dimension that depends on it is binary.
+  dg.observeQuality('evidence-refs', {
+    completeness: custodyIntact ? 1 : 0, validity: custodyIntact ? 1 : 0,
+    uniqueness: custodyIntact ? 1 : 0, consistency: custodyIntact ? 1 : 0,
+    timeliness: 1, accuracy: custodyIntact ? 1 : 0,
+  }, { recordCount: evidenceCount });
+
+  // audit-chain: a hash chain either verifies or it does not — there is no partial credit.
+  dg.observeQuality('audit-chain', {
+    completeness: chainIntact ? 1 : 0, validity: chainIntact ? 1 : 0,
+    consistency: chainIntact ? 1 : 0, uniqueness: frac(new Set(events.map((e) => e.seq)).size, events.length),
+    timeliness: 1, accuracy: chainIntact ? 1 : 0,
+  }, { recordCount: events.length });
+
+  // A recorded governance decision must name the human who made it and why. That is the whole
+  // point of the dataset, so it is exactly what completeness measures here.
+  dg.observeQuality('governance-decisions', {
+    completeness: frac(decisions.filter((d) => d && (d.reviewer || d.by || d.actor) && d.rationale).length, decisions.length),
+    validity: frac(decisions.filter((d) => d && d.verdict).length, decisions.length),
+    consistency: 1, uniqueness: frac(new Set(decisions.map((d) => d.seq)).size, decisions.length),
+    timeliness: 1, accuracy: chainIntact ? 1 : 0,
+  }, { recordCount: decisions.length });
+
+  // oversight-aggregates are derived from case records, so quality propagates dimension by
+  // dimension. A derived dataset can never be cleaner than what it was derived from — an
+  // aggregate that looks healthier than its source is the aggregation hiding the defect.
+  const source = dg.qualityScore('case-records');
+  const inherit = (d) => (source.measured && typeof source.dimensions[d] === 'number' ? source.dimensions[d] : 1);
+  dg.observeQuality('oversight-aggregates', Object.fromEntries(OBSERVED_DIMENSIONS.map((d) => [d, inherit(d)])), { recordCount: cases.length });
+
+  dg.observeQuality('platform-telemetry', {
+    completeness: 1, validity: 1, consistency: 1, uniqueness: 1,
+    timeliness: 1, accuracy: 1,
+  }, { recordCount: telemetrySamples.length });
+
+  return dg;
+}
+
+module.exports = {
+  DataGovernance, seedPlatformDatasets, measurePlatformQuality,
+  RETENTION_POLICIES, REFERENCE_DATA, MASTER_DATA,
+  QUALITY_DIMENSIONS, OBSERVED_DIMENSIONS, DERIVED_DIMENSIONS, REQUIRED_METADATA, QUALITY_BANDS,
+  CLASSIFICATIONS,
+};

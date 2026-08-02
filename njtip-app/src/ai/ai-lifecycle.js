@@ -13,12 +13,26 @@
 const { hash } = require('../twin');
 
 // EU-AI-Act-shaped risk classes. The class determines what governance an artifact needs.
+// `minConfidence` (Phase 11, Part 9): below this, the model's output is WITHHELD rather than
+// shown with a caveat. A low-confidence suggestion still anchors the person reading it, and an
+// anchor you did not intend to set is worse than no suggestion at all.
 const RISK_CLASSES = {
-  minimal: { humanApproval: false, biasMonitoring: false, explainabilityRequired: false, description: 'No effect on any person or decision (e.g. spell-checking a title).' },
-  limited: { humanApproval: true, biasMonitoring: false, explainabilityRequired: true, description: 'Informs staff workflow but not case outcomes (e.g. queue ordering).' },
-  high: { humanApproval: true, biasMonitoring: true, explainabilityRequired: true, description: 'Touches a case, a person or a governance outcome. Every use is approved, explained and audited.' },
-  prohibited: { humanApproval: false, biasMonitoring: false, explainabilityRequired: false, description: 'Never permitted on this platform. Registration is refused.' },
+  minimal: { humanApproval: false, biasMonitoring: false, explainabilityRequired: false, minConfidence: 0, description: 'No effect on any person or decision (e.g. spell-checking a title).' },
+  limited: { humanApproval: true, biasMonitoring: false, explainabilityRequired: true, minConfidence: 0.6, description: 'Informs staff workflow but not case outcomes (e.g. queue ordering).' },
+  high: { humanApproval: true, biasMonitoring: true, explainabilityRequired: true, minConfidence: 0.8, description: 'Touches a case, a person or a governance outcome. Every use is approved, explained and audited.' },
+  prohibited: { humanApproval: false, biasMonitoring: false, explainabilityRequired: false, minConfidence: 1, description: 'Never permitted on this platform. Registration is refused.' },
 };
+
+// Thresholds for the monitoring that Part 9 requires. All deterministic.
+const HALLUCINATION_THRESHOLD = 0.05;   // ungrounded outputs above 5% of a model's traffic
+const DRIFT_PSI_BANDS = [
+  { floor: 0.25, band: 'significant', action: 'suspend the model and re-approve it against current data' },
+  { floor: 0.10, band: 'moderate', action: 'investigate; schedule re-evaluation' },
+  { floor: 0, band: 'stable', action: 'none' },
+];
+// Dataset quality dimensions for training data, and the floor a dataset must clear to train on.
+const DATASET_QUALITY_DIMENSIONS = ['completeness', 'balance', 'labelAccuracy', 'representativeness', 'freshness'];
+const DATASET_QUALITY_FLOOR = 0.8;
 
 // Uses that are refused by name — not merely unimplemented.
 const PROHIBITED_USES = {
@@ -63,10 +77,49 @@ class AiLifecycle {
   catalogue(kind = null) { return [...this._artifacts.values()].filter((a) => !kind || a.kind === kind).map((a) => this.describe(a.kind, a.id)).sort((x, y) => (x.kind + x.id).localeCompare(y.kind + y.id)); }
   history(kind, id) { const a = this._artifacts.get(`${kind}:${id}`); if (!a) throw new Error('unknown artifact'); return a.versions.map((v, i) => ({ version: v.version, index: i, riskClass: v.riskClass, status: v.status, approvedBy: v.approvedBy })); }
 
+  // --- Approval workflow (Phase 11, Part 9) -----------------------------------------------------
+  //
+  // Submitted → reviewed → approved / rejected, per VERSION. Segregation of duties is structural:
+  // the artifact's own owner may never approve it, because an approval you can grant yourself is
+  // a formality, not a control.
+
+  submitForApproval(kind, id, { by, rationale, evaluation = null } = {}) {
+    const a = this._artifacts.get(`${kind}:${id}`); if (!a) throw new Error('unknown artifact');
+    if (!by || !rationale) throw new Error('a submission for approval requires a named human and a rationale');
+    if (a.current.status === 'approved') throw new Error(`${kind} '${id}' v${a.current.version} is already approved`);
+    a.current.status = 'submitted';
+    a.current.submission = { by, rationale, evaluation, at: this._clock(), textDigestAtSubmission: a.current.textDigest };
+    return this.describe(kind, id);
+  }
+  pendingApprovals() {
+    return [...this._artifacts.values()]
+      .filter((a) => a.current.status === 'submitted')
+      .map((a) => ({ kind: a.kind, id: a.id, version: a.current.version, riskClass: a.current.riskClass, submittedBy: a.current.submission.by, owner: a.current.owner }))
+      .sort((x, y) => (x.kind + x.id).localeCompare(y.kind + y.id));
+  }
+  reject(kind, id, { by, rationale } = {}) {
+    const a = this._artifacts.get(`${kind}:${id}`); if (!a) throw new Error('unknown artifact');
+    if (!by || !rationale) throw new Error('a rejection requires a named human and a rationale');
+    if (a.current.owner === by) { const e = new Error(`the owner of ${kind} '${id}' may not rule on its own approval`); e.failClosed = true; throw e; }
+    a.current.status = 'rejected'; a.current.rejectedBy = by; a.current.rejectionRationale = rationale; a.current.rejectedAt = this._clock();
+    return this.describe(kind, id);
+  }
+
   // Human approval — required for every risk class above `minimal`, per VERSION.
   approve(kind, id, { by, rationale }) {
     const a = this._artifacts.get(`${kind}:${id}`); if (!a) throw new Error('unknown artifact');
     if (!by || !rationale) throw new Error('AI approval requires a named human and a rationale');
+    // SEGREGATION OF DUTIES: the owner cannot approve their own artifact.
+    if (a.current.owner === by) { const e = new Error(`the owner of ${kind} '${id}' may not approve it — approval requires an independent authority`); e.failClosed = true; throw e; }
+    // A high-risk artifact cannot be approved on nothing: a submission carrying an evaluation is
+    // the record of what the approver actually looked at.
+    if (RISK_CLASSES[a.current.riskClass] && RISK_CLASSES[a.current.riskClass].explainabilityRequired) {
+      if (a.current.status === 'rejected') { const e = new Error(`${kind} '${id}' v${a.current.version} was rejected — resubmit it before approving`); e.failClosed = true; throw e; }
+    }
+    // A prompt whose text has changed since submission is not the prompt that was reviewed.
+    if (a.current.submission && a.current.submission.textDigestAtSubmission && a.current.submission.textDigestAtSubmission !== a.current.textDigest) {
+      const e = new Error(`${kind} '${id}' changed after it was submitted — the approver did not see this version`); e.failClosed = true; throw e;
+    }
     a.current.status = 'approved'; a.current.approvedBy = by; a.current.approvalRationale = rationale; a.current.approvedAt = this._clock();
     return this.describe(kind, id);
   }
@@ -91,6 +144,14 @@ class AiLifecycle {
     const leaked = Object.keys(inputSummary).filter((f) => IDENTITY_FIELDS.has(f.toLowerCase()));
     if (leaked.length) { const e = new Error(`inference refuses identity in its input: ${leaked.join(', ')}`); e.failClosed = true; throw e; }
     if (promptId) { const p = this.isApproved('prompt', promptId); if (!p.approved) { const e = new Error(`inference refused: prompt '${promptId}' is ${p.reason}`); e.failClosed = true; throw e; } }
+    // CONFIDENCE THRESHOLD (Phase 11, Part 9). Below the risk class's floor the output is WITHHELD,
+    // not shown with a caveat — a low-confidence suggestion still anchors the person reading it,
+    // and an anchor you did not intend to set is worse than no suggestion at all.
+    const floor = RISK_CLASSES[art.riskClass].minConfidence ?? 0;
+    if (floor > 0) {
+      if (typeof confidence !== 'number') { const e = new Error(`inference refused: risk class '${art.riskClass}' requires a confidence score`); e.failClosed = true; throw e; }
+      if (confidence < floor) { const e = new Error(`inference withheld: confidence ${confidence} is below the ${floor} floor for risk class '${art.riskClass}' — the matter goes to a human with no suggestion attached`); e.failClosed = true; e.withheld = true; throw e; }
+    }
     const record = {
       id: 'INF-' + (++this._seq).toString().padStart(5, '0'),
       model, modelVersion: art.version, promptId, inputSummary: { ...inputSummary }, output, explanation, confidence,
@@ -173,6 +234,156 @@ class AiLifecycle {
 
   // --- Governance view ------------------------------------------------------------------------------
 
+  // --- Dataset lineage & quality (Phase 11, Part 9) ---------------------------------------------
+
+  // Training-data lineage. A model trained on data nobody can trace is a model nobody can defend
+  // when someone asks where a decision came from.
+  recordDatasetLineage(id, { sources = [], transformations = [], collectedUnder = null, lawfulBasis = null, syntheticOnly = true, by } = {}) {
+    const a = this._artifacts.get(`dataset:${id}`); if (!a) throw new Error(`unknown AI dataset: ${id}`);
+    if (!by) throw new Error('recording dataset lineage requires a named human');
+    if (!sources.length) { const e = new Error('a training dataset must declare at least one source'); e.failClosed = true; throw e; }
+    if (!lawfulBasis) { const e = new Error('a training dataset must declare the lawful basis for its collection'); e.failClosed = true; throw e; }
+    if (syntheticOnly !== true) { const e = new Error('this platform trains on synthetic data only — a non-synthetic training dataset is refused'); e.failClosed = true; throw e; }
+    a.current.lineage = { sources: [...sources], transformations: [...transformations], collectedUnder, lawfulBasis, syntheticOnly, recordedBy: by, at: this._clock() };
+    return this.datasetLineage(id);
+  }
+  datasetLineage(id) {
+    const a = this._artifacts.get(`dataset:${id}`); if (!a) throw new Error(`unknown AI dataset: ${id}`);
+    const l = a.current.lineage || null;
+    return {
+      dataset: id, traced: !!l, ...(l ? JSON.parse(JSON.stringify(l)) : {}),
+      reason: l ? 'lineage recorded' : 'no lineage recorded — the training data cannot be traced',
+    };
+  }
+  observeDatasetQuality(id, observations = {}) {
+    const a = this._artifacts.get(`dataset:${id}`); if (!a) throw new Error(`unknown AI dataset: ${id}`);
+    const unknown = Object.keys(observations).filter((d) => !DATASET_QUALITY_DIMENSIONS.includes(d));
+    if (unknown.length) throw new Error(`unknown dataset quality dimension(s): ${unknown.join(', ')}`);
+    for (const [d, val] of Object.entries(observations)) if (typeof val !== 'number' || val < 0 || val > 1) throw new Error(`dataset quality '${d}' must be a number in [0, 1]`);
+    a.current.quality = { ...observations, at: this._clock() };
+    return this.datasetQuality(id);
+  }
+  datasetQuality(id) {
+    const a = this._artifacts.get(`dataset:${id}`); if (!a) throw new Error(`unknown AI dataset: ${id}`);
+    const q = a.current.quality;
+    if (!q) return { dataset: id, measured: false, score: null, acceptable: false, reason: 'no quality observation — an unmeasured training set is not a clean one' };
+    const measured = DATASET_QUALITY_DIMENSIONS.filter((d) => typeof q[d] === 'number');
+    const missing = DATASET_QUALITY_DIMENSIONS.filter((d) => !measured.includes(d));
+    const score = measured.length ? +(measured.reduce((s, d) => s + q[d], 0) / measured.length).toFixed(3) : null;
+    const failing = measured.filter((d) => q[d] < DATASET_QUALITY_FLOOR);
+    return {
+      dataset: id, measured: true, score, floor: DATASET_QUALITY_FLOOR,
+      dimensions: Object.fromEntries(measured.map((d) => [d, q[d]])), missing, failing,
+      acceptable: missing.length === 0 && failing.length === 0,
+      reason: missing.length ? `unmeasured dimension(s): ${missing.join(', ')}` : failing.length ? `below the floor: ${failing.join(', ')}` : 'training data meets every quality dimension',
+    };
+  }
+  // A model may only be trained on datasets that are traced, measured and clean. The gate is here
+  // rather than in a checklist so it cannot be skipped.
+  trainingDataAcceptable(model) {
+    const a = this._artifacts.get(`model:${model}`); if (!a) throw new Error(`unknown AI model: ${model}`);
+    const sets = [].concat(a.current.trainingData || []).filter(Boolean);
+    if (!sets.length) return { acceptable: false, model, datasets: [], reason: 'the model declares no training dataset' };
+    const rows = sets.map((id) => {
+      if (!this._artifacts.has(`dataset:${id}`)) return { dataset: id, registered: false, traced: false, quality: null, ok: false, reason: 'training dataset is not registered' };
+      const lineage = this.datasetLineage(id);
+      const quality = this.datasetQuality(id);
+      const approved = this.isApproved('dataset', id);
+      return { dataset: id, registered: true, traced: lineage.traced, approved: approved.approved, quality, ok: lineage.traced && quality.acceptable && approved.approved, reason: !lineage.traced ? lineage.reason : !approved.approved ? approved.reason : quality.reason };
+    });
+    const bad = rows.filter((r) => !r.ok);
+    return { model, datasets: rows, acceptable: bad.length === 0, blockers: bad.map((r) => `${r.dataset}: ${r.reason}`), reason: bad.length ? 'training data is not acceptable' : 'every training dataset is traced, approved and within quality' };
+  }
+
+  // --- Hallucination monitoring (Phase 11, Part 9) ----------------------------------------------
+
+  // Record whether an output was grounded in cited evidence. Monitoring is per model, because a
+  // rate averaged across models tells you nothing about which one to stop using.
+  recordGrounding(model, { inferenceId = null, grounded, reason = null } = {}) {
+    if (typeof grounded !== 'boolean') throw new Error('grounding must be recorded as a boolean');
+    if (!this._grounding) this._grounding = new Map();
+    if (!this._grounding.has(model)) this._grounding.set(model, []);
+    this._grounding.get(model).push({ inferenceId, grounded, reason, at: this._clock() });
+    return { model, observations: this._grounding.get(model).length };
+  }
+  hallucinationReport(model, { threshold = HALLUCINATION_THRESHOLD, minSample = 20 } = {}) {
+    const obs = (this._grounding && this._grounding.get(model)) || [];
+    if (obs.length < minSample) {
+      return { model, samples: obs.length, minSample, rate: null, withinThreshold: null, threshold, reason: `only ${obs.length} of ${minSample} samples — the rate is not yet meaningful, and a rate you cannot trust must not read as safe` };
+    }
+    const ungrounded = obs.filter((o) => !o.grounded).length;
+    const rate = +(ungrounded / obs.length).toFixed(4);
+    return {
+      model, samples: obs.length, ungrounded, rate, threshold,
+      withinThreshold: rate <= threshold,
+      severity: rate <= threshold ? 'ok' : rate <= threshold * 3 ? 'elevated' : 'critical',
+      examples: obs.filter((o) => !o.grounded).slice(0, 5).map((o) => ({ inferenceId: o.inferenceId, reason: o.reason })),
+      reason: rate <= threshold ? 'ungrounded output stays within threshold' : `${(rate * 100).toFixed(2)}% of outputs were ungrounded — above the ${(threshold * 100).toFixed(0)}% threshold`,
+    };
+  }
+
+  // --- Drift detection (Phase 11, Part 9) --------------------------------------------------------
+
+  // Record a feature distribution for a period. Distributions are bucket → proportion.
+  observeDistribution(model, { period, distribution = {} } = {}) {
+    if (!Number.isInteger(period) || period < 0) throw new Error('period must be a non-negative integer');
+    const total = Object.values(distribution).reduce((a, b) => a + b, 0);
+    if (total <= 0) throw new Error('a distribution must have some mass');
+    if (!this._distributions) this._distributions = new Map();
+    if (!this._distributions.has(model)) this._distributions.set(model, new Map());
+    const byPeriod = this._distributions.get(model);
+    if (byPeriod.has(period)) throw new Error(`period ${period} is already recorded for '${model}' — distribution history is append-only`);
+    byPeriod.set(period, Object.fromEntries(Object.entries(distribution).map(([k, val]) => [k, val / total])));
+    return { model, period, buckets: Object.keys(distribution).length };
+  }
+  // Population Stability Index between the baseline period and the latest. Deterministic; the
+  // usual banding (<0.1 stable, 0.1–0.25 moderate, >0.25 significant) is applied as data.
+  driftReport(model, { baselinePeriod = 0 } = {}) {
+    const byPeriod = (this._distributions && this._distributions.get(model)) || new Map();
+    const periods = [...byPeriod.keys()].sort((a, b) => a - b);
+    if (periods.length < 2) return { model, periods: periods.length, psi: null, band: 'insufficient-data', drifted: null, reason: 'at least two periods are needed to detect drift' };
+    const base = byPeriod.get(baselinePeriod) || byPeriod.get(periods[0]);
+    const latestPeriod = periods[periods.length - 1];
+    const latest = byPeriod.get(latestPeriod);
+    const buckets = [...new Set([...Object.keys(base), ...Object.keys(latest)])].sort();
+    const EPS = 1e-6;
+    let psi = 0;
+    const contributions = buckets.map((b) => {
+      const e = Math.max(base[b] ?? 0, EPS);
+      const a = Math.max(latest[b] ?? 0, EPS);
+      const c = (a - e) * Math.log(a / e);
+      psi += c;
+      return { bucket: b, baseline: +e.toFixed(6), latest: +a.toFixed(6), contribution: +c.toFixed(6) };
+    });
+    psi = +psi.toFixed(6);
+    const banding = DRIFT_PSI_BANDS.find((x) => psi >= x.floor);
+    return {
+      model, periods: periods.length, baselinePeriod, latestPeriod, psi, band: banding.band,
+      drifted: banding.band !== 'stable', action: banding.action,
+      contributions: contributions.sort((x, y) => Math.abs(y.contribution) - Math.abs(x.contribution)),
+      largestShift: contributions.length ? contributions[0].bucket : null,
+      reason: banding.band === 'stable' ? 'the input distribution has not meaningfully shifted' : `PSI ${psi} — ${banding.band} drift since period ${baselinePeriod}`,
+    };
+  }
+  // Combined monitoring posture: a model that has drifted or is hallucinating must not keep
+  // running on an approval granted against data that no longer exists.
+  monitoringPosture(model) {
+    const hall = this.hallucinationReport(model);
+    const drift = this.driftReport(model);
+    const training = (() => { try { return this.trainingDataAcceptable(model); } catch (_) { return { acceptable: null, reason: 'unknown model' }; } })();
+    const concerns = [];
+    if (hall.withinThreshold === false) concerns.push(`hallucination rate ${hall.rate} above ${hall.threshold}`);
+    if (drift.drifted) concerns.push(`input distribution has ${drift.band} drift (PSI ${drift.psi})`);
+    if (training.acceptable === false) concerns.push('training data is not acceptable: ' + (training.blockers || []).join('; '));
+    return {
+      model, hallucination: hall, drift, trainingData: training,
+      healthy: concerns.length === 0, concerns,
+      requiresReApproval: drift.band === 'significant' || hall.severity === 'critical',
+      advisoryOnly: true, authorizes: false,
+      note: 'Monitoring evidence. It can require a re-approval; it can never grant one.',
+    };
+  }
+
   prohibitedUses() { return Object.entries(PROHIBITED_USES).map(([id, why]) => ({ use: id, why })); }
   riskClasses() { return Object.entries(RISK_CLASSES).map(([id, r]) => ({ id, ...r })); }
 
@@ -184,6 +395,14 @@ class AiLifecycle {
       if (!a.purpose) violations.push(`${a.kind}:${a.id}: no declared purpose`);
       if (PROHIBITED_USES[a.purpose]) violations.push(`${a.kind}:${a.id}: prohibited purpose`);
       for (const f of a.fields) if (IDENTITY_FIELDS.has(String(f).toLowerCase())) violations.push(`${a.kind}:${a.id}: identity field '${f}'`);
+      // Phase 11, Part 9: an approver may never be the owner, and a model must be able to say
+      // where its training data came from.
+      if (a.status === 'approved' && a.approvedBy === a.owner) violations.push(`${a.kind}:${a.id}: approved by its own owner`);
+      if (a.kind === 'dataset' && a.status === 'approved' && !this.datasetLineage(a.id).traced) violations.push(`dataset:${a.id}: approved with no recorded lineage`);
+      if (a.kind === 'model' && a.trainingData) {
+        const t = this.trainingDataAcceptable(a.id);
+        if (!t.acceptable) for (const b of t.blockers) violations.push(`model:${a.id}: ${b}`);
+      }
     }
     for (const i of this._inferences) {
       if (i.authorizes !== false || i.advisoryOnly !== true) violations.push(`${i.id}: an inference claims authority`);
@@ -198,6 +417,10 @@ class AiLifecycle {
       models: this.catalogue('model'), datasets: this.catalogue('dataset'), prompts: this.catalogue('prompt'),
       inferences: this.auditTrail().length, pendingHumanDecisions: this.pendingDecisions(),
       overrides: this._overrides.map((o) => ({ ...o })),
+      pendingApprovals: this.pendingApprovals(),
+      datasetLineage: this.catalogue('dataset').map((d) => this.datasetLineage(d.id)),
+      datasetQuality: this.catalogue('dataset').map((d) => this.datasetQuality(d.id)),
+      monitoring: this.catalogue('model').map((m) => this.monitoringPosture(m.id)),
       validation: this.validate(),
       advisoryOnly: true, authorizes: false,
       note: 'AI output is an input to a human decision and nothing else. There is no apply(); the only exit from an inference is a recorded human decision.',
@@ -205,4 +428,7 @@ class AiLifecycle {
   }
 }
 
-module.exports = { AiLifecycle, RISK_CLASSES, PROHIBITED_USES, ARTIFACT_KINDS };
+module.exports = {
+  AiLifecycle, RISK_CLASSES, PROHIBITED_USES, ARTIFACT_KINDS,
+  HALLUCINATION_THRESHOLD, DRIFT_PSI_BANDS, DATASET_QUALITY_DIMENSIONS, DATASET_QUALITY_FLOOR,
+};

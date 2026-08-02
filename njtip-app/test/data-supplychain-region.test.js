@@ -118,11 +118,19 @@ test('supply chain: release verification is fail-closed and names each failed ch
   sc.buildProvenance({ artifact: 'njtip-app', artifactDigest: 'abc', sourceRef: 'git+njtip', sourceDigest: 'src' });
   const blocked = sc.verifyRelease({ artifact: 'njtip-app', artifactDigest: 'abc', sbom: sbom(), dependencies: [] });
   assert.strictEqual(blocked.verified, false);
-  assert.deepStrictEqual(blocked.failed, ['container-signature']);
+  assert.ok(blocked.failed.includes('container-signature'));
   assert.strictEqual(blocked.failClosed, true);
   assert.strictEqual(blocked.authorizes, false);
-  const ok = sc.verifyRelease({ artifact: 'njtip-app', artifactDigest: 'abc', sbom: sbom(), dependencies: [], signedContainer: true });
-  assert.strictEqual(ok.verified, true);
+  // Phase 11 raised the bar for a verified release: a keyless signature in the transparency log,
+  // a reproducible build and a lockfile that matches are now part of "fully attested".
+  const bundle = sc.keylessSign({ digest: 'abc', identity: 'https://github.com/gov/njtip/.github/workflows/release.yml@refs/tags/v1', issuer: 'https://token.actions.githubusercontent.com' });
+  const ok = sc.verifyRelease({
+    artifact: 'njtip-app', artifactDigest: 'abc', sbom: sbom(), dependencies: [], signedContainer: true,
+    bundle, expectedIdentity: bundle.certificate.identity, expectedIssuer: bundle.certificate.issuer,
+    reproducible: true, locked: [], fetched: [],
+  });
+  assert.strictEqual(ok.verified, true, 'failed: ' + ok.failed.join(', '));
+  assert.strictEqual(ok.trust.trusted, true);
   const unattested = sc.verifyRelease({ artifact: 'other', artifactDigest: 'zzz', sbom: sbom(), signedContainer: true });
   assert.ok(unattested.failed.includes('build-provenance'));
 });

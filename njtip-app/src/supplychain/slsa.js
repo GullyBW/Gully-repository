@@ -33,8 +33,135 @@ const LEVEL_EVIDENCE = {
   4: { met: false, evidence: 'Requires hermetic builds and enforced two-person review. Reproducibility is already demonstrable (zero third-party dependencies); hermeticity and review enforcement are organisational.' },
 };
 
+// --- Sigstore-shaped keyless signing (Phase 11, Part 8) -----------------------------------------
+//
+// Keyless signing inverts the usual problem: instead of protecting a long-lived private key
+// forever, you get a certificate that lives for MINUTES, bound to a workflow identity from an
+// OIDC issuer, and you publish the signature to an append-only transparency log. The key being
+// worthless afterwards is the security property, not a limitation.
+//
+// 🔒 The signing primitive here is the synthetic twin identity. Production drops in Sigstore
+// (Fulcio + Rekor) or an internal CA with HSM-custodied keys — the verification logic is the same.
+const FULCIO_CERT_TTL_MS = 10 * 60_000;   // Sigstore issues ~10-minute certificates
+const TRUST_THRESHOLD = 80;                // artifact trust score required to deploy
+
+// License policy for a national government platform. `unknown` is deliberately absent from the
+// allowed list: an unread license is a forbidden one.
+const LICENSE_POLICY = {
+  allowed: ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'CC0-1.0', 'Unlicense'],
+  reviewRequired: ['MPL-2.0', 'LGPL-2.1', 'LGPL-3.0', 'EPL-2.0'],
+  forbidden: ['AGPL-3.0', 'SSPL-1.0', 'BUSL-1.1', 'Commons-Clause', 'proprietary', 'UNKNOWN'],
+  rationale: 'Copyleft with a network clause is incompatible with a platform other agencies embed. An unknown license is forbidden, not tolerated.',
+};
+function licenseVerdict(license) {
+  const l = license ? String(license) : 'UNKNOWN';
+  if (LICENSE_POLICY.allowed.includes(l)) return { license: l, verdict: 'allowed' };
+  if (LICENSE_POLICY.reviewRequired.includes(l)) return { license: l, verdict: 'review-required', reason: 'weak copyleft — legal review required before embedding' };
+  return { license: l, verdict: 'forbidden', reason: l === 'UNKNOWN' ? 'no license declared — terms nobody has read cannot be accepted' : 'license is on the forbidden list' };
+}
+
+// Rekor-shaped append-only transparency log with inclusion proofs over a hash chain.
+class TransparencyLog {
+  constructor({ clock = () => Date.now() } = {}) { this._clock = clock; this._entries = []; this._head = 'GENESIS'; }
+  append({ digest, identity, issuer }) {
+    if (!digest || !identity || !issuer) throw new Error('a transparency-log entry needs a digest, an identity and an issuer');
+    const index = this._entries.length;
+    const at = this._clock();
+    const body = { index, digest, identity, issuer, at, prevHash: this._head };
+    const entryHash = hash.sha256(body);
+    this._head = entryHash;
+    this._entries.push({ ...body, entryHash });
+    return { logIndex: index, entryHash, loggedAt: at, root: this._head };
+  }
+  // Inclusion proof: replay the chain from genesis. Any alteration anywhere breaks it.
+  inclusionProof(logIndex) {
+    const e = this._entries[logIndex];
+    if (!e) return { included: false, reason: 'no such log index' };
+    let head = 'GENESIS';
+    for (let i = 0; i <= logIndex; i++) {
+      const x = this._entries[i];
+      const recomputed = hash.sha256({ index: x.index, digest: x.digest, identity: x.identity, issuer: x.issuer, at: x.at, prevHash: head });
+      if (recomputed !== x.entryHash) return { included: false, reason: `log entry ${i} does not match the chain — the log was altered` };
+      head = recomputed;
+    }
+    return { included: true, logIndex, entryHash: e.entryHash, loggedAt: e.at, identity: e.identity, issuer: e.issuer };
+  }
+  entries() { return this._entries.map((e) => ({ ...e })); }
+  size() { return this._entries.length; }
+  verifyChain() {
+    for (let i = 0; i < this._entries.length; i++) { const p = this.inclusionProof(i); if (!p.included) return { ok: false, reason: p.reason, brokenAt: i }; }
+    return { ok: true, length: this._entries.length, root: this._head };
+  }
+}
+
+// Verify a Sigstore-shaped bundle. The order of these checks is the design: a signature that
+// verifies but was made by the wrong identity, or never reached the log, is not a trusted
+// signature — and it is exactly the case an attacker with a build runner can produce.
+function verifySigstoreBundle(bundle, { expectedIdentity = null, expectedIssuer = null, now = 0, log = null } = {}) {
+  if (!bundle || !bundle.certificate || !bundle.signature) return { valid: false, reason: 'malformed bundle' };
+  const { certificate: cert, signature, digest, logEntry } = bundle;
+  const recomputed = hash.sha256({ digest, identity: cert.identity, issuer: cert.issuer, notBefore: cert.notBefore, notAfter: cert.notAfter });
+  if (recomputed !== bundle.payloadDigest) return { valid: false, reason: 'bundle payload does not match its digest — the bundle was altered' };
+  if (!signing.verify(bundle.payloadDigest, signature)) return { valid: false, reason: 'signature does not verify' };
+  if (expectedIdentity && cert.identity !== expectedIdentity) return { valid: false, reason: `signed by '${cert.identity}', expected '${expectedIdentity}'` };
+  if (expectedIssuer && cert.issuer !== expectedIssuer) return { valid: false, reason: `issued by '${cert.issuer}', expected '${expectedIssuer}'` };
+  if (!logEntry) return { valid: false, reason: 'not present in the transparency log — an unlogged signature is unverifiable after the certificate expires' };
+  if (log) {
+    const proof = log.inclusionProof(logEntry.logIndex);
+    if (!proof.included) return { valid: false, reason: 'transparency-log inclusion proof failed: ' + proof.reason };
+    if (proof.entryHash !== logEntry.entryHash) return { valid: false, reason: 'log entry hash does not match the bundle' };
+    if (proof.identity !== cert.identity) return { valid: false, reason: 'the log records a different signing identity' };
+  }
+  // THE KEYLESS MODEL: the certificate is expected to be expired by now. What must hold is that
+  // the signature was made WHILE it was valid, and the transparency log is what proves when.
+  const signedAt = logEntry.loggedAt;
+  if (signedAt < cert.notBefore || signedAt >= cert.notAfter) {
+    return { valid: false, reason: 'the signature was logged outside the certificate validity window — it was not made by that short-lived identity' };
+  }
+  return {
+    valid: true, identity: cert.identity, issuer: cert.issuer, digest,
+    logIndex: logEntry.logIndex, loggedAt: signedAt,
+    certificateExpired: now >= cert.notAfter,
+    note: 'Keyless signature verified against a short-lived certificate and an append-only transparency log. The certificate being expired now is expected — the log is what makes the signature durable.',
+  };
+}
+
 class SupplyChainAttestation {
-  constructor({ clock = () => Date.now() } = {}) { this._clock = clock; this._attestations = new Map(); this._artifacts = new Map(); this._seq = 0; }
+  constructor({ clock = () => Date.now() } = {}) {
+    this._clock = clock; this._attestations = new Map(); this._artifacts = new Map(); this._seq = 0;
+    this._log = new TransparencyLog({ clock });
+    this._images = new Map();
+  }
+
+  // --- Keyless (Sigstore-shaped) signing --------------------------------------------------------
+
+  // Sign an artifact digest with a short-lived, identity-bound certificate and record it in the
+  // transparency log. A TTL beyond the maximum is REFUSED, not clamped — asking for a long-lived
+  // signing certificate is a design problem worth surfacing rather than quietly accommodating.
+  keylessSign({ digest, identity, issuer, ttlMs = FULCIO_CERT_TTL_MS }) {
+    if (!digest) throw new Error('keyless signing requires an artifact digest');
+    if (!identity || !issuer) { const e = new Error('keyless signing requires a workflow identity and its OIDC issuer'); e.failClosed = true; throw e; }
+    if (ttlMs > FULCIO_CERT_TTL_MS) { const e = new Error(`signing certificate TTL ${ttlMs}ms exceeds the ${FULCIO_CERT_TTL_MS}ms maximum — a long-lived signing key defeats keyless signing`); e.failClosed = true; throw e; }
+    const notBefore = this._clock();
+    const certificate = { identity, issuer, notBefore, notAfter: notBefore + ttlMs, synthetic: true };
+    const payloadDigest = hash.sha256({ digest, identity, issuer, notBefore: certificate.notBefore, notAfter: certificate.notAfter });
+    const logEntry = this._log.append({ digest, identity, issuer });
+    return { digest, certificate, payloadDigest, signature: signing.sign(payloadDigest), logEntry, signedBy: '🔒 njtip-synthetic-signing-identity (production: Sigstore/Fulcio or an internal CA with HSM custody)' };
+  }
+  verifyBundle(bundle, opts = {}) { return verifySigstoreBundle(bundle, { now: this._clock(), log: this._log, ...opts }); }
+
+  // Cosign-shaped container image signing: the same bundle, bound to an image digest.
+  signImage({ image, imageDigest, identity, issuer }) {
+    if (!image || !imageDigest) throw new Error('signing an image requires its name and digest');
+    const bundle = this.keylessSign({ digest: imageDigest, identity, issuer });
+    this._images.set(imageDigest, { image, bundle });
+    return { image, imageDigest, ...bundle };
+  }
+  verifyImage(imageDigest, opts = {}) {
+    const rec = this._images.get(imageDigest);
+    if (!rec) return { valid: false, reason: 'no signature for this image digest — an unsigned image is not deployable' };
+    return { image: rec.image, ...this.verifyBundle(rec.bundle, opts) };
+  }
 
   // --- Provenance ------------------------------------------------------------------------
 
@@ -125,7 +252,8 @@ class SupplyChainAttestation {
   // --- Release verification ------------------------------------------------------------------
 
   // The gate a release must pass. FAIL-CLOSED: any missing attestation blocks the release.
-  verifyRelease({ artifact, artifactDigest, sbom, dependencies = [], approvedSuppliers = [], signedContainer = false }) {
+  verifyRelease({ artifact, artifactDigest, sbom, dependencies = [], approvedSuppliers = [], signedContainer = false, bundle = null, expectedIdentity = null, expectedIssuer = null, reproducible = null, locked = null, fetched = null, now = null }) {
+    const at = now ?? this._clock();
     const checks = [];
     const prov = this.verifyArtifact(artifactDigest);
     checks.push({ check: 'build-provenance', pass: prov.valid, detail: prov.reason || `attested at SLSA L${prov.slsaLevel}` });
@@ -135,14 +263,145 @@ class SupplyChainAttestation {
     checks.push({ check: 'sbom-attestation', pass: sbomOk, detail: sbomOk ? `runtime: ${sbom.runtime}` : 'no SBOM supplied' });
     checks.push({ check: 'artifact-signature', pass: prov.valid, detail: prov.valid ? 'signature verifies' : 'unsigned or unverifiable' });
     checks.push({ check: 'container-signature', pass: !!signedContainer, detail: signedContainer ? 'image signature present' : 'container image is not signed' });
+    // Phase 11, Part 8 additions.
+    const risk = this.dependencyRisk({ dependencies, approvedSuppliers, now: at });
+    checks.push({ check: 'dependency-risk', pass: risk.acceptable, detail: risk.critical.length ? `critical risk: ${risk.critical.join(', ')}` : `worst score ${risk.worstScore}` });
+    const lic = this.licenseCompliance({ dependencies });
+    checks.push({ check: 'license-compliance', pass: lic.compliant, detail: lic.compliant ? 'no forbidden licenses' : `forbidden: ${lic.forbidden.join(', ')}` });
+    const integrity = locked || fetched ? this.packageIntegrity({ locked: locked || [], fetched: fetched || [] }) : null;
+    checks.push({ check: 'package-integrity', pass: integrity ? integrity.intact : true, detail: integrity ? (integrity.intact ? `${integrity.locked} package(s) match the lockfile` : integrity.findings.map((f) => `${f.package}: ${f.issue}`).join('; ')) : 'no lockfile supplied — nothing to substitute' });
+    if (bundle || expectedIdentity) {
+      const sig = bundle ? this.verifyBundle(bundle, { expectedIdentity, expectedIssuer, now: at }) : { valid: false, reason: 'an identity was expected but no signing bundle was supplied' };
+      checks.push({ check: 'keyless-signature', pass: sig.valid, detail: sig.reason || `signed by ${sig.identity} via ${sig.issuer}, log index ${sig.logIndex}` });
+      checks.push({ check: 'transparency-log', pass: this._log.verifyChain().ok, detail: this._log.verifyChain().ok ? `log intact, ${this._log.size()} entr(ies)` : this._log.verifyChain().reason });
+    }
+    const trust = this.artifactTrustScore({ artifactDigest, sbom, dependencies, approvedSuppliers, signedContainer, bundle, expectedIdentity, expectedIssuer, reproducible, integrity, now: at });
+    checks.push({ check: 'artifact-trust-score', pass: trust.trusted, detail: `${trust.score}/100 (${trust.band}), threshold ${trust.threshold}` });
+
     const failed = checks.filter((c) => !c.pass);
     return {
       artifact, artifactDigest, checks, failed: failed.map((c) => c.check),
+      trust, dependencyRisk: risk, licenses: lic, integrity,
       verified: failed.length === 0,
       failClosed: true, authorizes: false,
-      note: failed.length ? 'Release BLOCKED: supply-chain verification failed.' : 'Supply chain verified. This does not authorize deployment — go-live is a recorded human decision.',
+      note: failed.length ? 'Release BLOCKED: supply-chain verification failed. An untrusted artifact is not deployable.' : 'Supply chain verified. This does not authorize deployment — go-live is a recorded human decision.',
     };
   }
+
+  // --- Package integrity, dependency risk, licensing (Phase 11, Part 8) ------------------------
+
+  // Package integrity: the digest recorded in the lockfile must match the digest of what was
+  // actually fetched. A mismatch is a substituted package, and there is no benign explanation.
+  packageIntegrity({ locked = [], fetched = [] } = {}) {
+    const byName = new Map(fetched.map((f) => [f.name, f]));
+    const findings = [];
+    for (const l of locked) {
+      const f = byName.get(l.name);
+      if (!f) { findings.push({ package: l.name, issue: 'locked but never fetched', severity: 'high' }); continue; }
+      if (!l.digest) { findings.push({ package: l.name, issue: 'lockfile records no digest', severity: 'critical' }); continue; }
+      if (f.digest !== l.digest) findings.push({ package: l.name, issue: `digest mismatch — expected ${l.digest}, fetched ${f.digest}`, severity: 'critical' });
+    }
+    for (const f of fetched) if (!locked.some((l) => l.name === f.name)) findings.push({ package: f.name, issue: 'fetched but not in the lockfile', severity: 'critical' });
+    return {
+      locked: locked.length, fetched: fetched.length, findings,
+      intact: findings.length === 0,
+      note: 'A package whose digest does not match the lockfile is a substituted package.',
+    };
+  }
+
+  // Dependency risk score per package, 0 (safe) to 100 (do not ship). Every input is a fact about
+  // the dependency, never a judgement about it.
+  dependencyRisk({ dependencies = [], approvedSuppliers = [], now = null } = {}) {
+    const at = now ?? this._clock();
+    const scored = dependencies.map((d) => {
+      const reasons = [];
+      let score = 0;
+      if (!d.digest) { score += 30; reasons.push('not pinned to a digest'); }
+      if (approvedSuppliers.length && !approvedSuppliers.includes(d.supplier)) { score += 20; reasons.push(`supplier '${d.supplier ?? 'unknown'}' is not approved`); }
+      const lic = licenseVerdict(d.license);
+      if (lic.verdict === 'forbidden') { score += 25; reasons.push(`license ${lic.license} is forbidden`); }
+      else if (lic.verdict === 'review-required') { score += 10; reasons.push(`license ${lic.license} needs legal review`); }
+      const vulns = d.knownVulnerabilities ?? 0;
+      if (vulns > 0) { score += Math.min(30, 10 * vulns); reasons.push(`${vulns} known vulnerability(ies)`); }
+      if (d.lastPublishedAt != null) {
+        const days = Math.floor((at - d.lastPublishedAt) / (24 * 3600_000));
+        if (days > 730) { score += 15; reasons.push(`unmaintained — last published ${days} days ago`); }
+        else if (days > 365) { score += 7; reasons.push(`ageing — last published ${days} days ago`); }
+      } else { score += 10; reasons.push('no publication date — maintenance cannot be assessed'); }
+      if ((d.depth ?? 0) > 3) { score += 5; reasons.push(`transitive depth ${d.depth} — far from anything reviewed`); }
+      const final = Math.min(100, score);
+      return {
+        package: d.name, version: d.version ?? null, supplier: d.supplier ?? null, license: lic.license,
+        score: final, band: final >= 60 ? 'critical' : final >= 35 ? 'high' : final >= 15 ? 'moderate' : 'low',
+        reasons,
+      };
+    }).sort((a, b) => b.score - a.score || String(a.package).localeCompare(String(b.package)));
+    const worst = scored.length ? scored[0].score : 0;
+    return {
+      dependencies: scored, count: scored.length,
+      highestRisk: scored.length ? scored[0].package : null, worstScore: worst,
+      critical: scored.filter((r) => r.band === 'critical').map((r) => r.package),
+      acceptable: scored.every((r) => r.band === 'low' || r.band === 'moderate'),
+      note: 'Risk derived from facts about each dependency: pinning, supplier, license, known vulnerabilities, maintenance and depth. Zero dependencies is a score of zero — and the check still runs, because that is how it stays true.',
+    };
+  }
+
+  // License compliance. An UNKNOWN license is forbidden, not tolerated: a government platform
+  // cannot ship a component whose terms nobody has read.
+  licenseCompliance({ dependencies = [] } = {}) {
+    const rows = dependencies.map((d) => ({ package: d.name, ...licenseVerdict(d.license) }));
+    const forbidden = rows.filter((r) => r.verdict === 'forbidden');
+    const review = rows.filter((r) => r.verdict === 'review-required');
+    return {
+      packages: rows, forbidden: forbidden.map((r) => r.package), reviewRequired: review.map((r) => r.package),
+      compliant: forbidden.length === 0,
+      policy: LICENSE_POLICY,
+      note: 'An unknown license is treated as forbidden. Nobody can accept terms they have not read.',
+    };
+  }
+
+  // --- Artifact trust score (Phase 11, Part 8) --------------------------------------------------
+
+  // A single trust score for an artifact, composed from the verification results the platform
+  // already produces. Deployment fails below the threshold — that is the entire point.
+  artifactTrustScore({ artifactDigest, sbom = null, dependencies = [], approvedSuppliers = [], signedContainer = false, bundle = null, expectedIdentity = null, expectedIssuer = null, reproducible = null, integrity = null, now = null } = {}) {
+    const at = now ?? this._clock();
+    const components = [];
+    const add = (name, weight, pass, detail) => components.push({ component: name, weight, pass: !!pass, earned: pass ? weight : 0, detail });
+
+    const prov = this.verifyArtifact(artifactDigest);
+    add('build-provenance', 25, prov.valid, prov.reason || `attested at SLSA L${prov.slsaLevel}`);
+
+    let sig = bundle ? verifySigstoreBundle(bundle, { expectedIdentity, expectedIssuer, now: at, log: this._log }) : { valid: false, reason: 'no signing bundle supplied' };
+    // A valid signature over a DIFFERENT artifact is not a signature over this one. Without this
+    // check a real bundle could be pasted onto any digest and the score would not notice.
+    if (sig.valid && bundle.digest !== artifactDigest) sig = { valid: false, reason: `the bundle signs '${bundle.digest}', not this artifact` };
+    add('keyless-signature', 20, sig.valid, sig.reason || `signed by ${sig.identity} via ${sig.issuer}`);
+    add('transparency-log', 10, sig.valid && sig.loggedAt != null, sig.valid ? `logged at index ${sig.logIndex}` : 'not present in the transparency log');
+
+    const deps = this.dependencyRisk({ dependencies, approvedSuppliers, now: at });
+    add('dependency-risk', 15, deps.acceptable, `worst score ${deps.worstScore}${deps.critical.length ? ` (${deps.critical.join(', ')})` : ''}`);
+
+    const lic = this.licenseCompliance({ dependencies });
+    add('license-compliance', 10, lic.compliant, lic.compliant ? 'no forbidden licenses' : `forbidden: ${lic.forbidden.join(', ')}`);
+
+    add('sbom', 5, !!(sbom && typeof sbom.runtime === 'string'), sbom ? `runtime ${sbom.runtime}` : 'no SBOM supplied');
+    add('container-signature', 5, signedContainer, signedContainer ? 'image signature present' : 'container image is not signed');
+    add('reproducible-build', 5, reproducible === true, reproducible === true ? 'two builds produced an identical digest' : 'reproducibility not demonstrated');
+    add('package-integrity', 5, integrity === null ? false : integrity.intact, integrity === null ? 'package integrity not checked' : integrity.intact ? 'every package matches its lockfile digest' : `${integrity.findings.length} integrity finding(s)`);
+
+    const score = components.reduce((a, c) => a + c.earned, 0);
+    const band = score >= TRUST_THRESHOLD ? (score >= 90 ? 'trusted' : 'acceptable') : score >= 50 ? 'untrusted' : 'unknown-provenance';
+    return {
+      artifactDigest, score, threshold: TRUST_THRESHOLD, band,
+      trusted: score >= TRUST_THRESHOLD,
+      components, failing: components.filter((c) => !c.pass).map((c) => c.component),
+      note: 'Artifact trust is composed from verification results, never asserted. Below the threshold the artifact is not deployable.',
+      authorizes: false,
+    };
+  }
+
+  transparencyLog() { return this._log; }
 
   // --- SLSA posture -------------------------------------------------------------------------------
 
@@ -156,11 +415,15 @@ class SupplyChainAttestation {
   }
 
   // Full supply-chain report for the CI dashboard.
-  report({ sbom = null, dependencies = [], buildFn = null } = {}) {
+  report({ sbom = null, dependencies = [], buildFn = null, approvedSuppliers = [] } = {}) {
     return {
       slsa: this.slsaPosture(),
       attestations: this.attestations().map((a) => ({ id: a.id, artifact: a.statement.subject[0].name, digest: a.digest, verified: this.verify(a.id).valid })),
       dependencies: this.verifyDependencies({ dependencies }),
+      dependencyRisk: this.dependencyRisk({ dependencies, approvedSuppliers }),
+      licenses: this.licenseCompliance({ dependencies }),
+      transparencyLog: { size: this._log.size(), chain: this._log.verifyChain() },
+      signedImages: [...this._images.keys()].map((d) => ({ imageDigest: d, image: this._images.get(d).image, verified: this.verifyImage(d).valid })),
       sbom: sbom ? this.sbomAttestation({ artifact: 'njtip-app', artifactDigest: hash.sha256(sbom), sbom }) : null,
       reproducible: buildFn ? this.verifyReproducible({ buildFn }) : null,
       note: '🔒 Synthetic signing identity in the reference build. Production drop-ins: Sigstore/cosign or an internal CA with HSM-custodied keys.',
@@ -177,4 +440,8 @@ function sourceDigest() {
   return hash.sha256(files.map((f) => ({ file: path.relative(ROOT, f).split(path.sep).join('/'), digest: hash.sha256(fs.readFileSync(f, 'utf8')) })));
 }
 
-module.exports = { SupplyChainAttestation, SLSA_LEVELS, CLAIMED_LEVEL, LEVEL_EVIDENCE, sourceDigest };
+module.exports = {
+  SupplyChainAttestation, SLSA_LEVELS, CLAIMED_LEVEL, LEVEL_EVIDENCE, sourceDigest,
+  TransparencyLog, verifySigstoreBundle, licenseVerdict,
+  LICENSE_POLICY, FULCIO_CERT_TTL_MS, TRUST_THRESHOLD,
+};

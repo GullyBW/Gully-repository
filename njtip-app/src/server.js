@@ -164,6 +164,9 @@ async function route(app, req, url, body) {
   // --- Phase 11: predictive reliability & business observability ---
   if (method === 'GET' && p === '/api/observability/dependency-risk') { requireRole('admin'); return json(200, app.observability.sre.dependencyRisk()); }
   if (method === 'GET' && p === '/api/observability/business') { requireRole('oversight-board'); return json(200, app.observability.businessMetrics()); }
+  // --- Phase 11: data quality, supply-chain trust, AI monitoring ---
+  if (method === 'GET' && p === '/api/data/quality') { requireRole('admin'); return json(200, app.fabric.dataGovernance.governanceReadiness()); }
+  if (method === 'GET' && p === '/api/ai/monitoring') { requireRole('admin'); return json(200, { models: app.ai.lifecycle.catalogue('model').map((m) => app.ai.lifecycle.monitoringPosture(m.id)), pendingApprovals: app.ai.lifecycle.pendingApprovals() }); }
   // --- Phase 10: zero trust, threat model, formal policy verification ---
   if (method === 'GET' && p === '/api/security/zero-trust') { requireRole('admin'); return json(200, { architecture: app.iam.zeroTrust.architecture(), policyVersion: app.iam.zeroTrust.pap.version(), policies: app.iam.zeroTrust.pap.registry(), workloads: app.iam.zeroTrust.workloads.list(), boundaries: app.iam.zeroTrust.boundaries.flows() }); }
   if (method === 'POST' && p === '/api/security/zero-trust/decide') { requireRole('admin'); return json(200, app.iam.zeroTrust.pdp.decide(body.request || {})); }

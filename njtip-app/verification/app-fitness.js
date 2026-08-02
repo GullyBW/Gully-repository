@@ -1958,6 +1958,153 @@ module.exports = [
     for (const m of dg.masterData()) if (!m.authoritativeSource || !m.steward) v.push(`master data '${m.id}' has no authoritative source or steward`);
   }),
 
+  fit('APP-FIT-DATA-QUALITY', 'Eight quality dimensions — two of them underivable by hand — and poor quality reduces governance readiness', (v) => {
+    const dgm = require('../src/fabric/data-governance');
+    const { DataGovernance, seedPlatformDatasets, measurePlatformQuality, OBSERVED_DIMENSIONS, DERIVED_DIMENSIONS, QUALITY_DIMENSIONS, REQUIRED_METADATA } = dgm;
+    let now = 1_000_000;
+    const dg = seedPlatformDatasets(new DataGovernance({ clock: () => now }));
+
+    // Part 7 requires eight dimensions, including lineage and metadata completeness.
+    if (QUALITY_DIMENSIONS.length !== 8) v.push(`expected 8 quality dimensions, found ${QUALITY_DIMENSIONS.length}`);
+    for (const d of ['completeness', 'validity', 'consistency', 'timeliness', 'uniqueness', 'accuracy', 'lineageCompleteness', 'metadataCompleteness']) {
+      if (!QUALITY_DIMENSIONS.includes(d)) v.push(`missing quality dimension: ${d}`);
+    }
+
+    // THE REQUIREMENT THAT MATTERS: the two derived dimensions cannot be supplied by hand.
+    for (const d of DERIVED_DIMENSIONS) {
+      let refused = false;
+      try { dg.observeQuality('case-records', { [d]: 1 }); } catch (_) { refused = true; }
+      if (!refused) v.push(`${d} was accepted as a hand-entered observation — it must be derived`);
+    }
+    let rangeRefused = false;
+    try { dg.observeQuality('case-records', { completeness: 1.5 }); } catch (_) { rangeRefused = true; }
+    if (!rangeRefused) v.push('an out-of-range quality observation was accepted');
+    let unknownRefused = false;
+    try { dg.observeQuality('case-records', { plausibility: 1 }); } catch (_) { unknownRefused = true; }
+    if (!unknownRefused) v.push('an unknown quality dimension was accepted');
+
+    // Derived dimensions are computed from the governance record and must be complete for the
+    // platform's own datasets — the model is supposed to describe reality.
+    for (const id of dg.datasets()) {
+      const d = dg.deriveQualityDimensions(id);
+      if (d.lineageCompleteness !== 1) v.push(`${id}: lineage incomplete — ${d.lineageGaps.join(', ')}`);
+      if (d.metadataCompleteness !== 1) v.push(`${id}: metadata incomplete — ${d.missingMetadata.join(', ')}`);
+    }
+    // THE DERIVATION MUST BITE: a dataset with no declared consumer and a missing purpose scores
+    // below 1 on both derived dimensions. A check that always returns 1 is not a check.
+    const gapped = new DataGovernance({ clock: () => now });
+    gapped.register('orphan', { origin: 'somewhere', classification: 'internal', retentionClass: 'telemetry', purpose: 'unstated-analysis' });
+    const gd = gapped.deriveQualityDimensions('orphan');
+    if (gd.lineageCompleteness >= 1) v.push('a dataset with no declared consumer scored full lineage completeness');
+    if (gd.metadataCompleteness >= 1) v.push('a dataset with no owner and no declared fields scored full metadata completeness');
+    if (!gd.lineageGaps.includes('consumersDeclared')) v.push('the missing consumer declaration was not named');
+    if (!gd.missingMetadata.includes('fields')) v.push('the missing field list was not named');
+    // A transformation pointing at an ungoverned upstream ends the lineage graph at nobody.
+    gapped.register('derived', { origin: 'derived from orphan', classification: 'internal', retentionClass: 'telemetry', owner: 'analytics', domain: 'Insight', fields: ['x'], purpose: 'analysis' });
+    gapped.addTransformation('derived', { from: 'not-a-governed-dataset', operation: 'join', by: 'pipeline', purpose: 'analysis' });
+    gapped.addConsumer('derived', { consumer: 'a-dashboard', purpose: 'analysis', domain: 'Insight' });
+    const ungoverned = gapped.deriveQualityDimensions('derived');
+    if (!ungoverned.lineageGaps.includes('upstreamsGoverned')) v.push('a transformation from an ungoverned upstream was not flagged');
+
+    // An UNMEASURED dataset is not a clean one: it must not report as meeting the threshold, and
+    // it must reduce readiness exactly as a poor one does.
+    const unmeasured = dg.qualityScore('case-records');
+    if (unmeasured.measured) v.push('a dataset with no observation reported as measured');
+    if (unmeasured.meets) v.push('an unmeasured dataset reported as meeting the quality threshold');
+    if (unmeasured.readinessImpact !== 1) v.push('an unmeasured dataset did not reduce governance readiness');
+    if (dg.governanceReadiness().qualityReadiness !== 0) v.push('an entirely unmeasured estate did not score zero quality readiness');
+    if (dg.governanceReadiness().acceptable) v.push('an entirely unmeasured estate was reported as acceptable');
+
+    // Healthy observations lift readiness to 1.0 and clear the alerts.
+    const good = Object.fromEntries(OBSERVED_DIMENSIONS.map((d) => [d, 0.99]));
+    for (const id of dg.datasets()) dg.observeQuality(id, good, { recordCount: 10 });
+    const healthy = dg.governanceReadiness();
+    if (healthy.qualityReadiness !== 1) v.push(`a healthy estate scored ${healthy.qualityReadiness} quality readiness`);
+    if (!healthy.acceptable) v.push('a healthy estate was not acceptable');
+    if (healthy.alerts.length) v.push('a healthy estate raised quality alerts');
+    if (healthy.authorizes !== false || healthy.failClosed !== true) v.push('quality readiness claims authority / is not fail-closed');
+
+    // THE REQUIREMENT: poor quality must REDUCE governance readiness, not merely be reported.
+    now += 24 * 3600_000;
+    dg.observeQuality('case-records', Object.fromEntries(OBSERVED_DIMENSIONS.map((d) => [d, 0.3])), { recordCount: 10 });
+    const degraded = dg.governanceReadiness();
+    if (!(degraded.qualityReadiness < healthy.qualityReadiness)) v.push('poor data quality did not reduce governance readiness');
+    if (degraded.acceptable) v.push('an estate containing a poor dataset was still acceptable');
+    if (!degraded.blockers.some((b) => b.startsWith('case-records'))) v.push('the poor dataset was not named as a blocker');
+    const alert = degraded.alerts.find((a) => a.dataset === 'case-records');
+    if (!alert || alert.severity !== 'critical') v.push('a poor dataset did not raise a critical alert');
+    if (!alert.owner) v.push('a quality alert was raised with no accountable owner — an unowned alert is an unowned dataset');
+    // Trend analysis is deterministic and reads the degradation.
+    const trend = dg.qualityTrend('case-records');
+    if (trend.direction !== 'degrading') v.push('a falling quality series was not reported as degrading');
+    if (JSON.stringify(dg.qualityTrend('case-records')) !== JSON.stringify(dg.qualityTrend('case-records'))) v.push('quality trend analysis is not deterministic');
+
+    // Remediation workflow: a named human, a bounded due date, and evidence to close.
+    let noOwner = false;
+    try { dg.openRemediation('case-records', { dimension: 'accuracy', dueInDays: 10 }); } catch (_) { noOwner = true; }
+    if (!noOwner) v.push('a remediation was opened without a named human authority');
+    let unbounded = false;
+    try { dg.openRemediation('case-records', { dimension: 'accuracy', by: 'DGB Chair', dueInDays: 400 }); } catch (_) { unbounded = true; }
+    if (!unbounded) v.push('a remediation was opened with an unbounded due date');
+    const ticket = dg.openRemediation('case-records', { dimension: 'accuracy', by: 'Data Governance Board Chair', dueInDays: 10, rationale: 'source system re-profiling required' });
+    if (ticket.state !== 'open') v.push('a new remediation was not open');
+    let noEvidence = false;
+    try { dg.closeRemediation(ticket.id, { by: 'Data Governance Board Chair' }); } catch (_) { noEvidence = true; }
+    if (!noEvidence) v.push('a remediation was closed without evidence of the fix');
+    // An overdue remediation blocks readiness on its own.
+    now += 20 * 24 * 3600_000;
+    if (!dg.overdueRemediations().length) v.push('an elapsed remediation was not reported as overdue');
+    if (!dg.governanceReadiness().blockers.some((b) => b.startsWith(ticket.id))) v.push('an overdue remediation did not block governance readiness');
+    if (dg.closeRemediation(ticket.id, { by: 'Data Governance Board Chair', evidence: 'source re-profiled; accuracy re-measured at 0.99' }).state !== 'closed') v.push('a properly evidenced remediation could not be closed');
+    let doubleClose = false;
+    try { dg.closeRemediation(ticket.id, { by: 'x', evidence: 'y' }); } catch (_) { doubleClose = true; }
+    if (!doubleClose) v.push('a closed remediation was closed again');
+
+    // An EMPTY dataset is not a quality achievement — it is reported as not-applicable.
+    const fresh = seedPlatformDatasets(new DataGovernance({ clock: () => 1_000_000 }));
+    fresh.observeQuality('evidence-refs', good, { recordCount: 0 });
+    const empty = fresh.qualityScore('evidence-refs');
+    if (empty.band !== 'not-applicable') v.push('a dataset holding no records was graded as though it had good quality');
+    if (empty.readinessImpact !== 0) v.push('an empty dataset penalised readiness for having no defects');
+
+    // The platform measures its OWN quality from live state — every figure computed, none supplied.
+    const live = seedPlatformDatasets(new DataGovernance({ clock: () => 1_000_000 }));
+    measurePlatformQuality(live, {
+      cases: [{ caseCode: 'NJ-1', status: 'received', category: 'police' }],
+      events: [{ seq: 1, meta: { at: 1 } }], decisions: [{ seq: 0, reviewer: 'OB', verdict: 'defer', rationale: 'await legal' }],
+      evidenceCount: 0, telemetrySamples: [], chainIntact: true, custodyIntact: true, replayAgrees: true,
+    });
+    const measured = live.governanceReadiness();
+    if (measured.qualityReadiness !== 1) v.push(`a healthy live platform measured ${measured.qualityReadiness} quality readiness`);
+    // Broken chains and out-of-vocabulary values must show up as measured defects.
+    const broken = seedPlatformDatasets(new DataGovernance({ clock: () => 1_000_000 }));
+    measurePlatformQuality(broken, {
+      cases: [{ caseCode: 'NJ-1', status: 'received', category: 'not-a-category' }, { caseCode: 'NJ-1', status: 'received', category: 'police' }],
+      events: [{ seq: 1, meta: { at: 1 } }], decisions: [{ seq: 0, reviewer: 'OB', verdict: 'defer' }],
+      evidenceCount: 3, chainIntact: false, custodyIntact: false, replayAgrees: false,
+    });
+    const brokenScore = broken.qualityScore('case-records');
+    if (brokenScore.dimensions.validity >= 1) v.push('an out-of-vocabulary category did not reduce validity');
+    if (brokenScore.dimensions.uniqueness >= 1) v.push('a duplicated case code did not reduce uniqueness');
+    if (brokenScore.dimensions.accuracy !== 0) v.push('a broken event chain did not zero the accuracy of case records');
+    if (broken.qualityScore('evidence-refs').dimensions.accuracy !== 0) v.push('a broken custody chain did not zero the accuracy of evidence references');
+    if (broken.governanceReadiness().acceptable) v.push('a platform with broken chains reported acceptable data quality');
+    // A governance decision recorded without a rationale is incomplete, by definition.
+    if (broken.qualityScore('governance-decisions').dimensions.completeness >= 1) v.push('a governance decision with no rationale scored full completeness');
+    // Derived aggregates cannot be cleaner than their source.
+    const agg = broken.qualityScore('oversight-aggregates');
+    if (agg.score > brokenScore.score) v.push('a derived aggregate scored higher than the source it is derived from');
+
+    // Poor quality reaches the continuous assurance framework, not just the data report.
+    const ca = require('../src/assurance/continuous');
+    const base = { fitness: { allHold: true }, architecture: { valid: true, contexts: 30, modules: 1 }, security: { policiesCertified: true, credentialFindings: 0, algorithmIndependence: true }, privacy: { identityMinimized: true, correlationDefaultDeny: true }, compliance: { overallCoverage: 1 }, reliability: { allSlosMet: true, latencyP95Ms: 100 }, governance: { ownershipComplete: true, noSelfApproval: true }, recovery: { allScenariosMatch: true, backupVerified: true }, supplyChain: { thirdPartyCount: 0, attestationsVerified: true }, infrastructure: { healthy: true, drift: false }, legislation: { unimplementedMandates: 0 }, identity: { trustedIssuer: true, shortLivedCredentials: true }, policies: { certified: true, allSpecsProven: true }, observability: { topologyValid: true, identityFree: true }, ai: { allArtifactsApproved: true, noAutonomousAction: true } };
+    const clean = ca.evaluate({ ...base, data: { tracedRatio: 1, qualityReadiness: 1, qualityAcceptable: true } });
+    if (clean.failed.includes('dataGovernance')) v.push('a fully traced, high-quality estate failed the data-governance assurance domain');
+    const dirty = ca.evaluate({ ...base, data: { tracedRatio: 1, qualityReadiness: 0.4, qualityAcceptable: false } });
+    if (!dirty.failed.includes('dataGovernance')) v.push('poor data quality did not fail the data-governance assurance domain');
+  }),
+
+
   fit('APP-FIT-SUPPLY-CHAIN-ATTESTATION', 'Builds are attested, artifacts verified, and an unattested release is blocked', (v) => {
     const { SupplyChainAttestation, sourceDigest, CLAIMED_LEVEL } = require('../src/supplychain/slsa');
     const { sbom } = require('../scripts/devsecops');
@@ -1982,7 +2129,14 @@ module.exports = [
     if (blocked.verified) v.push('a release with an unsigned container image was verified');
     if (!blocked.failed.includes('container-signature')) v.push('the failing supply-chain check was not named');
     if (blocked.failClosed !== true || blocked.authorizes !== false) v.push('release verification is not fail-closed / claims authority');
-    const ok = sc.verifyRelease({ artifact: 'njtip-app', artifactDigest: 'abc', sbom: sbom(), dependencies: [], signedContainer: true });
+    // Phase 11 raised the bar for "fully attested": a release now also needs a keyless signature
+    // recorded in the transparency log, a reproducible build and a lockfile that matches.
+    const releaseBundle = sc.keylessSign({ digest: 'abc', identity: 'https://github.com/gov/njtip/.github/workflows/release.yml@refs/tags/v1', issuer: 'https://token.actions.githubusercontent.com' });
+    const ok = sc.verifyRelease({
+      artifact: 'njtip-app', artifactDigest: 'abc', sbom: sbom(), dependencies: [], signedContainer: true,
+      bundle: releaseBundle, expectedIdentity: releaseBundle.certificate.identity, expectedIssuer: releaseBundle.certificate.issuer,
+      reproducible: true, locked: [], fetched: [],
+    });
     if (!ok.verified) v.push('a fully attested release was not verified: ' + ok.failed.join(', '));
     // Dependency verification refuses an unpinned dependency.
     if (sc.verifyDependencies({ dependencies: [{ name: 'x', supplier: 's' }] }).verified) v.push('an unpinned dependency was verified');
@@ -1995,6 +2149,139 @@ module.exports = [
     for (const l of posture.levels) if (l.level <= CLAIMED_LEVEL && !l.met) v.push(`SLSA L${l.level} is claimed but not met`);
     if (!posture.honestGaps.length) v.push('no SLSA gaps are recorded — the claim is suspiciously complete');
     for (const g of posture.honestGaps) if (!g.why) v.push(`SLSA L${g.level} gap has no explanation`);
+  }),
+
+  fit('APP-FIT-SUPPLY-CHAIN-TRUST', 'Keyless signing, transparency log, dependency risk, licensing and artifact trust — deployment fails for an untrusted artifact', (v) => {
+    const slsa = require('../src/supplychain/slsa');
+    const { SupplyChainAttestation, TransparencyLog, licenseVerdict, LICENSE_POLICY, FULCIO_CERT_TTL_MS, TRUST_THRESHOLD } = slsa;
+    let now = 1_000_000;
+    const sc = new SupplyChainAttestation({ clock: () => now });
+    const IDENTITY = 'https://github.com/gov/njtip/.github/workflows/release.yml@refs/tags/v1.10.0';
+    const ISSUER = 'https://token.actions.githubusercontent.com';
+
+    // --- Keyless signing: short-lived certificate, workflow identity, transparency log ----------
+    let noIdentity = false;
+    try { sc.keylessSign({ digest: 'abc' }); } catch (e) { noIdentity = !!e.failClosed; }
+    if (!noIdentity) v.push('an artifact was signed with no workflow identity or issuer');
+    let longTtl = false;
+    try { sc.keylessSign({ digest: 'abc', identity: IDENTITY, issuer: ISSUER, ttlMs: 24 * 3600_000 }); } catch (e) { longTtl = !!e.failClosed; }
+    if (!longTtl) v.push('a long-lived signing certificate was issued — that defeats keyless signing');
+    if (FULCIO_CERT_TTL_MS > 15 * 60_000) v.push('the signing certificate TTL is not short-lived');
+
+    const bundle = sc.keylessSign({ digest: 'artifact-digest-1', identity: IDENTITY, issuer: ISSUER });
+    if (!bundle.logEntry || bundle.logEntry.logIndex !== 0) v.push('a keyless signature was not recorded in the transparency log');
+
+    // THE KEYLESS MODEL: an hour later the certificate is expired, and the signature must STILL
+    // verify — the transparency log is what makes it durable.
+    now += 3600_000;
+    const verified = sc.verifyBundle(bundle, { expectedIdentity: IDENTITY, expectedIssuer: ISSUER });
+    if (!verified.valid) v.push('a valid keyless signature failed to verify after its certificate expired: ' + verified.reason);
+    if (!verified.certificateExpired) v.push('the certificate was expected to be expired by now — the test is not exercising the keyless model');
+
+    // Each verification failure mode must be caught individually.
+    if (sc.verifyBundle(bundle, { expectedIdentity: 'https://github.com/attacker/repo/.github/workflows/x.yml@refs/heads/main' }).valid) v.push('a signature from an unexpected identity was accepted');
+    if (sc.verifyBundle(bundle, { expectedIssuer: 'https://attacker.example/oidc' }).valid) v.push('a signature from an unexpected OIDC issuer was accepted');
+    const tampered = JSON.parse(JSON.stringify(bundle)); tampered.certificate.identity = 'attacker';
+    if (sc.verifyBundle(tampered).valid) v.push('a tampered signing bundle was accepted');
+    const unlogged = JSON.parse(JSON.stringify(bundle)); unlogged.logEntry = null;
+    if (sc.verifyBundle(unlogged).valid) v.push('an unlogged signature was accepted — it is unverifiable once the certificate expires');
+    const forgedLog = JSON.parse(JSON.stringify(bundle)); forgedLog.logEntry.entryHash = 'not-the-real-hash';
+    if (sc.verifyBundle(forgedLog).valid) v.push('a signature claiming a log entry it does not have was accepted');
+    // A signature logged outside its certificate window is not from that short-lived identity.
+    const outOfWindow = JSON.parse(JSON.stringify(bundle)); outOfWindow.logEntry.loggedAt = bundle.certificate.notAfter + 1;
+    if (sc.verifyBundle(outOfWindow).valid) v.push('a signature logged after its certificate expired was accepted');
+
+    // --- Transparency log: append-only with a working inclusion proof --------------------------
+    const log = new TransparencyLog({ clock: () => 5 });
+    log.append({ digest: 'd1', identity: 'i', issuer: 's' });
+    log.append({ digest: 'd2', identity: 'i', issuer: 's' });
+    if (!log.verifyChain().ok) v.push('a freshly built transparency log did not verify');
+    if (!log.inclusionProof(0).included) v.push('an inclusion proof failed for a logged entry');
+    if (log.inclusionProof(99).included) v.push('an inclusion proof succeeded for an entry that is not in the log');
+    let logRefused = false;
+    try { log.append({ digest: 'd3' }); } catch (_) { logRefused = true; }
+    if (!logRefused) v.push('the transparency log accepted an entry with no identity');
+    // ALTERING THE LOG MUST BREAK IT — otherwise it is a list, not a transparency log.
+    log._entries[0].digest = 'substituted';
+    if (log.verifyChain().ok) v.push('the transparency log verified after an entry was altered');
+    if (log.inclusionProof(1).included) v.push('an inclusion proof succeeded over an altered chain');
+
+    // --- Cosign-shaped image signing -----------------------------------------------------------
+    const img = sc.signImage({ image: 'njtip/app', imageDigest: 'sha256:image-1', identity: IDENTITY, issuer: ISSUER });
+    if (!sc.verifyImage('sha256:image-1', { expectedIdentity: IDENTITY }).valid) v.push('a signed container image did not verify');
+    if (sc.verifyImage('sha256:never-signed').valid) v.push('an unsigned container image verified');
+    if (sc.verifyImage('sha256:image-1', { expectedIdentity: 'someone-else' }).valid) v.push('an image signed by an unexpected identity was accepted');
+    if (!img.logEntry) v.push('an image signature was not recorded in the transparency log');
+
+    // --- License compliance --------------------------------------------------------------------
+    if (LICENSE_POLICY.allowed.includes('UNKNOWN')) v.push('an unknown license is on the allowed list');
+    if (licenseVerdict(undefined).verdict !== 'forbidden') v.push('an undeclared license was not treated as forbidden');
+    if (licenseVerdict('MIT').verdict !== 'allowed') v.push('a permissive license was not allowed');
+    if (licenseVerdict('AGPL-3.0').verdict !== 'forbidden') v.push('a network-copyleft license was not forbidden');
+    if (licenseVerdict('MPL-2.0').verdict !== 'review-required') v.push('a weak-copyleft license did not require review');
+    const badLicenses = sc.licenseCompliance({ dependencies: [{ name: 'a', license: 'MIT' }, { name: 'b', license: 'AGPL-3.0' }, { name: 'c' }] });
+    if (badLicenses.compliant) v.push('a dependency set containing a forbidden license was compliant');
+    if (!badLicenses.forbidden.includes('b') || !badLicenses.forbidden.includes('c')) v.push('forbidden and undeclared licenses were not both named');
+    if (!sc.licenseCompliance({ dependencies: [{ name: 'a', license: 'Apache-2.0' }] }).compliant) v.push('a fully permissive dependency set was not compliant');
+
+    // --- Dependency risk scoring ---------------------------------------------------------------
+    const risky = sc.dependencyRisk({ dependencies: [{ name: 'abandoned', supplier: 'npm', license: 'AGPL-3.0', knownVulnerabilities: 2, lastPublishedAt: now - 900 * 24 * 3600_000, depth: 5 }], approvedSuppliers: ['internal-registry'], now });
+    if (risky.acceptable) v.push('an unpinned, unapproved, forbidden-licensed, vulnerable dependency was acceptable');
+    if (risky.dependencies[0].band !== 'critical') v.push('a maximally risky dependency was not banded critical');
+    for (const expected of ['not pinned', 'not approved', 'forbidden', 'vulnerability', 'unmaintained']) {
+      if (!risky.dependencies[0].reasons.some((r) => r.includes(expected))) v.push(`dependency risk did not name the '${expected}' factor`);
+    }
+    const clean = sc.dependencyRisk({ dependencies: [{ name: 'internal-lib', supplier: 'internal-registry', license: 'MIT', digest: 'd', knownVulnerabilities: 0, lastPublishedAt: now, depth: 1 }], approvedSuppliers: ['internal-registry'], now });
+    if (!clean.acceptable) v.push('a pinned, approved, permissive, current dependency was not acceptable');
+    if (clean.dependencies[0].band !== 'low') v.push('a clean dependency was not banded low');
+    // Zero dependencies is a score of zero — and the check still runs.
+    if (!sc.dependencyRisk({ dependencies: [] }).acceptable || sc.dependencyRisk({ dependencies: [] }).worstScore !== 0) v.push('the zero-dependency case was mis-scored');
+
+    // --- Package integrity ---------------------------------------------------------------------
+    if (!sc.packageIntegrity({ locked: [{ name: 'a', digest: 'd1' }], fetched: [{ name: 'a', digest: 'd1' }] }).intact) v.push('a matching lockfile was reported as compromised');
+    const substituted = sc.packageIntegrity({ locked: [{ name: 'a', digest: 'd1' }], fetched: [{ name: 'a', digest: 'd2' }] });
+    if (substituted.intact) v.push('a substituted package passed the integrity check');
+    if (substituted.findings[0].severity !== 'critical') v.push('a digest mismatch was not critical');
+    if (sc.packageIntegrity({ locked: [], fetched: [{ name: 'smuggled', digest: 'd' }] }).intact) v.push('a package fetched but absent from the lockfile passed the integrity check');
+    if (sc.packageIntegrity({ locked: [{ name: 'a' }], fetched: [{ name: 'a', digest: 'd' }] }).intact) v.push('a lockfile entry with no digest passed the integrity check');
+
+    // --- Artifact trust score & the deployment gate ---------------------------------------------
+    // A fully attested, fully signed artifact clears the threshold…
+    const trustedSc = new SupplyChainAttestation({ clock: () => now });
+    trustedSc.buildProvenance({ artifact: 'njtip-app', artifactDigest: 'trusted-1', sourceRef: 'git+https://njtip/repo', sourceDigest: 'srcdigest' });
+    const goodBundle = trustedSc.keylessSign({ digest: 'trusted-1', identity: IDENTITY, issuer: ISSUER });
+    const trustedInputs = {
+      artifactDigest: 'trusted-1', sbom: { runtime: 'node', dependencies: [], devDependencies: [], builtinsUsed: [] },
+      dependencies: [], signedContainer: true, bundle: goodBundle, expectedIdentity: IDENTITY, expectedIssuer: ISSUER,
+      reproducible: true, integrity: trustedSc.packageIntegrity({ locked: [], fetched: [] }), now,
+    };
+    const trusted = trustedSc.artifactTrustScore(trustedInputs);
+    if (!trusted.trusted) v.push(`a fully attested artifact scored ${trusted.score}, below the trust threshold: ${trusted.failing.join(', ')}`);
+    if (trusted.threshold !== TRUST_THRESHOLD) v.push('the trust threshold is inconsistent');
+    if (trusted.authorizes !== false) v.push('the artifact trust score claims authority');
+    // …and every single removal drops it below.
+    const untrusted = trustedSc.artifactTrustScore({ ...trustedInputs, bundle: null, expectedIdentity: null, expectedIssuer: null, signedContainer: false, reproducible: false });
+    if (untrusted.trusted) v.push('an unsigned, irreproducible artifact was still trusted');
+    if (!untrusted.failing.includes('keyless-signature')) v.push('the missing signature was not named as a failing trust component');
+    const unattested = trustedSc.artifactTrustScore({ ...trustedInputs, artifactDigest: 'never-built-here' });
+    if (unattested.trusted) v.push('an artifact with no build provenance was trusted');
+
+    // THE REQUIREMENT: DEPLOYMENT MUST FAIL FOR AN UNTRUSTED ARTIFACT.
+    const release = trustedSc.verifyRelease({ artifact: 'njtip-app', ...trustedInputs, locked: [], fetched: [] });
+    if (!release.verified) v.push('a fully verified release was blocked: ' + release.failed.join(', '));
+    if (release.authorizes !== false) v.push('release verification claims authority');
+    const blockedRelease = trustedSc.verifyRelease({
+      artifact: 'njtip-app', artifactDigest: 'trusted-1', sbom: trustedInputs.sbom, signedContainer: true,
+      dependencies: [{ name: 'abandoned', supplier: 'npm', license: 'AGPL-3.0', knownVulnerabilities: 3, lastPublishedAt: 0 }],
+      bundle: goodBundle, expectedIdentity: IDENTITY, expectedIssuer: ISSUER, reproducible: true,
+      locked: [{ name: 'abandoned', digest: 'd1' }], fetched: [{ name: 'abandoned', digest: 'SUBSTITUTED' }], now,
+    });
+    if (blockedRelease.verified) v.push('a release with a substituted package and a forbidden license was verified');
+    for (const expected of ['dependency-risk', 'license-compliance', 'package-integrity', 'artifact-trust-score']) {
+      if (!blockedRelease.failed.includes(expected)) v.push(`the '${expected}' check did not block an untrusted release`);
+    }
+    if (blockedRelease.failClosed !== true) v.push('release verification is not fail-closed');
+    if (!/not deployable/.test(blockedRelease.note)) v.push('a blocked release did not say the artifact is not deployable');
   }),
 
   fit('APP-FIT-MULTI-REGION', 'Failover is residency-aware, quorum-gated and free of split brain', (v) => {
@@ -2099,6 +2386,148 @@ module.exports = [
     if (ai3.groundingCheck({ output: 'x', groundedIn: [] }).grounded) v.push('an ungrounded output passed the grounding check');
     if (ai3.groundingCheck({ output: 'x', groundedIn: ['doc'], confidence: 0.1, minConfidence: 0.5 }).grounded) v.push('a low-confidence output passed the grounding check');
     if (!ai3.groundingCheck({ output: 'x', groundedIn: ['doc'], confidence: 0.9 }).grounded) v.push('a grounded, confident output was withheld');
+  }),
+
+  fit('APP-FIT-AI-ASSURANCE', 'Prompt approval, dataset lineage and quality, confidence floors, hallucination monitoring and drift detection all hold — and fail when they should', (v) => {
+    const mod = require('../src/ai/ai-lifecycle');
+    const { AiLifecycle, RISK_CLASSES, DATASET_QUALITY_DIMENSIONS, DATASET_QUALITY_FLOOR, HALLUCINATION_THRESHOLD } = mod;
+    let now = 1_000_000;
+    const ai = new AiLifecycle({ clock: () => now });
+
+    // --- Prompt approval workflow ---------------------------------------------------------------
+    ai.register('prompt', 'summarise-case', { owner: 'analytics', purpose: 'case-summarisation', riskClass: 'limited', text: 'Summarise the case notes without naming anyone.' });
+    if (ai.isApproved('prompt', 'summarise-case').approved) v.push('a freshly registered prompt was already approved');
+    ai.submitForApproval('prompt', 'summarise-case', { by: 'analytics', rationale: 'reviewed against the anonymity boundary', evaluation: { redTeamed: true } });
+    if (!ai.pendingApprovals().some((p) => p.kind === 'prompt' && p.id === 'summarise-case')) v.push('a submitted prompt did not appear in the approval queue');
+    // SEGREGATION OF DUTIES: the owner cannot approve their own artifact.
+    let selfApproval = false;
+    try { ai.approve('prompt', 'summarise-case', { by: 'analytics', rationale: 'looks fine to me' }); } catch (e) { selfApproval = !!e.failClosed; }
+    if (!selfApproval) v.push('an artifact owner approved their own prompt');
+    let selfRejection = false;
+    try { ai.reject('prompt', 'summarise-case', { by: 'analytics', rationale: 'x' }); } catch (e) { selfRejection = !!e.failClosed; }
+    if (!selfRejection) v.push('an artifact owner ruled on their own approval');
+    ai.approve('prompt', 'summarise-case', { by: 'AI Governance Board', rationale: 'grounded, anonymity-safe' });
+    if (!ai.isApproved('prompt', 'summarise-case').approved) v.push('an independently approved prompt is not approved');
+    if (ai.pendingApprovals().some((p) => p.id === 'summarise-case')) v.push('an approved prompt is still queued for approval');
+
+    // A CHANGED PROMPT IS NOT THE PROMPT THAT WAS REVIEWED — approval must not carry over.
+    ai.register('prompt', 'summarise-case', { version: 2, owner: 'analytics', purpose: 'case-summarisation', riskClass: 'limited', text: 'Summarise the case notes.' });
+    if (ai.isApproved('prompt', 'summarise-case').approved) v.push('a new prompt version inherited the previous version\'s approval');
+    ai.submitForApproval('prompt', 'summarise-case', { by: 'analytics', rationale: 'shortened' });
+    const artifact = ai._artifacts.get('prompt:summarise-case');
+    artifact.current.textDigest = 'edited-after-submission';
+    let changedAfterSubmission = false;
+    try { ai.approve('prompt', 'summarise-case', { by: 'AI Governance Board', rationale: 'r' }); } catch (e) { changedAfterSubmission = !!e.failClosed; }
+    if (!changedAfterSubmission) v.push('a prompt edited after submission was approved on the reviewer\'s earlier reading');
+    // A rejected artifact cannot be approved without resubmission.
+    ai.register('prompt', 'risky', { owner: 'analytics', purpose: 'case-summarisation', riskClass: 'high' });
+    ai.reject('prompt', 'risky', { by: 'AI Governance Board', rationale: 'invites identification of the reporter' });
+    let rejectedStands = false;
+    try { ai.approve('prompt', 'risky', { by: 'AI Governance Board', rationale: 'changed my mind' }); } catch (e) { rejectedStands = !!e.failClosed; }
+    if (!rejectedStands) v.push('a rejected high-risk prompt was approved without resubmission');
+
+    // --- Dataset lineage & quality --------------------------------------------------------------
+    ai.register('dataset', 'synthetic-cases', { owner: 'analytics', purpose: 'model-training', riskClass: 'limited', fields: ['category', 'status'] });
+    if (ai.datasetLineage('synthetic-cases').traced) v.push('an unrecorded dataset reported traced lineage');
+    for (const bad of [{}, { sources: ['x'] }, { sources: ['x'], lawfulBasis: 'b', syntheticOnly: false }]) {
+      let refused = false;
+      try { ai.recordDatasetLineage('synthetic-cases', { by: 'Data Steward', ...bad }); } catch (e) { refused = !!e.failClosed || /named human/.test(e.message); }
+      if (!refused) v.push(`dataset lineage accepted an incomplete record: ${JSON.stringify(bad)}`);
+    }
+    ai.recordDatasetLineage('synthetic-cases', { by: 'Data Steward', sources: ['synthetic-generator@seed-42'], transformations: ['k-anonymity suppression'], collectedUnder: 'synthetic-only development', lawfulBasis: 'no personal data is processed' });
+    if (!ai.datasetLineage('synthetic-cases').traced) v.push('a fully recorded dataset lineage was not traced');
+    // Quality: unmeasured is not clean, and a partial measurement is not a pass.
+    if (ai.datasetQuality('synthetic-cases').acceptable) v.push('an unmeasured training dataset was acceptable');
+    ai.observeDatasetQuality('synthetic-cases', { completeness: 1, balance: 0.9 });
+    if (ai.datasetQuality('synthetic-cases').acceptable) v.push('a partially measured training dataset was acceptable');
+    if (!ai.datasetQuality('synthetic-cases').missing.length) v.push('unmeasured dataset quality dimensions were not named');
+    ai.observeDatasetQuality('synthetic-cases', Object.fromEntries(DATASET_QUALITY_DIMENSIONS.map((d) => [d, 0.95])));
+    if (!ai.datasetQuality('synthetic-cases').acceptable) v.push('a fully measured, high-quality training dataset was not acceptable');
+    ai.observeDatasetQuality('synthetic-cases', Object.fromEntries(DATASET_QUALITY_DIMENSIONS.map((d) => [d, DATASET_QUALITY_FLOOR - 0.1])));
+    if (ai.datasetQuality('synthetic-cases').acceptable) v.push('a training dataset below the quality floor was acceptable');
+    let outOfRange = false;
+    try { ai.observeDatasetQuality('synthetic-cases', { balance: 2 }); } catch (_) { outOfRange = true; }
+    if (!outOfRange) v.push('an out-of-range dataset quality observation was accepted');
+    ai.observeDatasetQuality('synthetic-cases', Object.fromEntries(DATASET_QUALITY_DIMENSIONS.map((d) => [d, 0.95])));
+
+    // A model may only train on data that is registered, traced, approved and clean.
+    ai.register('model', 'priority-advisor', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'high', trainingData: ['synthetic-cases'] });
+    if (ai.trainingDataAcceptable('priority-advisor').acceptable) v.push('training data was acceptable while the dataset itself was unapproved');
+    ai.approve('dataset', 'synthetic-cases', { by: 'Data Governance Board', rationale: 'synthetic, traced, within quality' });
+    if (!ai.trainingDataAcceptable('priority-advisor').acceptable) v.push('fully governed training data was not acceptable: ' + ai.trainingDataAcceptable('priority-advisor').blockers.join('; '));
+    ai.register('model', 'ghost-trained', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'high', trainingData: ['a-dataset-nobody-registered'] });
+    if (ai.trainingDataAcceptable('ghost-trained').acceptable) v.push('a model trained on an unregistered dataset was acceptable');
+    if (ai.trainingDataAcceptable('ghost-trained').datasets[0].registered) v.push('an unregistered training dataset was reported as registered');
+
+    // --- Confidence thresholds ------------------------------------------------------------------
+    for (const [cls, spec] of Object.entries(RISK_CLASSES)) if (typeof spec.minConfidence !== 'number') v.push(`risk class '${cls}' declares no confidence floor`);
+    if (!(RISK_CLASSES.high.minConfidence > RISK_CLASSES.limited.minConfidence)) v.push('a high-risk class does not demand more confidence than a limited one');
+    ai.approve('model', 'priority-advisor', { by: 'AI Governance Board', rationale: 'explainable, advisory-only' });
+    let noConfidence = false;
+    try { ai.infer({ model: 'priority-advisor', output: 'high', explanation: 'e', requestedBy: 'inv-001' }); } catch (e) { noConfidence = !!e.failClosed; }
+    if (!noConfidence) v.push('a high-risk inference was recorded with no confidence score');
+    let withheld = false, flagged = false;
+    try { ai.infer({ model: 'priority-advisor', output: 'high', explanation: 'e', confidence: 0.5, requestedBy: 'inv-001' }); } catch (e) { withheld = !!e.failClosed; flagged = !!e.withheld; }
+    if (!withheld) v.push('a below-floor inference was recorded rather than withheld');
+    if (!flagged) v.push('a withheld inference was not marked as withheld');
+    const ok = ai.infer({ model: 'priority-advisor', output: 'high', explanation: 'age + escalation', confidence: 0.85, requestedBy: 'inv-001' });
+    if (!ok.id || ok.authorizes !== false) v.push('a confident, explained inference was not recorded advisory-only');
+
+    // --- Hallucination monitoring ---------------------------------------------------------------
+    // An under-sampled rate must NOT read as safe.
+    const thin = ai.hallucinationReport('priority-advisor');
+    if (thin.withinThreshold !== null) v.push('an under-sampled hallucination rate reported a verdict');
+    if (thin.rate !== null) v.push('an under-sampled hallucination rate reported a number');
+    for (let i = 0; i < 40; i++) ai.recordGrounding('priority-advisor', { inferenceId: 'INF-' + i, grounded: true });
+    const clean = ai.hallucinationReport('priority-advisor');
+    if (!clean.withinThreshold) v.push('a fully grounded model was reported as hallucinating');
+    for (let i = 0; i < 10; i++) ai.recordGrounding('priority-advisor', { inferenceId: 'BAD-' + i, grounded: false, reason: 'cited no source' });
+    const hallucinating = ai.hallucinationReport('priority-advisor');
+    if (hallucinating.withinThreshold) v.push(`a ${(hallucinating.rate * 100).toFixed(0)}% ungrounded rate was within the threshold`);
+    if (hallucinating.severity === 'ok') v.push('an above-threshold hallucination rate was reported as ok');
+    if (!hallucinating.examples.length) v.push('an above-threshold hallucination report named no example');
+    if (HALLUCINATION_THRESHOLD > 0.1) v.push('the hallucination threshold is too permissive to be a control');
+    let notBoolean = false;
+    try { ai.recordGrounding('priority-advisor', { grounded: 'probably' }); } catch (_) { notBoolean = true; }
+    if (!notBoolean) v.push('grounding was recorded as something other than a boolean');
+
+    // --- Drift detection -------------------------------------------------------------------------
+    if (ai.driftReport('priority-advisor').band !== 'insufficient-data') v.push('drift was reported from fewer than two periods');
+    ai.observeDistribution('priority-advisor', { period: 0, distribution: { police: 50, courts: 30, prison: 20 } });
+    ai.observeDistribution('priority-advisor', { period: 1, distribution: { police: 50, courts: 30, prison: 20 } });
+    const stable = ai.driftReport('priority-advisor');
+    if (stable.drifted) v.push('an identical distribution was reported as drifted');
+    if (stable.psi !== 0 && stable.psi > 1e-6) v.push('an identical distribution produced a non-zero PSI');
+    ai.observeDistribution('priority-advisor', { period: 2, distribution: { police: 5, courts: 15, prison: 80 } });
+    const drifted = ai.driftReport('priority-advisor');
+    if (!drifted.drifted) v.push('a substantially shifted distribution was not reported as drifted');
+    if (drifted.band !== 'significant') v.push(`a large shift was banded '${drifted.band}' rather than significant`);
+    if (!drifted.action) v.push('significant drift carried no recommended action');
+    // PSI weights proportional change: police collapsing 0.50 → 0.05 contributes more than prison
+    // rising 0.20 → 0.80, so the biggest contributor is the bucket that all but disappeared.
+    if (drifted.largestShift !== 'police') v.push('the largest contributing bucket was misidentified');
+    if (drifted.contributions[0].contribution <= drifted.contributions[1].contribution) v.push('drift contributions are not ordered by magnitude');
+    if (JSON.stringify(ai.driftReport('priority-advisor')) !== JSON.stringify(ai.driftReport('priority-advisor'))) v.push('drift detection is not deterministic');
+    let replayed = false;
+    try { ai.observeDistribution('priority-advisor', { period: 2, distribution: { police: 1 } }); } catch (_) { replayed = true; }
+    if (!replayed) v.push('a distribution period was overwritten — the history must be append-only');
+    let emptyDist = false;
+    try { ai.observeDistribution('priority-advisor', { period: 9, distribution: {} }); } catch (_) { emptyDist = true; }
+    if (!emptyDist) v.push('an empty distribution was accepted');
+
+    // --- Combined posture -------------------------------------------------------------------------
+    const posture = ai.monitoringPosture('priority-advisor');
+    if (posture.healthy) v.push('a drifting, hallucinating model was reported healthy');
+    if (!posture.requiresReApproval) v.push('significant drift did not require re-approval');
+    if (posture.authorizes !== false || posture.advisoryOnly !== true) v.push('the monitoring posture claims authority');
+    if (posture.concerns.length < 2) v.push('the monitoring posture did not name both the drift and the hallucination concern');
+
+    // Validation catches self-approval and untraceable training data at the estate level.
+    const bad = new AiLifecycle({ clock: () => 1000 });
+    bad.register('model', 'self-approved', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'high' });
+    bad._artifacts.get('model:self-approved').current.status = 'approved';
+    bad._artifacts.get('model:self-approved').current.approvedBy = 'analytics';
+    if (!bad.validate().violations.some((x) => /approved by its own owner/.test(x))) v.push('estate validation missed an artifact approved by its own owner');
   }),
 
   fit('APP-FIT-ADR-GOVERNANCE', 'Every ADR satisfies its schema and the catalogue is contiguous and published', (v) => {

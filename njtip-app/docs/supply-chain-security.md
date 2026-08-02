@@ -1,10 +1,11 @@
-# Secure Software Supply Chain (Phase 10, Part 8)
+# Secure Software Supply Chain (Phase 10, Part 8 · Phase 11, Part 8)
 
 SLSA-shaped build integrity: in-toto provenance attestation, signed builds and artifacts, container
 and image provenance, dependency verification, reproducible builds, package integrity and release
 verification (`src/supplychain/slsa.js`).
 
-Gated by `APP-FIT-SUPPLY-CHAIN-ATTESTATION`. Live: `GET /api/supply-chain/attestations`.
+Gated by `APP-FIT-SUPPLY-CHAIN-ATTESTATION` and `APP-FIT-SUPPLY-CHAIN-TRUST`. Live:
+`GET /api/supply-chain/attestations`.
 
 > 🔒 Signing uses the platform's **synthetic** signing identity, clearly labelled. Production
 > signing keys are human-built and HSM-custodied (Sigstore/cosign or an internal CA are the
@@ -64,3 +65,81 @@ decision.
 the source digest is stable by construction, which is the strongest form of this property the
 platform can hold — and the fitness function also proves the check can **fail**, by feeding it a
 counter.
+
+---
+
+# Advanced Supply Chain Security (Phase 11, Part 8)
+
+## Keyless signing (Sigstore-shaped)
+
+Keyless signing inverts the usual problem. Instead of protecting a long-lived private key forever,
+you get a certificate that lives for **ten minutes**, bound to a workflow identity from an OIDC
+issuer, and you publish the signature to an **append-only transparency log**. The key being
+worthless afterwards is the security property, not a limitation.
+
+```
+keylessSign({ digest, identity, issuer })
+  → certificate  (identity, issuer, notBefore, notAfter ≤ 10 min)
+  → signature    over sha256(digest ‖ identity ‖ issuer ‖ validity)
+  → logEntry     appended to the hash-chained transparency log
+```
+
+A TTL beyond the maximum is **refused, not clamped** — asking for a long-lived signing certificate
+is a design problem worth surfacing.
+
+### Verification, and why the order matters
+
+| # | Check | Rejected as |
+|---|---|---|
+| 1 | Bundle payload matches its digest | `bundle was altered` |
+| 2 | Signature verifies | `signature does not verify` |
+| 3 | Identity is the **expected** workflow identity | `signed by 'X', expected 'Y'` |
+| 4 | Issuer is the **expected** OIDC issuer | `issued by 'X', expected 'Y'` |
+| 5 | Present in the transparency log, with a valid inclusion proof | `not present in the transparency log` |
+| 6 | Logged **inside** the certificate validity window | `logged outside the certificate validity window` |
+
+Checks 3 and 4 exist because a signature that verifies but was made by the wrong identity is
+exactly what an attacker with access to a build runner can produce. Check 6 is the keyless model
+itself: the certificate is *expected* to be expired by the time anyone verifies, and the log is what
+proves the signature was made while it was live.
+
+**Cosign-shaped image signing** uses the same bundle bound to an image digest.
+
+## License policy
+
+`allowed` MIT · Apache-2.0 · BSD · ISC · CC0 · Unlicense
+`review-required` MPL-2.0 · LGPL · EPL-2.0 — weak copyleft, legal review before embedding
+`forbidden` AGPL-3.0 · SSPL · BUSL · Commons-Clause · proprietary · **UNKNOWN**
+
+An unknown license is forbidden, not tolerated. Nobody can accept terms they have not read.
+
+## Dependency risk and package integrity
+
+Risk per package, 0–100, from facts rather than judgement: unpinned (+30), unapproved supplier
+(+20), forbidden license (+25) or review-required (+10), known vulnerabilities (+10 each, cap 30),
+unmaintained > 2 years (+15) or ageing > 1 year (+7), no publication date (+10), transitive depth
+> 3 (+5). Bands: `critical ≥ 60 · high ≥ 35 · moderate ≥ 15 · low`.
+
+`packageIntegrity()` compares lockfile digests against what was actually fetched. A mismatch, a
+missing digest, or a package fetched but absent from the lockfile is **critical** — there is no
+benign explanation for a substituted package.
+
+## Artifact trust score — and the deployment gate
+
+| Component | Weight |
+|---|---|
+| Build provenance | 25 |
+| Keyless signature (bound to **this** digest) | 20 |
+| Transparency-log presence | 10 |
+| Dependency risk acceptable | 15 |
+| License compliance | 10 |
+| SBOM · container signature · reproducible build · package integrity | 5 each |
+
+**Threshold 80.** Below it the artifact is not deployable, and `verifyRelease()` fails closed. The
+signature component checks the bundle signs *this* artifact digest — without that, a genuine bundle
+could be pasted onto any digest and the score would not notice.
+
+> **Phase 11 raised the bar for "fully attested."** A release that verified under Phase 10 now also
+> needs a keyless signature in the transparency log, a demonstrated reproducible build and a
+> lockfile that matches. The Phase 10 assertions were updated to supply that evidence rather than
+> the gate being relaxed to accept less.
