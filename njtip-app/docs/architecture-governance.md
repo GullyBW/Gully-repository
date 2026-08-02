@@ -18,14 +18,31 @@ without a demonstrated, implementation-driven need.
 | [0003](./adr/0003-context-consolidation-and-data-exchange-terminology.md) | Boundary consolidation and "National Data Exchange" terminology | Accepted | Federation merge, exchange governance model, responsibility scoping |
 | [0004](./adr/0004-operational-excellence-and-continuous-assurance.md) | Operational excellence, continuous assurance, and the expanded ADR schema | Accepted | Phase 10 capabilities; ADR schema expansion applied from 0004 onward |
 | [0005](./adr/0005-authorization-decision-caching.md) | Replace "nothing is cached" with signed, revocable, policy-versioned authorization decisions | Accepted | Zero Trust authorization path; scalability without weakening the guarantee |
+| [0006](./adr/0006-adaptive-assurance-and-predictive-operations.md) | Adaptive assurance, predictive operations, and the extended ADR schema | Accepted | Phase 11 capabilities; ADR schema extension applied from 0006 onward |
 | [template](./adr/000-template.md) | ADR template | — | Required format for every new decision |
 
-**Schema:** ADRs numbered **0004 and later** must record business justification, risk assessment,
-performance / security / operational / compliance impact, rollback strategy, migration strategy,
-estimated implementation cost, success metrics, decision owner and approval history — validated
-automatically by `APP-FIT-ADR-GOVERNANCE` (`src/architecture/adr-governance.js`). ADRs 0001–0003
-predate the expansion and are held to the legacy schema; rewriting them to a later standard would
-destroy the record of what was known at the time.
+**Schema, in three tiers.** Each ADR is validated against the standard that was in force when it was
+written — automatically, by `APP-FIT-ADR-GOVERNANCE` (`src/architecture/adr-governance.js`).
+
+| Tier | Applies from | Adds |
+|---|---|---|
+| **legacy** | 0001 | Context · Decision · Consequences · Alternatives considered |
+| **full** | **0004** | Business justification · risk assessment · performance / security / operational / compliance impact · rollback · migration · implementation cost · success metrics · decision owner · approval history |
+| **extended** | **0006** | Rejected alternatives · architectural trade-offs · long-term maintenance impact · implementation complexity · operational cost · lifecycle implications · **measurable** success criteria · architectural debt assessment |
+
+Earlier ADRs are **not** rewritten to a later standard: an ADR records what was known and required
+at the time, and retrofitting destroys precisely what the record exists to preserve. The cutovers
+are data (`FULL_SCHEMA_FROM`, `EXTENDED_SCHEMA_FROM`), so the validator applies the right schema per
+ADR rather than a blanket one.
+
+**Measurability is checked, not requested.** A *Measurable success criteria* or *Success metrics*
+section containing no number fails validation — "improve reliability" satisfies a heading check and
+commits to nothing.
+
+**Lifecycle and debt are queryable.** `lifecycle()` reports which decisions are live and what
+replaced the rest; a `Superseded by ADR-XXXX` that points at a non-existent ADR, or a status that
+disagrees with it, fails the build. `architecturalDebt()` aggregates what the catalogue has
+knowingly left unpaid, recorded at the point it was taken on rather than discovered later.
 
 ## When an ADR is required
 Any change to a **frozen baseline component** (`ARCHITECTURE-BASELINE-v1.7.md`), the **bounded-context

@@ -1,4 +1,4 @@
-# Multi-Region Operational Resilience (Phase 10, Part 10)
+# Multi-Region Operational Resilience (Phase 10, Part 10 · Phase 11, Part 10)
 
 Active-active and active-passive topologies, regional failover, disaster recovery,
 jurisdiction-aware routing, backup and recovery verification, split-brain prevention, cross-region
@@ -69,3 +69,54 @@ a fallback. Refused regions are named in the response so the operator sees *why*
 A restore counts only when **content digest**, **record count** and **residency** all hold. A
 byte-perfect restore into a region that may not hold the data is reported as a breach, not a
 recovery.
+
+---
+
+# Consistency Governance (Phase 11, Part 10)
+
+"Eventually consistent" is a promise nobody can check unless someone writes down **which data** it
+applies to and **what a reader is allowed to see meanwhile**. The registry in
+`src/twin2/multi-region.js` makes that explicit per bounded context, so a stale read is either
+declared acceptable in advance or refused — never discovered by a citizen.
+
+Gated by `APP-FIT-CONSISTENCY-GOVERNANCE`. Live: `GET /api/resilience/consistency`.
+
+## Models
+
+| Model | Max staleness | Replica reads | Quorum read | Cost |
+|---|---|---|---|---|
+| **strong** | 0 | no | required | Higher read latency; no read availability below quorum |
+| **causal** | 5 s | yes | no | Session tracking required; another session may see older state |
+| **eventual** | 60 s | yes | no | Cheapest and most available; only safe where a stale answer cannot mislead |
+
+## Stance per context
+
+| Consistency | Contexts | Why |
+|---|---|---|
+| **strong** | intake · custody · governance-oversight · identity-access · policy-governance · privacy · persistence · crypto-agility | A filed report, a custody chain, a recorded decision, a revocation, a policy version, a withdrawn consent — none of these may be observed late |
+| **causal** | investigation · orchestration · platform-events · data-exchange | An investigator must never see their own work disappear; workflow state moves forward monotonically within a session |
+| **eventual** | analytics · observability · data-fabric · assurance | Derived views, labelled as such. A minute-old count misleads nobody |
+
+Two rules are checked mechanically because they are the ways this table quietly goes wrong:
+
+- A context claiming **strong** consistency may not also accept stale reads.
+- **last-writer-wins** may only govern data where a stale read is already acceptable — it silently
+  loses an update, and an unstated conflict strategy *is* last-writer-wins by accident.
+
+## Replication and conflict resolution
+
+`synchronous` (RPO 0) · `semi-synchronous` (RPO 1 min) · `asynchronous` (RPO 5 min), each declaring
+which consistency models it can support — an incompatible pairing fails validation.
+
+Conflict resolution is always stated: `quorum-serialized` (conflicts cannot arise),
+`append-only-chain` (a divergent branch is rejected, never merged — a merged custody chain is not
+evidence), `last-writer-wins`, or `human-adjudicated`.
+
+## The read gate
+
+`readAllowed({ context, replicaLagMs, hasQuorum, sameSession })` refuses rather than degrades, and
+**an undeclared context fails closed**. A new stateful bounded context with no declared stance fails
+the build rather than inheriting something permissive.
+
+`consistencyPosture()` renders the whole matrix — context × region × lag — so an operator reading it
+during a partition knows exactly which reads to shed rather than guessing.

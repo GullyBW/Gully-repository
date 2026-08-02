@@ -37,6 +37,29 @@ const LEGACY_SCHEMA = [
   { field: 'alternatives', heading: 'Alternatives considered' },
 ];
 
+// --- Extended schema (Phase 11, Part 11) --------------------------------------------------------
+//
+// Applied from ADR-0006 onward, on the same principle as the 0004 expansion: an ADR records what
+// was known and required at the time it was written. Retrofitting a later standard onto an earlier
+// decision would destroy exactly the thing the record exists to preserve.
+const EXTENDED_SCHEMA_FROM = 6;
+const EXTENDED_SCHEMA = [
+  { field: 'rejectedAlternatives', heading: 'Rejected alternatives', why: 'What we chose not to do, and why — the part future readers most often need and least often find.' },
+  { field: 'architecturalTradeoffs', heading: 'Architectural trade-offs', why: 'Every decision buys something with something. Naming the price is the decision.' },
+  { field: 'maintenanceImpact', heading: 'Long-term maintenance impact', why: 'Who maintains this in five years, and what does it cost them.' },
+  { field: 'implementationComplexity', heading: 'Implementation complexity', why: 'Complexity is a durable cost paid by everyone who reads the code afterwards.' },
+  { field: 'operationalCost', heading: 'Operational cost', why: 'Running cost outlives build cost, and is usually the larger number.' },
+  { field: 'lifecycleImplications', heading: 'Lifecycle implications', why: 'When this decision expires, what supersedes it, and what has to be revisited.' },
+  { field: 'measurableSuccessCriteria', heading: 'Measurable success criteria', why: 'A criterion with no number in it cannot be checked, so it is an intention rather than a criterion.' },
+  { field: 'architecturalDebt', heading: 'Architectural debt assessment', why: 'What this decision knowingly leaves unpaid, and when it comes due.' },
+];
+
+// Sections whose content must actually be measurable — a threshold, a count, a percentage or a
+// date. This is the one place the validator reads content rather than structure, because
+// "improve reliability" satisfies a heading check and commits to nothing.
+const MEASURABLE_SECTIONS = ['Measurable success criteria', 'Success metrics'];
+const MEASURABLE_PATTERN = /\d/;
+
 const STATUSES = ['Proposed', 'Accepted', 'Superseded', 'Rejected'];
 
 function adrFiles() {
@@ -64,7 +87,12 @@ function parse(file) {
 }
 
 // Which schema applies to an ADR number.
-function schemaFor(number) { return number >= FULL_SCHEMA_FROM ? [...LEGACY_SCHEMA, ...FULL_SCHEMA] : LEGACY_SCHEMA; }
+function schemaFor(number) {
+  if (number >= EXTENDED_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA];
+  if (number >= FULL_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA];
+  return LEGACY_SCHEMA;
+}
+function schemaNameFor(number) { return number >= EXTENDED_SCHEMA_FROM ? 'extended' : number >= FULL_SCHEMA_FROM ? 'full' : 'legacy'; }
 
 // Validate one ADR against the schema that applies to it.
 function validateAdr(file, { minSectionChars = 40 } = {}) {
@@ -78,13 +106,24 @@ function validateAdr(file, { minSectionChars = 40 } = {}) {
     const body = adr.sections[s.heading.toLowerCase()];
     if (body === undefined) violations.push(`missing required section '${s.heading}'${s.why ? ` — ${s.why}` : ''}`);
     else if (body.length < minSectionChars) violations.push(`section '${s.heading}' is present but empty (< ${minSectionChars} chars)`);
+    // Phase 11: a success criterion with no number in it commits to nothing.
+    else if (MEASURABLE_SECTIONS.includes(s.heading) && !MEASURABLE_PATTERN.test(body)) {
+      violations.push(`section '${s.heading}' contains no measurable value — a criterion with no number cannot be checked`);
+    }
   }
   return {
     file, number: adr.number, title: adr.title, status: adr.status,
-    schema: adr.number >= FULL_SCHEMA_FROM ? 'full' : 'legacy',
+    schema: schemaNameFor(adr.number),
     sections: Object.keys(adr.sections),
+    supersededBy: supersessionTarget(adr),
     valid: violations.length === 0, violations,
   };
+}
+
+// "Superseded by ADR-0007" — parsed so the chain can be checked rather than trusted.
+function supersessionTarget(adr) {
+  const m = adr.raw.match(/\*\*Status:\*\*\s*Superseded\s+by\s+ADR-(\d{4})/i);
+  return m ? Number(m[1]) : null;
 }
 
 // Validate the whole catalogue, and check catalogue-level invariants.
@@ -105,11 +144,51 @@ function validateCatalogue(options = {}) {
     const text = fs.readFileSync(governanceDoc, 'utf8');
     for (const r of results) if (!text.includes(r.file)) violations.push(`${r.file} is not listed in the ADR catalogue in architecture-governance.md`);
   } else violations.push('architecture-governance.md is missing — there is no published governance process');
+  // Phase 11: supersession must point somewhere real, and nothing may supersede itself.
+  const byNumber = new Map(results.map((r) => [r.number, r]));
+  for (const r of results) {
+    if (r.supersededBy === null) continue;
+    if (!byNumber.has(r.supersededBy)) violations.push(`${r.file}: superseded by ADR-${String(r.supersededBy).padStart(4, '0')}, which does not exist`);
+    if (r.supersededBy === r.number) violations.push(`${r.file}: supersedes itself`);
+    if (r.status !== 'Superseded') violations.push(`${r.file}: names a superseding ADR but its status is '${r.status}'`);
+  }
   return {
     adrs: results, count: results.length,
-    fullSchemaFrom: FULL_SCHEMA_FROM,
+    fullSchemaFrom: FULL_SCHEMA_FROM, extendedSchemaFrom: EXTENDED_SCHEMA_FROM,
+    bySchema: results.reduce((acc, r) => ((acc[r.schema] = (acc[r.schema] || 0) + 1), acc), {}),
+    lifecycle: lifecycle(results),
     valid: violations.length === 0, violations,
-    note: 'ADRs from 0004 satisfy the expanded schema; earlier ones predate it and are held to the legacy schema rather than being rewritten.',
+    note: 'ADRs from 0004 satisfy the expanded schema and from 0006 the extended one; earlier ones predate each expansion and are held to the standard in force when they were written rather than being rewritten.',
+  };
+}
+
+// Decision lifecycle: which decisions are live, which have been replaced, and by what.
+function lifecycle(results = null) {
+  const rows = results || adrFiles().map((f) => validateAdr(f));
+  const byStatus = rows.reduce((acc, r) => ((acc[r.status || 'unknown'] = (acc[r.status || 'unknown'] || 0) + 1), acc), {});
+  return {
+    total: rows.length, byStatus,
+    active: rows.filter((r) => r.status === 'Accepted').map((r) => r.number),
+    superseded: rows.filter((r) => r.status === 'Superseded').map((r) => ({ number: r.number, by: r.supersededBy })),
+    chains: rows.filter((r) => r.supersededBy !== null).map((r) => `ADR-${String(r.number).padStart(4, '0')} → ADR-${String(r.supersededBy).padStart(4, '0')}`),
+    note: 'A decision is live until something explicitly replaces it. An ADR nobody superseded is still in force, whether or not anyone remembers it.',
+  };
+}
+
+// The architectural debt the catalogue has knowingly taken on, read from the ADRs that record it.
+function architecturalDebt() {
+  const entries = [];
+  for (const file of adrFiles()) {
+    const adr = parse(file);
+    const body = adr.sections['architectural debt assessment'];
+    if (!body) continue;
+    entries.push({ adr: adr.number, file, title: adr.title, status: adr.status, assessment: body });
+  }
+  return {
+    entries, count: entries.length,
+    recordedFrom: EXTENDED_SCHEMA_FROM,
+    unassessed: adrFiles().map((f) => Number(f.slice(0, 4))).filter((n) => n >= EXTENDED_SCHEMA_FROM && !entries.some((e) => e.adr === n)),
+    note: 'Debt the architecture has agreed to carry, recorded at the point it was taken on rather than discovered later.',
   };
 }
 
@@ -123,9 +202,24 @@ function template({ number = 'NNNN', title = '<title>' } = {}) {
     '- **Deciders:** <roles> · **Review required:** ARB (+ OB super-majority if constitutional-invariant)', '',
     ...LEGACY_SCHEMA.map((s) => section(s.heading, `what applies here`)),
     ...FULL_SCHEMA.map((s) => section(s.heading, s.why)),
+    ...EXTENDED_SCHEMA.map((s) => section(s.heading, s.why)),
   ].join('\n');
 }
 
-function schema() { return { legacy: LEGACY_SCHEMA.map((s) => ({ ...s })), full: FULL_SCHEMA.map((s) => ({ ...s })), fullSchemaFrom: FULL_SCHEMA_FROM, statuses: [...STATUSES] }; }
+function schema() {
+  return {
+    legacy: LEGACY_SCHEMA.map((s) => ({ ...s })),
+    full: FULL_SCHEMA.map((s) => ({ ...s })),
+    extended: EXTENDED_SCHEMA.map((s) => ({ ...s })),
+    fullSchemaFrom: FULL_SCHEMA_FROM, extendedSchemaFrom: EXTENDED_SCHEMA_FROM,
+    measurableSections: [...MEASURABLE_SECTIONS],
+    statuses: [...STATUSES],
+  };
+}
 
-module.exports = { ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, FULL_SCHEMA_FROM, STATUSES, adrFiles, parse, schemaFor, validateAdr, validateCatalogue, template, schema };
+module.exports = {
+  ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, FULL_SCHEMA_FROM, EXTENDED_SCHEMA_FROM,
+  MEASURABLE_SECTIONS, STATUSES,
+  adrFiles, parse, schemaFor, schemaNameFor, validateAdr, validateCatalogue,
+  lifecycle, architecturalDebt, template, schema,
+};

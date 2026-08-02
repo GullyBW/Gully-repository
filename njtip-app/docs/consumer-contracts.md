@@ -1,4 +1,4 @@
-# Consumer-Driven Contract Testing (Phase 10, Part 12)
+# Consumer-Driven Contract Testing (Phase 10, Part 12 · Phase 11, Part 12)
 
 The [contract registry](./integration-contracts.md) says what the platform **offers**. This says what
 each consumer actually **depends on**, and verifies the provider still satisfies every consumer
@@ -52,3 +52,63 @@ A consumer must name an owning context, a criticality, at least one expectation,
 error (a consumer that ignores failure is a consumer that fails silently), only canonical error codes,
 and an expected authentication mode. The composition root refuses to start if any registered consumer
 expectation is unmet.
+
+---
+
+# Consumer Impact Analysis (Phase 11, Part 12)
+
+Gated by `APP-FIT-CONSUMER-IMPACT`. Live: `GET /api/contracts/consumer-impact`.
+
+## Impact scoring — weighted by whom, not how many
+
+```
+score = Σ criticality weight of each newly-broken consumer
+      + 15 if the change is technically breaking
+      + 10 if three or more consumers depend on the contract
+      (capped at 100)
+
+constitutional 60 · critical 30 · important 10
+severe ≥ 60 · high ≥ 30 · moderate > 0 · none = 0
+```
+
+Breaking the citizen client **once** outweighs inconveniencing several internal pipelines, and the
+score has to say so — a count would rank them the other way round.
+
+## Dependency visualization
+
+`dependencyVisualization()` returns nodes and edges for a renderer **and** a deterministic text
+rendering, so the graph is readable from a terminal and diffable in review:
+
+```
+api.reports.submit (v1, stable)
+  └─ citizen-web [constitutional]
+api.case.transition (v1, stable)
+  └─ investigator-console [critical]
+```
+
+## Compatibility forecasting
+
+`compatibilityForecast({ contract, steps })` applies planned changes **cumulatively** — because that
+is how they will actually land — and reports the first step that breaks someone:
+
+> *steps 0–0 are safe; step 1 ('drop category') requires a major version and a migration*
+
+A roadmap that breaks a consumer at step four is a roadmap you want to know about at step zero.
+
+## Adoption tracking
+
+Adoption is **observed, never assumed**. `recordAdoption()` states which contract version a consumer
+is actually running; `adoption(contract)` reports coverage, who is current, who is behind and by how
+much, and — the important one — **who has not reported at all**. A provider that assumes its
+consumers have upgraded is a provider about to break one.
+
+## Deprecation analytics and migration readiness
+
+`deprecationAnalytics({ now })` reports days to sunset, remaining consumers, weighted migration
+burden, and flags `atRisk` (< 90 days) and `overdue` (past sunset with consumers still on it):
+
+> *OVERDUE: consumers remain past the sunset — retiring now would break them*
+
+`migrationReadiness({ contract, spec })` is **fail-closed**: an affected consumer whose adoption has
+not been reported is **not ready**, and a blocked constitutional consumer is flagged separately. As
+everywhere: `authorizes: false`.

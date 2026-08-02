@@ -2584,6 +2584,236 @@ module.exports = [
     if (!cc.versionLifecycle().every((x) => typeof x.version === 'number')) v.push('the version lifecycle is incomplete');
   }),
 
+  fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
+    const mr = require('../src/twin2/multi-region');
+    const ctxMap = require('../src/architecture/context-map');
+
+    // The registry is valid against the architecture-of-record.
+    const contextIds = ctxMap.ids();
+    for (const violation of mr.validateConsistency({ contextIds }).violations) v.push(violation);
+    if (!mr.validate().valid) v.push('multi-region validation fails once consistency governance is included: ' + mr.validate().violations.join('; '));
+
+    // Every model and replication policy is fully specified.
+    for (const m of mr.consistencyModels()) {
+      for (const f of ['description', 'maxStalenessMs', 'readsFromReplica', 'requiresQuorumRead', 'cost']) {
+        if (m[f] === undefined || m[f] === null) v.push(`consistency model '${m.id}': missing ${f}`);
+      }
+    }
+    if (mr.CONSISTENCY_MODELS.strong.maxStalenessMs !== 0) v.push('strong consistency tolerates staleness');
+    if (mr.CONSISTENCY_MODELS.strong.readsFromReplica) v.push('strong consistency permits a replica read');
+    if (!(mr.CONSISTENCY_MODELS.causal.maxStalenessMs < mr.CONSISTENCY_MODELS.eventual.maxStalenessMs)) v.push('causal consistency is not stricter than eventual');
+    for (const p of mr.replicationPolicies()) if (!p.appliesTo.length || !p.description) v.push(`replication policy '${p.id}' is incompletely specified`);
+
+    // Every declared context states a model, a replication policy, a conflict resolution and WHY.
+    for (const c of mr.contextConsistency()) {
+      if (!c.declared) v.push(`${c.context}: not declared`);
+      if (!c.rationale) v.push(`${c.context}: no rationale`);
+      if (!c.conflictDescription) v.push(`${c.context}: conflict resolution has no description`);
+    }
+    // The constitutional contexts are strongly consistent — this is not negotiable.
+    for (const required of ['intake', 'custody', 'governance-oversight', 'identity-access', 'policy-governance']) {
+      const c = mr.contextConsistency(required);
+      if (!c.declared) v.push(`${required}: a constitutional context has no consistency stance`);
+      else if (c.model !== 'strong') v.push(`${required}: declares '${c.model}' rather than strong consistency`);
+      else if (c.staleReadsAcceptable) v.push(`${required}: a constitutional context accepts stale reads`);
+    }
+    // Every declared context is a real bounded context.
+    for (const c of mr.contextConsistency()) if (!contextIds.includes(c.context)) v.push(`${c.context}: declares a consistency stance but is not a bounded context`);
+
+    // THE GATE: reads are refused, not served, when the model does not permit them.
+    if (mr.readAllowed({ context: 'intake', replicaLagMs: 500, hasQuorum: true }).allowed) v.push('a strongly consistent context served a replica read');
+    if (mr.readAllowed({ context: 'intake', replicaLagMs: 0, hasQuorum: false }).allowed) v.push('a strongly consistent context served a read without quorum');
+    if (!mr.readAllowed({ context: 'intake', replicaLagMs: 0, hasQuorum: true }).allowed) v.push('a strongly consistent context refused a fresh quorum read');
+    if (!mr.readAllowed({ context: 'analytics', replicaLagMs: 30_000 }).allowed) v.push('an eventually consistent context refused a read inside its staleness bound');
+    if (mr.readAllowed({ context: 'analytics', replicaLagMs: 90_000 }).allowed) v.push('a read beyond the declared staleness bound was served');
+    if (mr.readAllowed({ context: 'investigation', replicaLagMs: 30_000 }).allowed) v.push('a causally consistent context served a read far beyond its bound');
+    // FAIL-CLOSED: an undeclared context is refused, never defaulted to something permissive.
+    const undeclared = mr.readAllowed({ context: 'not-a-context' });
+    if (undeclared.allowed) v.push('a read was permitted for a context with no declared consistency stance');
+    if (undeclared.failClosed !== true) v.push('an undeclared context did not fail closed');
+
+    // The operational posture names exactly which reads are refused during a partition.
+    const posture = mr.consistencyPosture({ committedSequence: 100, replicas: { 'bw-central': 100, 'bw-south': 100, 'bw-north': 97 }, healthy: ['bw-central', 'bw-south', 'bw-north'] });
+    if (!posture.writesAvailable) v.push('writes were unavailable with all three regions healthy');
+    if (!posture.refusedReads.length) v.push('a lagging replica refused no reads at all — the posture is inert');
+    if (!posture.refusedReads.some((r) => r.startsWith('custody@bw-north'))) v.push('a lagging replica was allowed to serve custody reads');
+    if (posture.matrix.some((r) => r.region === 'bw-central' && r.lag === 0 && !r.readAllowed)) v.push('an up-to-date region was refused a read it should serve');
+    if (posture.failClosed !== true || posture.authorizes !== false) v.push('the consistency posture is not fail-closed / claims authority');
+    if (JSON.stringify(mr.consistencyPosture({ committedSequence: 100, replicas: { 'bw-central': 100 }, healthy: ['bw-central'] })) !== JSON.stringify(mr.consistencyPosture({ committedSequence: 100, replicas: { 'bw-central': 100 }, healthy: ['bw-central'] }))) v.push('the consistency posture is not deterministic');
+  }),
+
+  fit('APP-FIT-ADR-EXTENDED', 'The extended ADR schema is enforced from 0006, measurability is checked, and lifecycle and debt are queryable', (v) => {
+    const adr = require('../src/architecture/adr-governance');
+    const res = adr.validateCatalogue();
+
+    // The eight Part 11 fields are all present in the extended schema.
+    const required = ['rejectedAlternatives', 'architecturalTradeoffs', 'maintenanceImpact', 'implementationComplexity', 'operationalCost', 'lifecycleImplications', 'measurableSuccessCriteria', 'architecturalDebt'];
+    const fields = adr.schema().extended.map((s) => s.field);
+    for (const f of required) if (!fields.includes(f)) v.push(`the extended ADR schema is missing '${f}'`);
+    for (const s of adr.schema().extended) if (!s.why) v.push(`extended schema field '${s.field}' has no stated reason`);
+
+    // The right schema applies to each ADR — and earlier ones are NOT retrofitted.
+    if (adr.schemaNameFor(1) !== 'legacy' || adr.schemaNameFor(4) !== 'full' || adr.schemaNameFor(6) !== 'extended') v.push('schema selection by ADR number is wrong');
+    if (adr.schemaFor(6).length !== adr.LEGACY_SCHEMA.length + adr.FULL_SCHEMA.length + adr.EXTENDED_SCHEMA.length) v.push('the extended schema does not include the earlier tiers');
+    if (adr.schemaFor(3).length !== adr.LEGACY_SCHEMA.length) v.push('a legacy ADR was held to a later schema');
+    if (!res.adrs.some((a) => a.schema === 'extended' && a.valid)) v.push('no ADR satisfies the extended schema');
+    if (res.bySchema.legacy !== 3) v.push('the legacy ADRs were rewritten to a later standard');
+
+    // MEASURABILITY IS CHECKED, NOT REQUESTED. The rule must be able to fail, so it is fed a
+    // criterion that reads well and commits to nothing.
+    if (!adr.schema().measurableSections.includes('Measurable success criteria')) v.push('the measurable-content check does not cover the success criteria section');
+    const fsX = require('node:fs'); const pathX = require('node:path');
+    const filler = 'This section carries enough prose to clear the minimum-content threshold comfortably.';
+    const craft = (criterion) => {
+      let doc = '# ADR-0099: crafted probe\n\n- **Status:** Accepted\n\n';
+      for (const s of adr.schemaFor(99)) {
+        const isProbe = s.heading === 'Measurable success criteria';
+        const other = adr.schema().measurableSections.includes(s.heading) ? `${filler} 108 invariants hold.` : filler;
+        doc += `## ${s.heading}\n${isProbe ? criterion : other}\n\n`;
+      }
+      return doc;
+    };
+    const probeFile = '0099-measurability-probe.md';
+    const probePath = pathX.join(adr.ADR_DIR, probeFile);
+    try {
+      fsX.writeFileSync(probePath, craft('We will improve reliability and make everything better for everyone involved.'));
+      const vague = adr.validateAdr(probeFile);
+      if (vague.valid) v.push('an ADR whose success criteria contain no measurable value was accepted');
+      if (!vague.violations.some((x) => /no measurable value/.test(x))) v.push('the measurability failure was not named');
+      fsX.writeFileSync(probePath, craft('p95 latency stays under 500 ms across a 30-day window; 108 invariants hold.'));
+      const measurable = adr.validateAdr(probeFile);
+      if (!measurable.valid) v.push('a genuinely measurable criterion was rejected: ' + measurable.violations.join('; '));
+      if (measurable.schema !== 'extended') v.push('ADR-0099 was not held to the extended schema');
+    } finally { fsX.rmSync(probePath, { force: true }); }
+    // The real catalogue satisfies the rule, or it is decorative here.
+    for (const a of res.adrs.filter((x) => x.schema === 'extended')) {
+      const crit = adr.parse(a.file).sections['measurable success criteria'];
+      if (!crit) v.push(`${a.file}: no measurable success criteria section`);
+      else if (!/\d/.test(crit)) v.push(`${a.file}: success criteria contain no measurable value`);
+    }
+
+    // Lifecycle: live decisions, supersession chains, and a chain that points nowhere must fail.
+    const lc = adr.lifecycle();
+    if (lc.total !== res.count) v.push('the lifecycle view disagrees with the catalogue');
+    if (!lc.active.length) v.push('no ADR is recorded as live');
+    if (lc.superseded.some((s) => s.by === null)) v.push('an ADR is superseded by nothing in particular');
+    for (const s of lc.superseded) if (!lc.total || s.by > lc.total) v.push(`ADR-${s.number} is superseded by an ADR that does not exist`);
+
+    // Architectural debt is recorded where the extended schema applies, and nowhere is unassessed.
+    const debt = adr.architecturalDebt();
+    if (!debt.entries.length) v.push('no architectural debt is recorded by any extended ADR');
+    if (debt.unassessed.length) v.push('extended ADRs with no debt assessment: ' + debt.unassessed.join(', '));
+    for (const e of debt.entries) if (!e.assessment || e.assessment.length < 40) v.push(`ADR-${e.adr}: the debt assessment is empty`);
+
+    // The generated template covers every tier, so an author cannot miss a section.
+    const tpl = adr.template({ number: '0099' });
+    for (const s of [...adr.LEGACY_SCHEMA, ...adr.FULL_SCHEMA, ...adr.EXTENDED_SCHEMA]) if (!tpl.includes(`## ${s.heading}`)) v.push(`the generated template omits '${s.heading}'`);
+  }),
+
+  fit('APP-FIT-CONSUMER-IMPACT', 'Impact is scored by whom it breaks, adoption is observed rather than assumed, and migration readiness fails closed', (v) => {
+    const { ConsumerContracts, CRITICALITY_WEIGHT } = require('../src/contracts/consumer-contracts');
+    const { ContractRegistry } = require('../src/contracts/integration-contracts');
+    const cc = new ConsumerContracts();
+    const registry = new ContractRegistry();
+    const current = registry.current('api.reports.submit');
+
+    // --- Impact scoring -------------------------------------------------------------------------
+    if (!(CRITICALITY_WEIGHT.constitutional > CRITICALITY_WEIGHT.critical && CRITICALITY_WEIGHT.critical > CRITICALITY_WEIGHT.important)) {
+      v.push('impact weighting does not rank constitutional above critical above important');
+    }
+    const additive = cc.impactScore('api.reports.submit', { fields: { required: current.fields.required, optional: [...current.fields.optional, 'locale'] } });
+    if (!additive.safe || additive.score !== 0 || additive.band !== 'none') v.push('an additive change scored a non-zero impact');
+    const constitutionalBreak = cc.impactScore('api.reports.submit', { fields: { required: [], optional: [] } });
+    if (constitutionalBreak.safe) v.push('removing a field the citizen client sends was scored as safe');
+    if (constitutionalBreak.band !== 'severe') v.push(`breaking the constitutional consumer scored '${constitutionalBreak.band}', not severe`);
+    if (!constitutionalBreak.constitutionalImpact) v.push('constitutional impact was not flagged');
+    if (!constitutionalBreak.reasons.some((r) => /citizen-web/.test(r))) v.push('the impact score named no affected consumer');
+    if (!/major version/.test(constitutionalBreak.requiredAction)) v.push('a severe impact did not require a major version');
+    // Breaking a merely important consumer must score LOWER than breaking a constitutional one.
+    const importantBreak = cc.impactScore('event.case.submitted', { fields: { required: [], optional: [] } });
+    if (importantBreak.score >= constitutionalBreak.score) v.push('breaking an important consumer scored at least as high as breaking the constitutional one');
+
+    // --- Dependency visualization ------------------------------------------------------------------
+    const viz = cc.dependencyVisualization();
+    if (!viz.nodes.length || !viz.edges.length) v.push('the dependency visualization is empty');
+    if (!viz.nodes.some((n) => n.kind === 'consumer') || !viz.nodes.some((n) => n.kind === 'contract')) v.push('the visualization is missing a node kind');
+    for (const e of viz.edges) {
+      if (!viz.nodes.some((n) => n.id === e.from)) v.push(`edge from unknown node '${e.from}'`);
+      if (!viz.nodes.some((n) => n.id === e.to)) v.push(`edge to unknown node '${e.to}'`);
+    }
+    if (!viz.text.includes('citizen-web')) v.push('the text rendering omits the constitutional consumer');
+    if (JSON.stringify(cc.dependencyVisualization()) !== JSON.stringify(cc.dependencyVisualization())) v.push('the dependency visualization is not deterministic');
+
+    // --- Compatibility forecasting -----------------------------------------------------------------
+    const safeForecast = cc.compatibilityForecast({
+      contract: 'api.reports.submit',
+      steps: [
+        { name: 'add locale', spec: { fields: { required: current.fields.required, optional: [...current.fields.optional, 'locale'] } } },
+        { name: 'add channel', spec: { fields: { required: current.fields.required, optional: [...current.fields.optional, 'locale', 'channel'] } } },
+      ],
+    });
+    if (!safeForecast.cumulativeSafe || safeForecast.firstBreakingStep !== null) v.push('a wholly additive roadmap was forecast to break');
+    const breakingForecast = cc.compatibilityForecast({
+      contract: 'api.reports.submit',
+      steps: [
+        { name: 'add locale', spec: { fields: { required: current.fields.required, optional: [...current.fields.optional, 'locale'] } } },
+        { name: 'drop category', spec: { fields: { required: [], optional: ['locale'] } } },
+      ],
+    });
+    if (breakingForecast.cumulativeSafe) v.push('a roadmap whose second step removes a required field was forecast as safe');
+    if (breakingForecast.firstBreakingStep !== 1) v.push(`the first breaking step was reported as ${breakingForecast.firstBreakingStep}, not 1`);
+    if (breakingForecast.safeThrough !== 1) v.push('the safe prefix of the roadmap was miscomputed');
+    if (!/major version/.test(breakingForecast.recommendation)) v.push('a breaking forecast recommended no major version');
+    // Changes are applied CUMULATIVELY — a forecast that resets between steps is not a forecast.
+    if (breakingForecast.steps[1].affected.length === 0) v.push('the breaking step named no affected consumer');
+
+    // --- Adoption tracking --------------------------------------------------------------------------
+    const before = cc.adoption('api.reports.submit');
+    if (before.coverage !== 0 || before.fullyAdopted) v.push('adoption was assumed before anything was reported');
+    if (!before.unreported.includes('citizen-web')) v.push('an unreported consumer was not named');
+    cc.recordAdoption('citizen-web', 'api.reports.submit', { version: current.version });
+    const after = cc.adoption('api.reports.submit');
+    if (after.coverage !== 1 || !after.fullyAdopted) v.push('a reported, current consumer was not counted as adopted');
+    let badVersion = false;
+    try { cc.recordAdoption('citizen-web', 'api.reports.submit', { version: 0 }); } catch (_) { badVersion = true; }
+    if (!badVersion) v.push('an invalid contract version was recorded as adoption');
+    let unknownConsumer = false;
+    try { cc.recordAdoption('nobody', 'api.reports.submit', { version: 1 }); } catch (_) { unknownConsumer = true; }
+    if (!unknownConsumer) v.push('adoption was recorded for an unknown consumer');
+    // A consumer behind the current version is reported as behind, by how much.
+    const cc2 = new ConsumerContracts();
+    cc2.recordAdoption('citizen-web', 'api.reports.submit', { version: current.version - 1 >= 1 ? current.version - 1 : current.version });
+    const lagging = cc2.adoption('api.reports.submit');
+    if (current.version > 1 && !lagging.behind.length) v.push('a consumer on an older version was not reported as behind');
+
+    // --- Deprecation analytics -----------------------------------------------------------------------
+    const analytics = cc.deprecationAnalytics({ now: 0 });
+    if (!Array.isArray(analytics.deprecated)) v.push('deprecation analytics returned no list');
+    if (typeof analytics.totalBurden !== 'number') v.push('migration burden is not quantified');
+    // A deprecated contract with a live consumer past its sunset must be reported OVERDUE.
+    const probeRegistry = new ContractRegistry();
+    probeRegistry.deprecate('api.reports.submit', { sunsetAt: 1_000 });
+    const probe = new ConsumerContracts({ registry: probeRegistry });
+    const overdue = probe.deprecationAnalytics({ now: 10_000_000 });
+    if (!overdue.deprecated.length) v.push('a deprecated contract did not appear in the analytics');
+    if (!overdue.overdue.includes('api.reports.submit')) v.push('a deprecated contract past its sunset with a live consumer was not reported as overdue');
+    if (overdue.clean) v.push('an estate with an unmigrated deprecated contract was reported clean');
+
+    // --- Migration readiness --------------------------------------------------------------------------
+    // FAIL-CLOSED: an unreported consumer is NOT ready.
+    const blind = new ConsumerContracts();
+    const notReady = blind.migrationReadiness({ contract: 'api.reports.submit', spec: { fields: { required: [], optional: [] } } });
+    if (notReady.ready) v.push('migration was reported ready with no adoption reported at all');
+    if (!notReady.blockedBy.includes('citizen-web')) v.push('the blocking consumer was not named');
+    if (!notReady.constitutionalBlocked) v.push('a blocked constitutional consumer was not flagged');
+    if (notReady.failClosed !== true || notReady.authorizes !== false) v.push('migration readiness is not fail-closed / claims authority');
+    if (!/assumes/.test(notReady.note)) v.push('the readiness note does not explain why unreported is not ready');
+    blind.recordAdoption('citizen-web', 'api.reports.submit', { version: current.version });
+    const ready = blind.migrationReadiness({ contract: 'api.reports.submit', spec: { fields: { required: [], optional: [] } } });
+    if (!ready.ready) v.push('migration was not ready with every affected consumer on the current version');
+    if (ready.adoptionCoverage !== 1) v.push('adoption coverage was miscomputed');
+  }),
+
   fit('APP-FIT-RACI-GOVERNANCE', 'No subsystem approves itself; every control has an owner', (v) => {
     const raci = require('../src/governance/raci');
     for (const violation of raci.validate().violations) v.push(violation);
