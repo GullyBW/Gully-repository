@@ -1721,6 +1721,103 @@ module.exports = [
     if (raci.maturity({ fitnessIds: ids, fitnessResults: ids.map((id, i) => ({ id, pass: i > 0 })) }).level >= 5) v.push('maturity level 5 was claimed with a failing control');
   }),
 
+  fit('APP-FIT-EXECUTIVE-DASHBOARD', 'Every executive metric traces to evidence; none can be entered by hand', (v) => {
+    const exec = require('../src/observability/executive');
+    const knownFitnessIds = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => f.id),
+      ...require('./app-fitness').map((f) => f.id),
+      ...require('./infra-fitness').map((f) => f.id),
+    ];
+    for (const violation of exec.validate({ knownFitnessIds }).violations) v.push(violation);
+    // Every metric the executive brief requires is present.
+    for (const required of ['architecture-health', 'security-posture', 'compliance-posture', 'reliability', 'performance', 'operational-readiness', 'technical-debt', 'deployment-readiness', 'risk-exposure', 'legislative-readiness', 'data-governance', 'recovery-readiness']) {
+      if (!exec.METRICS[required]) v.push(`missing executive metric '${required}'`);
+    }
+    // No metric may exist without an evidence path — that is the only thing stopping hand entry.
+    for (const t of exec.evidenceTrace()) { if (!t.evidencePath) v.push(`${t.metric}: no evidence path`); if (!t.verifyingControl) v.push(`${t.metric}: no verifying control`); }
+    // A metric with no evidence renders UNAVAILABLE — never zero, never a default.
+    const empty = exec.dashboard({});
+    if (empty.metrics.some((m) => m.status === 'measured')) v.push('a metric was rendered with no evidence supplied');
+    if (empty.unavailable.length !== Object.keys(exec.METRICS).length) v.push('missing evidence was not reported per metric');
+    if (empty.metrics.some((m) => m.value === 0 && m.status !== 'measured')) v.push('an unavailable metric defaulted to zero');
+    // With evidence, values resolve and targets are evaluated in the right direction.
+    const evidence = { fitness: { heldRatio: 1, failingCount: 0 }, security: { postureScore: 1 }, compliance: { overallCoverage: 1 }, reliability: { allSlosMet: true, latencyP95Ms: 120 }, operations: { readinessScore: 1 }, assurance: { allDomainsPass: true }, risk: { totalExposure: 0, residual: [] }, legislation: { mandatesImplementedRatio: 1 }, data: { tracedRatio: 1 }, recovery: { allScenariosMatch: true } };
+    const full = exec.dashboard(evidence);
+    if (full.coverage !== 1 || !full.healthy) v.push('a fully evidenced, healthy platform did not render as such');
+    if (full.metrics.find((m) => m.metric === 'performance').meets !== true) v.push('a lower-is-better metric was evaluated in the wrong direction');
+    const slow = exec.dashboard({ ...evidence, reliability: { allSlosMet: true, latencyP95Ms: 5000 } });
+    if (slow.metrics.find((m) => m.metric === 'performance').meets !== false) v.push('a breached latency target was reported as met');
+    if (slow.healthy) v.push('a dashboard with a failing metric reported healthy');
+    // The risk heat map places threats by severity and control state.
+    const heat = exec.riskHeatmap({ residual: [{ threat: 'TH-DEANON', severity: 'critical', exposure: 12, failing: ['FIT-IDENTITY-MINIMIZATION'] }] });
+    if (heat.clean || heat.worst.band !== 'critical') v.push('the risk heat map did not band a critical exposure');
+    if (!exec.riskHeatmap({ residual: [] }).clean) v.push('an empty residual risk set did not render clean');
+    // Deterministic, informational, never authorizing.
+    if (JSON.stringify(exec.dashboard(evidence)) !== JSON.stringify(exec.dashboard(evidence))) v.push('the executive dashboard is not deterministic');
+    if (full.informationalOnly !== true || full.authorizes !== false) v.push('the executive dashboard claims authority');
+  }),
+
+  fit('APP-FIT-CONTINUOUS-ASSURANCE', 'Sixteen assurance domains gate deployment fail-closed, and never authorize it', (v) => {
+    const ca = require('../src/assurance/continuous');
+    const knownFitnessIds = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => f.id),
+      ...require('./app-fitness').map((f) => f.id),
+      ...require('./infra-fitness').map((f) => f.id),
+    ];
+    for (const violation of ca.validate({ knownFitnessIds }).violations) v.push(violation);
+    // All sixteen required domains are present, each naming real verifying controls.
+    for (const required of ['architecture', 'security', 'privacy', 'compliance', 'performance', 'reliability', 'governance', 'recovery', 'supplyChain', 'infrastructure', 'legislation', 'identity', 'policies', 'observability', 'dataGovernance', 'aiGovernance']) {
+      if (!ca.DOMAINS[required]) v.push(`missing assurance domain '${required}'`);
+    }
+    if (ca.domainIds().length !== 16) v.push(`expected 16 assurance domains, found ${ca.domainIds().length}`);
+    // A domain with no evidence FAILS — assurance is never granted blind.
+    const blind = ca.evaluate({});
+    if (blind.allPass) v.push('assurance passed with no evidence at all');
+    if (!blind.domains.every((d) => !d.evidencePresent && /cannot be assured blind/.test(d.reason))) v.push('a domain without evidence did not say so');
+    // A fully evidenced, healthy platform passes every domain.
+    const good = {
+      fitness: { allHold: true, heldRatio: 1, failingCount: 0 }, architecture: { valid: true, contexts: 30, modules: 120 },
+      security: { policiesCertified: true, credentialFindings: 0, algorithmIndependence: true, postureScore: 1 },
+      privacy: { identityMinimized: true, correlationDefaultDeny: true }, compliance: { overallCoverage: 1 },
+      reliability: { allSlosMet: true, latencyP95Ms: 100 }, governance: { ownershipComplete: true, noSelfApproval: true, maturityLevel: 5 },
+      recovery: { allScenariosMatch: true, backupVerified: true }, supplyChain: { thirdPartyCount: 0, attestationsVerified: true },
+      infrastructure: { healthy: true, drift: false }, legislation: { unimplementedMandates: 0 },
+      identity: { trustedIssuer: true, shortLivedCredentials: true }, policies: { certified: true, allSpecsProven: true, specsProven: 10 },
+      observability: { topologyValid: true, identityFree: true }, data: { tracedRatio: 1 }, ai: { allArtifactsApproved: true, noAutonomousAction: true },
+    };
+    const clean = ca.evaluate(good);
+    if (!clean.allPass) v.push('a fully evidenced healthy platform failed assurance: ' + clean.failed.join(', '));
+    // A single failing domain blocks the package — fail-closed.
+    const broken = ca.deploymentAuthorizationPackage({ sources: { ...good, privacy: { identityMinimized: false, correlationDefaultDeny: true } } });
+    if (broken.clean) v.push('a failed privacy domain did not block the authorization package');
+    if (!broken.blockers.length) v.push('a blocked package named no blocker');
+    if (broken.failClosed !== true) v.push('the deployment authorization package is not fail-closed');
+    if (!broken.riskRegister.register.some((r) => r.severity === 'critical')) v.push('a failed privacy domain was not raised as a critical risk');
+    // A named human may accept the risk, and the acceptance is recorded — never assumed.
+    const accepted = ca.deploymentAuthorizationPackage({ sources: { ...good, privacy: { identityMinimized: false, correlationDefaultDeny: true } }, riskAcceptedBy: 'Oversight Board', riskRationale: 'documented compensating control' });
+    if (!accepted.riskAcceptance || accepted.riskAcceptance.by !== 'Oversight Board') v.push('a recorded risk acceptance was not captured');
+    if (accepted.authorized !== false) v.push('accepting risk was treated as authorizing deployment');
+    // THE invariant: even a fully green, signed package authorizes nothing.
+    const green = ca.deploymentAuthorizationPackage({ sources: good, mandates: [{ instrument: 'dpa', control: 'FIT-IDENTITY-MINIMIZATION', implemented: true, holding: true }] });
+    if (!green.clean) v.push('a fully assured platform did not produce a clean package');
+    if (green.authorized !== false) v.push('a green assurance package reported itself as authorized');
+    if (!/NOT AUTHORIZED/.test(green.authorizationDecision)) v.push('the package does not state that it is not an authorization');
+    if (!green.digest || !green.signature) v.push('the authorization package is not signed');
+    // The registers are populated and reproducible.
+    if (!green.evidenceRegister.complete) v.push('the evidence register is incomplete for a fully evidenced run');
+    if (green.complianceRegister.gaps !== 0 || green.complianceRegister.breaches !== 0) v.push('a compliant mandate set produced gaps or breaches');
+    const gap = ca.complianceRegister({ mandates: [{ instrument: 'x', control: 'NONE', implemented: false }] });
+    if (gap.gaps !== 1 || gap.compliant) v.push('an unimplemented mandate was not recorded as a compliance gap');
+    const breach = ca.complianceRegister({ mandates: [{ instrument: 'x', control: 'C', implemented: true, holding: false }] });
+    if (breach.breaches !== 1) v.push('a failing mandated control was not recorded as a breach');
+    if (ca.deploymentAuthorizationPackage({ sources: good }).digest !== ca.deploymentAuthorizationPackage({ sources: good }).digest) v.push('the assurance package digest is not reproducible');
+    // Production readiness keeps the human items visible and never declares itself ready.
+    const prod = ca.productionReadinessPackage({ sources: good });
+    if (prod.productionReady !== false) v.push('the production readiness package declared the platform production-ready');
+    if (prod.outstandingHumanItems < 5) v.push('the human items required before production are not enumerated');
+    if (!prod.humanItems.some((i) => /cryptography/i.test(i.item))) v.push('human-built cryptography is not listed as a human item');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

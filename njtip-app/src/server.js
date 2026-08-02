@@ -137,6 +137,12 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/contracts') { requireRole('admin'); return json(200, app.contracts.catalogue()); }
   if (method === 'GET' && (m = p.match(/^\/api\/contracts\/([^/]+)$/))) { requireRole('admin'); return json(200, { ...app.contracts.describe(dec(m[1])), history: app.contracts.history(dec(m[1])) }); }
   if (method === 'GET' && p === '/api/contracts/openapi') { requireRole('admin'); return json(200, app.contracts.toOpenApi()); }
+  // --- Phase 10: executive dashboard + continuous assurance ---
+  if (method === 'GET' && p === '/api/executive/dashboard') { requireRole('admin'); return json(200, app.assurance.executiveDashboard()); }
+  if (method === 'GET' && p === '/api/executive/evidence-trace') { requireRole('admin'); return json(200, { trace: app.assurance.executive.evidenceTrace() }); }
+  if (method === 'GET' && p === '/api/assurance/continuous') { requireRole('admin'); return json(200, app.assurance.dashboard()); }
+  if (method === 'GET' && p === '/api/assurance/authorization-package') { requireRole('admin'); return json(200, app.assurance.authorizationPackage()); }
+  if (method === 'GET' && p === '/api/assurance/production-readiness') { requireRole('admin'); return json(200, app.assurance.productionReadiness()); }
   // --- Phase 10: AI lifecycle, ADR governance, consumer contracts, operational governance ---
   if (method === 'GET' && p === '/api/ai/lifecycle') { requireRole('admin'); return json(200, app.ai.lifecycle.report()); }
   if (method === 'GET' && p === '/api/ai/pending-decisions') { requireRole('oversight-board'); return json(200, { pending: app.ai.lifecycle.pendingDecisions() }); }

@@ -143,7 +143,7 @@ const THREATS = {
       t('Remove the record', 'OR', [{ goal: 'Truncate the log' }, { goal: 'Rewrite a chained entry' }]),
       { goal: 'Perform the action on a path that is not audited' },
     ]),
-    controls: ['FIT-AUDITABILITY', 'APP-FIT-EVENT-SOURCING', 'APP-FIT-EVENT-GOVERNANCE'],
+    controls: ['FIT-AUDITABILITY', 'APP-FIT-EVENT-SOURCING', 'APP-FIT-EVENT-GOVERNANCE', 'APP-FIT-CONTINUOUS-ASSURANCE'],
     evidence: 'Append-only hash-chained audit and event log, verified continuously; every governed action emits an event; assurance evidence is reproducible and signed.',
   },
 };

@@ -16,38 +16,44 @@ quality gate.
 
 ```bash
 cd njtip-app
-npm test           # 237 tests (vertical slice + API + adapters + domain + fitness + assurance)
-npm start          # serve the app + UI at http://localhost:8087
-npm run twin       # combined gate: 85 invariants (14 twin + 62 app + 9 infrastructure)
-npm run slice      # end-to-end vertical slice through the real composition root (deterministic)
-npm run contracts  # deterministic, signed integration-contract snapshot + OpenAPI fragment
-npm run perf       # load + soak + chaos resilience harness (Phase 5)
-npm run evidence   # deterministic, signed assurance evidence package (Phase 9)
-npm run readiness  # human-gated operational readiness assessment (Phase 10 — never authorizes)
-npm run devsecops  # SAST + classified secret scan + SBOM + SCA + IaC
-npm run health     # engineering-health score + transparent trend (Phase 8)
+npm test                     # 332 tests
+npm start                    # serve the app + UI at http://localhost:8087
+npm run twin                 # combined gate: 100 invariants (14 twin + 77 app + 9 infrastructure)
+npm run assurance            # 16 assurance domains → signed deployment authorization package
+npm run production-readiness # …plus the six items only a named human can close
+npm run chaos                # resilience: load/stress/spike/soak/recovery + 7 fault injections
+npm run slice                # end-to-end vertical slice through the real composition root
+npm run contracts            # deterministic, signed integration-contract snapshot
+npm run evidence             # deterministic, signed assurance evidence package
+npm run readiness            # human-gated operational readiness assessment (never authorizes)
+npm run devsecops            # SAST + classified secret scan + SBOM + SCA + IaC
+npm run perf                 # load + soak + chaos performance harness
 # container (build context = repo root, so it can copy the Twin it validates against):
 docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 njtip-app
 # reference Kubernetes + pilot manifests (HA, autoscaling, zone-isolation, canary):
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.9 — Production engineering & stabilization.** The architecture is **frozen** at
-> [Architecture Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md); no new government domain and no
-> new bounded context. v1.9 hardens what exists: a verified [context map](./docs/context-map.md) that
-> owns every source module, an [institutional ownership model](./docs/governance-ownership.md),
-> [stable integration contracts](./docs/integration-contracts.md) that refuse silent breaking changes,
-> a [component migration roadmap](./docs/component-migration-roadmap.md) with rollback per subsystem,
-> [infrastructure assurance](./docs/infrastructure-assurance.md), a classified DevSecOps scanner,
-> [legislative impact analysis](./docs/legislative-impact.md), a
-> [recovery strategy framework](./docs/recovery-framework.md), the
-> [National Data Exchange](./docs/data-exchange.md),
-> [process governance mining](./docs/process-governance.md), a
-> [quantum migration roadmap](./docs/quantum-migration-roadmap.md),
-> [audience-specific dashboards](./docs/observability-dashboards.md),
-> [correlation governance](./docs/cross-domain-governance.md) and
-> [user validation](./docs/user-validation-report.md).
-> Combined gate: **85 invariants**, 237 tests. Full summary: [`docs/stabilization.md`](./docs/stabilization.md) ·
+> **v1.10 — operational excellence & continuous assurance.** The architecture stays **frozen** at
+> [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md) — no new bounded context, every capability
+> added inside an existing one ([ADR-0004](./docs/adr/0004-operational-excellence-and-continuous-assurance.md)).
+> Phase 10 adds [Zero Trust](./docs/zero-trust.md) (PAP→PDP→PEP, workload identity, short-lived
+> credentials), an [enterprise threat model](./docs/threat-model.md) with executable
+> threat→control→evidence→owner traceability, [formal policy verification](./docs/formal-policy.md)
+> (10 properties proven over ~11,900 states, with counterexamples),
+> [reliability engineering](./docs/reliability-engineering.md) whose release gate fails when an SLO
+> is violated, [enterprise observability](./docs/observability.md),
+> [chaos engineering in CI](./docs/resilience-engineering.md),
+> [enterprise data governance](./docs/data-governance.md),
+> [SLSA supply-chain attestation](./docs/supply-chain-security.md),
+> [AI governance](./docs/ai-governance.md) with no autonomous action surface,
+> [multi-region resilience](./docs/multi-region.md),
+> [ADR governance](./docs/operational-governance.md),
+> [consumer-driven contracts](./docs/consumer-contracts.md),
+> [RACI governance](./docs/operational-governance.md), an
+> [evidence-traced executive dashboard and 16-domain continuous assurance framework](./docs/continuous-assurance.md).
+> Combined gate: **100 invariants**, 332 tests. Full summary: [`docs/high-assurance.md`](./docs/high-assurance.md) ·
+> v1.9: [`docs/stabilization.md`](./docs/stabilization.md) ·
 > production migration: [`docs/migration-guidance.md`](./docs/migration-guidance.md) ·
 > v1.8: [`docs/ecosystem-intelligence.md`](./docs/ecosystem-intelligence.md) ·
 > v1.7: [`docs/autonomous.md`](./docs/autonomous.md) · v1.6: [`docs/sovereign.md`](./docs/sovereign.md) ·

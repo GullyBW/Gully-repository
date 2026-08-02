@@ -189,7 +189,7 @@ const CONTEXTS = {
   'observability': {
     kind: 'generic', domain: 'Operations',
     purpose: 'Identity-free logs, metrics, traces, SLOs and audience-specific dashboards.',
-    responsibilities: ['logging', 'metrics', 'tracing', 'slo', 'dashboards', 'national-performance'],
+    responsibilities: ['logging', 'metrics', 'tracing', 'slo', 'dashboards', 'national-performance', 'service-level-objectives', 'runtime-topology', 'executive-reporting'],
     modules: ['src/adapters/observability.js', 'src/observability/', 'src/observatory/'],
     dependsOn: [d('privacy', 'shared-kernel', 'in-process-port')],
     acl: [], sharedKernel: ['privacy-invariants'], status: 'stable',
@@ -207,8 +207,8 @@ const CONTEXTS = {
   'assurance': {
     kind: 'core-domain', domain: 'Governance',
     purpose: 'The Digital Engineering Twin: fitness gate, compliance, maturity, capability, evolution and the architecture-of-record.',
-    responsibilities: ['fitness-gate', 'compliance-assessment', 'maturity-assessment', 'capability-model', 'evolution-intelligence', 'context-map', 'migration-roadmap', 'adr-governance'],
-    modules: ['src/twin.js', 'src/twin-validate.js', 'src/compliance/', 'src/maturity/', 'src/capability/', 'src/evolution/', 'src/architecture/', 'src/migration/'],
+    responsibilities: ['fitness-gate', 'compliance-assessment', 'maturity-assessment', 'capability-model', 'evolution-intelligence', 'context-map', 'migration-roadmap', 'adr-governance', 'continuous-assurance'],
+    modules: ['src/twin.js', 'src/twin-validate.js', 'src/compliance/', 'src/maturity/', 'src/capability/', 'src/evolution/', 'src/architecture/', 'src/migration/', 'src/assurance/'],
     dependsOn: [d('orchestration', 'conformist', 'in-process-port'), d('identity-access', 'conformist', 'in-process-port'), d('privacy', 'shared-kernel', 'in-process-port'), d('platform-events', 'published-language', 'read-model-query'), d('infrastructure', 'customer-supplier', 'read-model-query')],
     acl: [], sharedKernel: ['fitness-contract', 'privacy-invariants'], status: 'stable',
     rationale: 'The permanent quality gate. It reads every other context but is depended upon only through the fitness-contract shared kernel, so assurance can never be bypassed or forked.',

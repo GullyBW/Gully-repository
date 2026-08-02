@@ -33,6 +33,9 @@ jobs:
       - name: Resilience suite — load, stress, spike, soak, recovery, fault injection
         working-directory: njtip-app
         run: node scripts/chaos.js
+      - name: Continuous assurance — 16 domains, fail-closed
+        working-directory: njtip-app
+        run: node scripts/continuous-assurance.js
       - name: Integration contracts — valid and fully covered
         working-directory: njtip-app
         run: node scripts/contracts.js
