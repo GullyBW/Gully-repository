@@ -277,6 +277,199 @@ function validate({ knownFitnessIds = [] } = {}) {
   return { valid: violations.length === 0, violations, threats: ids().length, playbooks: Object.keys(PLAYBOOKS).length };
 }
 
+// --- Enterprise Risk Intelligence (Phase 11, Part 2) ---------------------------------------
+//
+// Extends the threat trace with the full risk lifecycle:
+//   Threat → Risk → Control → Evidence → Verification → Residual Risk → Owner → Review Date
+//
+// Risk is not a static label: it is accepted by a named human, it EXPIRES, it is reassessed,
+// and control effectiveness is scored from the live gate rather than asserted.
+
+// Control effectiveness weights. A control that is implemented and holding is worth more than
+// one that merely exists — and one that is failing is worth LESS than nothing, because it was
+// relied upon.
+const EFFECTIVENESS = { holding: 1, failing: -0.5, unimplemented: 0 };
+// How long a risk acceptance may stand before it must be re-taken by a human.
+const DEFAULT_ACCEPTANCE_DAYS = 90;
+// How often a risk must be reassessed, by severity.
+const REVIEW_CADENCE_DAYS = { critical: 30, high: 90, medium: 180, low: 365 };
+
+class RiskRegister {
+  constructor({ clock = () => Date.now() } = {}) { this._clock = clock; this._acceptances = new Map(); this._reassessments = []; this._intel = []; this._trend = []; this._seq = 0; }
+
+  // Control effectiveness for one threat, scored from the live fitness gate.
+  controlEffectiveness(threatId, fitnessResults = []) {
+    const th = describe(threatId);
+    const state = new Map(fitnessResults.map((r) => [r.id, r.pass]));
+    const rows = th.controls.map((c) => {
+      const status = !state.has(c) ? 'unimplemented' : state.get(c) ? 'holding' : 'failing';
+      return { control: c, status, weight: EFFECTIVENESS[status] };
+    });
+    const max = rows.length;
+    const raw = rows.reduce((a, r) => a + r.weight, 0);
+    return { threat: threatId, controls: rows, score: max ? +Math.max(0, raw / max).toFixed(3) : 0, holding: rows.filter((r) => r.status === 'holding').length, failing: rows.filter((r) => r.status === 'failing').length, unimplemented: rows.filter((r) => r.status === 'unimplemented').length };
+  }
+
+  // Residual risk for one threat: inherent severity reduced by control effectiveness, then
+  // reduced again only if a CURRENT human acceptance stands.
+  residual(threatId, { fitnessResults = [], now = null } = {}) {
+    const th = describe(threatId);
+    const at = now ?? this._clock();
+    const inherent = { critical: 1, high: 0.75, medium: 0.5, low: 0.25 }[th.severity] ?? 0.5;
+    const eff = this.controlEffectiveness(threatId, fitnessResults);
+    const residual = +Math.max(0, inherent * (1 - eff.score)).toFixed(3);
+    const acceptance = this.acceptanceFor(threatId, { now: at });
+    return {
+      threat: threatId, severity: th.severity, inherent, controlEffectiveness: eff.score, residual,
+      band: residual >= 0.6 ? 'critical' : residual >= 0.35 ? 'high' : residual >= 0.15 ? 'medium' : residual > 0 ? 'low' : 'none',
+      owner: th.owner, acceptance,
+      treatment: residual === 0 ? 'controlled' : acceptance && acceptance.current ? 'accepted (time-boxed)' : 'open — treat or accept',
+      reviewDue: this.reviewDue(threatId, { now: at }),
+    };
+  }
+
+  // Risk acceptance: a NAMED human accepts a residual risk, with a rationale and an expiry.
+  // An acceptance without an expiry is not an acceptance, it is an omission.
+  accept(threatId, { by, rationale, days = DEFAULT_ACCEPTANCE_DAYS, now = null } = {}) {
+    describe(threatId);
+    if (!by || !rationale) { const e = new Error('risk acceptance requires a named human authority and a rationale'); e.failClosed = true; throw e; }
+    if (!Number.isInteger(days) || days <= 0 || days > 365) { const e = new Error('a risk acceptance must expire within 365 days'); e.failClosed = true; throw e; }
+    const at = now ?? this._clock();
+    const record = { id: 'RA-' + (++this._seq).toString().padStart(4, '0'), threat: threatId, by, rationale, acceptedAt: at, expiresAt: at + days * 24 * 3600_000, revoked: false };
+    if (!this._acceptances.has(threatId)) this._acceptances.set(threatId, []);
+    this._acceptances.get(threatId).push(record);
+    return { ...record };
+  }
+  revokeAcceptance(id, { by, reason } = {}) {
+    for (const list of this._acceptances.values()) {
+      const rec = list.find((r) => r.id === id);
+      if (rec) { if (!by || !reason) throw new Error('revoking an acceptance requires a named human and a reason'); rec.revoked = true; rec.revokedBy = by; rec.revokedReason = reason; return { ...rec }; }
+    }
+    throw new Error('unknown risk acceptance: ' + id);
+  }
+  acceptanceFor(threatId, { now = null } = {}) {
+    const at = now ?? this._clock();
+    const list = (this._acceptances.get(threatId) || []).filter((r) => !r.revoked);
+    if (!list.length) return null;
+    const latest = list[list.length - 1];
+    return { ...latest, current: at <= latest.expiresAt, expired: at > latest.expiresAt };
+  }
+  // Acceptances that have lapsed — the risk is open again and nobody was told.
+  expiredAcceptances({ now = null } = {}) {
+    const at = now ?? this._clock();
+    const out = [];
+    for (const [threat, list] of this._acceptances) for (const r of list) if (!r.revoked && at > r.expiresAt) out.push({ threat, id: r.id, by: r.by, expiredAt: r.expiresAt, daysOverdue: Math.floor((at - r.expiresAt) / (24 * 3600_000)) });
+    return out;
+  }
+
+  // Reassessment: a recorded re-evaluation of a threat, which resets its review clock.
+  reassess(threatId, { by, findings, now = null } = {}) {
+    describe(threatId);
+    if (!by || !findings) throw new Error('a reassessment requires a named human and findings');
+    const rec = { threat: threatId, by, findings, at: now ?? this._clock() };
+    this._reassessments.push(rec);
+    return { ...rec };
+  }
+  lastReassessment(threatId) { const rows = this._reassessments.filter((r) => r.threat === threatId); return rows.length ? { ...rows[rows.length - 1] } : null; }
+  // Review date: cadence by severity, from the last reassessment (or never assessed).
+  reviewDue(threatId, { now = null } = {}) {
+    const th = describe(threatId);
+    const at = now ?? this._clock();
+    const last = this.lastReassessment(threatId);
+    const cadenceDays = REVIEW_CADENCE_DAYS[th.severity] ?? 180;
+    const dueAt = last ? last.at + cadenceDays * 24 * 3600_000 : at;
+    return { threat: threatId, cadenceDays, lastReassessedAt: last ? last.at : null, dueAt, overdue: !last || at > dueAt, neverAssessed: !last };
+  }
+  // Automatic review reminders — every threat whose review is due or overdue.
+  reviewReminders({ now = null } = {}) {
+    const at = now ?? this._clock();
+    return ids().map((id) => this.reviewDue(id, { now: at })).filter((r) => r.overdue)
+      .map((r) => ({ ...r, reminder: r.neverAssessed ? 'never reassessed since the threat was modelled' : `overdue by ${Math.floor((at - r.dueAt) / (24 * 3600_000))} day(s)` }));
+  }
+
+  // Threat intelligence ingestion. External intel may RAISE a threat's attention but never
+  // lowers a severity by itself — the same trust-lowering-only rule the feed already follows.
+  ingestIntelligence({ source, threat, indicator, severity = 'medium', confidence = 0.5, now = null } = {}) {
+    if (!source || !threat || !indicator) throw new Error('threat intelligence requires a source, a threat and an indicator');
+    if (!THREATS[threat]) throw new Error('intelligence references an unknown threat: ' + threat);
+    if (/@|omang|nationalid/i.test(JSON.stringify({ source, indicator }))) { const e = new Error('threat intelligence refuses identity data'); e.failClosed = true; throw e; }
+    const rec = { id: 'TI-' + (this._intel.length + 1).toString().padStart(4, '0'), source, threat, indicator, severity, confidence, at: now ?? this._clock(), effect: 'raises-attention-only' };
+    this._intel.push(rec);
+    return { ...rec, note: 'Intelligence raises attention on a threat. It never lowers a severity or grants trust.' };
+  }
+  intelligence(threatId = null) { return this._intel.filter((i) => !threatId || i.threat === threatId).map((i) => ({ ...i })); }
+
+  // Risk heat map: residual band × severity, with the intel signal overlaid.
+  heatMap({ fitnessResults = [], now = null } = {}) {
+    const cells = ids().map((id) => {
+      const r = this.residual(id, { fitnessResults, now });
+      return { threat: id, severity: r.severity, residual: r.residual, band: r.band, owner: r.owner, treatment: r.treatment, intelligence: this.intelligence(id).length, reviewOverdue: r.reviewDue.overdue };
+    }).sort((a, b) => b.residual - a.residual || a.threat.localeCompare(b.threat));
+    return { cells, byBand: cells.reduce((m, c) => ((m[c.band] = (m[c.band] || 0) + 1), m), {}), worst: cells[0] || null, clean: cells.every((c) => c.residual === 0) };
+  }
+
+  // Trend analysis over recorded snapshots (deterministic least-squares slope).
+  snapshot({ fitnessResults = [], now = null } = {}) {
+    const heat = this.heatMap({ fitnessResults, now });
+    const total = +heat.cells.reduce((a, c) => a + c.residual, 0).toFixed(3);
+    const rec = { at: now ?? this._clock(), totalResidual: total, critical: heat.byBand.critical || 0, high: heat.byBand.high || 0 };
+    this._trend.push(rec);
+    return { ...rec };
+  }
+  trend() {
+    const xs = this._trend.map((t) => t.totalResidual);
+    if (xs.length < 2) return { direction: 'flat', slope: 0, basis: xs.length, history: this._trend.map((t) => ({ ...t })) };
+    const n = xs.length, mx = (n - 1) / 2, my = xs.reduce((a, b) => a + b, 0) / n;
+    let num = 0, den = 0;
+    for (let i = 0; i < n; i++) { num += (i - mx) * (xs[i] - my); den += (i - mx) ** 2; }
+    const slope = den ? num / den : 0;
+    return { direction: slope < -1e-9 ? 'improving' : slope > 1e-9 ? 'worsening' : 'stable', slope: +slope.toFixed(5), basis: n, history: this._trend.map((t) => ({ ...t })) };
+  }
+
+  // The full lifecycle view: Threat → Risk → Control → Evidence → Verification → Residual →
+  // Owner → Review Date, in one row per threat.
+  lifecycle({ fitnessResults = [], now = null } = {}) {
+    const trace = traceability({ fitnessResults });
+    return trace.map((t) => {
+      const r = this.residual(t.threat, { fitnessResults, now });
+      return {
+        threat: t.threat, title: t.title, severity: t.severity,
+        inherentRisk: r.inherent,
+        controls: t.controls, evidence: t.evidence, verification: t.verification,
+        controlEffectiveness: r.controlEffectiveness, residualRisk: r.residual, residualBand: r.band,
+        treatment: r.treatment, acceptance: r.acceptance,
+        owner: t.owner, responsibleAuthority: t.responsibleAuthority, governanceBoard: t.governanceBoard,
+        reviewDate: r.reviewDue.dueAt, reviewOverdue: r.reviewDue.overdue,
+      };
+    });
+  }
+
+  validate({ fitnessResults = [], now = null } = {}) {
+    const violations = [];
+    for (const row of this.lifecycle({ fitnessResults, now })) {
+      if (!row.owner) violations.push(`${row.threat}: no risk owner`);
+      if (row.reviewDate === null || row.reviewDate === undefined) violations.push(`${row.threat}: no review date`);
+      if (row.residualRisk > 0 && row.treatment === 'controlled') violations.push(`${row.threat}: residual risk with no treatment`);
+    }
+    for (const e of this.expiredAcceptances({ now })) violations.push(`${e.threat}: risk acceptance ${e.id} expired ${e.daysOverdue} day(s) ago and was not re-taken`);
+    return { valid: violations.length === 0, violations, threats: ids().length };
+  }
+
+  report({ fitnessResults = [], now = null } = {}) {
+    return {
+      lifecycle: this.lifecycle({ fitnessResults, now }),
+      heatMap: this.heatMap({ fitnessResults, now }),
+      trend: this.trend(),
+      reviewReminders: this.reviewReminders({ now }),
+      expiredAcceptances: this.expiredAcceptances({ now }),
+      intelligence: this.intelligence(),
+      validation: this.validate({ fitnessResults, now }),
+      advisoryOnly: true, authorizes: false,
+      note: 'Risk is time-bound: an acceptance expires, a review comes due, and neither renews itself.',
+    };
+  }
+}
+
 function report({ fitnessResults = [], knownFitnessIds = [] } = {}) {
   return {
     threats: threats(), traceability: traceability({ fitnessResults }),
@@ -288,4 +481,4 @@ function report({ fitnessResults = [], knownFitnessIds = [] } = {}) {
   };
 }
 
-module.exports = { THREATS, PLAYBOOKS, KILL_CHAIN, CLASSES, ids, describe, threats, attackPaths, killChainCoverage, attckCoverage, capecCoverage, playbooks, traceability, residualRisk, validate, report };
+module.exports = { THREATS, PLAYBOOKS, KILL_CHAIN, CLASSES, RiskRegister, REVIEW_CADENCE_DAYS, EFFECTIVENESS, ids, describe, threats, attackPaths, killChainCoverage, attckCoverage, capecCoverage, playbooks, traceability, residualRisk, validate, report };

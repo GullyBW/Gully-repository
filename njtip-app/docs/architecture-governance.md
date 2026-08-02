@@ -17,6 +17,7 @@ without a demonstrated, implementation-driven need.
 | [0002](./adr/0002-freeze-architecture-baseline-v1.7.md) | Freeze Architecture Baseline v1.7 and transition to production engineering | Accepted | Structural freeze; architecture-of-record and ownership as verified data |
 | [0003](./adr/0003-context-consolidation-and-data-exchange-terminology.md) | Boundary consolidation and "National Data Exchange" terminology | Accepted | Federation merge, exchange governance model, responsibility scoping |
 | [0004](./adr/0004-operational-excellence-and-continuous-assurance.md) | Operational excellence, continuous assurance, and the expanded ADR schema | Accepted | Phase 10 capabilities; ADR schema expansion applied from 0004 onward |
+| [0005](./adr/0005-authorization-decision-caching.md) | Replace "nothing is cached" with signed, revocable, policy-versioned authorization decisions | Accepted | Zero Trust authorization path; scalability without weakening the guarantee |
 | [template](./adr/000-template.md) | ADR template | — | Required format for every new decision |
 
 **Schema:** ADRs numbered **0004 and later** must record business justification, risk assessment,

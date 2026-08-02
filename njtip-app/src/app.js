@@ -279,6 +279,9 @@ function createApp(overrides = {}) {
   servicePortfolio.register('svc:oversight-analytics', { owner: 'oversight', fundingPerYear: 200000, maturity: 'managed', strategicValue: 'medium', dependsOn: ['svc:anonymous-reporting'] });
   // Privacy engineering (Phase 35) + threat intelligence (Phase 36).
   const threat = threatModel;
+  // Enterprise risk intelligence (Phase 11 Part 2): residual risk, time-boxed acceptance,
+  // review cadence, intelligence ingestion and trend — over the same threat model.
+  threat.riskRegister = new threatModel.RiskRegister();
   const threatIntel = { feed: new threatIntelMod.ThreatFeed(), deviceRisk: threatIntelMod.deviceRisk, credentialRisk: threatIntelMod.credentialRisk, behavioralAnomaly: threatIntelMod.behavioralAnomaly, enrichTrust: threatIntelMod.enrichTrust, correlate: threatIntelMod.correlate, recommend: threatIntelMod.recommend };
   const schemaRegistry = new SchemaRegistry();
   for (const [name, schema] of Object.entries(CANONICAL_MODEL)) schemaRegistry.register(name, schema);

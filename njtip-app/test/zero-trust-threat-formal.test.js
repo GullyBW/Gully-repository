@@ -59,7 +59,7 @@ test('zero trust: the PDP evaluates every request through the full pipeline', ()
     assert.ok(d.trace.includes(stage), stage);
   }
   assert.ok(d.trustScore > 0);
-  assert.match(d.note, /Valid for THIS request only/);
+  assert.match(d.note, /Signed decision|never served from cache/);
 });
 
 test('zero trust: no implicit trust — unauthenticated, stale, out-of-boundary and over-ceiling deny', () => {
@@ -80,13 +80,20 @@ test('zero trust: no implicit trust — unauthenticated, stale, out-of-boundary 
   assert.strictEqual(untrusted.stage, 'continuous-authorization');
 });
 
-test('zero trust: nothing is cached — each request is decided again', () => {
+test('zero trust: every request reaches the PDP; caching skips recomputation, never checks', () => {
   const ref = { now: 1_000_000 };
   const z = zt(ref);
   const before = z.pdp.decisionsEvaluated();
   const base = baseRequest(ref.now);
   z.pdp.decide(base); z.pdp.decide(base); z.pdp.decide(base);
-  assert.strictEqual(z.pdp.decisionsEvaluated(), before + 3);
+  assert.strictEqual(z.pdp.decisionsEvaluated(), before + 3, 'no request may bypass the PDP');
+  // An unseen security context is always fully evaluated; caching is disableable per call.
+  const beforeFull = z.pdp.fullEvaluations();
+  z.pdp.decide({ ...base, subject: { ...base.subject, sessionId: 'other' } });
+  assert.strictEqual(z.pdp.fullEvaluations(), beforeFull + 1);
+  const b2 = z.pdp.fullEvaluations();
+  z.pdp.decide(base, { allowCache: false });
+  assert.strictEqual(z.pdp.fullEvaluations(), b2 + 1);
 });
 
 test('zero trust: the PAP publishes policy with accountability and the PDP follows immediately', () => {

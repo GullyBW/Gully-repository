@@ -1216,10 +1216,18 @@ module.exports = [
     if (zt.pdp.decide({ ...base, subject: { ...base.subject, mfa: 'none' } }).decision === 'permit') v.push('a sensitive action was permitted without step-up MFA');
     // A workload request without a credential is denied.
     if (zt.pdp.decide({ ...base, subject: { ...base.subject, kind: 'workload' } }).decision !== 'deny') v.push('a workload request without a credential was permitted');
-    // Nothing is cached: two identical requests are each evaluated at the PDP.
+    // Every request still reaches the PDP; caching skips recomputation, never the checks.
     const before = zt.pdp.decisionsEvaluated();
     zt.pdp.decide(base); zt.pdp.decide(base);
-    if (zt.pdp.decisionsEvaluated() !== before + 2) v.push('a decision was cached rather than re-evaluated');
+    if (zt.pdp.decisionsEvaluated() !== before + 2) v.push('a request bypassed the PDP entirely');
+    // A previously unseen security context is always fully evaluated.
+    const beforeFull = zt.pdp.fullEvaluations();
+    zt.pdp.decide({ ...base, subject: { ...base.subject, sessionId: 'fresh-session' } });
+    if (zt.pdp.fullEvaluations() !== beforeFull + 1) v.push('an unseen security context was not fully evaluated');
+    // With caching disabled, every request is fully evaluated (the old guarantee still available).
+    const b2 = zt.pdp.fullEvaluations();
+    zt.pdp.decide(base, { allowCache: false }); zt.pdp.decide(base, { allowCache: false });
+    if (zt.pdp.fullEvaluations() !== b2 + 2) v.push('allowCache:false did not force full evaluation');
     // The PAP publishes policy with a named human; a change takes effect with no code change.
     let paperwork = false;
     try { zt.pap.publish([{ id: 'x', effect: 'permit', actions: '*' }], {}); } catch (_) { paperwork = true; }
@@ -1236,6 +1244,99 @@ module.exports = [
     for (const required of ['PAP', 'PDP', 'PEP', 'Workload identity', 'Trust boundaries', 'Device trust']) {
       if (!arch.components.some((c) => c.component === required)) v.push(`zero trust architecture is missing the ${required} component`);
     }
+  }),
+
+  fit('APP-FIT-ZERO-TRUST-CACHE', 'Cached authorization is signed, policy-current, revocable and never bypasses revocation', (v) => {
+    const { makeZeroTrust, MAX_DECISION_TTL_MS, AuthorizationDecisionCache, RevocationRegistry } = require('../src/iam/zero-trust-architecture');
+    let now = 1_000_000;
+    const zt = makeZeroTrust({ clock: () => now });
+    zt.devices.register('dev-1', { trusted: true });
+    const base = { subject: { principal: 'inv-001', role: 'investigator', mfa: 'fido2', authenticatedAt: now, deviceId: 'dev-1', zone: 'independent', sessionId: 'S1' }, action: 'review-case', resource: { zone: 'independent' }, env: { geoAllowed: true } };
+
+    // A decision is issued signed, and reused only as a verified token.
+    const first = zt.pdp.decide(base);
+    if (first.decision !== 'permit' || !first.decisionToken) v.push('no signed decision token was issued on permit');
+    if (!first.decisionToken.signature || !first.decisionToken.digest) v.push('the decision token is not cryptographically signed');
+    const second = zt.pdp.decide(base);
+    if (!second.cached || second.stage !== 'cached') v.push('an identical request was not served from the decision cache');
+
+    // Tampering with any field invalidates the decision.
+    const tampered = { ...first.decisionToken, principal: 'attacker' };
+    if (zt.cache.verify(tampered, { policyVersion: zt.pap.version() }).valid) v.push('a tampered decision token verified');
+    const forged = { ...first.decisionToken, signature: 'forged' };
+    if (zt.cache.verify(forged, { policyVersion: zt.pap.version() }).valid) v.push('a forged signature verified');
+
+    // TTL: decisions are short-lived, and an over-long TTL is refused at construction.
+    if (MAX_DECISION_TTL_MS > 30_000) v.push('the decision TTL ceiling is too long to be called short-lived');
+    let ttlRefused = false;
+    try { new AuthorizationDecisionCache({ revocations: new RevocationRegistry(), ttlMs: MAX_DECISION_TTL_MS + 1 }); } catch (_) { ttlRefused = true; }
+    if (!ttlRefused) v.push('a decision cache accepted a TTL beyond the maximum');
+    now += MAX_DECISION_TTL_MS + 1;
+    if (zt.cache.verify(first.decisionToken, { policyVersion: zt.pap.version() }).reason !== 'expired') v.push('an expired decision did not expire');
+    now -= MAX_DECISION_TTL_MS + 1;
+
+    // REVOCATION: a revoked credential fails IMMEDIATELY, cache or no cache.
+    zt.pdp.decide(base);                                    // warm the cache again
+    zt.revoke.session('S1', { by: 'Security Operations Centre', reason: 'suspected compromise' });
+    const afterRevoke = zt.pdp.decide(base);
+    if (afterRevoke.decision !== 'deny' || afterRevoke.stage !== 'revocation') v.push('a revoked session was still authorized');
+    if (zt.cache.verify(first.decisionToken, { policyVersion: zt.pap.version() }).valid) v.push('a cached decision survived revocation of its session');
+    // Subject and credential revocation behave the same way.
+    const zt2 = makeZeroTrust({ clock: () => now });
+    zt2.devices.register('dev-1', { trusted: true });
+    zt2.pdp.decide(base);
+    zt2.revoke.subject('inv-001', { by: 'ISRB', reason: 'role withdrawn' });
+    if (zt2.pdp.decide(base).stage !== 'revocation') v.push('a revoked subject was still authorized');
+    let needsReason = false;
+    try { zt2.revocations.revokeSession('X', { by: 'ops' }); } catch (_) { needsReason = true; }
+    if (!needsReason) v.push('revocation was accepted without a named actor and a reason');
+
+    // STALE POLICY: publishing invalidates every cached decision, and a stale token is rejected.
+    const zt3 = makeZeroTrust({ clock: () => now });
+    zt3.devices.register('dev-1', { trusted: true });
+    const t3 = zt3.pdp.decide(base).decisionToken;
+    zt3.pap.publish([{ id: 'permit-all', effect: 'permit', actions: '*', conditions: [] }], { by: 'ISRB', rationale: 'incident containment' });
+    if (zt3.cache.size() !== 0) v.push('a policy change did not invalidate the decision cache');
+    if (zt3.cache.verify(t3, { policyVersion: zt3.pap.version() }).reason !== 'stale-policy-version') v.push('a decision issued under a superseded policy was accepted');
+    if (zt3.pdp.decide(base).stage === 'cached') v.push('a request was served from cache after a policy change');
+
+    // REPLAY protection: a presented nonce is single-use.
+    const zt4 = makeZeroTrust({ clock: () => now });
+    zt4.devices.register('dev-1', { trusted: true });
+    const t4 = zt4.pdp.decide(base).decisionToken;
+    if (!zt4.cache.verify(t4, { policyVersion: zt4.pap.version(), nonce: 'n1' }).valid) v.push('a fresh nonce was rejected');
+    if (zt4.cache.verify(t4, { policyVersion: zt4.pap.version(), nonce: 'n1' }).reason !== 'replayed-nonce') v.push('a replayed nonce was accepted');
+
+    // SESSION BINDING: a decision issued for one session is not reusable by another.
+    const other = { ...base, subject: { ...base.subject, sessionId: 'S2' } };
+    if (zt4.pdp.decide(other).stage === 'cached') v.push('a decision bound to one session was reused by another');
+
+    // SENSITIVE actions are never cached, whatever the TTL.
+    const sensitive = { ...base, action: 'read-evidence' };
+    zt4.pdp.decide(sensitive);
+    const s2 = zt4.pdp.decide(sensitive);
+    if (s2.cached || s2.stage === 'cached') v.push('a sensitive action was served from cache');
+    if (!s2.reevaluationTriggers.includes('sensitive-action')) v.push('the sensitive-action re-evaluation trigger did not fire');
+
+    // Continuous re-evaluation triggers force a full evaluation despite a valid cached decision.
+    for (const [envPatch, trigger] of [[{ riskLevel: 'high' }, 'elevated-risk'], [{ devicePostureChanged: true }, 'device-posture-changed'], [{ forceReevaluation: true }, 'explicit-request']]) {
+      const triggers = zt4.pdp.reevaluationTriggers({ ...base, env: { ...base.env, ...envPatch } });
+      if (!triggers.includes(trigger)) v.push(`the '${trigger}' re-evaluation trigger did not fire`);
+    }
+
+    // CROSS-REGION policy synchronization: a lagging region may not serve authorization.
+    zt4.policySync.register('bw-south', { version: 0 });
+    if (zt4.pdp.decide({ ...base, env: { ...base.env, region: 'bw-south' } }).stage !== 'policy-sync') v.push('a region behind the authoritative policy version served authorization');
+    zt4.policySync.sync('bw-south', zt4.pap.version());
+    if (zt4.pdp.decide({ ...base, env: { ...base.env, region: 'bw-south' } }).decision !== 'permit') v.push('a synchronized region was refused');
+    const sync = zt4.policySync.status(zt4.pap.version());
+    if (!sync.allInSync || sync.stale.length) v.push('policy sync status did not reflect a synchronized region');
+
+    // The architecture documents the new components and invariants.
+    const arch = zt4.architecture();
+    for (const c of ['Decision cache', 'Revocation', 'Policy sync']) if (!arch.components.some((x) => x.component === c)) v.push(`the architecture omits the ${c} component`);
+    if (!arch.invariants.some((i) => /Revocation is checked FIRST/.test(i))) v.push('the revocation-first invariant is not documented');
+    if (!arch.neverCachedActions.length) v.push('no actions are declared never-cacheable');
   }),
 
   fit('APP-FIT-THREAT-MODEL', 'Every threat traces to a real control, evidence, verification and owner', (v) => {
@@ -1273,15 +1374,119 @@ module.exports = [
     if (tm.residualRisk({ fitnessResults: oneFailing }).clean) v.push('residual risk did not react to a failing control');
   }),
 
+  fit('APP-FIT-RISK-INTELLIGENCE', 'Risk is owned, scored, time-boxed and expires — acceptance never renews itself', (v) => {
+    const tm = require('../src/security/threat-model');
+    const ids = [...new Set(tm.threats().flatMap((t) => t.controls))];
+    const green = ids.map((id) => ({ id, pass: true }));
+    const red = green.map((r) => (r.id === 'FIT-IDENTITY-MINIMIZATION' ? { ...r, pass: false } : r));
+    const rr = new tm.RiskRegister({ clock: () => 0 });
+
+    // The full lifecycle row exists for every threat, end to end.
+    for (const row of rr.lifecycle({ fitnessResults: green })) {
+      for (const field of ['threat', 'severity', 'inherentRisk', 'controls', 'evidence', 'verification', 'controlEffectiveness', 'residualRisk', 'residualBand', 'treatment', 'owner', 'responsibleAuthority', 'governanceBoard', 'reviewDate']) {
+        if (row[field] === undefined || row[field] === null) v.push(`${row.threat}: lifecycle is missing '${field}'`);
+      }
+    }
+    // Control effectiveness is scored from the LIVE gate: a failing control counts against it.
+    const effGreen = rr.controlEffectiveness('TH-DEANON', green);
+    const effRed = rr.controlEffectiveness('TH-DEANON', red);
+    if (effGreen.score !== 1) v.push('all-holding controls did not score full effectiveness');
+    if (!(effRed.score < effGreen.score)) v.push('a failing control did not reduce control effectiveness');
+    if (effRed.failing !== 1) v.push('the failing control was not counted');
+    // Residual risk falls to zero only when every control holds, and reacts when one fails.
+    if (rr.residual('TH-DEANON', { fitnessResults: green }).residual !== 0) v.push('residual risk was non-zero with every control holding');
+    const resid = rr.residual('TH-DEANON', { fitnessResults: red });
+    if (!(resid.residual > 0) || resid.band === 'none') v.push('residual risk did not rise when a control failed');
+    if (resid.treatment !== 'open — treat or accept') v.push('open residual risk was not marked for treatment');
+
+    // Risk acceptance: named human, rationale, and a MANDATORY expiry within a year.
+    let needsHuman = false;
+    try { rr.accept('TH-DEANON', { rationale: 'x' }); } catch (e) { needsHuman = !!e.failClosed; }
+    if (!needsHuman) v.push('a risk was accepted without a named human authority');
+    let needsExpiry = false;
+    try { rr.accept('TH-DEANON', { by: 'Oversight Board', rationale: 'x', days: 400 }); } catch (e) { needsExpiry = !!e.failClosed; }
+    if (!needsExpiry) v.push('a risk acceptance was allowed to outlive a year');
+    const acc = rr.accept('TH-DEANON', { by: 'Oversight Board', rationale: 'compensating control in place', days: 30, now: 0 });
+    if (!rr.acceptanceFor('TH-DEANON', { now: 0 }).current) v.push('a fresh acceptance was not current');
+    if (rr.residual('TH-DEANON', { fitnessResults: red, now: 0 }).treatment !== 'accepted (time-boxed)') v.push('an accepted risk was not marked as time-boxed');
+    // EXPIRY: the acceptance lapses on its own and the risk reopens.
+    const later = 31 * 24 * 3600_000;
+    if (rr.acceptanceFor('TH-DEANON', { now: later }).current) v.push('a risk acceptance outlived its expiry');
+    if (rr.residual('TH-DEANON', { fitnessResults: red, now: later }).treatment === 'accepted (time-boxed)') v.push('an expired acceptance still suppressed the risk');
+    if (!rr.expiredAcceptances({ now: later }).some((e) => e.id === acc.id)) v.push('an expired acceptance was not reported');
+    if (rr.validate({ fitnessResults: red, now: later }).valid) v.push('validation passed with a lapsed risk acceptance');
+    // Revoking an acceptance requires a named human and a reason.
+    let revokeNeedsReason = false;
+    try { rr.revokeAcceptance(acc.id, { by: 'x' }); } catch (_) { revokeNeedsReason = true; }
+    if (!revokeNeedsReason) v.push('a risk acceptance was revoked without a reason');
+
+    // Review cadence: never-assessed threats are overdue; a reassessment resets the clock.
+    const rr2 = new tm.RiskRegister({ clock: () => 0 });
+    if (rr2.reviewReminders({ now: 0 }).length !== tm.ids().length) v.push('never-assessed threats were not all flagged for review');
+    if (!rr2.reviewDue('TH-DEANON', { now: 0 }).neverAssessed) v.push('a never-assessed threat was not marked as such');
+    rr2.reassess('TH-DEANON', { by: 'Chief Information Security Officer', findings: 'controls verified', now: 0 });
+    if (rr2.reviewDue('TH-DEANON', { now: 0 }).overdue) v.push('a just-reassessed threat was still overdue');
+    if (!rr2.reviewDue('TH-DEANON', { now: 400 * 24 * 3600_000 }).overdue) v.push('a review never came due again');
+    if (tm.REVIEW_CADENCE_DAYS.critical >= tm.REVIEW_CADENCE_DAYS.low) v.push('critical risks are not reviewed more often than low ones');
+
+    // Threat intelligence raises attention only, and refuses identity.
+    let intelIdentityRefused = false;
+    try { rr2.ingestIntelligence({ source: 'a@b.c', threat: 'TH-DEANON', indicator: 'x' }); } catch (e) { intelIdentityRefused = !!e.failClosed; }
+    if (!intelIdentityRefused) v.push('threat intelligence accepted identity data');
+    const intel = rr2.ingestIntelligence({ source: 'national-cirt', threat: 'TH-DEANON', indicator: 'campaign-x' });
+    if (intel.effect !== 'raises-attention-only') v.push('threat intelligence claimed more than raising attention');
+    let unknownRefused = false;
+    try { rr2.ingestIntelligence({ source: 's', threat: 'TH-NONSENSE', indicator: 'x' }); } catch (_) { unknownRefused = true; }
+    if (!unknownRefused) v.push('intelligence was accepted for an unknown threat');
+
+    // Heat map and trend are computed, and the trend reacts to improvement.
+    const heat = rr2.heatMap({ fitnessResults: red, now: 0 });
+    if (heat.clean || !heat.worst) v.push('the risk heat map reported clean while a control was failing');
+    if (!rr2.heatMap({ fitnessResults: green, now: 0 }).clean) v.push('the heat map was not clean with every control holding');
+    rr2.snapshot({ fitnessResults: red, now: 0 });
+    rr2.snapshot({ fitnessResults: green, now: 1 });
+    if (rr2.trend().direction !== 'improving') v.push('the risk trend did not react to controls being repaired');
+    const rep = rr2.report({ fitnessResults: green, now: 0 });
+    if (rep.advisoryOnly !== true || rep.authorizes !== false) v.push('the risk report claims authority');
+  }),
+
   fit('APP-FIT-FORMAL-POLICY', 'Critical governance policies are proven, and the checker can produce counterexamples', (v) => {
     const fp = require('../src/iam/formal-policy');
     const mandates = [{ instrument: 'data-protection-act', control: 'FIT-IDENTITY-MINIMIZATION', implemented: true, holding: true }];
     const report = fp.verifyAll({ mandates });
     if (!report.allProven) v.push('policy verification failed: ' + JSON.stringify(report.failed));
-    // Every required policy domain is specified.
+    // Every required policy domain is specified — including the Phase 11 additions.
     const kinds = new Set(fp.specifications().map((s) => s.kind));
-    for (const required of ['authorization', 'separation-of-duties', 'approval-chain', 'escalation', 'evidence-custody', 'data-residency', 'legislative']) {
+    for (const required of ['authorization', 'separation-of-duties', 'approval-chain', 'escalation', 'evidence-custody', 'evidence-integrity', 'data-residency', 'legislative', 'non-interference', 'privilege-escalation', 'workflow-consistency', 'event-ordering', 'deadlock-freedom']) {
       if (!kinds.has(required)) v.push(`no formal specification for '${required}'`);
+    }
+    // The property catalogue publishes a guarantee for every property.
+    const cat = fp.catalogue();
+    for (const prop of cat.properties) if (!prop.guarantee) v.push(`${prop.id}: no published guarantee`);
+    if (cat.properties.length < 16) v.push('the property catalogue is smaller than the specification set');
+    // State coverage is exhaustive within the bound, and reported per specification.
+    const cov = fp.stateCoverage({ mandates });
+    if (!cov.fullyExhaustive) v.push('a specification was not proven exhaustively over its domain');
+    for (const row of cov.specifications) if (row.coverage !== 1) v.push(`${row.specification}: coverage ${row.coverage}`);
+    // The proof summary carries counterexamples, method and the no-authority statement.
+    const summary = fp.proofSummary({ mandates });
+    if (summary.failed !== 0) v.push('the proof summary reports failed properties');
+    if (!summary.method || summary.authorizes !== false) v.push('the proof summary has no method or claims authority');
+    if (summary.guarantees.some((g) => !g.guarantee)) v.push('a proven property has no published guarantee');
+    // Each new property is individually proven, and each can fail on a crafted input.
+    for (const spec of ['SPEC-NON-INTERFERENCE', 'SPEC-NO-PRIVILEGE-ESCALATION', 'SPEC-EVIDENCE-INTEGRITY', 'SPEC-WORKFLOW-CONSISTENCY', 'SPEC-EVENT-ORDERING', 'SPEC-DEADLOCK-FREEDOM']) {
+      if (!fp.check(spec, { mandates }).proven) v.push(`${spec} is not proven`);
+    }
+    const falsifiable = [
+      ['SPEC-NON-INTERFERENCE', { from: 'independent', to: 'executive', carriesIdentity: true, mechanism: 'domain-event' }],
+      ['SPEC-NO-PRIVILEGE-ESCALATION', { from: 'citizen', to: 'admin', granted: false, fromRank: 0, toRank: 3 }],
+      ['SPEC-EVIDENCE-INTEGRITY', { entries: [{ digest: 'a', previous: null, signed: true }, { digest: 'b', previous: 'WRONG', signed: true }] }],
+      ['SPEC-WORKFLOW-CONSISTENCY', { steps: ['assigned', 'reviewed'], terminal: null }],
+      ['SPEC-EVENT-ORDERING', { stream: 'X', sequences: [1, 3] }],
+      ['SPEC-DEADLOCK-FREEDOM', { states: { a: ['b'], b: ['a'] }, terminal: ['done'] }],
+    ];
+    for (const [spec, badState] of falsifiable) {
+      if (!fp.SPECIFICATIONS[spec].holds(badState, { policySet: null, mandates: [] })) v.push(`${spec} cannot detect its own violation`);
     }
     // The proof is exhaustive over a real bound, not a sample.
     if (report.statesExplored < 1000) v.push('the model checker explored an implausibly small state space');

@@ -9,17 +9,57 @@ Gated by `APP-FIT-ZERO-TRUST-ARCHITECTURE`. Live: `GET /api/security/zero-trust`
 
 > **The rule: every access request is evaluated dynamically against live signals.** There is no
 > implicit trust — not from network position, not from a prior decision, not from a role alone.
+>
+> **Phase 11 refinement ([ADR-0005](./adr/0005-authorization-decision-caching.md)):** the blanket
+> "nothing is cached" rule is replaced by a stricter, checkable one — a decision may be reused only
+> while *every* condition that produced it still holds. See **Authorization decision caching** below.
 
 ## Components
 
 | Component | Role | Responsibility | It never… |
 |---|---|---|---|
 | **PAP** | Policy Administration Point | Author, version and publish policy. Publication requires a named human and a rationale. | …evaluates a request |
-| **PDP** | Policy Decision Point | Evaluate every request against live signals; return a decision **and its reasoning trace**. | …caches a decision |
+| **PDP** | Policy Decision Point | Evaluate every request against live signals; return a decision **and its reasoning trace**. | …reuses a decision whose conditions changed |
 | **PEP** | Policy Enforcement Point (identity-aware proxy) | Enforce and audit the decision at the resource boundary. | …decides |
 | **Workload identity** | Service / workload identity | SPIFFE-shaped ids with attestation and short-lived credentials. | …trusts an unattested workload |
 | **Trust boundaries** | Microservice trust boundaries | Declared, mutually authenticated, action-scoped flows. | …permit an undeclared crossing |
 | **Device trust** | Device posture | Contributes to the trust score. | …grant access on its own |
+
+## Authorization decision caching (Phase 11, Part 1)
+
+A permit issues a **signed, short-lived decision token**. It may be reused only when all eight of
+these hold, **re-checked on every reuse**:
+
+| # | Condition | Rejected as |
+|---|---|---|
+| 1 | Signature and digest verify | `tampered` / `bad-signature` |
+| 2 | Unexpired (TTL ≤ 30s, refused at construction if longer) | `expired` |
+| 3 | Issued under the **current** policy version | `stale-policy-version` |
+| 4 | Session, credential and subject **un-revoked** | `revoked-session` / `revoked-credential` / `revoked-subject` |
+| 5 | Identical **security context** (role, MFA, kind, zone, device, resource, geo) | `context-changed` |
+| 6 | Same session | key miss |
+| 7 | Action is cacheable at all | `action-never-cached` |
+| 8 | No re-evaluation trigger fired | full evaluation |
+
+Caching sits **after** revocation, continuous authentication and credential validation — all
+time-dependent and cheap — so it only ever skips policy evaluation and trust scoring.
+
+**Never cached:** `read-evidence`, `admit-evidence`, `record-governance-decision`, `break-glass`,
+`cross-agency-share`. **Re-evaluation triggers:** sensitive action, elevated risk, device posture
+change, geo denial, step-up required, explicit request.
+
+**Revocation** (`RevocationRegistry`) is checked *first on every request*, before anything can
+permit, and revoking a session or subject also drops their cached decisions. **Policy publication**
+invalidates the entire cache. **Cross-region:** a region whose policy version lags the authoritative
+version may not serve authorization at all.
+
+> **A flaw worth recording.** The first implementation keyed the cache on the principal alone — so a
+> cached investigator permit could be reused with `role: citizen`. `APP-FIT-ZERO-TRUST-ARCHITECTURE`
+> caught it before commit. Condition 5 exists because of that, and is why the key binds a digest of
+> the full security context rather than the request identity.
+
+`allowCache: false` on any `decide()` call restores the Phase 10 behaviour exactly, and is the
+rollback path in ADR-0005.
 
 ## The decision pipeline
 
@@ -33,6 +73,9 @@ denial is explainable to the person who hit it.
 4. least-privilege             RBAC matrix is the CEILING — policy may narrow it, never widen it
 5. policy-decision             PAP-published policy, evaluated live (default-deny, deny-overrides)
 6. continuous-authorization    live trust score vs the action's floor → permit / step-up / deny
+
+   with, between 2 and 3:  revocation check (stage 0, always first) · policy-sync check ·
+                           decision-cache lookup (only if no trigger fired)
 ```
 
 ## Identity trust model
