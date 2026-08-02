@@ -117,8 +117,8 @@ const CONTEXTS = {
   'data-fabric': {
     kind: 'supporting', domain: 'Data',
     purpose: 'Canonical schemas, metadata catalogue, lineage, provenance and semantic interoperability.',
-    responsibilities: ['canonical-model', 'metadata-catalogue', 'data-lineage', 'provenance', 'semantic-mapping'],
-    modules: ['src/fabric/registry.js', 'src/fabric/metadata.js', 'src/fabric/provenance.js', 'src/fabric/interoperability.js'],
+    responsibilities: ['canonical-model', 'metadata-catalogue', 'data-lineage', 'provenance', 'semantic-mapping', 'retention-and-legal-hold', 'consent-lifecycle', 'data-quality', 'reference-and-master-data'],
+    modules: ['src/fabric/registry.js', 'src/fabric/metadata.js', 'src/fabric/provenance.js', 'src/fabric/interoperability.js', 'src/fabric/data-governance.js'],
     dependsOn: [d('platform-events', 'published-language', 'domain-event'), d('privacy', 'shared-kernel', 'in-process-port')],
     acl: ['external-agency-schema'], sharedKernel: ['canonical-model', 'privacy-invariants'], status: 'stable',
     rationale: 'Owns the published language for data. Its canonical model is a shared kernel with data-exchange and api-governance so one definition serves all three.',
@@ -180,7 +180,7 @@ const CONTEXTS = {
   'supply-chain': {
     kind: 'supporting', domain: 'Operations',
     purpose: 'Supplier and component integrity; no deployment bypasses the supply-chain gate.',
-    responsibilities: ['supplier-registry', 'component-integrity', 'sbom-validation', 'deployment-gate'],
+    responsibilities: ['supplier-registry', 'component-integrity', 'sbom-validation', 'deployment-gate', 'build-provenance', 'artifact-attestation'],
     modules: ['src/supplychain/'],
     dependsOn: [d('infrastructure', 'customer-supplier', 'in-process-port')],
     acl: ['external-supplier'], sharedKernel: [], status: 'stable',
@@ -198,7 +198,7 @@ const CONTEXTS = {
   'resilience': {
     kind: 'supporting', domain: 'Operations',
     purpose: 'Deterministic simulation, resilience validation, recovery strategy and crisis coordination.',
-    responsibilities: ['simulation', 'monte-carlo', 'resilience-validation', 'recovery-strategy', 'crisis-coordination'],
+    responsibilities: ['simulation', 'monte-carlo', 'resilience-validation', 'recovery-strategy', 'crisis-coordination', 'chaos-engineering', 'multi-region-failover'],
     modules: ['src/twin2/'],
     dependsOn: [d('orchestration', 'conformist', 'in-process-port'), d('infrastructure', 'customer-supplier', 'in-process-port'), d('observability', 'customer-supplier', 'read-model-query')],
     acl: [], sharedKernel: [], status: 'stable',

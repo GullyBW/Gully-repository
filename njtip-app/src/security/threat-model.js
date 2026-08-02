@@ -81,7 +81,7 @@ const THREATS = {
       t('Poison a dependency', 'AND', [{ goal: 'Publish a malicious version' }, { goal: 'Have it resolved into the build' }]),
       t('Tamper with the artifact', 'OR', [{ goal: 'Modify the built image' }, { goal: 'Defeat artifact signature verification' }]),
     ]),
-    controls: ['APP-FIT-SUPPLY-CHAIN-GOVERNANCE', 'INFRA-FIT-DEVSECOPS', 'INFRA-FIT-PLATFORM-LIFECYCLE', 'APP-FIT-DEVSECOPS-CLASSIFICATION'],
+    controls: ['APP-FIT-SUPPLY-CHAIN-GOVERNANCE', 'APP-FIT-SUPPLY-CHAIN-ATTESTATION', 'INFRA-FIT-DEVSECOPS', 'INFRA-FIT-PLATFORM-LIFECYCLE', 'APP-FIT-DEVSECOPS-CLASSIFICATION'],
     evidence: 'Zero third-party runtime dependencies (no transitive closure to poison); SBOM generated per build; deployment is gated by supply-chain validation that fails closed.',
   },
   'TH-THIRD-PARTY': {
@@ -94,7 +94,7 @@ const THREATS = {
       { goal: 'Retain data past the agreed retention' },
       { goal: 'Discover a restricted dataset through federation' },
     ]),
-    controls: ['APP-FIT-DATA-EXCHANGE-PURPOSE', 'APP-FIT-TENANT-ISOLATION', 'APP-FIT-INTEGRATION-ISOLATION'],
+    controls: ['APP-FIT-DATA-EXCHANGE-PURPOSE', 'APP-FIT-DATA-GOVERNANCE', 'APP-FIT-TENANT-ISOLATION', 'APP-FIT-INTEGRATION-ISOLATION'],
     evidence: 'Purpose limitation is enforced at request and at use; retention bounds every agreement; restricted datasets are never publicly discoverable; outbound integrations refuse PII and fail fast.',
   },
   'TH-CLOUD-MISCONFIG': {
@@ -131,7 +131,7 @@ const THREATS = {
     attackTree: t('Prevent reports being filed', 'OR', [
       { goal: 'Exhaust capacity' }, { goal: 'Cause a regional outage' }, { goal: 'Break a critical dependency' },
     ]),
-    controls: ['APP-FIT-NATIONAL-RESILIENCE', 'INFRA-FIT-HA-SCALABILITY', 'APP-FIT-RECOVERY-STRATEGIES', 'APP-FIT-SRE-RELIABILITY', 'APP-FIT-CHAOS-RESILIENCE'],
+    controls: ['APP-FIT-NATIONAL-RESILIENCE', 'INFRA-FIT-HA-SCALABILITY', 'APP-FIT-RECOVERY-STRATEGIES', 'APP-FIT-SRE-RELIABILITY', 'APP-FIT-CHAOS-RESILIENCE', 'APP-FIT-MULTI-REGION'],
     evidence: 'HA with autoscaling and disruption budgets, a validated resilience suite, degraded mode that preserves anonymous intake, and rehearsed multi-region failover.',
   },
   'TH-AUDIT-SUPPRESSION': {

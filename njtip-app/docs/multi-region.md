@@ -1,0 +1,71 @@
+# Multi-Region Operational Resilience (Phase 10, Part 10)
+
+Active-active and active-passive topologies, regional failover, disaster recovery,
+jurisdiction-aware routing, backup and recovery verification, split-brain prevention, cross-region
+consistency and executable failover simulation (`src/twin2/multi-region.js`).
+
+Gated by `APP-FIT-MULTI-REGION`. Live: `GET /api/resilience/multi-region`.
+
+> **The constraint that shapes everything here:** data residency is a sovereign obligation. A
+> failover that moves restricted data outside its permitted region is not a recovery — it is a
+> breach. So routing and failover are residency-aware and **refuse** the illegal option rather than
+> degrading to it.
+
+## Regions
+
+| Region | Jurisdiction | Sovereign | May hold | Role |
+|---|---|---|---|---|
+| `bw-central` | BW | ✅ | public · internal · restricted · secret | primary |
+| `bw-south` | BW | ✅ | public · internal · restricted · secret | secondary |
+| `bw-north` | BW | ✅ | public · internal · restricted | tertiary |
+| `za-north` | ZA | ❌ | **public only** | edge cache |
+
+A non-sovereign region may hold only public data — enforced by the validator, not by convention.
+
+## Topologies
+
+| Topology | Reads survive on | Writes | RTO | RPO | Suitable for |
+|---|---|---|---|---|---|
+| active-active | 1 sovereign region | quorum of 3 | 5 min | 0 | anonymous reporting, case status |
+| active-passive | 1 region | quorum of 2 | 30 min | 5 min | investigation, oversight |
+
+`minRegionsToServeReads` is deliberately 1: a single surviving sovereign region should still serve
+the constitutional path **read-only** rather than going dark. Writes always require quorum.
+
+## Failover behaviour
+
+| Scenario | Healthy | Quorum | Mode |
+|---|---|---|---|
+| Single region lost | 2 of 3 | ✅ | read-write |
+| Primary region lost | 2 of 3 | ✅ | read-write |
+| Two regions lost | 1 of 3 | ❌ | **read-only** |
+| All sovereign regions lost | 0 | ❌ | unavailable |
+| Active-passive promotion | 1 of 2 | ❌ | read-only |
+
+Losing write quorum degrades to read-only rather than accepting divergent writes. That is the whole
+design: availability is valuable, correctness is not negotiable.
+
+## Split-brain prevention
+
+Only the partition holding a **strict majority** of sovereign regions may write, and it receives a
+**fencing token** strictly greater than any previously issued — so a stale primary's writes are
+rejectable after the partition heals.
+
+```
+majority partition holds quorum   → writable, fenced at token n+1
+no partition holds quorum         → READ-ONLY (the safe outcome, not a failure)
+two writable partitions           → SPLIT BRAIN — a correctness failure, reported as such
+```
+
+## Jurisdiction-aware routing
+
+`route({ classification, healthy })` returns a region that is healthy **and** legally permitted to
+hold that classification. If none qualifies it returns `routed: false, failClosed: true` — refusing
+to serve is correct, because routing restricted data to `za-north` would be a residency breach, not
+a fallback. Refused regions are named in the response so the operator sees *why*.
+
+## Backup and recovery verification
+
+A restore counts only when **content digest**, **record count** and **residency** all hold. A
+byte-perfect restore into a region that may not hold the data is reported as a breach, not a
+recovery.

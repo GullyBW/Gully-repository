@@ -1420,6 +1420,145 @@ module.exports = [
     if (!storage.observed.plaintextRefused) v.push('storage fell back to plaintext under failure');
   }),
 
+  fit('APP-FIT-DATA-GOVERNANCE', 'Every record traces origin → transformations → consumers → retention → deletion', (v) => {
+    const { DataGovernance, seedPlatformDatasets, RETENTION_POLICIES } = require('../src/fabric/data-governance');
+    const dg = seedPlatformDatasets(new DataGovernance({ clock: () => 1_000_000 }));
+    for (const violation of dg.validate().violations) v.push(violation);
+    // Every governed record answers all five lifecycle stages.
+    for (const id of dg.datasets()) {
+      const t = dg.traceRecord(id);
+      if (!t.complete) v.push(`${id}: lifecycle trace incomplete`);
+      if (!t.origin) v.push(`${id}: no origin`);
+      if (!t.retention.basis) v.push(`${id}: retention has no legal basis`);
+      if (!t.deletion) v.push(`${id}: no deletion plan`);
+    }
+    // A dataset cannot be registered without a retention class or a purpose.
+    let needsRetention = false;
+    try { dg.register('x', { origin: 'o', retentionClass: 'nonsense', purpose: 'p' }); } catch (e) { needsRetention = !!e.failClosed; }
+    if (!needsRetention) v.push('a dataset was registered with no valid retention policy');
+    let needsPurpose = false;
+    try { dg.register('y', { origin: 'o', retentionClass: 'telemetry' }); } catch (e) { needsPurpose = !!e.failClosed; }
+    if (!needsPurpose) v.push('a dataset was registered with no declared purpose');
+    // Identity fields are refused in a governed dataset.
+    let identityRefused = false;
+    try { dg.register('z', { origin: 'o', retentionClass: 'telemetry', purpose: 'p', fields: ['email'] }); } catch (e) { identityRefused = !!e.failClosed; }
+    if (!identityRefused) v.push('a governed dataset accepted an identity field');
+    // Purpose limitation applies to consumers, across domains.
+    let purposeLimited = false;
+    try { dg.addConsumer('case-records', { consumer: 'marketing', purpose: 'outreach' }); } catch (e) { purposeLimited = !!e.failClosed; }
+    if (!purposeLimited) v.push('a consumer was added under a purpose the dataset does not permit');
+    // Cross-domain lineage is computed, not asserted.
+    const lineage = dg.lineageGraph();
+    if (!lineage.edges.length) v.push('lineage graph has no edges');
+    if (!lineage.crossDomainEdges.length) v.push('cross-domain lineage is not identified');
+    // Legal hold beats retention; deletion is refused while it stands and before expiry.
+    const future = 1_000_000 + 9e12;
+    const hold = dg.placeLegalHold('case-records', { matter: 'M-1', by: 'Attorney General Chambers', rationale: 'active litigation' });
+    let holdBlocks = false;
+    try { dg.delete('case-records', { by: 'Records Steward', rationale: 'retention elapsed', now: future }); } catch (e) { holdBlocks = !!e.failClosed; }
+    if (!holdBlocks) v.push('deletion proceeded while a legal hold was in force');
+    dg.releaseLegalHold(hold.id, { by: 'Attorney General Chambers', rationale: 'matter closed' });
+    let earlyBlocked = false;
+    try { dg.delete('audit-chain', { by: 'x', rationale: 'y', now: 1_000_001 }); } catch (e) { earlyBlocked = !!e.failClosed; }
+    if (!earlyBlocked) v.push('deletion proceeded before the retention period elapsed');
+    if (!dg.delete('case-records', { by: 'Records Steward', rationale: 'retention elapsed', now: future }).deleted) v.push('a due record could not be deleted after its hold was released');
+    // Permanent records can never be destroyed.
+    let permanentProtected = false;
+    try { dg.delete('governance-decisions', { by: 'x', rationale: 'y', now: future }); } catch (e) { permanentProtected = !!e.failClosed; }
+    if (!permanentProtected) v.push('a permanently retained record was deletable');
+    if (RETENTION_POLICIES['governance-decision'].retentionDays !== -1) v.push('governance decisions are not permanently retained');
+    // Consent lifecycle: granted → valid → withdrawn → invalid; identity refused.
+    dg.recordConsent('C1', { subjectRole: 'partner-agency-analyst', purpose: 'joint-analysis', grantedBy: 'Data Steward' });
+    if (!dg.consentValid('C1', { purpose: 'joint-analysis' }).valid) v.push('a fresh consent was not valid');
+    if (dg.consentValid('C1', { purpose: 'other' }).valid) v.push('consent was valid for an unstated purpose');
+    dg.withdrawConsent('C1', { by: 'subject' });
+    if (dg.consentValid('C1', { purpose: 'joint-analysis' }).valid) v.push('withdrawn consent was still valid');
+    // Data quality is observed across the declared dimensions.
+    dg.observeQuality('oversight-aggregates', { completeness: 1, validity: 0.99, timeliness: 0.95 });
+    const q = dg.qualityScore('oversight-aggregates');
+    if (!q.measured || q.score === null) v.push('data quality was not computed from observations');
+    if (dg.qualityScore('platform-telemetry').measured) v.push('an unobserved dataset reported a quality score');
+    // Reference data is a controlled vocabulary; master data has one authoritative source.
+    if (dg.validateReferenceValue('case-category', 'police').valid !== true) v.push('a valid reference value was rejected');
+    if (dg.validateReferenceValue('case-category', 'made-up').valid !== false) v.push('an out-of-vocabulary reference value was accepted');
+    for (const m of dg.masterData()) if (!m.authoritativeSource || !m.steward) v.push(`master data '${m.id}' has no authoritative source or steward`);
+  }),
+
+  fit('APP-FIT-SUPPLY-CHAIN-ATTESTATION', 'Builds are attested, artifacts verified, and an unattested release is blocked', (v) => {
+    const { SupplyChainAttestation, sourceDigest, CLAIMED_LEVEL } = require('../src/supplychain/slsa');
+    const { sbom } = require('../scripts/devsecops');
+    const sc = new SupplyChainAttestation({ clock: () => 0 });
+    const src = sourceDigest();
+    // Provenance requires the source it was built from — an unsourced build is not attestable.
+    let needsSource = false;
+    try { sc.buildProvenance({ artifact: 'njtip-app', artifactDigest: 'abc' }); } catch (e) { needsSource = !!e.failClosed; }
+    if (!needsSource) v.push('provenance was generated without a source reference');
+    const prov = sc.buildProvenance({ artifact: 'njtip-app', artifactDigest: 'abc', sourceRef: 'git+njtip', sourceDigest: src });
+    if (prov.statement.predicateType !== 'https://slsa.dev/provenance/v1') v.push('provenance is not SLSA-shaped');
+    if (!sc.verify(prov.id).valid) v.push('a freshly generated attestation did not verify');
+    // Tampering with the statement breaks verification — that is the whole point.
+    const tampered = new SupplyChainAttestation({ clock: () => 0 });
+    const p2 = tampered.buildProvenance({ artifact: 'njtip-app', artifactDigest: 'abc', sourceRef: 'git+njtip', sourceDigest: src });
+    tampered._attestations.get(p2.id).statement.predicate.builder.id = 'attacker';
+    if (tampered.verify(p2.id).valid) v.push('an altered attestation still verified');
+    // An artifact with no attestation is not deployable.
+    if (sc.verifyArtifact('unknown-digest').valid) v.push('an unattested artifact verified');
+    // Release verification is fail-closed and names every failed check.
+    const blocked = sc.verifyRelease({ artifact: 'njtip-app', artifactDigest: 'abc', sbom: sbom(), dependencies: [] });
+    if (blocked.verified) v.push('a release with an unsigned container image was verified');
+    if (!blocked.failed.includes('container-signature')) v.push('the failing supply-chain check was not named');
+    if (blocked.failClosed !== true || blocked.authorizes !== false) v.push('release verification is not fail-closed / claims authority');
+    const ok = sc.verifyRelease({ artifact: 'njtip-app', artifactDigest: 'abc', sbom: sbom(), dependencies: [], signedContainer: true });
+    if (!ok.verified) v.push('a fully attested release was not verified: ' + ok.failed.join(', '));
+    // Dependency verification refuses an unpinned dependency.
+    if (sc.verifyDependencies({ dependencies: [{ name: 'x', supplier: 's' }] }).verified) v.push('an unpinned dependency was verified');
+    if (!sc.verifyDependencies({ dependencies: [{ name: 'x', supplier: 's', digest: 'd' }] }).verified) v.push('a pinned dependency was rejected');
+    // Reproducible builds: the same inputs produce the same digest.
+    if (!sc.verifyReproducible({ buildFn: () => sourceDigest() }).reproducible) v.push('the build is not reproducible');
+    // The SLSA claim matches the evidence, and the gaps are stated rather than claimed.
+    const posture = sc.slsaPosture();
+    if (posture.claimedLevel !== CLAIMED_LEVEL) v.push('claimed SLSA level is inconsistent');
+    for (const l of posture.levels) if (l.level <= CLAIMED_LEVEL && !l.met) v.push(`SLSA L${l.level} is claimed but not met`);
+    if (!posture.honestGaps.length) v.push('no SLSA gaps are recorded — the claim is suspiciously complete');
+    for (const g of posture.honestGaps) if (!g.why) v.push(`SLSA L${g.level} gap has no explanation`);
+  }),
+
+  fit('APP-FIT-MULTI-REGION', 'Failover is residency-aware, quorum-gated and free of split brain', (v) => {
+    const mr = require('../src/twin2/multi-region');
+    for (const violation of mr.validate().violations) v.push(violation);
+    // Every declared failover scenario behaves as designed.
+    const sims = mr.simulateAll();
+    for (const s of sims.scenarios) if (!s.matches) v.push(`scenario '${s.scenario}': expected ${s.expected}, got ${s.actual}`);
+    // Losing write quorum degrades to READ-ONLY rather than accepting divergent writes.
+    const twoLost = mr.failover({ failed: ['bw-central', 'bw-south'] });
+    if (twoLost.mode !== 'read-only' || twoLost.acceptsWrites) v.push('the platform accepted writes without quorum');
+    if (!twoLost.servesTraffic) v.push('a surviving sovereign region did not serve reads');
+    // Split-brain prevention: at most one partition may write, and it is fenced.
+    const safe = mr.splitBrainCheck({ partitions: [{ name: 'majority', regions: ['bw-central', 'bw-south'] }, { name: 'minority', regions: ['bw-north'] }] });
+    if (safe.splitBrain || !safe.safe || safe.writablePartitions !== 1) v.push('split-brain prevention did not elect a single writable partition');
+    if (safe.fencingToken <= 0) v.push('no fencing token was issued to the writable partition');
+    const noQuorum = mr.splitBrainCheck({ partitions: [{ name: 'a', regions: ['bw-central'] }, { name: 'b', regions: ['bw-north'] }] });
+    if (noQuorum.writablePartitions !== 0 || !noQuorum.safe) v.push('a minority partition was allowed to write');
+    // Jurisdiction-aware routing REFUSES an illegal placement rather than degrading to it.
+    const refused = mr.route({ classification: 'restricted', healthy: ['za-north'] });
+    if (refused.routed || !refused.failClosed) v.push('restricted data was routed to a region that may not hold it');
+    const routed = mr.route({ classification: 'restricted', healthy: ['bw-south', 'za-north'] });
+    if (!routed.routed || routed.region !== 'bw-south') v.push('routing did not prefer a permitted sovereign region');
+    if (!routed.refusedRegions.includes('za-north')) v.push('the refused region was not reported');
+    if (mr.route({ classification: 'secret', healthy: ['bw-north'] }).routed) v.push('secret data was routed to a region not cleared for it');
+    // Backup/recovery verification checks content, count AND residency.
+    if (mr.verifyBackupRecovery({ classification: 'restricted', sourceDigest: 'd', restoredDigest: 'd', restoredRegion: 'za-north', recordsIn: 5, recordsOut: 5 }).verified) v.push('a restore into a non-permitted region was verified');
+    if (mr.verifyBackupRecovery({ classification: 'restricted', sourceDigest: 'd', restoredDigest: 'e', restoredRegion: 'bw-south', recordsIn: 5, recordsOut: 5 }).verified) v.push('a restore with a mismatched digest was verified');
+    if (!mr.verifyBackupRecovery({ classification: 'restricted', sourceDigest: 'd', restoredDigest: 'd', restoredRegion: 'bw-south', recordsIn: 5, recordsOut: 5 }).verified) v.push('a valid restore was rejected');
+    // Cross-region consistency reports lag and which replicas may serve reads.
+    const cons = mr.consistencyCheck({ committedSequence: 100, replicas: { 'bw-central': 100, 'bw-south': 100, 'bw-north': 97 } });
+    if (cons.consistent || cons.maxLag !== 3 || !cons.stale.includes('bw-north')) v.push('cross-region consistency did not detect a lagging replica');
+    if (!cons.readsSafeFrom.includes('bw-central')) v.push('consistent replicas were not identified as safe for reads');
+    // A non-sovereign region may only ever hold public data.
+    for (const [id, r] of Object.entries(mr.REGIONS)) if (!r.sovereign && r.mayHold.some((c) => c !== 'public')) v.push(`${id}: a non-sovereign region may hold only public data`);
+    if (mr.report().authorizes !== false) v.push('the multi-region report claims authority');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

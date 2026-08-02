@@ -137,6 +137,11 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/contracts') { requireRole('admin'); return json(200, app.contracts.catalogue()); }
   if (method === 'GET' && (m = p.match(/^\/api\/contracts\/([^/]+)$/))) { requireRole('admin'); return json(200, { ...app.contracts.describe(dec(m[1])), history: app.contracts.history(dec(m[1])) }); }
   if (method === 'GET' && p === '/api/contracts/openapi') { requireRole('admin'); return json(200, app.contracts.toOpenApi()); }
+  // --- Phase 10: data governance, supply-chain attestation, multi-region ---
+  if (method === 'GET' && p === '/api/data-governance') { requireRole('admin'); return json(200, app.fabric.dataGovernance.report()); }
+  if (method === 'GET' && (m = p.match(/^\/api\/data-governance\/([^/]+)\/trace$/))) { requireRole('admin'); return json(200, app.fabric.dataGovernance.traceRecord(dec(m[1]))); }
+  if (method === 'GET' && p === '/api/supply-chain/attestations') { requireRole('admin'); return json(200, app.supplyChain.attestation.report({ sbom: require('../scripts/devsecops').sbom(), buildFn: app.supplyChain.sourceDigest })); }
+  if (method === 'GET' && p === '/api/resilience/multi-region') { requireRole('admin'); return json(200, app.multiRegion.report()); }
   // --- Phase 10: reliability, telemetry analysis, resilience ---
   if (method === 'GET' && p === '/api/admin/reliability') { requireRole('admin'); return json(200, app.observability.reliability()); }
   if (method === 'GET' && p === '/api/admin/telemetry') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()]; const held = f.filter((r) => r.pass).length / f.length; return json(200, app.observability.telemetry.report({ signals: { architecture: held, reliability: app.evaluateSlo().healthy, security: true, privacy: true, infrastructure: app.infraAssurance.report().healthy, governance: true }, spans: app.tracer.recent(50) })); }

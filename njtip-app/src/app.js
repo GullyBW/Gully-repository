@@ -45,6 +45,7 @@ const { FederationRegistry } = require('./tenancy/federation');
 const { EcosystemFederation } = require('./tenancy/ecosystem-federation');
 const { AssetRegistry } = require('./governance/asset-governance');
 const { SupplyChainGovernance } = require('./supplychain/supply-chain');
+const { SupplyChainAttestation, sourceDigest } = require('./supplychain/slsa');
 const adaptiveGovernanceMod = require('./governance/adaptive');
 const { makeEventBus } = require('./fabric/event-bus');
 const { KnowledgeGraph } = require('./graph/graph');
@@ -69,6 +70,7 @@ const threatIntelMod = require('./security/threat-intel');
 const twin4 = require('./twin2/national-sim');
 const resilience = require('./twin2/resilience-validation');
 const chaos = require('./twin2/chaos');
+const multiRegion = require('./twin2/multi-region');
 const { RecoveryPlatform, seedPlaybooks } = require('./twin2/recovery');
 const { RecoveryStrategyEvaluator } = require('./twin2/recovery-strategies');
 const { NationalCrisisPlatform } = require('./twin2/crisis');
@@ -78,6 +80,7 @@ const { ProvenanceLedger } = require('./fabric/provenance');
 const { InteroperabilityProfile, SemanticMapping, SharedVocabulary } = require('./fabric/interoperability');
 const { DataMarketplace } = require('./fabric/marketplace');
 const { NationalDataExchange } = require('./fabric/data-exchange');
+const { DataGovernance, seedPlatformDatasets } = require('./fabric/data-governance');
 const { LegislativeRegistry } = require('./legislation/registry');
 const { LegislativeImpactAnalyzer } = require('./legislation/impact');
 const { CorrelationGovernance } = require('./intelligence/correlation-governance');
@@ -205,6 +208,10 @@ function createApp(overrides = {}) {
   assetGovernance.register('asset:priority-advisor', { type: 'ai-model', owner: 'analytics-domain', riskClass: 'high', dependsOn: ['asset:reports-api'] });
   // National digital supply-chain governance (Phase 65): no deployment bypasses it (fail-closed).
   const supplyChain = new SupplyChainGovernance();
+  // Software supply-chain attestation (Part 8): SLSA-shaped build provenance, signed and
+  // verifiable. 🔒 Synthetic signing identity; production uses HSM-custodied keys.
+  supplyChain.attestation = new SupplyChainAttestation();
+  supplyChain.sourceDigest = sourceDigest;
   supplyChain.registerSupplier('anthropic-nodejs-builtins', { trustLevel: 'sovereign-approved', risk: 'low' });
   // Adaptive governance framework (Phase 66): continuous improvement; adoption human-approved.
   const adaptiveGovernance = adaptiveGovernanceMod;
@@ -276,7 +283,10 @@ function createApp(overrides = {}) {
   // National Data Exchange (Part 9, ADR-0003): purpose limitation, purpose-scoped approval and
   // retention over the same registry. Commercial exchange is a named, refused purpose.
   const dataExchange = new NationalDataExchange({ registry: marketplace });
-  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, provenance, interop, semanticMapping, vocabulary, marketplace, dataExchange, canonical: CANONICAL_MODEL };
+  // Enterprise data governance (Part 7): retention, legal holds, consent, quality, reference
+  // and master data, with a full origin → deletion trace for every governed record.
+  const dataGovernance = seedPlatformDatasets(new DataGovernance());
+  const fabric = { schemaRegistry, serviceRegistry, catalog, lineage, provenance, interop, semanticMapping, vocabulary, marketplace, dataExchange, dataGovernance, canonical: CANONICAL_MODEL };
   // Digital legislation & regulatory governance (Phase 53): laws are simulatable before enactment.
   const legislation = new LegislativeRegistry();
   // Legislative impact analysis (Part 7): transitive reach, control traceability, simulation
@@ -427,7 +437,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
