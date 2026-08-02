@@ -29,8 +29,8 @@ const CONTEXTS = {
   'identity-access': {
     kind: 'supporting', domain: 'Security',
     purpose: 'Authenticate principals and authorize actions; zero standing privilege, default deny.',
-    responsibilities: ['authentication', 'authorization', 'session-lifecycle', 'device-trust', 'digital-identity'],
-    modules: ['src/authz.js', 'src/iam/digital-identity.js', 'src/iam/zero-trust.js', 'src/adapters/session.js', 'src/adapters/oidc.js', 'src/adapters/secrets.js'],
+    responsibilities: ['authentication', 'authorization', 'session-lifecycle', 'device-trust', 'digital-identity', 'workload-identity', 'trust-boundary-enforcement'],
+    modules: ['src/authz.js', 'src/iam/digital-identity.js', 'src/iam/zero-trust.js', 'src/iam/zero-trust-architecture.js', 'src/adapters/session.js', 'src/adapters/oidc.js', 'src/adapters/secrets.js'],
     dependsOn: [], acl: ['external-idp'], sharedKernel: [],
     status: 'stable',
     rationale: 'Highest fan-in context. Kept independent because every other context conforms to its decisions; merging it would couple security policy to domain logic.',
@@ -38,8 +38,8 @@ const CONTEXTS = {
   'policy-governance': {
     kind: 'supporting', domain: 'Security',
     purpose: 'Author, version, validate and certify access policy as data (never as code).',
-    responsibilities: ['policy-as-data', 'policy-versioning', 'policy-validation', 'policy-certification'],
-    modules: ['src/iam/policy-engine.js', 'src/iam/policy-governance.js'],
+    responsibilities: ['policy-as-data', 'policy-versioning', 'policy-validation', 'policy-certification', 'formal-policy-verification'],
+    modules: ['src/iam/policy-engine.js', 'src/iam/policy-governance.js', 'src/iam/formal-policy.js'],
     dependsOn: [d('identity-access', 'customer-supplier', 'in-process-port')],
     acl: [], sharedKernel: [], status: 'stable',
     rationale: 'Split from identity-access because policy AUTHORING has a governance lifecycle (propose → validate → activate) that must not share a release cadence with the enforcement path.',
@@ -153,7 +153,7 @@ const CONTEXTS = {
   'security': {
     kind: 'supporting', domain: 'Security',
     purpose: 'Threat intelligence that may only LOWER trust, never grant it.',
-    responsibilities: ['threat-feed', 'risk-scoring', 'anomaly-correlation'],
+    responsibilities: ['threat-feed', 'risk-scoring', 'anomaly-correlation', 'threat-modelling', 'adversary-playbooks'],
     modules: ['src/security/'],
     dependsOn: [d('identity-access', 'customer-supplier', 'in-process-port')],
     acl: ['external-threat-feed'], sharedKernel: [], status: 'stable',

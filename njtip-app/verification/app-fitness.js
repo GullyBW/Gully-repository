@@ -1177,6 +1177,129 @@ module.exports = [
     if (/@|omang|nationalId/i.test(JSON.stringify(report))) v.push('usability evidence leaked an identifying value');
   }),
 
+  fit('APP-FIT-ZERO-TRUST-ARCHITECTURE', 'Every access request is evaluated dynamically; no implicit trust anywhere', (v) => {
+    const { makeZeroTrust, MAX_CREDENTIAL_TTL_MS } = require('../src/iam/zero-trust-architecture');
+    let now = 1_000_000;
+    const zt = makeZeroTrust({ clock: () => now });
+    const wl = 'spiffe://njtip/zone/independent/sa/intake-api';
+    // A workload identity requires an attestation — registration is not trust.
+    let attestationRequired = false;
+    try { zt.workloads.register(wl, { zone: 'independent' }); } catch (e) { attestationRequired = !!e.failClosed; }
+    if (!attestationRequired) v.push('a workload identity was registered without an attestation');
+    zt.workloads.register(wl, { zone: 'independent', attestation: { kind: 'synthetic-node-attestation' } });
+    // Credentials are short-lived; an excessive TTL is REFUSED, not clamped.
+    let ttlRefused = false;
+    try { zt.workloads.issueCredential(wl, { ttlMs: MAX_CREDENTIAL_TTL_MS + 1, audience: 'reports' }); } catch (e) { ttlRefused = !!e.failClosed; }
+    if (!ttlRefused) v.push('a long-lived workload credential was issued');
+    const cred = zt.workloads.issueCredential(wl, { ttlMs: 60_000, audience: 'reports' });
+    if (!zt.workloads.verifyCredential(cred.id, { audience: 'reports' }).valid) v.push('a fresh credential did not verify');
+    if (zt.workloads.verifyCredential(cred.id, { audience: 'other' }).valid) v.push('a credential verified for the wrong audience');
+    now += 61_000;
+    if (zt.workloads.verifyCredential(cred.id, { audience: 'reports' }).valid) v.push('an expired credential still verified');
+    now -= 61_000;
+    // Revocation is immediate and cascades to issued credentials.
+    const cred2 = zt.workloads.issueCredential(wl, { ttlMs: 60_000, audience: 'reports' });
+    zt.workloads.revoke(wl);
+    if (zt.workloads.verifyCredential(cred2.id, { audience: 'reports' }).valid) v.push('a revoked workload still had a valid credential');
+
+    zt.devices.register('dev-1', { trusted: true });
+    zt.boundaries.allow('independent', 'executive', { actions: ['review-case'], rationale: 'case routing across zones' });
+    const base = { subject: { principal: 'inv-001', role: 'investigator', mfa: 'fido2', authenticatedAt: now, deviceId: 'dev-1', zone: 'independent' }, action: 'review-case', resource: { zone: 'executive' }, env: { geoAllowed: true } };
+    const permit = zt.pdp.decide(base);
+    if (permit.decision !== 'permit') v.push('a fully compliant request was denied: ' + permit.reason);
+    if (!permit.trace.includes('continuous-authentication') || !permit.trace.includes('continuous-authorization')) v.push('the decision trace does not show continuous authn/authz');
+    // No implicit trust: unauthenticated, stale, undeclared-boundary and over-ceiling all deny.
+    if (zt.pdp.decide({ ...base, subject: {} }).decision !== 'deny') v.push('an unauthenticated request was not denied');
+    if (zt.pdp.decide({ ...base, subject: { ...base.subject, authenticatedAt: now - 24 * 3600_000 } }).decision !== 'deny') v.push('a stale authentication was accepted');
+    if (zt.pdp.decide({ ...base, resource: { zone: 'judiciary' } }).decision !== 'deny') v.push('an undeclared trust-boundary crossing was permitted');
+    if (zt.pdp.decide({ ...base, subject: { ...base.subject, role: 'citizen' } }).decision !== 'deny') v.push('least privilege was not enforced (RBAC ceiling breached)');
+    if (zt.pdp.decide({ ...base, subject: { ...base.subject, mfa: 'none' } }).decision === 'permit') v.push('a sensitive action was permitted without step-up MFA');
+    // A workload request without a credential is denied.
+    if (zt.pdp.decide({ ...base, subject: { ...base.subject, kind: 'workload' } }).decision !== 'deny') v.push('a workload request without a credential was permitted');
+    // Nothing is cached: two identical requests are each evaluated at the PDP.
+    const before = zt.pdp.decisionsEvaluated();
+    zt.pdp.decide(base); zt.pdp.decide(base);
+    if (zt.pdp.decisionsEvaluated() !== before + 2) v.push('a decision was cached rather than re-evaluated');
+    // The PAP publishes policy with a named human; a change takes effect with no code change.
+    let paperwork = false;
+    try { zt.pap.publish([{ id: 'x', effect: 'permit', actions: '*' }], {}); } catch (_) { paperwork = true; }
+    if (!paperwork) v.push('a policy set was published without a named human and rationale');
+    zt.pap.publish([{ id: 'deny-everything', effect: 'deny', actions: '*', conditions: [] }], { by: 'ISRB', rationale: 'test the administration point' });
+    if (zt.pdp.decide(base).decision !== 'deny') v.push('a PAP policy change did not take effect at the PDP');
+    // The PEP enforces and audits; it never decides.
+    const pep = zt.pep.enforce(base);
+    if (pep.allowed !== false) v.push('the PEP did not enforce the PDP denial');
+    if (!zt.pep.auditTrail().length) v.push('the PEP did not audit the decision');
+    if (/@|omang/i.test(JSON.stringify(zt.pep.auditTrail()))) v.push('the PEP audit leaked identity');
+    // The architecture describes all the required components.
+    const arch = zt.architecture();
+    for (const required of ['PAP', 'PDP', 'PEP', 'Workload identity', 'Trust boundaries', 'Device trust']) {
+      if (!arch.components.some((c) => c.component === required)) v.push(`zero trust architecture is missing the ${required} component`);
+    }
+  }),
+
+  fit('APP-FIT-THREAT-MODEL', 'Every threat traces to a real control, evidence, verification and owner', (v) => {
+    const tm = require('../src/security/threat-model');
+    const knownFitnessIds = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => f.id),
+      ...require('./app-fitness').map((f) => f.id),
+      ...require('./infra-fitness').map((f) => f.id),
+    ];
+    for (const violation of tm.validate({ knownFitnessIds }).violations) v.push(violation);
+    // Analysis goes beyond STRIDE/LINDDUN: insider, supply-chain, third-party, cloud and AI.
+    for (const cls of ['stride', 'linddun', 'insider', 'supply-chain', 'third-party', 'cloud', 'ai']) {
+      if (!tm.threats({ threatClass: cls }).length) v.push(`no threat modelled for class '${cls}'`);
+    }
+    // Attack trees decompose into concrete paths.
+    const paths = tm.attackPaths('TH-DEANON');
+    if (paths.paths.length < 3) v.push('the de-anonymisation attack tree does not decompose into paths');
+    // Kill-chain, ATT&CK and CAPEC mappings exist and resolve.
+    if (!Object.values(tm.killChainCoverage()).some((x) => x.length)) v.push('no kill-chain coverage');
+    if (!Object.keys(tm.attckCoverage()).length) v.push('no MITRE ATT&CK mapping');
+    if (!Object.keys(tm.capecCoverage()).length) v.push('no CAPEC mapping');
+    // Adversary playbooks name the control that breaks each step.
+    for (const pb of tm.playbooks()) for (const s of pb.sequence) if (!s.breaksAt) v.push(`${pb.id}: a step names no breaking control`);
+    // The trace resolves end to end, including the accountable authority.
+    const results = knownFitnessIds.map((id) => ({ id, pass: true }));
+    for (const row of tm.traceability({ fitnessResults: results })) {
+      if (!row.controls.length) v.push(`${row.threat}: no controls`);
+      if (!row.evidence) v.push(`${row.threat}: no evidence`);
+      if (!row.responsibleAuthority || !row.governanceBoard) v.push(`${row.threat}: no accountable authority resolved`);
+      if (row.controls.some((c) => !c.implemented)) v.push(`${row.threat}: control(s) not implemented: ${row.controls.filter((c) => !c.implemented).map((c) => c.control).join(', ')}`);
+    }
+    // Residual risk is clean when every control holds, and reacts when one fails.
+    if (!tm.residualRisk({ fitnessResults: results }).clean) v.push('residual risk is not clean while every control holds');
+    const oneFailing = results.map((r) => (r.id === 'FIT-IDENTITY-MINIMIZATION' ? { ...r, pass: false } : r));
+    if (tm.residualRisk({ fitnessResults: oneFailing }).clean) v.push('residual risk did not react to a failing control');
+  }),
+
+  fit('APP-FIT-FORMAL-POLICY', 'Critical governance policies are proven, and the checker can produce counterexamples', (v) => {
+    const fp = require('../src/iam/formal-policy');
+    const mandates = [{ instrument: 'data-protection-act', control: 'FIT-IDENTITY-MINIMIZATION', implemented: true, holding: true }];
+    const report = fp.verifyAll({ mandates });
+    if (!report.allProven) v.push('policy verification failed: ' + JSON.stringify(report.failed));
+    // Every required policy domain is specified.
+    const kinds = new Set(fp.specifications().map((s) => s.kind));
+    for (const required of ['authorization', 'separation-of-duties', 'approval-chain', 'escalation', 'evidence-custody', 'data-residency', 'legislative']) {
+      if (!kinds.has(required)) v.push(`no formal specification for '${required}'`);
+    }
+    // The proof is exhaustive over a real bound, not a sample.
+    if (report.statesExplored < 1000) v.push('the model checker explored an implausibly small state space');
+    for (const r of report.results) if (r.statesExplored !== r.statesInDomain) v.push(`${r.specification}: proof did not explore its whole domain`);
+    // The checker MUST be able to fail and produce a deterministic counterexample.
+    const broken = fp.check('SPEC-SUSPENDED-DENIED', { policies: [{ id: 'permit-all', effect: 'permit', actions: '*', conditions: [] }] });
+    if (broken.proven) v.push('the model checker proved a property that a permit-all policy violates');
+    if (!broken.counterexample || !broken.counterexample.state || !broken.counterexample.reason) v.push('no counterexample was produced for a violated property');
+    const again = fp.check('SPEC-SUSPENDED-DENIED', { policies: [{ id: 'permit-all', effect: 'permit', actions: '*', conditions: [] }] });
+    if (JSON.stringify(broken.counterexample) !== JSON.stringify(again.counterexample)) v.push('counterexamples are not deterministic');
+    // A legal mandate with no implementing control is caught by verification.
+    const gap = fp.check('SPEC-LEGISLATIVE-COMPLIANCE', { mandates: [{ instrument: 'x', control: 'NO-SUCH-CONTROL', implemented: false }] });
+    if (gap.proven) v.push('an unimplemented legal mandate was not caught');
+    // Continuous validation is fail-closed and never authorizes.
+    const cv = fp.continuousValidation({ mandates });
+    if (cv.failClosed !== true || cv.authorizes !== false) v.push('continuous policy validation is not fail-closed / claims authority');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

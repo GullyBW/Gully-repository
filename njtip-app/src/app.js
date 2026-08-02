@@ -34,6 +34,9 @@ const ownership = require('./governance/ownership');
 const { ContractRegistry } = require('./contracts/integration-contracts');
 const migration = require('./migration/roadmap');
 const zeroTrust = require('./iam/zero-trust');
+const { makeZeroTrust } = require('./iam/zero-trust-architecture');
+const formalPolicy = require('./iam/formal-policy');
+const threatModel = require('./security/threat-model');
 const formalVerification = require('./orchestration/formal-verification');
 const { TenantRegistry, CollaborationBroker } = require('./tenancy/tenant');
 const { FederationRegistry } = require('./tenancy/federation');
@@ -154,6 +157,16 @@ function createApp(overrides = {}) {
   const devices = new zeroTrust.DeviceRegistry();
   const breakGlass = new zeroTrust.BreakGlass();
   const iam = { policies, devices, breakGlass, trustScore: zeroTrust.trustScore, continuousAuthz: zeroTrust.continuousAuthz };
+  // Zero Trust architecture (Phase 10 Part 1): PAP → PDP → PEP with workload identity,
+  // short-lived credentials and declared trust boundaries. Every request is evaluated live.
+  const zt = makeZeroTrust({ policies: cfg.policies || DEFAULT_POLICIES, devices });
+  zt.workloads.register('spiffe://njtip/zone/independent/sa/intake-api', { zone: 'independent', attestation: { kind: 'synthetic-node-attestation', verified: true } });
+  zt.workloads.register('spiffe://njtip/zone/executive/sa/case-router', { zone: 'executive', attestation: { kind: 'synthetic-node-attestation', verified: true } });
+  zt.boundaries.allow('independent', 'executive', { actions: ['review-case', 'transition-case'], rationale: 'case routing from intake into investigation' });
+  zt.boundaries.allow('executive', 'judiciary', { actions: ['admit-evidence'], rationale: 'evidence admission into judicial proceedings' });
+  iam.zeroTrust = zt;
+  // Formal policy verification (Part 3): bounded exhaustive proofs with counterexamples.
+  iam.formalPolicy = formalPolicy;
   // Policy governance (Phase 41): registry + versioning; a change is validated before activation.
   const policyGovernance = new PolicyRegistry();
   policyGovernance.register('access-control', { owner: 'security-domain', policies: DEFAULT_POLICIES });
@@ -242,6 +255,7 @@ function createApp(overrides = {}) {
   servicePortfolio.register('svc:anonymous-reporting', { owner: 'independent', fundingPerYear: 500000, maturity: 'defined', strategicValue: 'high' });
   servicePortfolio.register('svc:oversight-analytics', { owner: 'oversight', fundingPerYear: 200000, maturity: 'managed', strategicValue: 'medium', dependsOn: ['svc:anonymous-reporting'] });
   // Privacy engineering (Phase 35) + threat intelligence (Phase 36).
+  const threat = threatModel;
   const threatIntel = { feed: new threatIntelMod.ThreatFeed(), deviceRisk: threatIntelMod.deviceRisk, credentialRisk: threatIntelMod.credentialRisk, behavioralAnomaly: threatIntelMod.behavioralAnomaly, enrichTrust: threatIntelMod.enrichTrust, correlate: threatIntelMod.correlate, recommend: threatIntelMod.recommend };
   const schemaRegistry = new SchemaRegistry();
   for (const [name, schema] of Object.entries(CANONICAL_MODEL)) schemaRegistry.register(name, schema);
@@ -408,7 +422,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };
