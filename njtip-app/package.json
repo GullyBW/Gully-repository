@@ -15,7 +15,8 @@
     "infra-baseline": "node scripts/infra-baseline.js",
     "devsecops": "node scripts/devsecops.js",
     "contracts": "node scripts/contracts.js",
-    "slice": "node scripts/slice.js"
+    "slice": "node scripts/slice.js",
+    "chaos": "node scripts/chaos.js"
   },
   "license": "SEE-BLUEPRINT",
   "dependencies": {},

@@ -131,7 +131,7 @@ const THREATS = {
     attackTree: t('Prevent reports being filed', 'OR', [
       { goal: 'Exhaust capacity' }, { goal: 'Cause a regional outage' }, { goal: 'Break a critical dependency' },
     ]),
-    controls: ['APP-FIT-NATIONAL-RESILIENCE', 'INFRA-FIT-HA-SCALABILITY', 'APP-FIT-RECOVERY-STRATEGIES'],
+    controls: ['APP-FIT-NATIONAL-RESILIENCE', 'INFRA-FIT-HA-SCALABILITY', 'APP-FIT-RECOVERY-STRATEGIES', 'APP-FIT-SRE-RELIABILITY', 'APP-FIT-CHAOS-RESILIENCE'],
     evidence: 'HA with autoscaling and disruption budgets, a validated resilience suite, degraded mode that preserves anonymous intake, and rehearsed multi-region failover.',
   },
   'TH-AUDIT-SUPPRESSION': {

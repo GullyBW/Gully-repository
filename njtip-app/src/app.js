@@ -9,6 +9,8 @@ const { SessionManager } = require('./adapters/session');
 const { Logger, Metrics, Health, Tracer } = require('./adapters/observability');
 const slo = require('./observability/slo');
 const dashboards = require('./observability/dashboards');
+const sre = require('./observability/sre');
+const telemetry = require('./observability/telemetry');
 const { NotificationService } = require('./adapters/notifications');
 const { makeKeyManager } = require('./adapters/kms');
 const { makeObjectStore } = require('./adapters/object-store');
@@ -66,6 +68,7 @@ const privacy = require('./privacy/privacy-engineering');
 const threatIntelMod = require('./security/threat-intel');
 const twin4 = require('./twin2/national-sim');
 const resilience = require('./twin2/resilience-validation');
+const chaos = require('./twin2/chaos');
 const { RecoveryPlatform, seedPlaybooks } = require('./twin2/recovery');
 const { RecoveryStrategyEvaluator } = require('./twin2/recovery-strategies');
 const { NationalCrisisPlatform } = require('./twin2/crisis');
@@ -333,7 +336,9 @@ function createApp(overrides = {}) {
   // evidence (Part 15). Dashboards inform; correlation is default-deny; user evidence guides
   // refinement. None of the three authorizes anything.
   const observability = {
-    slo, dashboards,
+    slo, dashboards, sre, telemetry,
+    // Reliability from the live metric snapshot: SLIs → SLOs → error budgets → release gate.
+    reliability: () => { const c = metrics.counters(); let total = 0, failed = 0; for (const [k, val] of Object.entries(c)) { if (k.startsWith('njtip_http_requests_total')) { total += val; if (/status="?5\d\d"?/.test(k)) failed += val; } } return sre.reliabilityReport({ measurements: sre.fromSliSnapshot({ total, failed, latencies: metrics.samples('njtip_http_latency_ms'), services: Object.keys(sre.SERVICE_LEVELS) }) }); },
     dashboard: (id) => dashboards.dashboard(id, dashboardSources()),
     all: () => dashboards.all(dashboardSources()),
     audiences: () => dashboards.audiences(),
@@ -422,7 +427,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, ownership, contracts, migration, infraAssurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

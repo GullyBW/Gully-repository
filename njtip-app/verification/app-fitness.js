@@ -1300,6 +1300,126 @@ module.exports = [
     if (cv.failClosed !== true || cv.authorizes !== false) v.push('continuous policy validation is not fail-closed / claims authority');
   }),
 
+  fit('APP-FIT-SRE-RELIABILITY', 'SLOs, error budgets and the release gate hold — and fail when breached', (v) => {
+    const sre = require('../src/observability/sre');
+    // Every user journey has availability, latency and RECOVERY objectives with a rationale.
+    for (const sl of sre.serviceLevels()) {
+      for (const field of ['availability', 'latencyMs', 'latencyTarget', 'rtoMinutes', 'rationale']) {
+        if (sl[field] === undefined || sl[field] === null) v.push(`${sl.id}: missing ${field}`);
+      }
+      if (typeof sl.rpoMinutes !== 'number') v.push(`${sl.id}: missing rpoMinutes`);
+    }
+    // The constitutional journey carries the strictest targets and loses nothing on recovery.
+    const intake = sre.SERVICE_LEVELS['anonymous-reporting'];
+    if (intake.rpoMinutes !== 0) v.push('the anonymous reporting journey tolerates data loss (RPO > 0)');
+    if (!(intake.availability >= 0.999)) v.push('the anonymous reporting availability objective is too weak');
+    // Error budget mathematics: consumption, remaining and burn rate.
+    const healthy = sre.errorBudget({ objective: 0.999, attained: 0.9995, windowDays: 30, elapsedDays: 30 });
+    if (healthy.exhausted || healthy.severity !== 'healthy') v.push('a within-objective service was reported as burning budget');
+    const burnt = sre.errorBudget({ objective: 0.999, attained: 0.99, windowDays: 30, elapsedDays: 30 });
+    if (!burnt.exhausted || burnt.remaining !== 0) v.push('an over-budget service was not reported as exhausted');
+    const fast = sre.errorBudget({ objective: 0.999, attained: 0.9985, windowDays: 30, elapsedDays: 5 });
+    if (fast.burnRate <= 1) v.push('burn rate is not computed against elapsed window time');
+    // THE REQUIREMENT: the gate must FAIL when an SLO is violated.
+    const breached = { 'anonymous-reporting': { availability: 0.90, latencyUnder: 0.5 } };
+    const gate = sre.releaseGate({ measurements: breached });
+    if (gate.allow) v.push('the release gate permitted a release while an SLO was breached');
+    if (!gate.failClosed || gate.authorizes !== false) v.push('the release gate is not fail-closed / claims authority');
+    if (!gate.blockers.length) v.push('a blocked release named no blocker');
+    // A release cannot be judged blind: absent measurements block too.
+    if (sre.releaseGate({ measurements: {} }).allow) v.push('a release was permitted with no reliability measurement at all');
+    // Only a NAMED human may accept the risk, and the acceptance is recorded.
+    const overridden = sre.releaseGate({ measurements: breached, riskAcceptedBy: 'ORB Chair', riskRationale: 'security fix outweighs the budget' });
+    if (!overridden.allow || !overridden.overridden || overridden.riskAcceptedBy !== 'ORB Chair') v.push('a recorded human risk acceptance did not unblock the release');
+    if (sre.releaseGate({ measurements: breached, riskAcceptedBy: 'ORB Chair' }).allow) v.push('risk was accepted without a rationale');
+    // Healthy measurements permit a release (the gate is not merely always-closed).
+    const ok = sre.releaseGate({ measurements: { 'anonymous-reporting': { availability: 1, latencyUnder: 1 }, 'case-status': { availability: 1, latencyUnder: 1 }, 'investigation': { availability: 1, latencyUnder: 1 }, 'oversight': { availability: 1, latencyUnder: 1 }, 'governance-decision': { availability: 1, latencyUnder: 1 } } });
+    if (!ok.allow || !ok.clean) v.push('the release gate blocked a fully healthy platform');
+    // Recovery targets are checked against the strategy actually chosen.
+    if (sre.recoveryCompliance({ service: 'anonymous-reporting', strategyRtoMinutes: 240, strategyRpoMinutes: 60 }).compliant) v.push('a strategy that misses both recovery objectives was accepted');
+    if (!sre.recoveryCompliance({ service: 'anonymous-reporting', strategyRtoMinutes: 10, strategyRpoMinutes: 0 }).compliant) v.push('a compliant recovery strategy was rejected');
+    // Autoscaling policy validation catches the classic mistakes.
+    if (!sre.validateAutoscaling(sre.DEFAULT_AUTOSCALING).valid) v.push('the default autoscaling policy is invalid');
+    if (sre.validateAutoscaling({ minReplicas: 1, maxReplicas: 1, targetCpuPct: 95, scaleUpCooldownS: 300, scaleDownCooldownS: 60 }).valid) v.push('an unsafe autoscaling policy was accepted');
+    // Capacity and resource projections are deterministic.
+    if (JSON.stringify(sre.capacityPlan()) !== JSON.stringify(sre.capacityPlan())) v.push('capacity planning is not deterministic');
+    if (sre.capacityPlan({ months: 6 }).plan.length !== 7) v.push('capacity plan horizon is wrong');
+    if (JSON.stringify(sre.resourceForecast()) !== JSON.stringify(sre.resourceForecast())) v.push('resource forecasting is not deterministic');
+  }),
+
+  fit('APP-FIT-OBSERVABILITY-TELEMETRY', 'Telemetry is OTel-shaped, zone-isolated, correlated and identity-free', (v) => {
+    const tel = require('../src/observability/telemetry');
+    for (const violation of tel.validate().violations) v.push(violation);
+    // Zones never depend on each other directly — only PII-free events cross.
+    for (const f of tel.runtimeTopology().eventFlows) if (!f.piiFree) v.push(`cross-zone flow ${f.from}→${f.to} is not PII-free`);
+    if (tel.cycles().length) v.push('the runtime topology has a dependency cycle');
+    // Spans only carry allow-listed semantic attributes; anything else is dropped.
+    const s = tel.span({ name: 'http.request', kind: 'server', traceId: 't1', spanId: 's1', attrs: { 'http.route': '/api/reports', email: 'a@b.c', 'user.name': 'x' } });
+    if (s.attrs.email || s.attrs['user.name']) v.push('a span carried a non-allow-listed attribute');
+    if (s.attrs['http.route'] !== '/api/reports') v.push('a span dropped a valid semantic attribute');
+    if (!s.dropped.includes('email')) v.push('dropped attributes are not reported');
+    if (!s.resource['service.name']) v.push('spans carry no OpenTelemetry resource attributes');
+    // Business and audit events are traceable and identity-free.
+    const be = tel.businessEvent({ traceId: 't1', spanId: 's2', name: 'case.submitted', caseCode: 'NJ-1', zone: 'independent' });
+    const ae = tel.auditEvent({ traceId: 't1', spanId: 's3', name: 'governance.decided', actorRole: 'oversight-board', decision: 'defer' });
+    if (be.attrs['event.domain'] !== 'business' || ae.attrs['event.domain'] !== 'audit') v.push('event domain is not recorded on business/audit traces');
+    if (/@|omang/i.test(JSON.stringify([be, ae]))) v.push('a business/audit event leaked identity');
+    // Correlation joins spans, logs and events under one id.
+    const corr = tel.correlate({ traceId: 't1', spans: [s], logs: [{ traceId: 't1', msg: 'x' }], events: [be, ae] });
+    if (!corr.complete) v.push('correlation did not join a request to its logs');
+    if (!corr.businessEvents.length || !corr.auditEvents.length) v.push('correlation lost the business/audit events');
+    // The trace tree computes self time and finds the slowest span.
+    const tree = tel.traceTree([
+      tel.span({ name: 'root', traceId: 't2', spanId: 'a', durationMs: 100 }),
+      tel.span({ name: 'child', traceId: 't2', spanId: 'b', parentId: 'a', durationMs: 70 }),
+    ]);
+    if (tree.slowest.name !== 'child' || tree.spans.find((x) => x.spanId === 'a').selfMs !== 30) v.push('latency breakdown is wrong');
+    // Failure propagation distinguishes DOWN from DEGRADED and finds the constitutional impact.
+    const notif = tel.failurePropagation(['notification-service']);
+    if (notif.criticalPathBroken) v.push('losing notifications was reported as breaking anonymous reporting');
+    if (!notif.degraded.includes('intake-api')) v.push('degradation did not propagate to the dependent service');
+    const store = tel.failurePropagation(['persistence-ind']);
+    if (!store.criticalPathBroken) v.push('losing the intake datastore was not reported as breaking the critical path');
+    if (Object.keys(store.byZone).length > 1) v.push('a single-zone failure propagated across zones — zone isolation is broken');
+    // Single points of failure on the constitutional path are known, not discovered in an incident.
+    if (!tel.singlePointsOfFailure().includes('persistence-ind')) v.push('single points of failure are not identified');
+    // Alerts route to an accountable team and board; an unrouted alert is flagged.
+    if (!tel.alertRoute({ domain: 'security', severity: 'page' }).page) v.push('a paging security alert did not page');
+    if (tel.alertRoute({ domain: 'nonsense' }).routed) v.push('an unknown alert domain was silently routed');
+    // The health score is computed from measured signals; unmeasured lowers COVERAGE.
+    const full = tel.healthScore({ architecture: 1, reliability: 1, security: 1, privacy: 1, infrastructure: 1, governance: 1 });
+    if (full.score !== 1 || full.coverage !== 1) v.push('a fully healthy platform did not score 1 at full coverage');
+    const partial = tel.healthScore({ architecture: 1 });
+    if (partial.coverage >= 1) v.push('an unmeasured domain did not reduce coverage');
+    if (partial.contributions.some((c) => c.status === 'unmeasured' && c.contribution !== 0)) v.push('an unmeasured domain contributed to the score');
+  }),
+
+  fit('APP-FIT-CHAOS-RESILIENCE', 'Load, stress, spike, soak, recovery and fault injection all hold in CI', (v) => {
+    const chaos = require('../src/twin2/chaos');
+    const suite = chaos.runSuite({ light: true });
+    for (const failed of suite.failed) v.push(`resilience check failed: ${failed}`);
+    if (!suite.pass) v.push('the resilience suite did not pass');
+    if (suite.failClosed !== true || suite.authorizes !== false) v.push('the resilience suite is not fail-closed / claims authority');
+    // Every required test type and fault class is present and executable.
+    const perfTypes = suite.performance.map((p) => p.test);
+    for (const required of ['load', 'stress', 'spike', 'soak', 'recovery']) if (!perfTypes.includes(required)) v.push(`missing ${required} test`);
+    const faults = chaos.experiments().map((e) => e.id);
+    for (const required of ['dependency-failure', 'network-partition', 'database-failure', 'storage-failure', 'identity-failure']) {
+      if (!faults.includes(required)) v.push(`missing fault injection for ${required}`);
+    }
+    // Every experiment states a hypothesis — an experiment without one is just a script.
+    for (const e of chaos.experiments()) { if (!e.hypothesis) v.push(`${e.id}: no steady-state hypothesis`); if (!e.fault) v.push(`${e.id}: no fault described`); }
+    // The key guarantees, asserted individually so a regression names itself.
+    const partition = chaos.runExperiment('network-partition');
+    if (partition.observed.lost !== 0 || partition.observed.retainedDuringPartition !== 2) v.push('events were lost across a network partition');
+    const db = chaos.runExperiment('database-failure');
+    if (!db.observed.errorSurfaced || db.observed.after !== db.observed.before) v.push('a database failure did not fail closed');
+    const idp = chaos.runExperiment('identity-failure');
+    if (!idp.observed.forgedRejected || !idp.observed.tamperedRejected) v.push('identity verification did not fail closed');
+    const storage = chaos.runExperiment('storage-failure');
+    if (!storage.observed.plaintextRefused) v.push('storage fell back to plaintext under failure');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

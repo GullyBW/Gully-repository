@@ -30,6 +30,9 @@ jobs:
       - name: End-to-end vertical slice (deterministic)
         working-directory: njtip-app
         run: node scripts/slice.js
+      - name: Resilience suite — load, stress, spike, soak, recovery, fault injection
+        working-directory: njtip-app
+        run: node scripts/chaos.js
       - name: Integration contracts — valid and fully covered
         working-directory: njtip-app
         run: node scripts/contracts.js
