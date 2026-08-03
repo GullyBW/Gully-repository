@@ -189,6 +189,9 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/governance/continuity/dashboard') { requireRole('oversight-board'); const o = require('./governance/ownership'); return json(200, o.continuityDashboard({ activity: app.ownership.activity, training: app.ownership.training, escalations: app.ownership.escalations })); }
   if (method === 'GET' && p === '/api/assurance/evidence-provenance') { requireRole('admin'); return json(200, app.assurance.evidenceRegister().provenance()); }
   if (method === 'GET' && (m = p.match(/^\/api\/assurance\/evidence-provenance\/([^/]+)$/))) { requireRole('admin'); return json(200, app.assurance.evidenceRegister().provenanceReport(dec(m[1]))); }
+  // --- Phase 12: readiness dependencies, engineering intelligence ---
+  if (method === 'GET' && p === '/api/assurance/readiness-dependencies') { requireRole('admin'); return json(200, app.assurance.readiness().dependencyAnalysis); }
+  if (method === 'GET' && p === '/api/assurance/engineering-intelligence') { requireRole('admin'); return json(200, app.assurance.engineeringIntelligence()); }
   if (method === 'GET' && p === '/api/architecture/adr') { requireRole('admin'); const a = require('./architecture/adr-governance'); return json(200, { catalogue: a.validateCatalogue(), lifecycle: a.lifecycle(), debt: a.architecturalDebt(), schema: a.schema() }); }
   if (method === 'GET' && p === '/api/governance/continuity') { requireRole('admin'); const own = require('./governance/ownership'); return json(200, own.continuityReport()); }
   if (method === 'GET' && p === '/api/assurance/readiness-model') { requireRole('admin'); return json(200, app.assurance.readiness()); }

@@ -527,6 +527,30 @@ function createApp(overrides = {}) {
       });
     },
     engineeringMaturity: (extra = {}) => evidenceConfidence.maturity(assurance.engineeringMetrics(extra)),
+    // Phase 12, Part 16. Assurance coverage is derived from the executable checks that actually
+    // ran — a control is covered when a check holds it, not when a document mentions it. History
+    // and forecasting take caller-supplied snapshots: this module owns no store and no clock, and
+    // inventing a history would be worse than reporting that there is none.
+    engineeringIntelligence: (extra = {}) => {
+      const ids = safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => r.id), []);
+      const coverage = evidenceConfidence.assuranceCoverage({ controls: raci.controlOwnership(ids).controls.map((c) => c.control), executableCheckIds: ids });
+      const history = evidenceConfidence.engineeringHistory({ snapshots: extra.snapshots || [] });
+      return {
+        metrics: assurance.engineeringMetrics(extra),
+        engineeringMaturity: assurance.engineeringMaturity(extra),
+        assuranceCoverage: coverage,
+        governanceMaturity: evidenceConfidence.governanceMaturity({
+          controlsDeclared: ids.length > 0,
+          assurance: coverage,
+          adrCatalogueValid: safeCall(() => adrGovernance.validateCatalogue().valid, null),
+          adrCatalogueSound: safeCall(() => adrGovernance.qualityReport().sound, null),
+          activeOwnershipComplete: safeCall(() => ownership.activeCoverage({ activity: ownership.activity, training: ownership.training }).complete, null),
+          structuralGaps: safeCall(() => ownership.ownershipGaps().gaps.filter((g) => g.kind === 'structural').length, null),
+        }),
+        history, forecast: evidenceConfidence.engineeringForecast({ history, targets: extra.targets || {} }),
+        informationalOnly: true, authorizes: false,
+      };
+    },
   };
   function safeCall(fn, fallback) { try { return fn(); } catch (_) { return fallback; } }
   // Organisational readiness is the one dimension not already in the assurance bundle: it comes

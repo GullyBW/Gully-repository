@@ -3447,6 +3447,111 @@ module.exports = [
     if (provenance.authorizes !== false) v.push('the provenance report claims authority');
   }),
 
+  fit('APP-FIT-ENGINEERING-INTELLIGENCE', 'Readiness dependencies explain without aggregating, and engineering intelligence reports unknown rather than a comfortable default', (v) => {
+    const ec = require('../src/assurance/evidence-confidence');
+
+    // --- Part 15: readiness dependency analysis ------------------------------------------------
+    const graph = ec.readinessDependencyGraph();
+    if (!graph.valid) v.push('readiness dependency graph invalid: ' + graph.violations.join('; '));
+    if (!graph.acyclic) v.push('the readiness dependency graph contains a cycle: ' + graph.cycles.join('; '));
+    if (graph.nodes.length !== Object.keys(ec.READINESS_DIMENSIONS).length) v.push('the graph does not cover every readiness dimension');
+    for (const e of graph.edges) if (!e.because) v.push(`edge ${e.from} → ${e.to} states no reason`);
+    if (!graph.roots.length) v.push('no readiness dimension is foundational — everything depending on something is a cycle waiting to happen');
+    // Every dimension declares its dependencies, including "none". Omission must not read as none.
+    for (const id of Object.keys(ec.READINESS_DIMENSIONS)) if (!ec.DIMENSION_DEPENDENCIES[id]) v.push(`${id}: no dependency list declared`);
+
+    // The graph EXPLAINS; it must not aggregate. Scores are unchanged by it.
+    const dims = Object.keys(ec.READINESS_DIMENSIONS).map((d) => ({ dimension: d, ready: d !== 'technical', score: d !== 'technical' ? 1 : 0 }));
+    const analysis = ec.readinessDependencyAnalysis({ dimensions: dims });
+    for (const row of analysis.dimensions) {
+      const src = dims.find((d) => d.dimension === row.dimension);
+      if (row.ready !== src.ready) v.push(`${row.dimension}: the dependency analysis changed a dimension's readiness — dependencies explain, they do not aggregate`);
+    }
+    if (analysis.authorizationStatus !== 'NOT AUTHORIZED') v.push('the dependency analysis produced something other than NOT AUTHORIZED');
+    if (analysis.derivedFromReadiness !== false || analysis.authorizes !== false) v.push('the dependency analysis claims to derive authorization');
+    if (Object.prototype.hasOwnProperty.call(analysis, 'overallReadiness') || Object.prototype.hasOwnProperty.call(analysis, 'score')) {
+      v.push('the dependency analysis produced an overall figure — that is the single number the ten dimensions exist to avoid');
+    }
+    // One broken foundation is named as the root cause, and everything standing on it is named too.
+    if (!analysis.rootCauses.includes('technical')) v.push('the only unready dimension was not identified as the root cause');
+    if (!analysis.restingOnUnready.includes('security')) v.push('a ready dimension resting on an unready one was not reported');
+    if (analysis.suggestedOrder[0] !== 'technical') v.push('the suggested repair order does not start at the root cause');
+    // With everything ready, nothing rests on anything unready — the check can pass as well as fail.
+    const allReady = ec.readinessDependencyAnalysis({ dimensions: Object.keys(ec.READINESS_DIMENSIONS).map((d) => ({ dimension: d, ready: true })) });
+    if (allReady.restingOnUnready.length || allReady.rootCauses.length) v.push('a fully ready model reported unready foundations');
+    if (allReady.authorizationStatus !== 'NOT AUTHORIZED') v.push('ten ready dimensions produced an authorization');
+
+    // --- Part 16: engineering intelligence -----------------------------------------------------
+    for (const [id, spec] of Object.entries(ec.TEST_TYPES)) {
+      if (!spec.proves || !spec.missingMeans) v.push(`test type '${id}' does not say what it proves or what its absence means`);
+    }
+    for (const required of ['unit', 'integration', 'contract', 'resilience', 'chaos', 'policy']) {
+      if (!ec.TEST_TYPES[required]) v.push(`test type '${required}' is not named`);
+    }
+    // A test type nobody runs is reported as unmeasured, not omitted from the list.
+    const partial = ec.engineeringMetrics({ tests: { unit: 400 } });
+    if (!partial.tests.unmeasuredTypes.includes('chaos')) v.push('an unrun test type vanished from the breakdown instead of reporting unmeasured');
+    if (partial.tests.typeCoverage >= 1) v.push('a breakdown missing five of six test types claimed full type coverage');
+    const full = ec.engineeringMetrics({ tests: Object.fromEntries(Object.keys(ec.TEST_TYPES).map((k) => [k, 10])) });
+    if (full.tests.unmeasuredTypes.length || full.tests.typeCoverage !== 1) v.push('a complete breakdown was not reported as complete');
+
+    // Assurance coverage: a documented procedure is not a control.
+    const none = ec.assuranceCoverage({});
+    if (none.coverage !== null || none.complete) v.push('no declared controls read as full assurance coverage');
+    if (!/undefined, not complete/.test(none.reason)) v.push('undefined assurance coverage was not distinguished from complete');
+    const partialCov = ec.assuranceCoverage({ controls: ['C1', { id: 'C2', verifiedBy: ['APP-FIT-X'] }], executableCheckIds: ['C1'] });
+    if (partialCov.complete) v.push('a control with no executable check behind it counted as covered');
+    if (!partialCov.uncovered.includes('C2')) v.push('the uncovered control was not named');
+    const fullCov = ec.assuranceCoverage({ controls: ['C1'], executableCheckIds: ['C1'] });
+    if (!fullCov.complete || fullCov.coverage !== 1) v.push('a fully covered control set was not reported complete');
+
+    // Governance maturity cannot inflate on unmeasured inputs.
+    const blind = ec.governanceMaturity({});
+    if (blind.level !== 0) v.push('governance maturity rose above zero with nothing measured');
+    if (!blind.blockedBy.length) v.push('an unmeasured governance estate named nothing blocking it');
+    const top = ec.governanceMaturity({ controlsDeclared: true, adrCatalogueValid: true, adrCatalogueSound: true, assurance: fullCov, activeOwnershipComplete: true, structuralGaps: 0 });
+    if (top.level !== 5) v.push('a fully evidenced governance estate did not reach the top level: ' + top.blockedBy.join('; '));
+    const unowned = ec.governanceMaturity({ controlsDeclared: true, adrCatalogueValid: true, adrCatalogueSound: true, assurance: fullCov, activeOwnershipComplete: false, structuralGaps: 1 });
+    if (unowned.level >= 4) v.push('an estate with incomplete active ownership reached the owned level');
+    for (const l of ec.GOVERNANCE_MATURITY_LEVELS) if (!l.requires) v.push(`governance maturity level ${l.level} does not say what it requires`);
+
+    // History: a missing period is a gap, never an interpolated line.
+    let threw = false;
+    try { ec.engineeringHistory({ snapshots: [{ coverage: 0.8 }] }); } catch (_) { threw = true; }
+    if (!threw) v.push('an unlabelled engineering snapshot was accepted');
+    const hist = ec.engineeringHistory({ snapshots: [
+      { period: '2026-Q1', coverage: 0.70, mutationScore: 0.55, testTotal: 400, invariantTotal: 100, changeFailureRate: 0.12, mttrHours: 6, assuranceCoverage: 0.7 },
+      { period: '2026-Q2', coverage: 0.78, testTotal: 470, invariantTotal: 110, changeFailureRate: 0.09, mttrHours: 4, assuranceCoverage: 0.8 },
+      { period: '2026-Q3', coverage: 0.86, mutationScore: 0.72, testTotal: 533, invariantTotal: 123, changeFailureRate: 0.06, mttrHours: 2, assuranceCoverage: 0.92 },
+    ] });
+    if (!hist.metrics.mutationScore.gaps.includes('2026-Q2')) v.push('a period with no measurement was not reported as a gap');
+    if (hist.metrics.mutationScore.measuredPeriods !== 2) v.push('a gap was counted as a measurement');
+    if (hist.completeness >= 1) v.push('a history with a gap claimed full completeness');
+    if (hist.metrics.coverage.direction !== 'rising') v.push('rising coverage was not reported as rising');
+    // Duplicate periods collapse — a series cannot be padded by re-submitting a period.
+    const padded = ec.engineeringHistory({ snapshots: [{ period: 'P1', coverage: 0.5 }, { period: 'P1', coverage: 0.5 }, { period: 'P1', coverage: 0.5 }] });
+    if (padded.snapshots !== 1) v.push('a history series was padded by re-submitting one period');
+
+    // Forecast: fewer than two points is unknown, never a default.
+    const blindCast = ec.engineeringForecast({ history: padded });
+    for (const row of blindCast.metrics) if (row.projectable) v.push(`'${row.metric}' was projected from a single period`);
+    if (!blindCast.unprojectable.includes('coverage')) v.push('an unprojectable metric was not named');
+    if (blindCast.healthyClaim !== null) v.push('a forecast with nothing to project claimed health');
+    const cast = ec.engineeringForecast({ history: hist, periodsAhead: 2 });
+    const cov = cast.metrics.find((m) => m.metric === 'coverage');
+    if (!cov.projectable || cov.direction !== 'rising' || cov.improving !== true) v.push('rising coverage was not projected as improving');
+    const cfr = cast.metrics.find((m) => m.metric === 'changeFailureRate');
+    if (cfr.improving !== true) v.push('a FALLING change-failure rate was not read as an improvement — polarity must be stated, not guessed');
+    if (cast.authorizes !== false) v.push('the engineering forecast claims authority');
+    // A metric moving the wrong way is named as regressing.
+    const worse = ec.engineeringForecast({ history: ec.engineeringHistory({ snapshots: [
+      { period: 'A', coverage: 0.9, changeFailureRate: 0.02 },
+      { period: 'B', coverage: 0.7, changeFailureRate: 0.10 },
+    ] }) });
+    if (!worse.regressing.includes('coverage') || !worse.regressing.includes('changeFailureRate')) v.push('metrics moving the wrong way were not reported as regressing');
+    if (!worse.offTarget.includes('coverage')) v.push('a metric below its target was not reported off-target');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

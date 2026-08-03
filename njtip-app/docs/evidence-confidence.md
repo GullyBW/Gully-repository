@@ -171,3 +171,126 @@ weakest-link aggregate, and a digest over the whole set.
 
 Live: `GET /api/assurance/evidence-provenance` · `GET /api/assurance/evidence-provenance/:id`
 (admin).
+
+---
+
+# Readiness Dependency Analysis (Phase 12, Part 15)
+
+The ten dimensions stay **independent**. Nothing in this section changes a score, and no dimension
+inherits another's verdict.
+
+What the graph adds is the sentence a flat list cannot say: *"security is ready, and it rests on a
+technical dimension that is not."*
+
+> **A dependency graph is not an aggregation.** Rolling an unready prerequisite into the dependent's
+> score would recreate exactly the single-number problem the ten dimensions exist to avoid — one
+> figure, and no way to see which thing is actually broken. The graph reports the foundation; a
+> human reads both.
+
+## The graph
+
+```
+layer 0   technical            organisational
+layer 1   supplyChain   operational   data   governance
+layer 2   security      reliability          legal
+layer 3   privacy
+```
+
+Every edge states **why** it exists — an unexplained edge is an assumption. A few examples:
+
+| Edge | Because |
+|---|---|
+| security → technical | A security claim rests on invariants that hold; unverified, "the policy is certified" describes a policy over something unknown |
+| security → supplyChain | An unattested artifact makes every runtime security property a statement about code nobody can identify |
+| data → organisational | A dataset with no available steward has quality nobody is accountable for |
+| legal → governance | A mandate is implemented by a control, and a control with no accountable owner implements nothing |
+
+The graph is validated: it must be **acyclic** (two dimensions each waiting on the other can never
+be reasoned about in an order), every dependency must name a real dimension, and every dimension
+must declare a list — including the empty one. *"None" must be stated, not omitted.*
+
+## What the analysis reports
+
+| Field | Means |
+|---|---|
+| `restsOnUnready` | A **green** dimension standing on a **red** one — the case worth naming |
+| `rootCauses` | Unready with all of its own dependencies ready. Fixing it is what unblocks the rest |
+| `suggestedOrder` | The unready dimensions in repair order: layer, then name. Deterministic |
+
+And what it never reports: an overall readiness figure. There is no `overallReadiness` field, no
+composite score, and `authorizationStatus` is the same constant string it is everywhere else —
+**NOT AUTHORIZED**, with `derivedFromReadiness: false`. Ten ready dimensions and a clean dependency
+graph still print it.
+
+---
+
+# Engineering Intelligence Platform (Phase 12, Part 16)
+
+## Test types are named, not inferred
+
+Phase 11 counted tests by whatever keys the caller passed, which made the breakdown a description of
+what somebody chose to report rather than of what the platform verifies. The six types are now named:
+
+| Type | Proves | Its absence means |
+|---|---|---|
+| `unit` | A single unit behaves as specified in isolation | Defects are found later, by something slower |
+| `integration` | Components agree across a boundary inside the platform | Each part works and the assembly does not |
+| `contract` | A published interface still satisfies what its consumers depend on | A consumer discovers the breakage in production |
+| `resilience` | The platform degrades and recovers as designed under failure | Recovery is a plan rather than a demonstrated property |
+| `chaos` | A fault is **detected**, contained, recovered and verified | Silent survival is mistaken for resilience |
+| `policy` | Authorization rules hold over their whole input domain | A rule is checked on the cases somebody thought of |
+
+**A type nobody runs is reported as `unmeasured`, not omitted.** All six always appear.
+
+## Assurance coverage
+
+What fraction of declared controls has an **executable check** behind it. A control with a
+documented procedure and no check is **not covered** — that is the whole distinction the figure
+exists to draw.
+
+**No declared controls is `coverage: null`, not `1`.** Nothing to cover is not full coverage.
+
+## Governance maturity
+
+```
+5 Continuously assured  every control covered by a check, active ownership complete, ADR catalogue sound
+4 Owned                 active ownership complete — available, current, certified — no structural gaps
+3 Verified              assurance coverage measured and above 0.9
+2 Recorded              ownership recorded and the ADR catalogue valid
+1 Declared              controls and owners are declared somewhere
+```
+
+Banded from governance evidence, not from a self-assessment, and — as with engineering maturity —
+**an unmeasured input cannot raise a level.** Every level below the top names what is blocking the
+next one.
+
+*As composed, the platform sits at level 3: assurance coverage is complete and the ADR catalogue is
+sound, but the activity and training registers start empty, so active ownership is genuinely not
+evidenced. That is the honest reading, and seeding the registers to reach level 5 would report a
+governance history that never happened.*
+
+## Historical dashboards
+
+`engineeringHistory({ snapshots })` tracks coverage, mutation score, test and invariant totals,
+change failure rate, MTTR and assurance coverage across periods. Two rules:
+
+- **A period with no measurement is a gap, not a flat line.** Interpolating would invent a
+  measurement nobody took, and the `gaps` list names every one.
+- **Duplicate periods collapse.** A series cannot be padded by re-submitting a period.
+
+`completeness` says how much of the picture is actually there.
+
+## Predictive engineering reports
+
+`engineeringForecast()` fits a slope per metric and reports where it lands `periodsAhead`, plus
+`periodsToTarget` on the current trend.
+
+- **Polarity is declared, never guessed.** A *falling* change-failure rate is an improvement; a
+  falling coverage is not. `higherIsBetter` and `improving` are separate fields for that reason.
+- **Fewer than two measured periods is `unknown`.** A projection from one point is *"a guess with a
+  decimal point"*, and the report says so rather than emitting a comfortable default.
+- `healthyClaim` is **always `null`**. The forecast says what is measured and which way it is
+  going. It never says the platform is healthy, and no projection can produce an authorization.
+
+Live: `GET /api/assurance/readiness-dependencies` · `GET /api/assurance/engineering-intelligence`
+(admin).

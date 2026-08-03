@@ -272,6 +272,125 @@ function scoreDimension(id, { sources = {}, evidence = null } = {}) {
   };
 }
 
+// --- Readiness dependency analysis (Phase 12, Part 15) --------------------------------------------
+//
+// The dimensions stay INDEPENDENT — nothing below changes a score, and no dimension inherits another
+// one's verdict. What the graph adds is the sentence a flat list cannot say: "security is ready, and
+// it rests on a technical dimension that is not."
+//
+// A DEPENDENCY GRAPH IS NOT AN AGGREGATION. Rolling an unready prerequisite into the dependent's
+// score would recreate exactly the single-number problem the ten dimensions exist to avoid: one
+// figure, and no way to see which thing is actually broken. The graph reports the foundation; a
+// human reads both.
+const DIMENSION_DEPENDENCIES = {
+  technical: [],
+  organisational: [],
+  security: [
+    { on: 'technical', because: 'a security claim rests on invariants that hold; if the architecture is not verified, "the policy is certified" describes a policy over something unknown.' },
+    { on: 'supplyChain', because: 'an unattested artifact makes every runtime security property a statement about code nobody can identify.' },
+  ],
+  privacy: [
+    { on: 'technical', because: 'identity minimisation is enforced by the invariants; unverified invariants make it an intention.' },
+    { on: 'security', because: 'an anonymity boundary that authorization does not hold is not a boundary.' },
+  ],
+  supplyChain: [
+    { on: 'technical', because: 'attestation verification is itself an executable check — it is only worth what the check is worth.' },
+  ],
+  operational: [
+    { on: 'technical', because: 'runbooks and recovery procedures are exercised by the invariant suite; unverified, they are documents.' },
+  ],
+  reliability: [
+    { on: 'operational', because: 'an SLO met on a platform nobody can observe or recover is a measurement without a response.' },
+  ],
+  data: [
+    { on: 'technical', because: 'lineage and quality are derived from platform state; if the state is unverified, so are the figures.' },
+    { on: 'organisational', because: 'a dataset with no available steward has quality nobody is accountable for.' },
+  ],
+  governance: [
+    { on: 'organisational', because: 'accountability is complete only if somebody is actually available to exercise it.' },
+  ],
+  legal: [
+    { on: 'governance', because: 'a mandate is implemented by a control, and a control with no accountable owner implements nothing.' },
+    { on: 'data', because: 'a legal obligation over records cannot be evidenced from records whose lineage is not traced.' },
+  ],
+};
+
+// The graph as data, with cycle detection and a layering. A cycle here would be a modelling error:
+// two dimensions each waiting on the other can never be reasoned about in an order.
+function readinessDependencyGraph() {
+  const ids = Object.keys(READINESS_DIMENSIONS).sort();
+  const violations = [];
+  for (const id of ids) {
+    if (!DIMENSION_DEPENDENCIES[id]) { violations.push(`${id}: declares no dependency list — "none" must be stated, not omitted`); continue; }
+    for (const dep of DIMENSION_DEPENDENCIES[id]) {
+      if (!READINESS_DIMENSIONS[dep.on]) violations.push(`${id}: depends on unknown dimension '${dep.on}'`);
+      if (dep.on === id) violations.push(`${id}: depends on itself`);
+      if (!dep.because) violations.push(`${id} → ${dep.on}: no stated reason — an unexplained edge is an assumption`);
+    }
+  }
+  // Layering by longest path from a root; a dimension that never settles is in a cycle.
+  const depth = new Map();
+  const inProgress = new Set();
+  const cycles = [];
+  const resolve = (id, trail = []) => {
+    if (depth.has(id)) return depth.get(id);
+    if (inProgress.has(id)) { cycles.push([...trail, id].join(' → ')); return 0; }
+    inProgress.add(id);
+    const deps = (DIMENSION_DEPENDENCIES[id] || []).filter((d) => READINESS_DIMENSIONS[d.on]);
+    const d = deps.length ? 1 + Math.max(...deps.map((x) => resolve(x.on, [...trail, id]))) : 0;
+    inProgress.delete(id);
+    depth.set(id, d);
+    return d;
+  };
+  for (const id of ids) resolve(id);
+  for (const c of cycles) violations.push(`dependency cycle: ${c}`);
+  const dependents = Object.fromEntries(ids.map((id) => [id, ids.filter((x) => (DIMENSION_DEPENDENCIES[x] || []).some((d) => d.on === id))]));
+  return {
+    nodes: ids.map((id) => ({ dimension: id, title: READINESS_DIMENSIONS[id].title, owner: READINESS_DIMENSIONS[id].owner, layer: depth.get(id), dependsOn: (DIMENSION_DEPENDENCIES[id] || []).map((d) => d.on), dependents: dependents[id] })),
+    edges: ids.flatMap((id) => (DIMENSION_DEPENDENCIES[id] || []).map((d) => ({ from: id, to: d.on, because: d.because }))),
+    roots: ids.filter((id) => !(DIMENSION_DEPENDENCIES[id] || []).length),
+    layers: [...new Set([...depth.values()])].sort((a, b) => a - b).map((l) => ({ layer: l, dimensions: ids.filter((id) => depth.get(id) === l) })),
+    acyclic: cycles.length === 0, cycles,
+    valid: violations.length === 0, violations,
+    note: 'The graph explains what a dimension RESTS ON. It never changes a dimension\'s score — dimensions stay independent, and rolling a prerequisite into a dependent would recreate the single number these ten exist to avoid.',
+  };
+}
+
+// Overlay the graph on a scored readiness model: which ready dimensions rest on unready ones, and
+// which unready dimension is a ROOT CAUSE rather than a symptom.
+function readinessDependencyAnalysis({ dimensions = [] } = {}) {
+  const graph = readinessDependencyGraph();
+  const byId = Object.fromEntries(dimensions.map((d) => [d.dimension, d]));
+  const rows = graph.nodes.map((n) => {
+    const self = byId[n.dimension] || null;
+    const unreadyDeps = n.dependsOn.filter((d) => byId[d] && !byId[d].ready);
+    return {
+      dimension: n.dimension, layer: n.layer, owner: n.owner,
+      ready: self ? self.ready : null,
+      dependsOn: n.dependsOn, dependents: n.dependents,
+      unreadyDependencies: unreadyDeps,
+      // The case worth naming: a green dimension standing on a red one.
+      restsOnUnready: (self ? self.ready : false) && unreadyDeps.length > 0,
+      // A root cause is unready with every dependency ready — fixing it is what unblocks the rest.
+      rootCause: (self ? !self.ready : false) && unreadyDeps.length === 0,
+      note: unreadyDeps.length
+        ? `rests on ${unreadyDeps.join(', ')}, which ${unreadyDeps.length === 1 ? 'is' : 'are'} not ready`
+        : 'every dimension this one rests on is ready',
+    };
+  });
+  return {
+    graph, dimensions: rows,
+    restingOnUnready: rows.filter((r) => r.restsOnUnready).map((r) => r.dimension),
+    rootCauses: rows.filter((r) => r.rootCause).map((r) => r.dimension),
+    // Repair order: root causes first, then whatever they unblock. Deterministic by layer then name.
+    suggestedOrder: rows.filter((r) => r.ready === false).sort((a, b) => a.layer - b.layer || a.dimension.localeCompare(b.dimension)).map((r) => r.dimension),
+    // The graph must not be mistaken for a route to a verdict.
+    authorizationStatus: 'NOT AUTHORIZED',
+    derivedFromReadiness: false, authorizes: false, informationalOnly: true,
+    note: 'Dependencies explain what a dimension rests on and suggest a repair order. They do not change a score, do not produce an overall figure, and cannot reach authorization.',
+  };
+}
+
 // The readiness model. Ten dimensions, each independent, none aggregated into a single number that
 // could be mistaken for permission.
 function readinessModel({ sources = {}, evidence = null } = {}) {
@@ -284,6 +403,7 @@ function readinessModel({ sources = {}, evidence = null } = {}) {
     notReady: notReady.map((d) => ({ dimension: d.dimension, owner: d.owner, reason: d.reason })),
     allDimensionsReady: notReady.length === 0,
     lowConfidence: dimensions.filter((d) => d.confidence < 0.60).map((d) => d.dimension),
+    dependencyAnalysis: readinessDependencyAnalysis({ dimensions }),
     // THE INVARIANT. This string is a constant. Nothing computes it, nothing can flip it, and no
     // combination of green dimensions produces anything else.
     authorizationStatus: 'NOT AUTHORIZED',
@@ -358,8 +478,18 @@ function engineeringMetrics({
     const slope = sxx === 0 ? 0 : sxy / sxx;
     return { n, slope: +slope.toFixed(8), first: series[0], latest: series[n - 1], direction: Math.abs(slope) < 1e-9 ? 'flat' : slope > 0 ? 'rising' : 'falling' };
   };
+  // Phase 12: the six named test types are reported whether or not the caller mentioned them. A
+  // type nobody runs must appear as unmeasured rather than simply be absent from the list.
+  const byType = Object.fromEntries(Object.keys(TEST_TYPES).map((k) => [k, num(tests[k])]));
+  for (const [k, val] of Object.entries(tests)) if (!(k in byType)) byType[k] = num(val);
+  const unmeasuredTypes = Object.keys(TEST_TYPES).filter((k) => byType[k] === null);
   return {
-    tests: { byType: { ...tests }, total: testTotal },
+    tests: {
+      byType, total: testTotal,
+      types: Object.entries(TEST_TYPES).map(([id, spec]) => ({ type: id, count: byType[id], ...spec })),
+      unmeasuredTypes,
+      typeCoverage: +((Object.keys(TEST_TYPES).length - unmeasuredTypes.length) / Object.keys(TEST_TYPES).length).toFixed(4),
+    },
     invariants: { byLayer: { ...invariants }, total: invariantTotal },
     coverage: num(coverage), mutationScore: num(mutationScore),
     dora: {
@@ -414,6 +544,158 @@ function maturity(metrics) {
   };
 }
 
+// --- Engineering intelligence (Phase 12, Part 16) --------------------------------------------------
+//
+// Phase 11 counted tests by whatever keys the caller passed. That makes the breakdown a description
+// of what somebody chose to report rather than of what the platform actually verifies — and the
+// gap between them is invisible. The six types below are NAMED, each with what it proves, so a type
+// nobody runs is reported as unmeasured instead of simply not appearing.
+const TEST_TYPES = {
+  unit: { proves: 'A single unit behaves as specified in isolation.', missingMeans: 'Defects are found later, by something slower.' },
+  integration: { proves: 'Components agree across a boundary inside the platform.', missingMeans: 'Each part works and the assembly does not.' },
+  contract: { proves: 'A published interface still satisfies what its consumers depend on.', missingMeans: 'A consumer discovers the breakage in production.' },
+  resilience: { proves: 'The platform degrades and recovers as designed under failure.', missingMeans: 'Recovery is a plan rather than a demonstrated property.' },
+  chaos: { proves: 'A fault is DETECTED, contained, recovered and verified — not merely survived.', missingMeans: 'Silent survival is mistaken for resilience.' },
+  policy: { proves: 'Authorization and governance rules hold over their whole input domain.', missingMeans: 'A rule is checked on the cases somebody thought of.' },
+};
+
+// Assurance coverage: what fraction of the declared controls has an EXECUTABLE check behind it.
+// A control with a documented procedure and no check is not covered — that is the whole distinction
+// this figure exists to draw.
+function assuranceCoverage({ controls = [], executableCheckIds = [] } = {}) {
+  const checks = new Set(executableCheckIds);
+  const rows = controls.map((c) => {
+    const id = typeof c === 'string' ? c : c.id;
+    const verifiedBy = (typeof c === 'object' && Array.isArray(c.verifiedBy)) ? c.verifiedBy : [id];
+    const holding = verifiedBy.filter((x) => checks.has(x));
+    return { control: id, verifiedBy, holdingChecks: holding, covered: holding.length > 0, reason: holding.length ? `verified by ${holding.join(', ')}` : 'no executable check verifies this control — a documented procedure is not a control' };
+  });
+  const covered = rows.filter((r) => r.covered);
+  return {
+    controls: rows, total: rows.length, covered: covered.length,
+    coverage: rows.length ? +(covered.length / rows.length).toFixed(4) : null,
+    uncovered: rows.filter((r) => !r.covered).map((r) => r.control),
+    // No controls declared is not full coverage. It is nothing to cover, and it must not read as 1.
+    reason: rows.length === 0 ? 'no controls declared — coverage is undefined, not complete' : `${covered.length} of ${rows.length} controls have an executable check behind them`,
+    complete: rows.length > 0 && covered.length === rows.length,
+  };
+}
+
+// Governance maturity, from the governance evidence rather than from a self-assessment. Each level
+// names what it needs; an unmeasured input cannot raise a level, exactly as in engineering maturity.
+const GOVERNANCE_MATURITY_LEVELS = [
+  { level: 5, name: 'Continuously assured', requires: 'Every control covered by an executable check, active ownership complete, and the ADR catalogue sound.' },
+  { level: 4, name: 'Owned', requires: 'Active ownership complete — available, current and certified — with no structural gaps.' },
+  { level: 3, name: 'Verified', requires: 'Assurance coverage measured and above 0.9.' },
+  { level: 2, name: 'Recorded', requires: 'Ownership recorded and the ADR catalogue valid.' },
+  { level: 1, name: 'Declared', requires: 'Controls and owners are declared somewhere.' },
+];
+function governanceMaturity({ assurance = null, activeOwnershipComplete = null, structuralGaps = null, adrCatalogueValid = null, adrCatalogueSound = null, controlsDeclared = null } = {}) {
+  const reasons = [];
+  let level = 0;
+  const known = (x) => x !== null && x !== undefined;
+  if (controlsDeclared) level = 1; else reasons.push('no controls are declared');
+  if (level >= 1 && adrCatalogueValid === true) level = 2; else if (level >= 1) reasons.push(known(adrCatalogueValid) ? 'the ADR catalogue is not valid' : 'ADR catalogue validity is unmeasured');
+  if (level >= 2 && assurance && known(assurance.coverage) && assurance.coverage >= 0.9) level = 3;
+  else if (level >= 2) reasons.push(assurance && known(assurance.coverage) ? `assurance coverage ${assurance.coverage} is below 0.9` : 'assurance coverage is unmeasured');
+  if (level >= 3 && activeOwnershipComplete === true && structuralGaps === 0) level = 4;
+  else if (level >= 3) reasons.push(known(activeOwnershipComplete) ? 'active ownership is incomplete or structurally gapped' : 'active ownership is unmeasured');
+  if (level >= 4 && assurance && assurance.complete === true && adrCatalogueSound === true) level = 5;
+  else if (level >= 4) reasons.push('not every control has an executable check, or the ADR catalogue is not sound');
+  const spec = GOVERNANCE_MATURITY_LEVELS.find((x) => x.level === level) || { level: 0, name: 'Unmeasured', requires: '—' };
+  return {
+    level, name: spec.name, requires: spec.requires, blockedBy: reasons,
+    levels: GOVERNANCE_MATURITY_LEVELS.map((x) => ({ ...x })),
+    note: 'Banded from governance evidence, not from a self-assessment. An unmeasured input cannot raise a level.',
+    authorizes: false,
+  };
+}
+
+// Historical dashboard. Snapshots are supplied by the caller — this module does not own a clock or
+// a store — and are sorted and de-duplicated by their period label so a series cannot be padded.
+function engineeringHistory({ snapshots = [] } = {}) {
+  const byPeriod = new Map();
+  for (const s of snapshots) {
+    if (!s || !s.period) throw new Error('every engineering snapshot must carry a period label');
+    byPeriod.set(s.period, { ...s });
+  }
+  const series = [...byPeriod.values()].sort((a, b) => String(a.period).localeCompare(String(b.period)));
+  const track = ['coverage', 'mutationScore', 'testTotal', 'invariantTotal', 'changeFailureRate', 'mttrHours', 'assuranceCoverage'];
+  const metrics = {};
+  for (const key of track) {
+    const points = series.map((s) => ({ period: s.period, value: typeof s[key] === 'number' ? s[key] : null }));
+    const measured = points.filter((p) => p.value !== null);
+    metrics[key] = {
+      points, measuredPeriods: measured.length,
+      first: measured.length ? measured[0].value : null,
+      latest: measured.length ? measured[measured.length - 1].value : null,
+      delta: measured.length >= 2 ? +(measured[measured.length - 1].value - measured[0].value).toFixed(6) : null,
+      // A gap in a series is a gap, not a flat line. Interpolating would invent measurements.
+      gaps: points.filter((p) => p.value === null).map((p) => p.period),
+      direction: measured.length < 2 ? 'insufficient-data'
+        : measured[measured.length - 1].value > measured[0].value ? 'rising'
+          : measured[measured.length - 1].value < measured[0].value ? 'falling' : 'flat',
+    };
+  }
+  return {
+    periods: series.map((s) => s.period), snapshots: series.length, metrics,
+    // Reported so a reader knows how much of the picture is actually there.
+    completeness: series.length ? +(track.reduce((a, k) => a + metrics[k].measuredPeriods, 0) / (track.length * series.length)).toFixed(4) : 0,
+    informationalOnly: true, authorizes: false,
+    note: 'History is what was recorded. A period with no measurement is shown as a gap; interpolating one would invent a measurement nobody took.',
+  };
+}
+
+// Predictive engineering report: where each tracked metric is heading, and when it crosses a target
+// if the current direction holds. An unprojectable metric reports `unknown` — never a comfortable
+// default.
+function engineeringForecast({ history = null, targets = {}, periodsAhead = 3 } = {}) {
+  const h = history || engineeringHistory({ snapshots: [] });
+  const defaults = { coverage: 0.9, mutationScore: 0.8, changeFailureRate: 0.05, mttrHours: 1, assuranceCoverage: 1 };
+  const higherIsBetter = { coverage: true, mutationScore: true, testTotal: true, invariantTotal: true, assuranceCoverage: true, changeFailureRate: false, mttrHours: false };
+  const rows = Object.entries(h.metrics).map(([metric, m]) => {
+    const measured = m.points.filter((p) => p.value !== null).map((p) => p.value);
+    if (measured.length < 2) {
+      return { metric, projectable: false, direction: 'unknown', projected: null, target: targets[metric] ?? defaults[metric] ?? null, periodsToTarget: null, reason: `only ${measured.length} measured period(s) — a projection from fewer than two points is a guess with a decimal point` };
+    }
+    const n = measured.length, meanX = (n - 1) / 2, meanY = measured.reduce((a, b) => a + b, 0) / n;
+    let sxy = 0, sxx = 0;
+    for (let i = 0; i < n; i++) { const dx = i - meanX; sxy += dx * (measured[i] - meanY); sxx += dx * dx; }
+    const slope = sxx === 0 ? 0 : sxy / sxx;
+    const latest = measured[n - 1];
+    const projected = +(latest + slope * periodsAhead).toFixed(6);
+    const target = targets[metric] ?? defaults[metric] ?? null;
+    const better = higherIsBetter[metric];
+    let periodsToTarget = null;
+    if (target !== null && slope !== 0) {
+      const p = (target - latest) / slope;
+      periodsToTarget = p > 0 ? +p.toFixed(2) : null;   // already past it, or moving away
+    }
+    const meetsTarget = target === null ? null : better === false ? latest <= target : latest >= target;
+    return {
+      metric, projectable: true, slope: +slope.toFixed(6), latest, projected, periodsAhead,
+      target, higherIsBetter: better ?? null, meetsTarget,
+      direction: Math.abs(slope) < 1e-9 ? 'flat' : slope > 0 ? 'rising' : 'falling',
+      improving: better === undefined || better === null ? null : (better ? slope > 0 : slope < 0),
+      periodsToTarget,
+      reason: meetsTarget === true ? 'already at or past target'
+        : periodsToTarget !== null ? `on the current trend, ${periodsToTarget} period(s) to target`
+          : 'not moving toward the target on the current trend',
+    };
+  });
+  const regressing = rows.filter((r) => r.projectable && r.improving === false);
+  return {
+    metrics: rows, periodsAhead,
+    unprojectable: rows.filter((r) => !r.projectable).map((r) => r.metric),
+    regressing: regressing.map((r) => r.metric),
+    offTarget: rows.filter((r) => r.meetsTarget === false).map((r) => r.metric),
+    // The forecast never says "healthy". It says what is measured and which way it is going.
+    healthyClaim: null,
+    informationalOnly: true, authorizes: false,
+    note: 'A projection is a statement about the trend, not about the future. An unprojectable metric reports unknown rather than a comfortable default, and no projection can produce an authorization.',
+  };
+}
+
 function validate() {
   const violations = [];
   // Confidence must be computable, weighted, and refuse manual entry.
@@ -461,6 +743,9 @@ function report({ sources = {}, evidence = null, metrics = {} } = {}) {
 module.exports = {
   SOURCE_KINDS, DEFAULT_MAX_AGE_MS, CONFIDENCE_BANDS, CONFIDENCE_METHOD,
   READINESS_DIMENSIONS, DORA_BANDS, MATURITY_LEVELS,
+  DIMENSION_DEPENDENCIES, TEST_TYPES, GOVERNANCE_MATURITY_LEVELS,
   assess, EvidenceRegister, scoreDimension, readinessModel,
+  readinessDependencyGraph, readinessDependencyAnalysis,
+  assuranceCoverage, governanceMaturity, engineeringHistory, engineeringForecast,
   bandFor, engineeringMetrics, maturity, validate, report,
 };
