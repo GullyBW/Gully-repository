@@ -182,6 +182,13 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/ai/calibration') { requireRole('admin'); const l = app.ai.lifecycle; return json(200, { models: l.catalogue('model').map((m) => l.calibrationReport(m.id)), retired: l.retired() }); }
   if (method === 'GET' && p === '/api/resilience/consistency/dependencies') { requireRole('admin'); return json(200, app.multiRegion.consistencyDependencyMap()); }
   if (method === 'GET' && (m = p.match(/^\/api\/resilience\/consistency\/failover(?:\/([^/]+))?$/))) { requireRole('admin'); return json(200, app.multiRegion.validateFailover({ failed: m[1] ? dec(m[1]).split(',') : [] })); }
+  // --- Phase 12: ADR quality, release impact, active ownership, evidence provenance ---
+  if (method === 'GET' && p === '/api/architecture/adr/quality') { requireRole('admin'); const a = require('./architecture/adr-governance'); return json(200, a.qualityReport({ now: body && body.now })); }
+  if (method === 'POST' && p === '/api/architecture/adr/admit') { requireRole('admin'); const a = require('./architecture/adr-governance'); return json(200, a.admit(String((body && body.text) || ''), { number: body && body.number })); }
+  if (method === 'POST' && p === '/api/contracts/release-impact') { requireRole('admin'); return json(200, app.contracts.consumers.releaseImpact({ release: body && body.release, changes: (body && body.changes) || [], now: (body && body.now) || 0 })); }
+  if (method === 'GET' && p === '/api/governance/continuity/dashboard') { requireRole('oversight-board'); const o = require('./governance/ownership'); return json(200, o.continuityDashboard({ activity: app.ownership.activity, training: app.ownership.training, escalations: app.ownership.escalations })); }
+  if (method === 'GET' && p === '/api/assurance/evidence-provenance') { requireRole('admin'); return json(200, app.assurance.evidenceRegister().provenance()); }
+  if (method === 'GET' && (m = p.match(/^\/api\/assurance\/evidence-provenance\/([^/]+)$/))) { requireRole('admin'); return json(200, app.assurance.evidenceRegister().provenanceReport(dec(m[1]))); }
   if (method === 'GET' && p === '/api/architecture/adr') { requireRole('admin'); const a = require('./architecture/adr-governance'); return json(200, { catalogue: a.validateCatalogue(), lifecycle: a.lifecycle(), debt: a.architecturalDebt(), schema: a.schema() }); }
   if (method === 'GET' && p === '/api/governance/continuity') { requireRole('admin'); const own = require('./governance/ownership'); return json(200, own.continuityReport()); }
   if (method === 'GET' && p === '/api/assurance/readiness-model') { requireRole('admin'); return json(200, app.assurance.readiness()); }

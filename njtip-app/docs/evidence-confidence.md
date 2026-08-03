@@ -119,3 +119,55 @@ and risk, `'rising'` for assurance), so a direction is never read the wrong way 
 
 **An unmeasured metric cannot raise a level** — that is how maturity models usually inflate. Every
 level below the top names what is blocking the next one. And, as everywhere: `authorizes: false`.
+
+---
+
+# Verification History, Confidence Trend & Provenance (Phase 12, Part 14)
+
+A confidence figure is a snapshot. `0.91` tells you where the evidence stands; it does not tell you
+that it was `0.99` four verifications ago and has fallen every time since. **A high band with a
+falling trend is a control on its way out, not a control that is working** — and the band alone
+cannot show it.
+
+## Verification history
+
+Every `record()` appends an observation: `{ at, verifiedAt, source, completeness, freshness,
+confidence, band }`. The current value is still the latest one; what changed is that the earlier
+ones are no longer discarded.
+
+**Re-recording an identical observation does not create a second history point.** Without that rule
+a caller could manufacture any trend simply by calling `record()` in a loop, which would make the
+trend a measure of how often the function was called.
+
+## Confidence trend
+
+`confidenceTrend(id)` reports `improving` · `stable` · `degrading` · `insufficient-data`, plus:
+
+- `consecutiveFalls` — because endpoints lie. Evidence that fell, recovered and fell again has a
+  flat delta and a real problem.
+- `bandChanged`, `fromBand`, `toBand` — a move from `high` to `moderate` matters more than the same
+  delta inside one band.
+
+**A trend needs at least two verifications.** One observation is a value, not a direction, and
+reporting "stable" from a single point would be an assertion nothing supports.
+
+## Provenance reports
+
+`provenanceReport(id)` traces one figure end to end: source kind and what that kind is worth,
+completeness, freshness, age against its horizon, the reproducible calculation, the full
+verification history, and the trend. Two fields exist to close the gaps a provenance report usually
+leaves:
+
+| Field | Says |
+|---|---|
+| `derivationNote` | Confidence is computed and **cannot be supplied** — `assess()` refuses a caller-provided value and fails closed |
+| `doesNotEstablish` | *That the thing the evidence describes is correct, approved, or authorized. Evidence supports a human decision; it is never one* |
+
+Evidence that was never recorded reports `known: false` with *"absence of a record is not evidence
+of anything"* — it does not fall through to a default.
+
+`provenance()` gives the register-wide view: everything degrading, everything untrended, the
+weakest-link aggregate, and a digest over the whole set.
+
+Live: `GET /api/assurance/evidence-provenance` · `GET /api/assurance/evidence-provenance/:id`
+(admin).

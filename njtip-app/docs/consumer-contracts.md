@@ -112,3 +112,45 @@ burden, and flags `atRisk` (< 90 days) and `overdue` (past sunset with consumers
 `migrationReadiness({ contract, spec })` is **fail-closed**: an affected consumer whose adoption has
 not been reported is **not ready**, and a blocked constitutional consumer is flagged separately. As
 everywhere: `authorizes: false`.
+
+---
+
+# Release Impact Reporting (Phase 12, Part 12)
+
+Everything above answers a question about **one** contract. A release is a **set** of changes
+landing together, and the property that matters is not "is each change safe?" but "**is any consumer
+hit by more than one of them?**"
+
+`releaseImpact({ release, changes, now })` is the report that answers it, produced **before**
+deployment — afterwards the same information is an incident report.
+
+## What it blocks on
+
+| Blocker | Why |
+|---|---|
+| `constitutional-consumer` | The change breaks a constitutional consumer. The constitutional path is not broken by a release, whatever the schedule says |
+| `migration-not-ready` | The change is breaking and named consumers are not migrated |
+| `simultaneous-break` | **Two or more changes in this release land on the same consumer** |
+| `sunset-overdue` | Consumers remain past a contract's sunset date |
+| `no-changes-assessed` | Nothing was submitted for assessment |
+
+## The two that a per-contract report cannot produce
+
+**Simultaneous break.** Two separately-acceptable changes hitting one consumer make one
+*unacceptable* release: there is no intermediate version the consumer can run, so it cannot migrate
+incrementally. Every per-contract report says "fine" twice; the roll-up says no.
+
+**Nothing assessed.** An empty release is not a safe release — it is an **unmeasured** one, and the
+two must not produce the same verdict. A gate that passes when it has been given nothing to check is
+a gate that passes when it is bypassed.
+
+## Aggregation
+
+The release band is its **worst** change, not the mean of them. `totalScore` is reported alongside,
+but nothing decides on it: a release containing one severe change and nine harmless ones is a severe
+release.
+
+`failClosed: true`, `authorizes: false`. Clearing the gate means no registered consumer is broken.
+Deployment itself remains a recorded decision by a named human authority.
+
+Live: `POST /api/contracts/release-impact` (admin).

@@ -19,9 +19,10 @@ without a demonstrated, implementation-driven need.
 | [0004](./adr/0004-operational-excellence-and-continuous-assurance.md) | Operational excellence, continuous assurance, and the expanded ADR schema | Accepted | Phase 10 capabilities; ADR schema expansion applied from 0004 onward |
 | [0005](./adr/0005-authorization-decision-caching.md) | Replace "nothing is cached" with signed, revocable, policy-versioned authorization decisions | Accepted | Zero Trust authorization path; scalability without weakening the guarantee |
 | [0006](./adr/0006-adaptive-assurance-and-predictive-operations.md) | Adaptive assurance, predictive operations, and the extended ADR schema | Accepted | Phase 11 capabilities; ADR schema extension applied from 0006 onward |
+| [0007](./adr/0007-session-consistency-and-adr-review-lifecycle.md) | Session-scoped consistency, and the ADR review lifecycle | Accepted | Read-your-writes / monotonic-reads stances; ADR governance schema applied from 0007 onward |
 | [template](./adr/000-template.md) | ADR template | — | Required format for every new decision |
 
-**Schema, in three tiers.** Each ADR is validated against the standard that was in force when it was
+**Schema, in four tiers.** Each ADR is validated against the standard that was in force when it was
 written — automatically, by `APP-FIT-ADR-GOVERNANCE` (`src/architecture/adr-governance.js`).
 
 | Tier | Applies from | Adds |
@@ -29,10 +30,11 @@ written — automatically, by `APP-FIT-ADR-GOVERNANCE` (`src/architecture/adr-go
 | **legacy** | 0001 | Context · Decision · Consequences · Alternatives considered |
 | **full** | **0004** | Business justification · risk assessment · performance / security / operational / compliance impact · rollback · migration · implementation cost · success metrics · decision owner · approval history |
 | **extended** | **0006** | Rejected alternatives · architectural trade-offs · long-term maintenance impact · implementation complexity · operational cost · lifecycle implications · **measurable** success criteria · architectural debt assessment |
+| **governance** | **0007** | **Review schedule** (must name a date or an interval) · **sunset criteria** |
 
 Earlier ADRs are **not** rewritten to a later standard: an ADR records what was known and required
 at the time, and retrofitting destroys precisely what the record exists to preserve. The cutovers
-are data (`FULL_SCHEMA_FROM`, `EXTENDED_SCHEMA_FROM`), so the validator applies the right schema per
+are data (`FULL_SCHEMA_FROM`, `EXTENDED_SCHEMA_FROM`, `GOVERNANCE_SCHEMA_FROM`), so the validator applies the right schema per
 ADR rather than a blanket one.
 
 **Measurability is checked, not requested.** A *Measurable success criteria* or *Success metrics*
@@ -80,3 +82,73 @@ Measured need (from implementation) → ADR (adr/000-template.md) → Twin stays
 ## Cadence
 ADRs reviewed at the ARB cadence; the Twin runs on every commit; drift + threat-model refresh per the
 assurance calendar (blueprint phase3/03).
+
+---
+
+# ADR Review Lifecycle & Quality Reporting (Phase 12, Part 11)
+
+ADR-0004 expanded the schema; ADR-0006 extended it to record what a decision *costs*. Neither
+addressed what happens to a decision **afterwards**. Every ADR written before 0007 is permanent —
+not because anyone decided it should be, but because nothing obliged anyone to look at it again.
+
+## The governance tier
+
+| Section | Why |
+|---|---|
+| **Review schedule** | When this decision is next examined, and by whom. A decision nobody has agreed to re-read is permanent by accident |
+| **Sunset criteria** | The observable conditions under which it stops applying. Without them a decision can only be replaced, never retired |
+
+Applied from **ADR-0007** onward. Earlier ADRs are not retrofitted, for the reason already recorded
+twice in this document: backdating a commitment nobody made is worse than an honest gap.
+
+**A review schedule must name a date or an interval.** `periodically`, `as required` and `when
+appropriate` are rejected by the validator — the same rule ADR-0006 introduced for success criteria,
+applied to the other section that is easy to write and impossible to check.
+
+## Automatic rejection
+
+`admit(text)` validates a proposal against the schema in force for its number and returns
+`admitted: false` with the specific sections at fault. It is a pure function over text, so a
+proposal can be checked before it is written to disk and the check never touches the real catalogue.
+
+**There is no "accepted pending sections" state.** That state is precisely how an incomplete record
+becomes a permanent one. Admission is also *not* approval, and the response says so: passing the
+completeness check makes an ADR admissible, and approval remains a recorded decision by the ARB.
+
+## Quality reporting
+
+A pass/fail verdict tells an author their ADR is incomplete. It does not tell a board whether the
+catalogue is decaying, or in which dimension. `qualityReport()` scores each ADR across six:
+
+| Dimension | Asks |
+|---|---|
+| `completeness` | Is every required section present and non-empty? |
+| `specificity` | Do the sections that must carry a number or a date actually carry one? |
+| `alternatives` | What was considered, and what was rejected and why? |
+| `accountability` | Is there a named owner and a recorded approval history? |
+| `reviewability` | When is this looked at again, and what would retire it? |
+| `reversibility` | How do we get back, and how does existing state get forward? |
+
+Two rules make the report mean something:
+
+- **A dimension the ADR's schema never required scores `null`, not 0.** Otherwise the report
+  measures age rather than quality, and ADR-0001 would score badly for lacking a section that did
+  not exist when it was written.
+- **Every figure aggregates to the weakest ADR, not the mean.** One decision with no rollback
+  strategy *is* the catalogue's rollback story, whatever the other six say.
+
+## Review tracking
+
+`dueForReview({ now })` sorts every ADR into one of four states, and none of them is silent:
+
+```
+scheduled + dated + in date   → fine
+scheduled + dated + past      → overdue
+scheduled + no date           → UNDATED — an interval with no anchor cannot become overdue
+no review schedule            → UNSCHEDULED — permanent by inertia rather than by choice
+```
+
+`now` is injected. A governance report that changes with the wall clock is not reproducible
+evidence.
+
+Live: `GET /api/architecture/adr/quality` · `POST /api/architecture/adr/admit` (admin).

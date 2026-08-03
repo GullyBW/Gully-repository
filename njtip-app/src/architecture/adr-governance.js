@@ -54,11 +54,26 @@ const EXTENDED_SCHEMA = [
   { field: 'architecturalDebt', heading: 'Architectural debt assessment', why: 'What this decision knowingly leaves unpaid, and when it comes due.' },
 ];
 
+// --- Governance schema (Phase 12, Part 11) ------------------------------------------------------
+//
+// Applied from ADR-0007 onward. The extended schema records what a decision COSTS; the governance
+// schema records when it gets LOOKED AT AGAIN. Without those two sections an ADR is written once
+// and is thereafter permanent by inertia — nobody decided to keep it, they just never revisited it.
+const GOVERNANCE_SCHEMA_FROM = 7;
+const GOVERNANCE_SCHEMA = [
+  { field: 'reviewSchedule', heading: 'Review schedule', why: 'When this decision is next examined, and by whom. A decision nobody has agreed to re-read is permanent by accident.' },
+  { field: 'sunsetCriteria', heading: 'Sunset criteria', why: 'The observable conditions under which this decision stops applying. Without them a decision can only be replaced, never retired.' },
+];
+
 // Sections whose content must actually be measurable — a threshold, a count, a percentage or a
 // date. This is the one place the validator reads content rather than structure, because
 // "improve reliability" satisfies a heading check and commits to nothing.
 const MEASURABLE_SECTIONS = ['Measurable success criteria', 'Success metrics'];
 const MEASURABLE_PATTERN = /\d/;
+
+// A review schedule that says "periodically" is not a schedule. It must name a date or an interval.
+const DATED_SECTIONS = ['Review schedule'];
+const DATED_PATTERN = /(\d{4}-\d{2}-\d{2}|\b\d+\s*(month|months|year|years|quarter|quarters|week|weeks|day|days)\b|\bannual|\bquarterly|\bmonthly)/i;
 
 const STATUSES = ['Proposed', 'Accepted', 'Superseded', 'Rejected'];
 
@@ -91,11 +106,14 @@ function parseText(text, { file = '(in-memory)', number = 0 } = {}) {
 
 // Which schema applies to an ADR number.
 function schemaFor(number) {
+  if (number >= GOVERNANCE_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA, ...GOVERNANCE_SCHEMA];
   if (number >= EXTENDED_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA];
   if (number >= FULL_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA];
   return LEGACY_SCHEMA;
 }
-function schemaNameFor(number) { return number >= EXTENDED_SCHEMA_FROM ? 'extended' : number >= FULL_SCHEMA_FROM ? 'full' : 'legacy'; }
+function schemaNameFor(number) {
+  return number >= GOVERNANCE_SCHEMA_FROM ? 'governance' : number >= EXTENDED_SCHEMA_FROM ? 'extended' : number >= FULL_SCHEMA_FROM ? 'full' : 'legacy';
+}
 
 // Validate one ADR against the schema that applies to it.
 function validateAdr(file, opts = {}) { return validateParsed(parse(file), opts); }
@@ -115,6 +133,10 @@ function validateParsed(adr, { minSectionChars = 40 } = {}) {
     // Phase 11: a success criterion with no number in it commits to nothing.
     else if (MEASURABLE_SECTIONS.includes(s.heading) && !MEASURABLE_PATTERN.test(body)) {
       violations.push(`section '${s.heading}' contains no measurable value — a criterion with no number cannot be checked`);
+    }
+    // Phase 12: "review periodically" is not a schedule. A date or an interval, or it is nothing.
+    else if (DATED_SECTIONS.includes(s.heading) && !DATED_PATTERN.test(body)) {
+      violations.push(`section '${s.heading}' names no date or interval — 'periodically' is not a schedule`);
     }
   }
   return {
@@ -181,6 +203,138 @@ function lifecycle(results = null) {
   };
 }
 
+// --- ADR quality reporting (Phase 12, Part 11) ---------------------------------------------------
+//
+// A pass/fail verdict tells an author their ADR is incomplete. It does not tell a governance board
+// whether the catalogue as a whole is decaying, or which dimension it is decaying in. The quality
+// report scores each ADR across the dimensions that make a decision record usable years later.
+const QUALITY_DIMENSIONS = [
+  { id: 'completeness', description: 'Every section the applicable schema requires is present and non-empty.', headings: null },
+  { id: 'specificity', description: 'Sections that must contain a number or a date actually do.', headings: [...MEASURABLE_SECTIONS, ...DATED_SECTIONS] },
+  { id: 'alternatives', description: 'What was considered, and what was rejected and why.', headings: ['Alternatives considered', 'Rejected alternatives'] },
+  { id: 'accountability', description: 'A named decision owner and a recorded approval history.', headings: ['Decision owner', 'Approval history'] },
+  { id: 'reviewability', description: 'When this decision is looked at again, and what would retire it.', headings: ['Review schedule', 'Sunset criteria'] },
+  { id: 'reversibility', description: 'How to get back, and how existing state gets forward.', headings: ['Rollback strategy', 'Migration strategy'] },
+];
+
+// Score one parsed ADR. A dimension whose sections the ADR's schema does not require scores `null`
+// — "not applicable" — rather than 0. Scoring an ADR-0001 badly for lacking a section that did not
+// exist when it was written would make the report a measure of age rather than of quality.
+function qualityScore(adr, { minSectionChars = 40 } = {}) {
+  const required = new Set(schemaFor(adr.number).map((s) => s.heading));
+  const has = (heading) => {
+    const body = adr.sections[heading.toLowerCase()];
+    if (body === undefined || body.length < minSectionChars) return false;
+    if (MEASURABLE_SECTIONS.includes(heading) && !MEASURABLE_PATTERN.test(body)) return false;
+    if (DATED_SECTIONS.includes(heading) && !DATED_PATTERN.test(body)) return false;
+    return true;
+  };
+  const dimensions = QUALITY_DIMENSIONS.map((d) => {
+    const headings = (d.headings || [...required]).filter((h) => required.has(h));
+    if (!headings.length) return { dimension: d.id, applicable: false, score: null, missing: [], description: d.description };
+    const missing = headings.filter((h) => !has(h));
+    return {
+      dimension: d.id, applicable: true, description: d.description,
+      score: +((headings.length - missing.length) / headings.length).toFixed(3),
+      missing,
+    };
+  });
+  const applicable = dimensions.filter((d) => d.applicable);
+  // AGGREGATE TO THE WEAKEST LINK. An ADR that is complete, specific and accountable but records
+  // no way back is not "83% good" — it is a decision you cannot reverse, and the mean hides that.
+  const weakest = applicable.reduce((w, d) => (w === null || d.score < w.score ? d : w), null);
+  return {
+    file: adr.file, number: adr.number, title: adr.title, status: adr.status, schema: schemaNameFor(adr.number),
+    dimensions, weakestDimension: weakest ? weakest.dimension : null,
+    score: weakest ? weakest.score : null,
+    complete: applicable.every((d) => d.score === 1),
+    note: 'Scored against the schema in force when the ADR was written. A dimension that schema did not require is not applicable, not a failure.',
+  };
+}
+
+// The next review date, read from the Review schedule section. An ADR with a schedule that names no
+// date is reported as `unknown` — which is a blocker, not a pass. "No date" must never read as
+// "not due".
+function nextReview(adr) {
+  const body = adr.sections['review schedule'];
+  if (body === undefined) return { adr: adr.number, scheduled: false, nextReview: null, reason: 'this ADR predates the review-schedule requirement' };
+  const m = body.match(/\d{4}-\d{2}-\d{2}/);
+  if (!m) return { adr: adr.number, scheduled: true, nextReview: null, reason: 'the review schedule names an interval but no next date — an interval with no anchor cannot become overdue' };
+  return { adr: adr.number, scheduled: true, nextReview: m[0], reason: `next reviewed on or before ${m[0]}` };
+}
+
+// Which decisions are due to be looked at again. `now` is injected — a governance report that
+// changes with the wall clock is not reproducible evidence.
+function dueForReview({ now = null, results = null } = {}) {
+  const adrs = (results || adrFiles().map((f) => parse(f)));
+  const today = now || null;
+  const rows = adrs.map((a) => {
+    const r = nextReview(a);
+    const overdue = today && r.nextReview ? r.nextReview < today : false;
+    return { ...r, title: a.title, status: a.status, overdue, undated: r.scheduled && !r.nextReview };
+  });
+  return {
+    now: today, adrs: rows,
+    overdue: rows.filter((r) => r.overdue).map((r) => r.adr),
+    undated: rows.filter((r) => r.undated).map((r) => r.adr),
+    unscheduled: rows.filter((r) => !r.scheduled).map((r) => r.adr),
+    scheduledFrom: GOVERNANCE_SCHEMA_FROM,
+    note: 'A decision with no scheduled review is permanent by inertia rather than by choice.',
+  };
+}
+
+// Automatic rejection (Phase 12, Part 11). An incomplete ADR does not enter the catalogue and is
+// not "accepted pending sections" — that state is how an incomplete record becomes a permanent one.
+// This is deliberately a pure function over TEXT so a proposal can be checked before it is written
+// to disk, and so the check itself never mutates the real catalogue.
+function admit(text, { number, minSectionChars = 40 } = {}) {
+  if (typeof text !== 'string' || !text.trim()) {
+    return { admitted: false, rejected: true, rejections: ['an empty proposal is not an ADR'], failClosed: true };
+  }
+  const n = Number.isFinite(number) ? number : (text.match(/^#\s*ADR-(\d{4})/m) ? Number(text.match(/^#\s*ADR-(\d{4})/m)[1]) : null);
+  if (n === null) return { admitted: false, rejected: true, rejections: ['no `# ADR-NNNN: title` heading, so no schema can be selected'], failClosed: true };
+  const parsed = parseText(text, { file: `${String(n).padStart(4, '0')}-proposed.md`, number: n });
+  const validation = validateParsed(parsed, { minSectionChars });
+  const quality = qualityScore(parsed, { minSectionChars });
+  return {
+    admitted: validation.valid, rejected: !validation.valid,
+    number: n, title: parsed.title, schema: schemaNameFor(n),
+    rejections: validation.violations, quality,
+    failClosed: true, authorizes: false,
+    note: validation.valid
+      ? 'The proposal satisfies the schema in force for its number. Admission to the catalogue is a completeness check, not approval — approval remains a recorded decision by the Architecture Review Board.'
+      : 'REJECTED. An incomplete ADR is not admitted and is not recorded as accepted-pending-sections; that state is how an incomplete record becomes a permanent one.',
+  };
+}
+
+// The catalogue-wide quality report a governance board reads.
+function qualityReport({ now = null, minSectionChars = 40 } = {}) {
+  const adrs = adrFiles().map((f) => parse(f));
+  const scores = adrs.map((a) => qualityScore(a, { minSectionChars }));
+  const byDimension = QUALITY_DIMENSIONS.map((d) => {
+    const rows = scores.map((s) => s.dimensions.find((x) => x.dimension === d.id)).filter((x) => x && x.applicable);
+    return {
+      dimension: d.id, description: d.description, assessed: rows.length,
+      // Weakest link again: one ADR with no rollback strategy is the catalogue's rollback story.
+      score: rows.length ? Math.min(...rows.map((r) => r.score)) : null,
+      failing: scores.filter((s) => { const r = s.dimensions.find((x) => x.dimension === d.id); return r && r.applicable && r.score < 1; }).map((s) => s.number),
+    };
+  });
+  const incomplete = scores.filter((s) => !s.complete);
+  const review = dueForReview({ now, results: adrs });
+  return {
+    adrs: scores, count: scores.length,
+    byDimension, weakestDimension: byDimension.filter((d) => d.score !== null).sort((a, b) => a.score - b.score)[0] || null,
+    incomplete: incomplete.map((s) => ({ number: s.number, weakestDimension: s.weakestDimension, missing: s.dimensions.filter((d) => d.applicable && d.missing.length).flatMap((d) => d.missing) })),
+    review,
+    // The catalogue is sound only if nothing is incomplete AND nothing is silently overdue.
+    sound: incomplete.length === 0 && review.overdue.length === 0 && review.undated.length === 0,
+    dimensions: QUALITY_DIMENSIONS.map((d) => ({ id: d.id, description: d.description })),
+    informationalOnly: true, authorizes: false,
+    note: 'Every figure aggregates to the weakest ADR, not to the mean. One decision with no way back is the catalogue\'s rollback story, whatever the other twelve say.',
+  };
+}
+
 // The architectural debt the catalogue has knowingly taken on, read from the ADRs that record it.
 function architecturalDebt() {
   const entries = [];
@@ -209,6 +363,7 @@ function template({ number = 'NNNN', title = '<title>' } = {}) {
     ...LEGACY_SCHEMA.map((s) => section(s.heading, `what applies here`)),
     ...FULL_SCHEMA.map((s) => section(s.heading, s.why)),
     ...EXTENDED_SCHEMA.map((s) => section(s.heading, s.why)),
+    ...GOVERNANCE_SCHEMA.map((s) => section(s.heading, s.why)),
   ].join('\n');
 }
 
@@ -217,15 +372,20 @@ function schema() {
     legacy: LEGACY_SCHEMA.map((s) => ({ ...s })),
     full: FULL_SCHEMA.map((s) => ({ ...s })),
     extended: EXTENDED_SCHEMA.map((s) => ({ ...s })),
-    fullSchemaFrom: FULL_SCHEMA_FROM, extendedSchemaFrom: EXTENDED_SCHEMA_FROM,
+    governance: GOVERNANCE_SCHEMA.map((s) => ({ ...s })),
+    fullSchemaFrom: FULL_SCHEMA_FROM, extendedSchemaFrom: EXTENDED_SCHEMA_FROM, governanceSchemaFrom: GOVERNANCE_SCHEMA_FROM,
     measurableSections: [...MEASURABLE_SECTIONS],
+    datedSections: [...DATED_SECTIONS],
+    qualityDimensions: QUALITY_DIMENSIONS.map((d) => ({ id: d.id, description: d.description })),
     statuses: [...STATUSES],
   };
 }
 
 module.exports = {
-  ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, FULL_SCHEMA_FROM, EXTENDED_SCHEMA_FROM,
-  MEASURABLE_SECTIONS, STATUSES,
+  ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, GOVERNANCE_SCHEMA,
+  FULL_SCHEMA_FROM, EXTENDED_SCHEMA_FROM, GOVERNANCE_SCHEMA_FROM,
+  MEASURABLE_SECTIONS, DATED_SECTIONS, QUALITY_DIMENSIONS, STATUSES,
   adrFiles, parse, parseText, schemaFor, schemaNameFor, validateAdr, validateParsed, validateCatalogue,
   lifecycle, architecturalDebt, template, schema,
+  qualityScore, qualityReport, nextReview, dueForReview, admit,
 };

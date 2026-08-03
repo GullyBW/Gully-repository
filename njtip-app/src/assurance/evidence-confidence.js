@@ -88,14 +88,107 @@ function assess({ id, source, completeness = 1, verifiedAt = null, now = 0, maxA
 // average: a conclusion is only as sound as the least trustworthy thing it rests on, and averaging
 // is how a single unusable input disappears behind nine good ones.
 class EvidenceRegister {
-  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._items = new Map(); }
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._items = new Map(); this._history = new Map(); }
   record(spec) {
+    const at = spec.now ?? this._clock();
     const a = assess({ now: this._clock(), ...spec });
     this._items.set(a.id, a);
+    // --- Verification history (Phase 12, Part 14) ---------------------------------------------
+    // Each recording is an OBSERVATION, appended. Overwriting the current value and keeping no
+    // history is how "confidence 0.91" hides the fact that it was 0.99 four verifications ago.
+    if (!this._history.has(a.id)) this._history.set(a.id, []);
+    const series = this._history.get(a.id);
+    // A re-record at the same assessment instant is the same observation, not a new one. Without
+    // this, a caller could manufacture any trend simply by calling record() repeatedly.
+    const prior = series[series.length - 1];
+    if (!prior || prior.at !== at || prior.verifiedAt !== a.lastVerifiedAt) {
+      series.push({ at, verifiedAt: a.lastVerifiedAt, source: a.source, completeness: a.completeness, freshness: a.freshness, confidence: a.confidence, band: a.band });
+    }
     return { ...a };
   }
   get(id) { const a = this._items.get(id); return a ? { ...a } : null; }
   all() { return [...this._items.values()].map((a) => ({ ...a })).sort((x, y) => x.confidence - y.confidence || x.id.localeCompare(y.id)); }
+
+  // --- Verification history, trend and provenance (Phase 12, Part 14) ---------------------------
+
+  history(id) { return (this._history.get(id) || []).map((h) => ({ ...h })); }
+
+  // A trend needs at least two observations. One point is a value, not a direction, and reporting
+  // "stable" from a single observation would be an assertion nothing supports.
+  confidenceTrend(id, { degradingBy = 0.05 } = {}) {
+    const series = this.history(id);
+    if (series.length < 2) {
+      return { id, observations: series.length, direction: 'insufficient-data', delta: null, reason: 'a trend needs at least two verifications — one observation is a value, not a direction' };
+    }
+    const first = series[0], last = series[series.length - 1];
+    const delta = +(last.confidence - first.confidence).toFixed(4);
+    // Consecutive falls matter more than the endpoints: evidence that fell, recovered and fell
+    // again has a flat delta and a real problem.
+    let consecutiveFalls = 0, run = 0;
+    for (let i = 1; i < series.length; i++) {
+      if (series[i].confidence < series[i - 1].confidence) { run += 1; consecutiveFalls = Math.max(consecutiveFalls, run); } else run = 0;
+    }
+    const direction = delta <= -degradingBy ? 'degrading' : delta >= degradingBy ? 'improving' : 'stable';
+    return {
+      id, observations: series.length, first: first.confidence, latest: last.confidence, delta, direction,
+      consecutiveFalls, bandChanged: first.band !== last.band, fromBand: first.band, toBand: last.band,
+      // High-and-falling is the case a band alone cannot show, and it is the one worth acting on.
+      warning: direction === 'degrading' || consecutiveFalls >= 2
+        ? `confidence in '${id}' has fallen ${consecutiveFalls >= 2 ? `${consecutiveFalls} verifications running` : `by ${Math.abs(delta)}`} — a high band with a falling trend is a control on its way out, not a control that is working`
+        : null,
+      reason: `${direction} across ${series.length} verifications`,
+    };
+  }
+
+  // The provenance report Part 14 asks for: where a figure came from, how it was calculated, every
+  // time it has been verified, which way it is moving — and, explicitly, what it does not establish.
+  provenanceReport(id) {
+    const current = this.get(id);
+    if (!current) return { id, known: false, reason: 'no evidence with this identifier has ever been recorded — absence of a record is not evidence of anything', authorizes: false };
+    const kind = SOURCE_KINDS[current.source];
+    const trend = this.confidenceTrend(id);
+    const series = this.history(id);
+    return {
+      id, known: true,
+      source: current.source, sourceMeaning: kind.description, sourceWeight: kind.weight,
+      reVerifiedWhen: kind.reVerified,
+      confidence: current.confidence, band: current.band, bandMeaning: current.bandMeaning,
+      completeness: current.completeness, freshness: current.freshness,
+      ageMs: current.ageMs, maxAgeMs: current.maxAgeMs, lastVerifiedAt: current.lastVerifiedAt,
+      method: CONFIDENCE_METHOD, calculation: current.calculation,
+      // Derived values must never be hand-enterable, and the report says so rather than assuming
+      // the reader knows.
+      manualEntry: false,
+      derivationNote: 'Confidence is computed from source kind, completeness and freshness. It cannot be supplied — assess() refuses a caller-provided confidence and fails closed.',
+      verificationHistory: series, verifications: series.length,
+      trend,
+      usable: current.usable,
+      authorizes: false,
+      establishes: `That this evidence was verified ${series.length} time(s), most recently at ${current.lastVerifiedAt}, and carries ${current.band} confidence under the stated method.`,
+      doesNotEstablish: 'That the thing the evidence describes is correct, approved, or authorized. Evidence supports a human decision; it is never one.',
+    };
+  }
+
+  // Provenance across the whole register, aggregated to the weakest link and naming what is moving
+  // in the wrong direction.
+  provenance() {
+    const ids = [...this._items.keys()].sort();
+    const reports = ids.map((id) => this.provenanceReport(id));
+    const trends = ids.map((id) => this.confidenceTrend(id));
+    const bySource = {};
+    for (const r of reports) (bySource[r.source] = bySource[r.source] || []).push(r.id);
+    return {
+      evidence: reports, count: reports.length,
+      aggregate: this.aggregate(),
+      bySource,
+      degrading: trends.filter((t2) => t2.direction === 'degrading').map((t2) => t2.id),
+      untrended: trends.filter((t2) => t2.direction === 'insufficient-data').map((t2) => t2.id),
+      warnings: trends.filter((t2) => t2.warning).map((t2) => ({ id: t2.id, warning: t2.warning })),
+      digest: this.digest(),
+      authorizes: false,
+      note: 'Every figure traces to a source kind, a completeness, a freshness and a verification history. A figure that cannot be traced that way does not appear.',
+    };
+  }
   aggregate(ids = null) {
     const items = (ids ? ids.map((i) => this._items.get(i)).filter(Boolean) : [...this._items.values()]);
     if (!items.length) return { items: 0, confidence: 0, band: 'unusable', weakest: null, reason: 'no evidence recorded — an empty register is not a confident one' };

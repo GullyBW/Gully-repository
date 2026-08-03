@@ -275,6 +275,227 @@ function continuityReport({ availability = null, now = 0, lastReviewed = {} } = 
   };
 }
 
+// --- Owner activity, training and escalation workflow (Phase 12, Part 13) ------------------------
+//
+// Phase 11 asked "is somebody available to decide?" That is necessary and not sufficient. An owner
+// who has recorded no governance act in eight months is nominally available and practically absent;
+// an owner whose mandatory training lapsed two years ago is available, active, and not currently
+// competent to exercise the role. Both states look identical in an availability register, and both
+// are how a governance object stops being governed while the org chart still says otherwise.
+//
+// AVAILABILITY is what somebody declared. ACTIVITY is what they did. They are different facts and
+// the platform records them separately.
+const ACTIVITY_BANDS = [
+  { band: 'active', maxDaysSinceAct: 90, meaning: 'has exercised the role within the current review cycle' },
+  { band: 'stale', maxDaysSinceAct: 180, meaning: 'has not acted in over a quarter — verify the role is still held' },
+  { band: 'dormant', maxDaysSinceAct: Infinity, meaning: 'has not acted in over six months — treat the role as vacant until confirmed' },
+];
+const GOVERNANCE_ACTS = ['decision', 'approval', 'review', 'escalation-response', 'attestation'];
+
+class ActivityRegister {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._acts = []; }
+  recordAct({ person, act, subsystem = null, at = null, reference = null } = {}) {
+    if (!person) throw new Error('a governance act must name the person or office that performed it');
+    if (!GOVERNANCE_ACTS.includes(act)) throw new Error(`unknown governance act '${act}' — one of ${GOVERNANCE_ACTS.join(', ')}`);
+    const t = at ?? this._clock();
+    if (!Number.isFinite(t)) throw new Error('a governance act must be timestamped');
+    const rec = { id: `ACT-${String(this._acts.length + 1).padStart(4, '0')}`, person, act, subsystem, at: t, reference };
+    this._acts.push(rec);
+    return { ...rec };
+  }
+  acts(person = null) { return this._acts.filter((a) => !person || a.person === person).map((a) => ({ ...a })); }
+  lastAct(person) {
+    const mine = this._acts.filter((a) => a.person === person);
+    return mine.length ? mine.reduce((m, a) => (a.at > m.at ? a : m)) : null;
+  }
+  // NEVER ACTED is its own state, and it is the worst one — not an absence of evidence that gets
+  // rounded up to "probably fine". An office nobody has ever seen act is an office on paper.
+  status(person, { now = null } = {}) {
+    const t = now ?? this._clock();
+    const last = this.lastAct(person);
+    if (!last) return { person, band: 'never-acted', daysSinceAct: null, lastAct: null, acceptable: false, reason: 'no governance act has ever been recorded for this office' };
+    const days = Math.floor((t - last.at) / (24 * 3600_000));
+    const band = ACTIVITY_BANDS.find((b) => days <= b.maxDaysSinceAct);
+    return { person, band: band.band, daysSinceAct: days, lastAct: { act: last.act, at: last.at, subsystem: last.subsystem }, acceptable: band.band === 'active', reason: band.meaning };
+  }
+}
+
+// Training. A role carries obligations somebody has to have been taught; an expired certification is
+// not a formality, it is the reason a decision can be challenged afterwards.
+const REQUIRED_TRAINING = {
+  responsibleAuthority: ['records-management', 'evidence-handling'],
+  approvingAuthority: ['records-management', 'separation-of-duties'],
+  operationalOwner: ['incident-response', 'records-management'],
+  dataSteward: ['data-protection', 'records-management'],
+};
+const TRAINING_VALIDITY_DAYS = 365;
+
+class TrainingRegister {
+  constructor({ clock = () => 0, validityDays = TRAINING_VALIDITY_DAYS } = {}) { this._clock = clock; this._validity = validityDays; this._records = new Map(); }
+  recordCompletion({ person, course, at = null, by } = {}) {
+    if (!person || !course) throw new Error('a training record needs a person and a course');
+    if (!by) throw new Error('a training completion must be attested by a named human — a self-declared certification certifies nothing');
+    const t = at ?? this._clock();
+    if (!Number.isFinite(t)) throw new Error('a training completion must be timestamped');
+    const key = `${person}:${course}`;
+    const prior = this._records.get(key);
+    // Keep the most recent completion; re-taking a course renews it, it does not duplicate it.
+    if (!prior || t > prior.at) this._records.set(key, { person, course, at, attestedBy: by, expiresAt: t + this._validity * 24 * 3600_000 });
+    return { ...this._records.get(key) };
+  }
+  completions(person = null) { return [...this._records.values()].filter((r) => !person || r.person === person).map((r) => ({ ...r })); }
+  // Status for one (person, role) pair. Missing and expired are reported SEPARATELY, because the
+  // remedy differs: one is "book the course", the other is "you have been operating uncertified".
+  status(person, role, { now = null } = {}) {
+    const t = now ?? this._clock();
+    const required = REQUIRED_TRAINING[role] || [];
+    const rows = required.map((course) => {
+      const rec = this._records.get(`${person}:${course}`);
+      if (!rec) return { course, held: false, state: 'never-completed', expiresAt: null };
+      return { course, held: t < rec.expiresAt, state: t < rec.expiresAt ? 'current' : 'expired', completedAt: rec.at, expiresAt: rec.expiresAt, attestedBy: rec.attestedBy };
+    });
+    const missing = rows.filter((r) => r.state === 'never-completed').map((r) => r.course);
+    const expired = rows.filter((r) => r.state === 'expired').map((r) => r.course);
+    return {
+      person, role, required, courses: rows, missing, expired,
+      current: missing.length === 0 && expired.length === 0,
+      reason: missing.length ? `never completed: ${missing.join(', ')}` : expired.length ? `expired: ${expired.join(', ')}` : 'all required training is current',
+    };
+  }
+}
+
+// Escalation as a WORKFLOW, not a diagram. Phase 11 published the escalation path; a path nobody
+// walks is a picture. An escalation that is raised and never acknowledged is the actual failure
+// mode, and it is invisible unless the raising is stateful.
+const ESCALATION_STATES = ['raised', 'acknowledged', 'resolved'];
+const ACKNOWLEDGEMENT_HOURS = 24;
+
+class EscalationWorkflow {
+  constructor({ clock = () => 0, acknowledgementHours = ACKNOWLEDGEMENT_HOURS } = {}) {
+    this._clock = clock; this._ackWindow = acknowledgementHours * 3600_000; this._items = new Map(); this._seq = 0;
+  }
+  raise({ subsystem, reason, raisedBy, at = null } = {}) {
+    if (!OWNERSHIP[subsystem]) throw new Error('no ownership record for subsystem: ' + subsystem);
+    if (!reason || !raisedBy) throw new Error('an escalation must state a reason and name who raised it');
+    const t = at ?? this._clock();
+    const path = escalationPath(subsystem);
+    const id = `ESC-${String(++this._seq).padStart(4, '0')}`;
+    const item = { id, subsystem, reason, raisedBy, raisedAt: t, state: 'raised', path: path.path, terminatesAt: path.terminatesAt, ackDueAt: t + this._ackWindow, acknowledgedBy: null, acknowledgedAt: null, resolvedBy: null, resolvedAt: null, resolution: null };
+    this._items.set(id, item);
+    return { ...item };
+  }
+  acknowledge(id, { by, at = null } = {}) {
+    const it = this._items.get(id); if (!it) throw new Error('unknown escalation: ' + id);
+    if (!by) throw new Error('an acknowledgement must name the human who made it');
+    if (it.state !== 'raised') throw new Error(`escalation ${id} is '${it.state}' and cannot be acknowledged again`);
+    it.state = 'acknowledged'; it.acknowledgedBy = by; it.acknowledgedAt = at ?? this._clock();
+    return { ...it };
+  }
+  resolve(id, { by, resolution, at = null } = {}) {
+    const it = this._items.get(id); if (!it) throw new Error('unknown escalation: ' + id);
+    if (!by || !resolution) throw new Error('a resolution must name a human and state what was decided');
+    // An escalation cannot skip acknowledgement: "resolved without anyone admitting they saw it" is
+    // precisely the record that makes an after-the-fact review impossible.
+    if (it.state !== 'acknowledged') throw new Error(`escalation ${id} is '${it.state}' — it must be acknowledged before it can be resolved`);
+    it.state = 'resolved'; it.resolvedBy = by; it.resolvedAt = at ?? this._clock(); it.resolution = resolution;
+    return { ...it };
+  }
+  items({ state = null } = {}) { return [...this._items.values()].filter((i) => !state || i.state === state).map((i) => ({ ...i })); }
+  overdue({ now = null } = {}) {
+    const t = now ?? this._clock();
+    return this.items({ state: 'raised' }).filter((i) => t > i.ackDueAt).map((i) => ({ ...i, overdueByMs: t - i.ackDueAt }));
+  }
+  status({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const all = this.items();
+    const overdue = this.overdue({ now: t });
+    return {
+      states: ESCALATION_STATES, acknowledgementHours: this._ackWindow / 3600_000,
+      total: all.length,
+      byState: all.reduce((acc, i) => ((acc[i.state] = (acc[i.state] || 0) + 1), acc), {}),
+      open: all.filter((i) => i.state !== 'resolved').map((i) => i.id),
+      unacknowledged: overdue.map((i) => ({ id: i.id, subsystem: i.subsystem, overdueByMs: i.overdueByMs, escalateTo: i.terminatesAt })),
+      healthy: overdue.length === 0,
+      note: 'An escalation raised and never acknowledged is the failure this workflow exists to make visible. Resolution cannot skip acknowledgement.',
+    };
+  }
+}
+
+// ACTIVE coverage: is there somebody available, ACTIVE and TRAINED to decide for every governance
+// object? This is the Part 13 invariant — no governance object without active ownership — and it is
+// deliberately separate from `coverageScore()`, which answers the narrower availability question.
+//
+// Activity and training default to UNKNOWN when no register is supplied, and unknown is reported as
+// unknown rather than as satisfied. A platform that treats "we have no record of this owner acting"
+// as evidence of active ownership has inverted the meaning of the word evidence.
+function activeCoverage({ availability = null, activity = null, training = null, now = 0 } = {}) {
+  const avail = availability || new AvailabilityRegister({ clock: () => now });
+  const rows = [];
+  for (const id of subsystems()) {
+    for (const role of DEPUTY_ROLES) {
+      const eff = avail.effectiveOwner(id, role, now);
+      const holder = eff.holder;
+      const act = holder && activity ? activity.status(holder, { now }) : null;
+      const trn = holder && training ? training.status(holder, role, { now }) : null;
+      const blockers = [];
+      if (!eff.covered) blockers.push(`nobody available — ${eff.reason}`);
+      if (holder && !activity) blockers.push('no activity register supplied — whether this owner is active is unknown, and unknown is not active');
+      else if (act && !act.acceptable) blockers.push(`${holder} is ${act.band}: ${act.reason}`);
+      if (holder && !training) blockers.push('no training register supplied — whether this owner is currently certified is unknown');
+      else if (trn && !trn.current) blockers.push(`${holder} training ${trn.reason}`);
+      rows.push({
+        subsystem: id, role, holder, via: eff.via,
+        available: eff.covered,
+        activity: act, training: trn,
+        activelyOwned: blockers.length === 0, blockers,
+        escalateTo: blockers.length ? BOARDS[OWNERSHIP[id].governanceBoard].name : null,
+      });
+    }
+  }
+  const owned = rows.filter((r) => r.activelyOwned);
+  return {
+    pairs: rows, total: rows.length, activelyOwned: owned.length,
+    coverage: rows.length ? +(owned.length / rows.length).toFixed(4) : 0,
+    unowned: rows.filter((r) => !r.activelyOwned).map((r) => ({ subsystem: r.subsystem, role: r.role, blockers: r.blockers, escalateTo: r.escalateTo })),
+    complete: owned.length === rows.length,
+    failClosed: true, authorizes: false,
+    note: 'No governance object without ACTIVE ownership. Available, active and trained are three separate facts; satisfying one does not imply the others.',
+  };
+}
+
+// The continuity dashboard a governance board reads: availability, activity, training, escalation
+// and review, in one place, aggregated to the weakest of them.
+function continuityDashboard({ availability = null, activity = null, training = null, escalations = null, now = 0, lastReviewed = {} } = {}) {
+  const active = activeCoverage({ availability, activity, training, now });
+  const gaps = ownershipGaps({ availability, now, lastReviewed });
+  const review = reviewSchedule({ now, lastReviewed });
+  const esc = escalations ? escalations.status({ now }) : { healthy: null, total: 0, unacknowledged: [], note: 'no escalation workflow supplied — unacknowledged escalations cannot be reported, which is not the same as there being none' };
+  const dormant = activity ? [...new Set(active.pairs.filter((p) => p.activity && !p.activity.acceptable).map((p) => p.holder))].sort() : null;
+  const uncertified = training ? [...new Set(active.pairs.filter((p) => p.training && !p.training.current).map((p) => p.holder))].sort() : null;
+  const blockers = [
+    ...active.unowned.map((u) => `${u.subsystem}/${u.role}: ${u.blockers.join('; ')}`),
+    ...gaps.gaps.filter((g) => g.kind === 'structural').map((g) => `${g.subsystem}/${g.role}: ${g.detail}`),
+    ...(esc.unacknowledged || []).map((u) => `${u.id}: escalation unacknowledged past its window, escalate to ${u.escalateTo}`),
+  ];
+  return {
+    question: 'Is every governance object owned by somebody who is available, active and currently certified?',
+    answer: blockers.length === 0
+      ? 'Yes, for every subsystem and role assessed.'
+      : 'No. Each blocker below is a governance object that is nominally owned and practically not.',
+    activeCoverage: active.coverage,
+    availabilityCoverage: coverageScore({ availability, now }).coverage,
+    dormantOwners: dormant, uncertifiedOwners: uncertified,
+    escalations: esc,
+    reviewOverdue: review.filter((r) => r.overdue).map((r) => r.subsystem),
+    structuralGaps: gaps.gaps.filter((g) => g.kind === 'structural'),
+    blockers, sound: blockers.length === 0,
+    activityBands: ACTIVITY_BANDS.map((b) => ({ ...b, maxDaysSinceAct: b.maxDaysSinceAct === Infinity ? null : b.maxDaysSinceAct })),
+    requiredTraining: JSON.parse(JSON.stringify(REQUIRED_TRAINING)),
+    informationalOnly: true, authorizes: false,
+    note: 'Availability is what somebody declared; activity is what they did; training is what they are certified to do. The dashboard aggregates to the weakest of the three, because a role fails on whichever is missing.',
+  };
+}
+
 // The full ownership model as served to the API and rendered into docs/governance-ownership.md.
 function model() {
   return {
@@ -291,4 +512,6 @@ module.exports = {
   subsystems, describe, boards, escalationPath, accountabilityFor, validate, model,
   deputyOf, deputies, AvailabilityRegister, successionPlan, reviewSchedule,
   coverageScore, ownershipGaps, continuityReport,
+  ACTIVITY_BANDS, GOVERNANCE_ACTS, REQUIRED_TRAINING, TRAINING_VALIDITY_DAYS, ESCALATION_STATES,
+  ActivityRegister, TrainingRegister, EscalationWorkflow, activeCoverage, continuityDashboard,
 };

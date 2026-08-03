@@ -409,6 +409,14 @@ function createApp(overrides = {}) {
   if (!architectureValidation.valid) throw new Error('context map invalid: ' + architectureValidation.violations.join('; '));
   const ownershipValidation = ownership.validate();
   if (!ownershipValidation.valid) throw new Error('governance ownership model invalid: ' + ownershipValidation.violations.join('; '));
+  // Phase 12, Part 13: the registers behind active ownership. They start EMPTY on purpose. An
+  // empty activity register reports every owner as never having acted, and the continuity
+  // dashboard therefore reports the estate as not soundly owned — which is the truth of a freshly
+  // composed platform. Seeding them with synthetic acts would make the dashboard report a
+  // governance history that never happened.
+  ownership.activity = new ownership.ActivityRegister({ clock: () => Date.now() });
+  ownership.training = new ownership.TrainingRegister({ clock: () => Date.now() });
+  ownership.escalations = new ownership.EscalationWorkflow({ clock: () => Date.now() });
   // Stable integration contracts (Part 3) + the component migration roadmap (Part 4). The
   // contract registry is the published interface surface; a boundary crossing without a
   // contract, or a migration item without a rollback, refuses composition.

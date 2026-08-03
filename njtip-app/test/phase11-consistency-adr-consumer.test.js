@@ -98,7 +98,11 @@ test('ADR: an unmeasurable success criterion fails validation', () => {
     let doc = '# ADR-0098: crafted probe\n\n- **Status:** Accepted\n\n';
     for (const s of adr.schemaFor(98)) {
       const isProbe = s.heading === 'Measurable success criteria';
-      const other = adr.schema().measurableSections.includes(s.heading) ? `${filler} 108 invariants hold.` : filler;
+      // Sections with a content rule get content that satisfies it, so the probe isolates the one
+      // rule under test. Phase 12 added a dated-content rule for the review schedule.
+      const other = adr.schema().measurableSections.includes(s.heading) ? `${filler} 108 invariants hold.`
+        : adr.schema().datedSections.includes(s.heading) ? `${filler} Reviewed on or before 2027-08-03.`
+          : filler;
       doc += `## ${s.heading}\n${isProbe ? criterion : other}\n\n`;
     }
     return doc;
@@ -109,7 +113,7 @@ test('ADR: an unmeasurable success criterion fails validation', () => {
   assert.ok(vague.violations.some((x) => /no measurable value/.test(x)));
   const ok = probe('p95 latency under 500 ms across a 30-day window.');
   assert.strictEqual(ok.valid, true, ok.violations.join('; '));
-  assert.strictEqual(ok.schema, 'extended');
+  assert.strictEqual(ok.schema, 'governance');   // a new ADR is held to the newest tier in force
 });
 
 test('ADR: lifecycle and architectural debt are queryable', () => {

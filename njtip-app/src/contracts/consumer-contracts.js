@@ -371,6 +371,73 @@ class ConsumerContracts {
     };
   }
 
+  // --- Release impact reporting (Phase 12, Part 12) ---------------------------------------------
+  //
+  // Everything above answers a question about ONE contract. A release is a SET of changes landing
+  // together, and the property that matters is not "is each change safe?" but "is any consumer hit
+  // by more than one of them?" A consumer facing two separately-acceptable changes in the same
+  // release is facing one unacceptable release — and no per-contract report can see that.
+  releaseImpact({ release = 'unnamed', changes = [], now = 0 } = {}) {
+    if (!Array.isArray(changes)) throw new Error('a release is a list of contract changes');
+    const perChange = changes.map((ch) => {
+      if (!ch || !ch.contract) throw new Error('every change must name the contract it modifies');
+      if (!this._registry.has(ch.contract)) throw new Error('unknown contract: ' + ch.contract);
+      const impact = this.impactScore(ch.contract, ch.spec || {});
+      const readiness = this.migrationReadiness({ contract: ch.contract, spec: ch.spec || {}, now });
+      return {
+        contract: ch.contract, description: ch.description || null, spec: ch.spec || {},
+        score: impact.score, band: impact.band, safe: impact.safe,
+        affected: impact.affected, constitutionalImpact: impact.constitutionalImpact,
+        requiredAction: impact.requiredAction,
+        migrationReady: readiness.ready, blockedBy: readiness.blockedBy,
+      };
+    });
+
+    // Per-consumer roll-up: how many changes in THIS release land on each consumer at once.
+    const perConsumer = new Map();
+    for (const c of perChange) {
+      for (const consumer of c.affected) {
+        if (!perConsumer.has(consumer)) perConsumer.set(consumer, { consumer, criticality: this._expectations[consumer].criticality, owner: this._expectations[consumer].owner, changes: [] });
+        perConsumer.get(consumer).changes.push(c.contract);
+      }
+    }
+    const consumers = [...perConsumer.values()].map((r) => ({
+      ...r, changeCount: r.changes.length,
+      // Two breaking changes in one release is not twice the work — it is a consumer that cannot
+      // migrate incrementally, because there is no intermediate state where it compiles against both.
+      simultaneousBreak: r.changes.length > 1,
+    })).sort((a, b) => b.changeCount - a.changeCount || a.consumer.localeCompare(b.consumer));
+
+    const blockers = [];
+    for (const c of perChange) {
+      if (c.constitutionalImpact) blockers.push({ check: 'constitutional-consumer', contract: c.contract, reason: `breaks a constitutional consumer (${c.affected.join(', ')}) — the constitutional path may not be broken by a release` });
+      else if (!c.safe && !c.migrationReady) blockers.push({ check: 'migration-not-ready', contract: c.contract, reason: `breaking, and these consumers are not migrated: ${c.blockedBy.join(', ')}` });
+    }
+    for (const r of consumers.filter((x) => x.simultaneousBreak)) {
+      blockers.push({ check: 'simultaneous-break', consumer: r.consumer, reason: `${r.changeCount} changes in this release land on ${r.consumer} at once — there is no intermediate version it can run` });
+    }
+    // A release containing no assessed change is not a safe release; it is an unassessed one.
+    if (!changes.length) blockers.push({ check: 'no-changes-assessed', reason: 'no contract change was submitted for assessment — an unassessed release is not a safe release, it is an unmeasured one' });
+
+    const deprecation = this.deprecationAnalytics({ now });
+    for (const overdue of deprecation.overdue) blockers.push({ check: 'sunset-overdue', contract: overdue, reason: 'consumers remain past this contract\'s sunset date — retiring it in this release would break them' });
+
+    return {
+      release, changes: perChange, consumers,
+      // Aggregate to the WEAKEST link: the release's band is its worst change, not their average.
+      worstBand: perChange.reduce((w, c) => (['none', 'moderate', 'high', 'severe'].indexOf(c.band) > ['none', 'moderate', 'high', 'severe'].indexOf(w) ? c.band : w), 'none'),
+      totalScore: perChange.reduce((a, c) => a + c.score, 0),
+      constitutionalImpact: perChange.some((c) => c.constitutionalImpact),
+      simultaneouslyBroken: consumers.filter((c) => c.simultaneousBreak).map((c) => c.consumer),
+      deprecationOverdue: deprecation.overdue,
+      blockers, deployable: blockers.length === 0,
+      failClosed: true, authorizes: false,
+      note: blockers.length
+        ? 'RELEASE BLOCKED. Every blocker names a consumer that this release would break, or a change nobody assessed. Release impact is assessed BEFORE deployment because afterwards it is an incident report.'
+        : 'No registered consumer is broken by this release. Deployment itself remains a recorded decision by a named human authority.',
+    };
+  }
+
   validate() {
     const violations = [];
     for (const id of this.consumers()) {

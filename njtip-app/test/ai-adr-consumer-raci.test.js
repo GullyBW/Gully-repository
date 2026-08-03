@@ -126,9 +126,11 @@ test('ADR: the expanded schema applies from 0004 and demands the full record', (
     assert.ok(fields.includes(f), f);
   }
   const res = adr.validateCatalogue();
-  // Phase 11 added a third tier from 0006; 0004–0005 stay on the full schema they were written to.
+  // Phase 11 added a third tier from 0006 and Phase 12 a fourth from 0007; earlier ADRs stay on
+  // the schema they were written to rather than being retrofitted.
   assert.ok(res.adrs.filter((a) => a.number >= 4 && a.number < adr.EXTENDED_SCHEMA_FROM).every((a) => a.schema === 'full'));
-  assert.ok(res.adrs.filter((a) => a.number >= adr.EXTENDED_SCHEMA_FROM).every((a) => a.schema === 'extended'));
+  assert.ok(res.adrs.filter((a) => a.number >= adr.EXTENDED_SCHEMA_FROM && a.number < adr.GOVERNANCE_SCHEMA_FROM).every((a) => a.schema === 'extended'));
+  assert.ok(res.adrs.filter((a) => a.number >= adr.GOVERNANCE_SCHEMA_FROM).every((a) => a.schema === 'governance'));
   assert.ok(res.adrs.filter((a) => a.number < 4).every((a) => a.schema === 'legacy'));
 });
 

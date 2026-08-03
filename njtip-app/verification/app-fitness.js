@@ -3294,6 +3294,159 @@ module.exports = [
     if (JSON.stringify(mr.validateFailover({ failed: ['bw-south'] })) !== JSON.stringify(mr.validateFailover({ failed: ['bw-south'] }))) v.push('failover validation is not deterministic');
   }),
 
+  fit('APP-FIT-GOVERNANCE-INTELLIGENCE', 'ADR quality, release impact, active ownership and evidence provenance all hold — and each rejects the case it exists to catch', (v) => {
+    // --- Part 11: ADR review lifecycle, quality reporting, automatic rejection -----------------
+    const adr = require('../src/architecture/adr-governance');
+    const cat = adr.validateCatalogue();
+    if (!cat.valid) v.push('ADR catalogue invalid: ' + cat.violations.join('; '));
+    // The governance schema is in force and something actually satisfies it — a schema no ADR is
+    // held to is a schema that has never been tested.
+    if (!adr.GOVERNANCE_SCHEMA.length) v.push('the governance schema declares no sections');
+    for (const s of adr.GOVERNANCE_SCHEMA) if (!s.why) v.push(`governance section '${s.heading}' does not say why it is required`);
+    const governed = cat.adrs.filter((a) => a.schema === 'governance');
+    if (!governed.length) v.push('no ADR is held to the governance schema — an untested schema governs nothing');
+    for (const a of governed) if (!a.valid) v.push(`${a.file}: fails the governance schema: ${a.violations.join('; ')}`);
+
+    const q = adr.qualityReport({ now: '2026-08-03' });
+    if (!q.sound) v.push('the ADR catalogue is not sound: ' + JSON.stringify(q.incomplete) + ' overdue=' + q.review.overdue.join(','));
+    if (q.authorizes !== false) v.push('the ADR quality report claims authority');
+    for (const d of q.byDimension) if (!d.description) v.push(`quality dimension '${d.dimension}' has no description`);
+    if (!q.byDimension.some((d) => d.dimension === 'reviewability' && d.score !== null)) v.push('reviewability is not assessed for any ADR');
+    // Weakest link, not mean: the catalogue score must equal its worst ADR on each dimension.
+    for (const d of q.byDimension.filter((x) => x.score !== null)) {
+      const rows = q.adrs.map((a) => a.dimensions.find((x) => x.dimension === d.dimension)).filter((x) => x && x.applicable);
+      if (d.score !== Math.min(...rows.map((r) => r.score))) v.push(`dimension '${d.dimension}' does not aggregate to the weakest ADR`);
+    }
+
+    // An ADR with no review schedule is not "not due" — and one whose schedule names no date is
+    // reported as undated rather than as compliant.
+    const complete = require('node:fs').readFileSync(require('node:path').join(adr.ADR_DIR, '0007-session-consistency-and-adr-review-lifecycle.md'), 'utf8');
+    if (!adr.admit(complete).admitted) v.push('a complete ADR was rejected: ' + adr.admit(complete).rejections.join('; '));
+    const vague = complete.replace(/## Review schedule\n[\s\S]*?\n## Sunset criteria/, '## Review schedule\nThis decision is reviewed periodically by the Architecture Review Board whenever it seems appropriate to do so.\n\n## Sunset criteria');
+    const vagueVerdict = adr.admit(vague);
+    if (vagueVerdict.admitted) v.push('"reviewed periodically" was accepted as a review schedule');
+    if (!vagueVerdict.rejections.some((r) => /is not a schedule/.test(r))) v.push('the vague review schedule was rejected for the wrong reason');
+    const noSunset = complete.replace(/## Sunset criteria\n[\s\S]*?(?=\n## Decision owner)/, '');
+    if (adr.admit(noSunset).admitted) v.push('an ADR with no sunset criteria was admitted');
+    if (adr.admit('').admitted || !adr.admit('').failClosed) v.push('an empty proposal was admitted, or did not fail closed');
+    if (adr.admit('## Context\nsomething').admitted) v.push('a proposal with no ADR heading was admitted');
+    if (adr.admit(complete).authorizes !== false) v.push('admission claims to be approval');
+    if (!/not approval/i.test(adr.admit(complete).note)) v.push('admission does not distinguish itself from approval');
+
+    // --- Part 12: release impact reported BEFORE deployment ------------------------------------
+    const { ConsumerContracts } = require('../src/contracts/consumer-contracts');
+    const { ContractRegistry } = require('../src/contracts/integration-contracts');
+    const reg = new ContractRegistry();
+    const cc = new ConsumerContracts({ registry: reg });
+    const unassessed = cc.releaseImpact({ release: 'empty' });
+    if (unassessed.deployable) v.push('a release with nothing assessed was reported deployable — an unassessed release is not a safe one');
+    if (!unassessed.blockers.some((b) => b.check === 'no-changes-assessed')) v.push('an empty release named no blocker');
+    const submit = reg.current('api.reports.submit');
+    const status = reg.current('api.reports.status');
+    const additive = cc.releaseImpact({
+      release: 'additive',
+      changes: [{ contract: 'api.reports.submit', description: 'accept an optional locale field', spec: { fields: { required: submit.fields.required, optional: [...submit.fields.optional, 'locale'] } } }],
+    });
+    if (!additive.deployable) v.push('a backward-compatible release was blocked: ' + JSON.stringify(additive.blockers));
+    if (additive.worstBand !== 'none') v.push('an additive release did not band as none');
+    if (additive.authorizes !== false || additive.failClosed !== true) v.push('the release impact report claims authority / is not fail-closed');
+    // Breaking a constitutional consumer blocks the release outright.
+    const breaking = cc.releaseImpact({ release: 'breaking', changes: [{ contract: 'api.reports.submit', description: 'remove every field', spec: { fields: { required: [], optional: [] } } }] });
+    if (breaking.deployable) v.push('a release breaking the constitutional reporting path was deployable');
+    if (!breaking.constitutionalImpact) v.push('breaking a constitutional consumer was not reported as constitutional impact');
+    if (!breaking.blockers.some((b) => b.check === 'constitutional-consumer')) v.push('a constitutional break was not the named blocker');
+    if (!/RELEASE BLOCKED/.test(breaking.note)) v.push('a blocked release did not say so');
+    // Two changes landing on ONE consumer at once — the case no per-contract report can see.
+    const both = cc.releaseImpact({
+      release: 'simultaneous',
+      changes: [
+        { contract: 'api.reports.submit', spec: { fields: { required: [], optional: [] } } },
+        { contract: 'api.reports.status', spec: { fields: { required: [], optional: [] }, responseFields: status.responseFields } },
+      ],
+    });
+    if (!both.simultaneouslyBroken.includes('citizen-web')) v.push('two changes landing on one consumer were not reported as a simultaneous break');
+    if (!both.blockers.some((b) => b.check === 'simultaneous-break')) v.push('a simultaneous break did not block the release');
+    if (both.worstBand !== 'severe') v.push('the release band did not aggregate to its worst change');
+
+    // --- Part 13: owner activity, training, escalation, active ownership -----------------------
+    const own = require('../src/governance/ownership');
+    const DAY = 24 * 3600_000, NOW = 400 * DAY;
+    const blind = own.continuityDashboard({ now: NOW });
+    if (blind.sound) v.push('governance was reported soundly owned with no activity or training evidence at all');
+    if (!blind.blockers.some((b) => /unknown is not active/.test(b))) v.push('an unknown activity state was not reported as unknown');
+    const activity = new own.ActivityRegister({ clock: () => NOW });
+    const training = new own.TrainingRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        const holder = own.OWNERSHIP[s][role];
+        activity.recordAct({ person: holder, act: 'review', subsystem: s, at: NOW - 10 * DAY });
+        for (const course of own.REQUIRED_TRAINING[role]) training.recordCompletion({ person: holder, course, at: NOW - 30 * DAY, by: 'Registrar of Governance' });
+      }
+    }
+    const wired = own.continuityDashboard({ activity, training, now: NOW });
+    if (!wired.sound) v.push('a fully available, active and trained estate was not sound: ' + wired.blockers.slice(0, 3).join('; '));
+    if (wired.activeCoverage !== 1) v.push('active coverage was not complete for a fully evidenced estate');
+    // A dormant owner is not an available one, even though availability says otherwise.
+    const dormantActivity = new own.ActivityRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) for (const role of own.DEPUTY_ROLES) dormantActivity.recordAct({ person: own.OWNERSHIP[s][role], act: 'review', subsystem: s, at: NOW - 300 * DAY });
+    const dormant = own.continuityDashboard({ activity: dormantActivity, training, now: NOW });
+    if (dormant.sound) v.push('an estate whose every owner last acted 300 days ago was reported soundly owned');
+    if (own.coverageScore({ now: NOW }).coverage !== 1) v.push('availability coverage changed — activity must be a separate fact, not a redefinition of availability');
+    if (!dormant.dormantOwners || !dormant.dormantOwners.length) v.push('dormant owners were not named');
+    // Expired training blocks separately from missing training.
+    const expiredTraining = new own.TrainingRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) for (const role of own.DEPUTY_ROLES) for (const course of own.REQUIRED_TRAINING[role]) expiredTraining.recordCompletion({ person: own.OWNERSHIP[s][role], course, at: NOW - 400 * DAY, by: 'Registrar of Governance' });
+    const lapsed = own.activeCoverage({ activity, training: expiredTraining, now: NOW });
+    if (lapsed.complete) v.push('an estate whose training expired a year ago was actively owned');
+    if (!lapsed.unowned.some((u) => u.blockers.some((b) => /expired/.test(b)))) v.push('expired training was not reported as expired');
+    let selfCertified = false;
+    try { expiredTraining.recordCompletion({ person: 'X', course: 'records-management', at: NOW }); } catch (_) { selfCertified = true; }
+    if (!selfCertified) v.push('a training completion was accepted with nobody attesting it');
+    // Escalation is a workflow: resolution cannot skip acknowledgement.
+    const esc = new own.EscalationWorkflow({ clock: () => NOW });
+    const raised = esc.raise({ subsystem: own.subsystems()[0], reason: 'no available owner', raisedBy: 'Operations Duty Officer' });
+    let skipped = false;
+    try { esc.resolve(raised.id, { by: 'ARB Chair', resolution: 'reassigned' }); } catch (_) { skipped = true; }
+    if (!skipped) v.push('an escalation was resolved without ever being acknowledged');
+    if (esc.status({ now: NOW }).healthy !== true) v.push('a freshly raised escalation was already reported unhealthy');
+    if (esc.overdue({ now: NOW + 2 * DAY }).length !== 1) v.push('an escalation unacknowledged past its window was not reported overdue');
+    esc.acknowledge(raised.id, { by: 'ARB Vice-Chair' });
+    esc.resolve(raised.id, { by: 'ARB Chair', resolution: 'deputy confirmed and recorded' });
+    if (esc.status({ now: NOW }).byState.resolved !== 1) v.push('a resolved escalation was not recorded as resolved');
+
+    // --- Part 14: verification history, confidence trend, provenance ---------------------------
+    const ec = require('../src/assurance/evidence-confidence');
+    let clock = 0;
+    const evidence = new ec.EvidenceRegister({ clock: () => clock });
+    if (evidence.provenanceReport('nothing').known) v.push('a provenance report was produced for evidence that does not exist');
+    evidence.record({ id: 'fitness', source: 'executable-check', completeness: 1, verifiedAt: 0, now: 0 });
+    if (evidence.confidenceTrend('fitness').direction !== 'insufficient-data') v.push('a trend was reported from a single verification');
+    // Re-recording the same observation must not manufacture a trend.
+    evidence.record({ id: 'fitness', source: 'executable-check', completeness: 1, verifiedAt: 0, now: 0 });
+    if (evidence.history('fitness').length !== 1) v.push('re-recording an identical observation created a second history point');
+    clock = 6 * 3600_000; evidence.record({ id: 'fitness', source: 'executable-check', completeness: 0.9, verifiedAt: 0, now: clock });
+    clock = 12 * 3600_000; evidence.record({ id: 'fitness', source: 'executable-check', completeness: 0.8, verifiedAt: 0, now: clock });
+    const trend = evidence.confidenceTrend('fitness');
+    if (trend.direction !== 'degrading') v.push('falling confidence was not reported as degrading');
+    if (trend.consecutiveFalls < 2) v.push('consecutive falls were not counted');
+    if (!trend.warning || !/on its way out/.test(trend.warning)) v.push('a degrading trend produced no warning');
+    const prov = evidence.provenanceReport('fitness');
+    for (const f of ['source', 'sourceMeaning', 'confidence', 'completeness', 'freshness', 'method', 'calculation', 'verificationHistory', 'trend']) {
+      if (prov[f] === undefined || prov[f] === null) v.push(`provenance report omits '${f}'`);
+    }
+    if (prov.manualEntry !== false || !/cannot be supplied/.test(prov.derivationNote)) v.push('the provenance report does not state that confidence cannot be hand-entered');
+    if (prov.authorizes !== false || !prov.doesNotEstablish) v.push('the provenance report does not say what it fails to establish');
+    // Improving evidence must read as improving, so the trend can pass as well as fail.
+    let c2 = 0;
+    const better = new ec.EvidenceRegister({ clock: () => c2 });
+    better.record({ id: 'coverage', source: 'derived-computation', completeness: 0.5, verifiedAt: 0, now: 0 });
+    c2 = 3600_000; better.record({ id: 'coverage', source: 'derived-computation', completeness: 0.8, verifiedAt: c2, now: c2 });
+    if (better.confidenceTrend('coverage').direction !== 'improving') v.push('rising confidence was not reported as improving');
+    const provenance = evidence.provenance();
+    if (!provenance.degrading.includes('fitness')) v.push('the register-wide provenance report did not name the degrading evidence');
+    if (provenance.authorizes !== false) v.push('the provenance report claims authority');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');
@@ -3381,7 +3534,11 @@ module.exports = [
       let doc = '# ADR-0099: crafted probe\n\n- **Status:** Accepted\n\n';
       for (const s of adr.schemaFor(99)) {
         const isProbe = s.heading === 'Measurable success criteria';
-        const other = adr.schema().measurableSections.includes(s.heading) ? `${filler} 108 invariants hold.` : filler;
+        // Sections with a content rule get content that satisfies it, so the probe isolates the
+        // one rule under test rather than failing on an unrelated one.
+        const other = adr.schema().measurableSections.includes(s.heading) ? `${filler} 108 invariants hold.`
+          : adr.schema().datedSections.includes(s.heading) ? `${filler} Reviewed on or before 2027-08-03.`
+            : filler;
         doc += `## ${s.heading}\n${isProbe ? criterion : other}\n\n`;
       }
       return doc;
@@ -3392,7 +3549,8 @@ module.exports = [
     if (!vague.violations.some((x) => /no measurable value/.test(x))) v.push('the measurability failure was not named');
     const measurable = probe('p95 latency stays under 500 ms across a 30-day window; 108 invariants hold.');
     if (!measurable.valid) v.push('a genuinely measurable criterion was rejected: ' + measurable.violations.join('; '));
-    if (measurable.schema !== 'extended') v.push('ADR-0099 was not held to the extended schema');
+    // A new ADR is held to the newest tier in force, which Phase 12 made 'governance'.
+    if (measurable.schema !== 'governance') v.push('ADR-0099 was not held to the newest schema in force');
     // The real catalogue satisfies the rule, or it is decorative here.
     for (const a of res.adrs.filter((x) => x.schema === 'extended')) {
       const crit = adr.parse(a.file).sections['measurable success criteria'];
@@ -3415,7 +3573,7 @@ module.exports = [
 
     // The generated template covers every tier, so an author cannot miss a section.
     const tpl = adr.template({ number: '0099' });
-    for (const s of [...adr.LEGACY_SCHEMA, ...adr.FULL_SCHEMA, ...adr.EXTENDED_SCHEMA]) if (!tpl.includes(`## ${s.heading}`)) v.push(`the generated template omits '${s.heading}'`);
+    for (const s of [...adr.LEGACY_SCHEMA, ...adr.FULL_SCHEMA, ...adr.EXTENDED_SCHEMA, ...adr.GOVERNANCE_SCHEMA]) if (!tpl.includes(`## ${s.heading}`)) v.push(`the generated template omits '${s.heading}'`);
   }),
 
   fit('APP-FIT-CONSUMER-IMPACT', 'Impact is scored by whom it breaks, adoption is observed rather than assumed, and migration readiness fails closed', (v) => {

@@ -149,3 +149,79 @@ authorities, and only the second can act when the first two cannot.
 
 **A never-reviewed record is `overdue`, not `pending`.** A record nobody has ever checked is the
 least trustworthy kind, so it cannot sit in a softer bucket than one merely reviewed too long ago.
+
+---
+
+# Active Ownership: Activity, Training & Escalation (Phase 12, Part 13)
+
+Phase 11 asked *"is somebody available to decide?"* That is necessary and not sufficient.
+
+- An owner who has recorded no governance act in eight months is **nominally available and
+  practically absent**.
+- An owner whose mandatory training lapsed two years ago is available, active, and **not currently
+  competent** to exercise the role.
+
+Both look identical in an availability register. Both are how a governance object stops being
+governed while the org chart still says otherwise.
+
+> **Availability is what somebody declared. Activity is what they did. Training is what they are
+> certified to do.** Three separate facts; satisfying one does not imply the others.
+
+## Activity monitoring
+
+`ActivityRegister` records governance acts — `decision`, `approval`, `review`,
+`escalation-response`, `attestation` — each attributed and timestamped.
+
+| Band | Days since last act | Meaning |
+|---|---|---|
+| `active` | ≤ 90 | Has exercised the role within the current review cycle |
+| `stale` | ≤ 180 | Has not acted in over a quarter — verify the role is still held |
+| `dormant` | > 180 | Treat the role as vacant until confirmed |
+| **`never-acted`** | — | **No governance act has ever been recorded. An office nobody has seen act is an office on paper** |
+
+`never-acted` is its own band and the worst one. It is not an absence of evidence that gets rounded
+up to "probably fine".
+
+## Training status
+
+| Role | Required |
+|---|---|
+| `responsibleAuthority` | records-management · evidence-handling |
+| `approvingAuthority` | records-management · separation-of-duties |
+| `operationalOwner` | incident-response · records-management |
+| `dataSteward` | data-protection · records-management |
+
+Valid for 365 days. **Missing and expired are reported separately**, because the remedy differs: one
+is "book the course", the other is "you have been operating uncertified." A completion must be
+attested by a named human — a self-declared certification certifies nothing.
+
+## Escalation as a workflow
+
+Phase 11 published the escalation *path*. A path nobody walks is a picture. `EscalationWorkflow`
+makes it stateful:
+
+```
+raised ──acknowledge──► acknowledged ──resolve──► resolved
+   │
+   └─ unacknowledged past 24 h → reported as overdue, escalated to the terminal board
+```
+
+**Resolution cannot skip acknowledgement.** "Resolved without anyone admitting they saw it" is
+exactly the record that makes an after-the-fact review impossible.
+
+## Active coverage
+
+`activeCoverage()` is the Part 13 invariant — *no governance object without active ownership* — and
+is deliberately separate from `coverageScore()`, which still answers the narrower availability
+question and is unchanged.
+
+**Activity and training default to unknown when no register is supplied, and unknown is reported as
+unknown.** A platform that treats "we have no record of this owner acting" as evidence of active
+ownership has inverted the meaning of the word evidence. The composition root therefore starts these
+registers **empty**: a freshly composed platform genuinely has no governance history, and seeding
+one would report a past that never happened.
+
+`continuityDashboard()` aggregates availability, activity, training, escalation and review to the
+**weakest** of them, and names the dormant and uncertified owners rather than reporting a percentage.
+
+Live: `GET /api/governance/continuity/dashboard` (oversight-board).
