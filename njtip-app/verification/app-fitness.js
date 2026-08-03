@@ -3552,6 +3552,142 @@ module.exports = [
     if (!worse.offTarget.includes('coverage')) v.push('a metric below its target was not reported off-target');
   }),
 
+  fit('APP-FIT-OPERATIONS-TWIN', 'The operations twin is built from the architecture-of-record, and a simulation provably never touches it', (v) => {
+    const { OperationsTwin, ENTITY_KINDS, SCENARIOS } = require('../src/twin2/operations-twin');
+    const contextMap = require('../src/architecture/context-map');
+    const twin = new OperationsTwin({ evidenceIds: ['APP-FIT-OPERATIONS-TWIN'] });
+
+    // --- The model is derived, not hand-maintained ---------------------------------------------
+    const validation = twin.validate();
+    if (!validation.valid) v.push('operations twin model invalid: ' + validation.violations.join('; '));
+    for (const [kind, spec] of Object.entries(ENTITY_KINDS)) {
+      if (!spec.source) v.push(`entity kind '${kind}' does not say where it is read from — an unsourced kind is a hand-maintained one`);
+      if (!twin.model().byKind[kind]) v.push(`the twin models no '${kind}' entities`);
+    }
+    // Drift detection in both directions: nothing modelled that the architecture lacks, and nothing
+    // in the architecture that the twin omits.
+    const modelled = new Set(twin.entities('bounded-context').map((e) => e.id));
+    for (const id of contextMap.ids()) if (!modelled.has(id)) v.push(`context '${id}' is in the architecture-of-record but not in the twin`);
+    for (const id of modelled) if (!contextMap.ids().includes(id)) v.push(`context '${id}' is modelled but not in the architecture-of-record — the twin has drifted`);
+    // Rebuilding produces the same model: the twin is a function of the registries, not of history.
+    if (new OperationsTwin({ evidenceIds: ['APP-FIT-OPERATIONS-TWIN'] }).digest() !== twin.digest()) v.push('two twins built from the same registries disagree — the model is not deterministic');
+
+    // --- Every scenario runs, states its question, and authorizes nothing ----------------------
+    for (const [id, spec] of Object.entries(SCENARIOS)) {
+      if (!spec.question || !spec.perturbs) v.push(`scenario '${id}' does not state what it perturbs or what question it answers`);
+    }
+    let unknownScenario = false;
+    try { twin.simulate({ scenario: 'wing-it' }); } catch (_) { unknownScenario = true; }
+    if (!unknownScenario) v.push('an unknown scenario was simulated');
+
+    const runs = [
+      twin.simulate({ scenario: 'infrastructure-change', change: { zones: ['independent'] } }),
+      twin.simulate({ scenario: 'operational-failure', change: { failed: ['kms'] } }),
+      twin.simulate({ scenario: 'policy-update', change: { policies: { investigation: 'eventual' } } }),
+      twin.simulate({ scenario: 'governance-change', change: { vacated: ['identity-access'] } }),
+      twin.simulate({ scenario: 'migration-plan', change: { contexts: ['custody'] } }),
+      twin.simulate({ scenario: 'dr-exercise', change: { failedRegions: ['bw-south', 'bw-north'] } }),
+    ];
+    for (const r of runs) {
+      if (r.authorizes !== false) v.push(`scenario '${r.scenario}' claims authority`);
+      if (!r.question) v.push(`scenario '${r.scenario}' produced no question`);
+      // THE PART 17 INVARIANT, checked after every single run.
+      if (!r.isolation.unchanged) v.push(`scenario '${r.scenario}' changed the baseline model — a simulation must never affect production state`);
+      if (!r.isolation.frozen) v.push('the baseline model is not frozen');
+    }
+
+    // --- Each scenario finds the thing it exists to find ----------------------------------------
+    const infra = runs[0];
+    if (infra.safe) v.push('withdrawing the independent zone produced no blocking finding — the constitutional services live there');
+    if (!infra.findings.some((f) => f.entity === 'intake-api')) v.push('withdrawing the independent zone did not name intake-api');
+    const failure = runs[1];
+    if (!failure.blastRadius.impacted.includes('evidence-store')) v.push('a KMS failure did not propagate to the evidence store');
+    if (!/lower bound/.test(failure.blastRadius.caveat)) v.push('the blast radius does not state that it is a lower bound');
+    const policy = runs[2];
+    if (policy.safe) v.push('a consistency stance was changed with no ADR and produced no blocking finding');
+    if (!policy.findings.some((f) => f.weakening)) v.push('read-your-writes → eventual was not reported as a weakening');
+    const governance = runs[3];
+    if (governance.safe) v.push('vacating an accountable authority left the model with no blocking finding');
+    if (!governance.findings.some((f) => /no accountable authority/.test(f.finding))) v.push('a vacated authority was not reported as leaving something unowned');
+    const migration = runs[4];
+    if (!migration.findings.some((f) => /moves from zone/.test(f.finding))) v.push('a migration plan did not state what moves');
+    if (migration.safe) v.push('a migration plan with no target zone was reported safe');
+    const dr = runs[5];
+    if (dr.safe) v.push('losing two of three regions produced no blocking finding');
+    if (!dr.findings.some((f) => /unavailable/.test(f.finding))) v.push('the DR exercise did not report an unavailable context');
+
+    // A simulation over an unmodelled entity says so rather than reporting nothing.
+    const ghost = twin.simulate({ scenario: 'operational-failure', change: { failed: ['a-service-that-does-not-exist'] } });
+    if (!ghost.findings.some((f) => /not modelled/.test(f.finding))) v.push('a failure of an unmodelled entity produced silence');
+
+    // Isolation holds across the whole run, and the model is genuinely immutable.
+    const after = twin.verifyIsolation();
+    if (!after.unchanged) v.push('the baseline model changed across the simulation suite');
+    const snapshot = twin.model();
+    snapshot.entities.push({ kind: 'service', id: 'injected' });
+    if (twin.model().entities.length === snapshot.entities.length) v.push('model() handed out a live reference — a caller could mutate the baseline');
+    if (twin.history().length !== runs.length + 1) v.push('the simulation history does not record every run');
+  }),
+
+  fit('APP-FIT-MISSION-IMPACT', 'A technical event is forecast through justice services to citizen impact and strategic goals, and an unmapped path reports unknown', (v) => {
+    const bus = require('../src/observability/business');
+
+    // --- The six-stage chain is declared and joined end to end ---------------------------------
+    const expected = ['technical-event', 'business-process', 'justice-service', 'citizen-impact', 'mission-objective', 'strategic-goal'];
+    if (JSON.stringify(bus.MISSION_IMPACT_LAYERS) !== JSON.stringify(expected)) v.push('the mission impact chain does not have the six declared stages');
+    for (const violation of bus.validateMissionChain().violations) v.push(violation);
+    for (const l of bus.missionImpactLinks()) {
+      if (!l.mechanism) v.push(`link ${l.from} → ${l.to}: no mechanism`);
+      if (bus.MISSION_IMPACT_LAYERS.indexOf(l.toLayer) <= bus.MISSION_IMPACT_LAYERS.indexOf(l.fromLayer)) v.push(`link ${l.from} → ${l.to} does not move forward`);
+    }
+    // A citizen impact is stated in the citizen's words. A severity with no experience behind it is
+    // a number about a person, which is the thing this layer exists to avoid.
+    for (const c of bus.citizenImpacts()) {
+      if (!c.experience) v.push(`citizen impact '${c.id}' states no experience`);
+      if (/api|service|store|endpoint|latency/i.test(c.experience)) v.push(`citizen impact '${c.id}' is stated in the platform's words, not the citizen's`);
+      if (!bus.CITIZEN_IMPACT_SEVERITY.includes(c.severity)) v.push(`citizen impact '${c.id}': undeclared severity`);
+    }
+    for (const s of bus.justiceServices()) if (!s.delivers || !s.dependsOn.length) v.push(`justice service '${s.id}' does not say what it delivers or what it needs`);
+
+    // --- The forecast reaches all the way through ----------------------------------------------
+    const intake = bus.missionImpactForecast({ change: 'withdraw the intake store', failed: ['persistence-ind'] });
+    if (!intake.undeliveredServices.includes('anonymous-reporting')) v.push('losing the intake store did not stop the anonymous-reporting service');
+    if (!intake.citizenImpacts.some((c) => c.impact === 'cannot-report')) v.push('a citizen who cannot report was not reported as a citizen impact');
+    if (!intake.strategicGoals.some((g) => g.id === 'rule-of-law')) v.push('the forecast did not reach a strategic goal');
+    if (!intake.constitutionalServicesLost.includes('anonymous-reporting')) v.push('a lost constitutional service was not named as such');
+    if (intake.safeToDeploy) v.push('a change that stops a citizen reporting was reported safe to deploy');
+    if (intake.authorizes !== false || intake.failClosed !== true) v.push('the mission impact forecast claims authority / is not fail-closed');
+    if (!intake.paths.length) v.push('the forecast produced no traceable path');
+    for (const p of intake.paths) if (!p.mechanisms.length) v.push(`path ${p.chain} states no mechanism`);
+
+    // Aggregation is to the WORST impact, not the mean — and severity ordering is respected.
+    const all = bus.missionImpactForecast({ change: 'total loss', failed: ['persistence-ind', 'kms', 'persistence-exec', 'persistence-jud'] });
+    if (!all.worstCitizenImpact || all.worstCitizenImpact.severity !== 'severe') v.push('the worst citizen impact was not the severe one');
+    if (!all.irreversibleImpacts.length) v.push('an irreversible harm was not flagged as irreversible');
+    if (!/irreversible/.test(all.boardSummary)) v.push('the board summary does not say the harm is irreversible');
+    // The summary speaks in the citizen's language, not the platform's.
+    if (/persistence-|kms|api\b/i.test(all.boardSummary.replace(/^[^:]*:/, ''))) v.push('the board summary describes components rather than people');
+
+    // --- An unmapped path is UNKNOWN, not safe -------------------------------------------------
+    const nothing = bus.missionImpactForecast({ change: 'no-op', failed: [] });
+    if (!nothing.safeToDeploy) v.push('a change affecting nothing was not reported safe');
+    if (nothing.citizenImpacts.length) v.push('a change affecting nothing produced a citizen impact');
+    // A component outside every justice service's dependency tree must produce "unknown", not
+    // "no impact". `broker-exec` is genuinely such a component in the current topology — nothing
+    // declares a dependency on it — so the probe uses reality rather than mutating shared state.
+    const orphan = bus.missionImpactForecast({ change: 'withdraw the executive broker', failed: ['broker-exec'] });
+    if (!orphan.unmappedComponents.includes('broker-exec')) v.push('an affected component outside every service tree was not reported unmapped');
+    if (orphan.safeToDeploy) v.push('a change with an unmapped affected component was reported safe — unknown is not safe');
+    if (!/unknown, not nil/.test(orphan.boardSummary)) v.push('the board summary treated an unknown impact as no impact');
+    // The sharpest case: a component the topology has never heard of. Deployed before it was
+    // modelled, it must surface as unmodelled rather than crashing or reading as harmless.
+    const ghost = bus.missionImpactForecast({ change: 'ship an unmodelled component', failed: ['new-search-index'] });
+    if (!ghost.unmodelledComponents.includes('new-search-index')) v.push('a component the topology does not know was not reported as unmodelled');
+    if (ghost.safeToDeploy) v.push('a change touching an unmodelled component was reported safe');
+    // And the mapping still holds for the components that ARE mapped.
+    if (!bus.missionImpactForecast({ change: 'kms outage', failed: ['kms'] }).undeliveredServices.includes('evidence-custody')) v.push('a mapped component stopped reaching its justice service');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

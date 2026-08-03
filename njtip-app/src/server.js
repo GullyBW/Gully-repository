@@ -192,6 +192,11 @@ async function route(app, req, url, body) {
   // --- Phase 12: readiness dependencies, engineering intelligence ---
   if (method === 'GET' && p === '/api/assurance/readiness-dependencies') { requireRole('admin'); return json(200, app.assurance.readiness().dependencyAnalysis); }
   if (method === 'GET' && p === '/api/assurance/engineering-intelligence') { requireRole('admin'); return json(200, app.assurance.engineeringIntelligence()); }
+  // --- Phase 12: digital twin of operations, predictive mission impact ---
+  if (method === 'GET' && p === '/api/twin/operations') { requireRole('admin'); return json(200, app.operationsTwin().report()); }
+  if (method === 'POST' && p === '/api/twin/operations/simulate') { requireRole('admin'); return json(200, app.operationsTwin().simulate({ scenario: body && body.scenario, change: (body && body.change) || {}, label: body && body.label })); }
+  if (method === 'GET' && p === '/api/observability/mission-chain') { requireRole('oversight-board'); const b = require('./observability/business'); return json(200, { layers: b.MISSION_IMPACT_LAYERS, justiceServices: b.justiceServices(), citizenImpacts: b.citizenImpacts(), strategicGoals: b.strategicGoals(), links: b.missionImpactLinks(), validation: b.validateMissionChain() }); }
+  if (method === 'POST' && p === '/api/observability/mission-forecast') { requireRole('oversight-board'); const b = require('./observability/business'); return json(200, b.missionImpactForecast({ change: (body && body.change) || 'unnamed change', failed: (body && body.failed) || [], degraded: (body && body.degraded) || [] })); }
   if (method === 'GET' && p === '/api/architecture/adr') { requireRole('admin'); const a = require('./architecture/adr-governance'); return json(200, { catalogue: a.validateCatalogue(), lifecycle: a.lifecycle(), debt: a.architecturalDebt(), schema: a.schema() }); }
   if (method === 'GET' && p === '/api/governance/continuity') { requireRole('admin'); const own = require('./governance/ownership'); return json(200, own.continuityReport()); }
   if (method === 'GET' && p === '/api/assurance/readiness-model') { requireRole('admin'); return json(200, app.assurance.readiness()); }

@@ -489,9 +489,279 @@ function report({ events = [], periods = 1, businessHistory = {}, technicalHisto
   };
 }
 
+// --- Predictive mission impact analysis (Phase 12, Part 18) ---------------------------------------
+//
+// The chain above answers an incident commander's question: "what has this outage broken, in the
+// board's language?" This section answers a different one, asked BEFORE anything is deployed:
+//
+//   Technical Event → Business Process → Justice Service → Citizen Impact → Mission Objective
+//                                                                              → Strategic Goal
+//
+// Two layers sit between a business metric and a mission outcome, and they are the two nobody
+// writes down. A JUSTICE SERVICE is the thing a citizen actually receives. A CITIZEN IMPACT is what
+// happens to a person when they do not receive it — and it is stated in the citizen's words, not in
+// the platform's, because "intake-api unavailable" is not an impact on anybody. "A person who
+// decided today to report corruption cannot" is.
+const MISSION_IMPACT_LAYERS = ['technical-event', 'business-process', 'justice-service', 'citizen-impact', 'mission-objective', 'strategic-goal'];
+
+// The services the state actually delivers through this platform.
+const JUSTICE_SERVICES = {
+  'anonymous-reporting': { title: 'Report corruption without being identified', delivers: 'A route into the justice system for someone who cannot afford to be known to have used it.', constitutional: true },
+  'case-investigation': { title: 'Have a report investigated to an outcome', delivers: 'The state examining reported conduct rather than filing it.', constitutional: false },
+  'evidence-custody': { title: 'Have evidence preserved so it stands in court', delivers: 'An unbroken chain of custody, which is what makes evidence usable at all.', constitutional: true },
+  'judicial-review': { title: 'Have a decision taken by an accountable authority', delivers: 'A named human answerable for the decision, and a record of it.', constitutional: true },
+  'public-accountability': { title: 'See how the justice system is performing', delivers: 'Published, verifiable figures rather than assurances.', constitutional: false },
+};
+
+// What a person experiences when a service is not delivered. Severity is declared, because the
+// ordering is a judgement about people and should be arguable rather than computed from a weight.
+const CITIZEN_IMPACT_SEVERITY = ['severe', 'serious', 'material'];
+const CITIZEN_IMPACTS = {
+  'cannot-report': { severity: 'severe', experience: 'A person who decided today to report corruption cannot, and may not decide again.', irreversible: true },
+  'identity-at-risk': { severity: 'severe', experience: 'A person who reported anonymously can be identified, which is the harm the whole design exists to prevent.', irreversible: true },
+  'evidence-unusable': { severity: 'severe', experience: 'Evidence a person risked something to provide cannot be used, so the risk bought nothing.', irreversible: true },
+  'case-stalls': { severity: 'serious', experience: 'A report sits without progressing, and the person who filed it is told nothing.', irreversible: false },
+  'decision-unattributable': { severity: 'serious', experience: 'A decision affecting a person exists with nobody answerable for it, so it cannot be challenged.', irreversible: false },
+  'accountability-invisible': { severity: 'material', experience: 'The public cannot tell whether the system is working, so trust rests on assertion.', irreversible: false },
+};
+
+// National strategic goals the mission objectives serve.
+const STRATEGIC_GOALS = {
+  'rule-of-law': { title: 'The rule of law applies equally', owner: 'Government of Botswana' },
+  'public-trust': { title: 'Public trust in the justice system', owner: 'Government of Botswana' },
+  'institutional-integrity': { title: 'Institutional integrity of the justice institutions', owner: 'Government of Botswana' },
+};
+
+// The links across the four new hops. As with CHAIN_LINKS, each states its mechanism.
+const MISSION_IMPACT_LINKS = [
+  // business process → justice service
+  // Found by validateMissionChain(): 'anonymous-reporting' — the constitutional service — was
+  // reached by no business process at all. The platform measures nothing directly about whether
+  // people can report. Throughput is the nearest real signal (a report that cannot be filed never
+  // enters the pipeline, which is the mechanism CHAIN_LINKS already declares from intake-api), so
+  // the link is added and the weakness is recorded here rather than left implicit: this is a PROXY,
+  // and a fall in throughput has several other explanations.
+  { from: 'case-throughput', fromLayer: 'business-process', to: 'anonymous-reporting', toLayer: 'justice-service', mechanism: 'a report that cannot be filed never enters the pipeline, so throughput is the only measured signal that bears on reporting being available — a proxy, not a direct measure' },
+  { from: 'case-throughput', fromLayer: 'business-process', to: 'case-investigation', toLayer: 'justice-service', mechanism: 'throughput is the rate at which reports become investigations' },
+  { from: 'investigation-latency', fromLayer: 'business-process', to: 'case-investigation', toLayer: 'justice-service', mechanism: 'an investigation that does not conclude has not been delivered' },
+  { from: 'evidence-processing-time', fromLayer: 'business-process', to: 'evidence-custody', toLayer: 'justice-service', mechanism: 'evidence unprocessed is evidence not yet in custody of record' },
+  { from: 'judicial-workflow-duration', fromLayer: 'business-process', to: 'judicial-review', toLayer: 'justice-service', mechanism: 'the review is the service; its duration is its delivery' },
+  { from: 'approval-delay', fromLayer: 'business-process', to: 'judicial-review', toLayer: 'justice-service', mechanism: 'a decision awaiting a human has not been taken' },
+  { from: 'governance-review-time', fromLayer: 'business-process', to: 'judicial-review', toLayer: 'justice-service', mechanism: 'a review that never concludes leaves the decision it was meant to test unmade' },
+  { from: 'audit-completion-rate', fromLayer: 'business-process', to: 'public-accountability', toLayer: 'justice-service', mechanism: 'audit output is what accountability is published from' },
+  { from: 'compliance-rate', fromLayer: 'business-process', to: 'public-accountability', toLayer: 'justice-service', mechanism: 'compliance figures are the published measure of practice against policy' },
+  { from: 'policy-violation-rate', fromLayer: 'business-process', to: 'public-accountability', toLayer: 'justice-service', mechanism: 'violations are what accountability reporting exists to surface' },
+  // justice service → citizen impact
+  { from: 'anonymous-reporting', fromLayer: 'justice-service', to: 'cannot-report', toLayer: 'citizen-impact', mechanism: 'the service being unavailable IS the person being unable to report' },
+  { from: 'anonymous-reporting', fromLayer: 'justice-service', to: 'identity-at-risk', toLayer: 'citizen-impact', mechanism: 'a degraded anonymity boundary exposes the person the service exists to protect' },
+  { from: 'case-investigation', fromLayer: 'justice-service', to: 'case-stalls', toLayer: 'citizen-impact', mechanism: 'an undelivered investigation is a report that sits' },
+  { from: 'evidence-custody', fromLayer: 'justice-service', to: 'evidence-unusable', toLayer: 'citizen-impact', mechanism: 'a broken chain of custody makes the evidence inadmissible' },
+  { from: 'judicial-review', fromLayer: 'justice-service', to: 'decision-unattributable', toLayer: 'citizen-impact', mechanism: 'without a recorded accountable decision there is nothing to challenge' },
+  { from: 'public-accountability', fromLayer: 'justice-service', to: 'accountability-invisible', toLayer: 'citizen-impact', mechanism: 'unpublished figures leave the public with assertions' },
+  // citizen impact → mission objective
+  { from: 'cannot-report', fromLayer: 'citizen-impact', to: 'reports-can-be-filed', toLayer: 'mission-objective', mechanism: 'the mission objective is precisely that this does not happen' },
+  { from: 'identity-at-risk', fromLayer: 'citizen-impact', to: 'reports-can-be-filed', toLayer: 'mission-objective', mechanism: 'reporting is only possible if reporting is safe' },
+  { from: 'case-stalls', fromLayer: 'citizen-impact', to: 'cases-progress', toLayer: 'mission-objective', mechanism: 'a stalled case is the negation of the objective' },
+  { from: 'evidence-unusable', fromLayer: 'citizen-impact', to: 'evidence-is-admissible', toLayer: 'mission-objective', mechanism: 'admissibility is what the objective names' },
+  { from: 'decision-unattributable', fromLayer: 'citizen-impact', to: 'decisions-are-accountable', toLayer: 'mission-objective', mechanism: 'attribution is what accountability means here' },
+  { from: 'accountability-invisible', fromLayer: 'citizen-impact', to: 'oversight-is-informed', toLayer: 'mission-objective', mechanism: 'oversight that cannot see is not informed' },
+  // mission objective → strategic goal
+  { from: 'reports-can-be-filed', fromLayer: 'mission-objective', to: 'public-trust', toLayer: 'strategic-goal', mechanism: 'a reporting route people believe in is what public trust rests on' },
+  { from: 'reports-can-be-filed', fromLayer: 'mission-objective', to: 'rule-of-law', toLayer: 'strategic-goal', mechanism: 'conduct nobody can report is conduct outside the law\'s reach' },
+  { from: 'cases-progress', fromLayer: 'mission-objective', to: 'rule-of-law', toLayer: 'strategic-goal', mechanism: 'law that is never applied to reported conduct does not rule' },
+  { from: 'evidence-is-admissible', fromLayer: 'mission-objective', to: 'rule-of-law', toLayer: 'strategic-goal', mechanism: 'a court that cannot use the evidence cannot apply the law to the facts' },
+  { from: 'decisions-are-accountable', fromLayer: 'mission-objective', to: 'institutional-integrity', toLayer: 'strategic-goal', mechanism: 'an institution whose decisions are unattributable has no integrity to point to' },
+  { from: 'oversight-is-informed', fromLayer: 'mission-objective', to: 'institutional-integrity', toLayer: 'strategic-goal', mechanism: 'oversight is how integrity is demonstrated rather than claimed' },
+  { from: 'oversight-is-informed', fromLayer: 'mission-objective', to: 'public-trust', toLayer: 'strategic-goal', mechanism: 'trust survives bad news that was reported; it does not survive bad news that was hidden' },
+];
+
+// The one structural link, matching CONSTITUTIONAL_CHAIN at the technical end: intake IS the
+// anonymous-reporting service, so its loss is the service's loss, not a metric moving.
+// Found while building the coverage check: notification-service, analytics and the brokers mapped
+// to no justice service at all, which would have made every forecast involving them report "no
+// citizen impact". They do bear on people — somebody who files a report and is told nothing has
+// received a worse service — so they are mapped here rather than the check being relaxed.
+const SERVICE_DEPENDENCIES = {
+  'anonymous-reporting': ['intake-api'],
+  'case-investigation': ['case-service', 'notification-service'],
+  'evidence-custody': ['evidence-store', 'custody-ledger', 'kms'],
+  'judicial-review': ['governance-ledger'],
+  'public-accountability': ['oversight-api', 'analytics'],
+};
+
+function justiceServices() { return Object.entries(JUSTICE_SERVICES).map(([id, s]) => ({ id, ...s, dependsOn: [...(SERVICE_DEPENDENCIES[id] || [])] })); }
+// Every technical component any justice service rests on, directly or transitively.
+function mappedComponents() {
+  const telemetry = require('./telemetry');
+  const seen = new Set();
+  const walk = (id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const spec = telemetry.TOPOLOGY[id] || {};
+    // Soft dependencies count for MAPPING even though they do not count for delivery: a component
+    // that only degrades a service still has a citizen-impact path, and leaving it unmapped would
+    // make its failure read as "no impact" rather than as a degraded service.
+    for (const dep of [...(spec.dependsOn || []), ...(spec.degradesOn || [])]) walk(dep);
+  };
+  for (const list of Object.values(SERVICE_DEPENDENCIES)) for (const c of list) walk(c);
+  return seen;
+}
+function citizenImpacts() { return Object.entries(CITIZEN_IMPACTS).map(([id, c]) => ({ id, ...c })); }
+function strategicGoals() { return Object.entries(STRATEGIC_GOALS).map(([id, g]) => ({ id, ...g })); }
+function missionImpactLinks() { return MISSION_IMPACT_LINKS.map((l) => ({ ...l })); }
+
+// Validate the extended chain the same way the operational one is validated: every link joins
+// declared things, moves forward, and states a mechanism; nothing is orphaned at either end.
+function validateMissionChain() {
+  const violations = [];
+  const known = {
+    'business-process': new Set(Object.keys(BUSINESS_METRICS)),
+    'justice-service': new Set(Object.keys(JUSTICE_SERVICES)),
+    'citizen-impact': new Set(Object.keys(CITIZEN_IMPACTS)),
+    'mission-objective': new Set(Object.keys(MISSION_OUTCOMES)),
+    'strategic-goal': new Set(Object.keys(STRATEGIC_GOALS)),
+  };
+  for (const l of MISSION_IMPACT_LINKS) {
+    if (!MISSION_IMPACT_LAYERS.includes(l.fromLayer) || !MISSION_IMPACT_LAYERS.includes(l.toLayer)) violations.push(`link ${l.from} → ${l.to}: unknown layer`);
+    else if (MISSION_IMPACT_LAYERS.indexOf(l.toLayer) <= MISSION_IMPACT_LAYERS.indexOf(l.fromLayer)) violations.push(`link ${l.from} → ${l.to}: does not move forward through the chain`);
+    if (!known[l.fromLayer] || !known[l.fromLayer].has(l.from)) violations.push(`link ${l.from} → ${l.to}: '${l.from}' is not a declared ${l.fromLayer}`);
+    if (!known[l.toLayer] || !known[l.toLayer].has(l.to)) violations.push(`link ${l.from} → ${l.to}: '${l.to}' is not a declared ${l.toLayer}`);
+    if (!l.mechanism) violations.push(`link ${l.from} → ${l.to}: no mechanism — a link with no mechanism is a diagram, not a model`);
+  }
+  // Nothing may be orphaned. A justice service nothing reaches cannot be predicted about; a citizen
+  // impact that reaches no mission objective is a harm the platform has no stated position on.
+  for (const s of Object.keys(JUSTICE_SERVICES)) {
+    if (!MISSION_IMPACT_LINKS.some((l) => l.to === s)) violations.push(`justice service '${s}' is reached by no business process — nothing measured says anything about it`);
+    if (!MISSION_IMPACT_LINKS.some((l) => l.from === s)) violations.push(`justice service '${s}' reaches no citizen impact — what happens to a person when it is not delivered?`);
+    if (!SERVICE_DEPENDENCIES[s] || !SERVICE_DEPENDENCIES[s].length) violations.push(`justice service '${s}' declares no technical dependency — its delivery cannot be predicted from a technical event`);
+  }
+  for (const c of Object.keys(CITIZEN_IMPACTS)) {
+    if (!MISSION_IMPACT_LINKS.some((l) => l.from === c && l.toLayer === 'mission-objective')) violations.push(`citizen impact '${c}' reaches no mission objective — the platform has no stated position on this harm`);
+    if (!CITIZEN_IMPACT_SEVERITY.includes(CITIZEN_IMPACTS[c].severity)) violations.push(`citizen impact '${c}': unknown severity '${CITIZEN_IMPACTS[c].severity}'`);
+    if (!CITIZEN_IMPACTS[c].experience) violations.push(`citizen impact '${c}': no experience stated in the citizen's words`);
+  }
+  for (const g of Object.keys(STRATEGIC_GOALS)) {
+    if (!MISSION_IMPACT_LINKS.some((l) => l.to === g)) violations.push(`strategic goal '${g}' is reached by no mission objective — nothing this platform does bears on it`);
+  }
+  for (const o of Object.keys(MISSION_OUTCOMES)) {
+    if (!MISSION_IMPACT_LINKS.some((l) => l.from === o && l.toLayer === 'strategic-goal')) violations.push(`mission objective '${o}' serves no strategic goal — why is it a mission objective?`);
+  }
+  return { valid: violations.length === 0, violations, links: MISSION_IMPACT_LINKS.length, layers: MISSION_IMPACT_LAYERS.length };
+}
+
+// Walk the extended chain from any node to the strategic goals it reaches, recording the whole path
+// so a reader can disagree with any hop.
+function traceToStrategic(origin, { visited = new Set() } = {}) {
+  if (visited.has(origin)) return [];
+  visited.add(origin);
+  const links = MISSION_IMPACT_LINKS.filter((l) => l.from === origin);
+  const paths = [];
+  for (const l of links) {
+    if (l.toLayer === 'strategic-goal') paths.push([{ ...l }]);
+    else for (const rest of traceToStrategic(l.to, { visited: new Set(visited) })) paths.push([{ ...l }, ...rest]);
+  }
+  return paths;
+}
+
+// THE PART 18 REPORT. Forecast the consequences of a proposed change before it is deployed.
+// `failed` are the services the change would take down or degrade; everything else is derived.
+function missionImpactForecast({ change = 'unnamed change', failed = [], degraded = [] } = {}) {
+  // A component the topology does not know is the sharpest form of "unknown, not safe": something
+  // was deployed before it was modelled. It is kept in the failure set so it surfaces as unmapped,
+  // but excluded from propagation, which can only reason about what it has a record of.
+  const telemetryTopology = require('./telemetry').TOPOLOGY;
+  const unmodelled = failed.filter((f) => !telemetryTopology[f]);
+  const technical = impactOf({ failed: failed.filter((f) => telemetryTopology[f]) });
+  const allDown = new Set([...technical.infrastructure, ...technical.applications, ...failed]);
+  const degradedSet = new Set([...(technical.degraded || []), ...degraded]);
+
+  // Which justice services stop being delivered, and which are impaired. A service is undelivered
+  // when ANY of the technical components it needs is down — services do not partially exist.
+  const services = justiceServices().map((s) => {
+    const missing = s.dependsOn.filter((d) => allDown.has(d));
+    const impaired = s.dependsOn.filter((d) => degradedSet.has(d) && !allDown.has(d));
+    return {
+      service: s.id, title: s.title, delivers: s.delivers, constitutional: s.constitutional,
+      dependsOn: s.dependsOn, missingComponents: missing, degradedComponents: impaired,
+      delivered: missing.length === 0,
+      state: missing.length ? 'not-delivered' : impaired.length ? 'impaired' : 'delivered',
+    };
+  });
+  const undelivered = services.filter((s) => !s.delivered);
+
+  // Citizen impacts follow from the undelivered services, through declared links only.
+  const impacts = [];
+  for (const s of undelivered) {
+    for (const l of MISSION_IMPACT_LINKS.filter((x) => x.from === s.service && x.toLayer === 'citizen-impact')) {
+      impacts.push({ impact: l.to, ...CITIZEN_IMPACTS[l.to], viaService: s.service, mechanism: l.mechanism });
+    }
+  }
+  const uniqueImpacts = [...new Map(impacts.map((i) => [i.impact, i])).values()].sort((a, b) => CITIZEN_IMPACT_SEVERITY.indexOf(a.severity) - CITIZEN_IMPACT_SEVERITY.indexOf(b.severity) || a.impact.localeCompare(b.impact));
+
+  const objectives = [...new Set(uniqueImpacts.flatMap((i) => MISSION_IMPACT_LINKS.filter((l) => l.from === i.impact && l.toLayer === 'mission-objective').map((l) => l.to)))].sort();
+  const goals = [...new Set(objectives.flatMap((o) => MISSION_IMPACT_LINKS.filter((l) => l.from === o && l.toLayer === 'strategic-goal').map((l) => l.to)))].sort();
+  const paths = undelivered.flatMap((s) => traceToStrategic(s.service).map((p) => ({
+    service: s.service,
+    chain: [s.service, ...p.map((l) => l.to)].join(' → '),
+    mechanisms: p.map((l) => l.mechanism),
+  })));
+
+  // Aggregate to the WORST impact, not the mean. Averaging harm across people is how a severe,
+  // irreversible impact on one person disappears behind five material ones on nobody in particular.
+  const worst = uniqueImpacts.length ? uniqueImpacts[0] : null;
+  const irreversible = uniqueImpacts.filter((i) => i.irreversible);
+  // An undeclared path is UNKNOWN, not safe. A component nobody mapped to a service produces no
+  // impact here, and the report must say that rather than reporting "no citizen impact".
+  //
+  // The mapped set is the TRANSITIVE closure over the operational topology, not the hand-listed
+  // components: `intake-api` depends on `persistence-ind`, so a store nobody named directly is
+  // still mapped. Listing every transitive component by hand would be a second copy of the topology
+  // and would drift; what stays genuinely unmapped is a component outside every service's tree,
+  // which is the signal worth surfacing.
+  const mapped = mappedComponents();
+  const unmapped = [...allDown].filter((c) => !mapped.has(c)).sort();
+
+  return {
+    change, failed: [...failed].sort(), degraded: [...degraded].sort(),
+    layers: MISSION_IMPACT_LAYERS,
+    technicalEvent: { down: [...allDown].sort(), degraded: [...degradedSet].sort(), blastRadius: technical.blastRadius },
+    businessProcesses: technical.businessProcesses,
+    justiceServices: services,
+    undeliveredServices: undelivered.map((s) => s.service),
+    citizenImpacts: uniqueImpacts,
+    worstCitizenImpact: worst ? { impact: worst.impact, severity: worst.severity, experience: worst.experience } : null,
+    irreversibleImpacts: irreversible.map((i) => i.impact),
+    missionObjectives: objectives.map((id) => ({ id, ...MISSION_OUTCOMES[id] })),
+    strategicGoals: goals.map((id) => ({ id, ...STRATEGIC_GOALS[id] })),
+    constitutionalServicesLost: undelivered.filter((s) => s.constitutional).map((s) => s.service),
+    paths,
+    unmappedComponents: unmapped, unmodelledComponents: unmodelled.sort(),
+    coverage: {
+      mappedComponents: [...mapped].sort(),
+      complete: unmapped.length === 0,
+      caveat: unmapped.length
+        ? `${unmapped.length} affected component(s) map to no justice service, so their citizen impact is UNKNOWN rather than absent: ${unmapped.join(', ')}`
+        : 'every affected component maps to a declared justice service',
+    },
+    // The sentence a board reads, in the citizen's language rather than the platform's.
+    boardSummary: worst
+      ? `${change}: ${worst.experience}${irreversible.length ? ' This is irreversible for the people it happens to.' : ''}`
+      : unmapped.length
+        ? `${change}: no declared justice service is affected, but ${unmapped.length} affected component(s) are unmapped — the citizen impact is unknown, not nil.`
+        : `${change}: no declared justice service is affected.`,
+    safeToDeploy: uniqueImpacts.length === 0 && unmapped.length === 0,
+    failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'A forecast of consequences, produced before deployment. It never approves a deployment; an undeclared path is reported as unknown rather than as no impact.',
+  };
+}
+
 module.exports = {
   BUSINESS_METRICS, DWELL_METRICS, EVENT_ALIASES, catalogue,
   CHAIN_LAYERS, CHAIN_LINKS, MISSION_OUTCOMES, INFRASTRUCTURE_COMPONENTS, chainLinks, missionOutcomes,
+  MISSION_IMPACT_LAYERS, MISSION_IMPACT_LINKS, JUSTICE_SERVICES, CITIZEN_IMPACTS, CITIZEN_IMPACT_SEVERITY,
+  STRATEGIC_GOALS, SERVICE_DEPENDENCIES,
+  justiceServices, citizenImpacts, strategicGoals, missionImpactLinks, mappedComponents,
+  validateMissionChain, traceToStrategic, missionImpactForecast,
   traceForward, impactOf, validateChain, executiveAnalytics,
   assertPiiFree, fromEventLog, dwellTimes, derive, assess,
   correlation, correlateWithReliability, dashboard, report,

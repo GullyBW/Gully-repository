@@ -79,6 +79,7 @@ const twin4 = require('./twin2/national-sim');
 const resilience = require('./twin2/resilience-validation');
 const chaos = require('./twin2/chaos');
 const multiRegion = require('./twin2/multi-region');
+const { OperationsTwin } = require('./twin2/operations-twin');
 const { RecoveryPlatform, seedPlaybooks } = require('./twin2/recovery');
 const { RecoveryStrategyEvaluator } = require('./twin2/recovery-strategies');
 const { NationalCrisisPlatform } = require('./twin2/crisis');
@@ -281,6 +282,10 @@ function createApp(overrides = {}) {
   const compliance = { assess: () => complianceMod.assess([...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }))) };
   // Twin 2.0 simulations (Phase 17/24) and the national data fabric (Phase 14).
   const twin2 = simulation;
+  // Digital Twin of Operations (Phase 12, Part 17). Built fresh on each call from the registries
+  // rather than held as state: a twin that is constructed once and kept is a twin that drifts the
+  // moment anything it models changes, and drift is the failure this design exists to prevent.
+  const operationsTwin = () => new OperationsTwin({ evidenceIds: safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => r.id), []) });
   // Human-governed autonomous recovery (Phase 54): recommends; never executes without approval.
   const recovery = seedPlaybooks(new RecoveryPlatform());
   // Recovery strategy evaluation (Part 8): multiple strategies compared on RTO/RPO, disruption,
@@ -625,7 +630,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, ownership, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, ownership, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

@@ -121,3 +121,84 @@ own words. That is the point: an incident commander should not have to translate
 Mission health derived from the business metrics that feed each outcome, through the declared
 chain. An outcome fed only by unmeasured metrics reports **`unknown`** — which, as the payload says
 in as many words, *is not the same as fine*.
+
+---
+
+# Predictive Mission Impact Analysis (Phase 12, Part 18)
+
+The correlation chain answers an incident commander's question: *"what has this outage broken, in the
+board's language?"* This section answers a different one, asked **before** anything is deployed:
+
+```
+Technical Event → Business Process → Justice Service → Citizen Impact → Mission Objective
+                                                                            → Strategic Goal
+```
+
+Gated by `APP-FIT-MISSION-IMPACT`. Live: `GET /api/observability/mission-chain` ·
+`POST /api/observability/mission-forecast`.
+
+## The two layers nobody writes down
+
+A **justice service** is the thing a citizen actually receives. A **citizen impact** is what happens
+to a person when they do not receive it.
+
+| Justice service | Delivers | Constitutional |
+|---|---|---|
+| `anonymous-reporting` | A route into the justice system for someone who cannot afford to be known to have used it | ✅ |
+| `case-investigation` | The state examining reported conduct rather than filing it | |
+| `evidence-custody` | An unbroken chain of custody, which is what makes evidence usable at all | ✅ |
+| `judicial-review` | A named human answerable for the decision, and a record of it | ✅ |
+| `public-accountability` | Published, verifiable figures rather than assurances | |
+
+> **A citizen impact is stated in the citizen's words, not the platform's.** `intake-api unavailable`
+> is not an impact on anybody. *"A person who decided today to report corruption cannot, and may not
+> decide again"* is. The fitness function checks this: an experience containing `api`, `service`,
+> `store`, `endpoint` or `latency` fails.
+
+Severity is **declared**, not computed from a weight — the ordering is a judgement about people and
+should be arguable. `severe` impacts also carry `irreversible: true`, because "the person may not
+decide to report again" is not something a later fix undoes.
+
+## What the forecast reports
+
+- **A service is not delivered when *any* component it needs is down.** Services do not partially
+  exist.
+- **Impact aggregates to the worst harm, not the average.** Averaging harm across people is how a
+  severe irreversible impact on one person disappears behind five material ones on nobody in
+  particular.
+- **Every hop is traceable and states its mechanism**, so a reader can disagree with any of them.
+- The **board summary** is one sentence in the citizen's language: *"withdraw the intake store: A
+  person who decided today to report corruption cannot, and may not decide again. This is
+  irreversible for the people it happens to."*
+
+## An undeclared path is unknown, not safe
+
+The failure mode a forecast like this normally has is reassurance by omission: nothing was declared,
+so nothing was reported, so it looks fine. Two guards:
+
+| Case | Reported as |
+|---|---|
+| An affected component in no justice service's dependency tree | `unmappedComponents` — *"citizen impact is UNKNOWN rather than absent"* |
+| An affected component the topology has never heard of | `unmodelledComponents` — deployed before it was modelled |
+
+Either one sets `safeToDeploy: false`. The board summary says *"the citizen impact is unknown, not
+nil."*
+
+The mapped set is the **transitive** closure over the operational topology, including soft
+(`degradesOn`) edges — a component that only degrades a service still has a citizen-impact path.
+Listing every transitive component by hand would be a second copy of the topology and would drift.
+
+## What the chain validator found
+
+Two real gaps, fixed in the record rather than by relaxing the check:
+
+- **`anonymous-reporting` — the constitutional service — was reached by no business process at all.**
+  The platform measures nothing directly about whether people can report. `case-throughput` is the
+  nearest real signal and is now linked, with the weakness recorded in the link's own mechanism text:
+  it is a **proxy**, and a fall in throughput has several other explanations.
+- **`notification-service`, `analytics` and the brokers mapped to no justice service**, which would
+  have made every forecast involving them report "no citizen impact". Somebody who files a report and
+  is then told nothing has received a worse service, so they are mapped.
+
+`authorizes: false`, `failClosed: true`. The forecast tells a board what a change would do to people.
+It never approves the change.
