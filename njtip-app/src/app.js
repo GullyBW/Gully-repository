@@ -221,6 +221,12 @@ function createApp(overrides = {}) {
   supplyChain.attestation = new SupplyChainAttestation();
   supplyChain.sourceDigest = sourceDigest;
   supplyChain.registerSupplier('anthropic-nodejs-builtins', { trustLevel: 'sovereign-approved', risk: 'low' });
+  // Phase 12 Part 8: the platform names the builder it trusts. "Built by CI" means nothing if any
+  // runner can call itself CI, so the trust decision has a named human behind it like any other.
+  supplyChain.attestation.registerBuilder('gov-ci-hardened', {
+    operator: 'Government Shared Build Service', hardened: true, isolated: true, ephemeral: true, attestsProvenance: true,
+    by: 'Information Security Review Board', rationale: 'ephemeral hardened runners; provenance signed by the builder, not the build',
+  });
   // Adaptive governance framework (Phase 66): continuous improvement; adoption human-approved.
   const adaptiveGovernance = adaptiveGovernanceMod;
   const graph = new KnowledgeGraph();
@@ -241,6 +247,13 @@ function createApp(overrides = {}) {
   const aiLifecycle = new AiLifecycle();
   aiLifecycle.register('model', 'priority-advisor', { owner: 'analytics-domain', purpose: 'case-prioritisation', riskClass: 'high' });
   aiLifecycle.approve('model', 'priority-advisor', { by: 'AI Governance Board', rationale: 'explainable, advisory-only, deterministic' });
+  // Phase 12 Part 9: which fairness criterion this model is held to is a governance decision with
+  // consequences for real people, and the criteria are mutually incompatible — so it is recorded
+  // here, by name, rather than left for the fairness report to assume.
+  aiLifecycle.declareFairnessCriterion('priority-advisor', {
+    criterion: 'equal-opportunity', threshold: 0.1, by: 'AI Governance Board',
+    rationale: 'the model prioritises cases for human review; failing to surface a real case harms a complainant, while a false alarm costs review time',
+  });
   ai.lifecycle = aiLifecycle;
   // Cryptographic agility (Phase 47): 🔒 policy/lifecycle only — never key material.
   const cryptoAgility = makeCryptoAgility();

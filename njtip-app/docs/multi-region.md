@@ -72,7 +72,7 @@ recovery.
 
 ---
 
-# Consistency Governance (Phase 11, Part 10)
+# Consistency Governance (Phase 11, Part 10 · Phase 12, Part 10)
 
 "Eventually consistent" is a promise nobody can check unless someone writes down **which data** it
 applies to and **what a reader is allowed to see meanwhile**. The registry in
@@ -87,6 +87,8 @@ Gated by `APP-FIT-CONSISTENCY-GOVERNANCE`. Live: `GET /api/resilience/consistenc
 |---|---|---|---|---|
 | **strong** | 0 | no | required | Higher read latency; no read availability below quorum |
 | **causal** | 5 s | yes | no | Session tracking required; another session may see older state |
+| **read-your-writes** | 30 s | yes | no | Session affinity or a write token; the guarantee is per session |
+| **monotonic-reads** | 30 s | yes | no | Track the highest sequence a session has seen; cheap, and prevents the most confusing failure mode |
 | **eventual** | 60 s | yes | no | Cheapest and most available; only safe where a stale answer cannot mislead |
 
 ## Stance per context
@@ -94,14 +96,18 @@ Gated by `APP-FIT-CONSISTENCY-GOVERNANCE`. Live: `GET /api/resilience/consistenc
 | Consistency | Contexts | Why |
 |---|---|---|
 | **strong** | intake · custody · governance-oversight · identity-access · policy-governance · privacy · persistence · crypto-agility | A filed report, a custody chain, a recorded decision, a revocation, a policy version, a withdrawn consent — none of these may be observed late |
-| **causal** | investigation · orchestration · platform-events · data-exchange | An investigator must never see their own work disappear; workflow state moves forward monotonically within a session |
-| **eventual** | analytics · observability · data-fabric · assurance | Derived views, labelled as such. A minute-old count misleads nobody |
+| **causal** | orchestration · platform-events · data-exchange | Workflow state moves forward monotonically; an amendment is read in causal order with what it amends |
+| **read-your-writes** | investigation | An investigator must never see their own work disappear. That is precisely read-your-writes — calling it *causal* overstated what was actually needed |
+| **monotonic-reads** | analytics | A dashboard whose numbers go **backwards** between refreshes destroys trust faster than one that is a minute stale |
+| **eventual** | observability · data-fabric · assurance | Derived views, labelled as such. A minute-old count misleads nobody |
 
-Two rules are checked mechanically because they are the ways this table quietly goes wrong:
+Three rules are checked mechanically because they are the ways this table quietly goes wrong:
 
 - A context claiming **strong** consistency may not also accept stale reads.
 - **last-writer-wins** may only govern data where a stale read is already acceptable — it silently
   loses an update, and an unstated conflict strategy *is* last-writer-wins by accident.
+- Every stance **cites the ADR that chose it**. A consistency model with no recorded decision
+  behind it is a default somebody inherited, and nobody can say what it was traded against.
 
 ## Replication and conflict resolution
 
@@ -120,3 +126,63 @@ the build rather than inheriting something permissive.
 
 `consistencyPosture()` renders the whole matrix — context × region × lag — so an operator reading it
 during a partition knows exactly which reads to shed rather than guessing.
+
+## Session guarantees are not replica-lag guarantees
+
+`read-your-writes` and `monotonic-reads` are **per-session** properties. Whether a replica is fresh
+enough does not depend only on how far behind it is — it depends on what *this session* has already
+done. So neither can be settled from lag alone, and `sessionGuaranteeHolds()` takes a session token
+carrying the highest sequence the session has written and the highest it has read:
+
+```
+read-your-writes   refused when replicaSequence < session.lastWriteSequence
+monotonic-reads    refused when replicaSequence < session.lastReadSequence
+```
+
+`readAllowed()` checks the session guarantee **last**, after quorum and the staleness bound, because
+it is the only condition that depends on *who is asking* rather than on the state of the replica.
+
+**A session guarantee that cannot be checked is refused.** Calling `readAllowed({ context:
+'investigation' })` with no session token does not quietly pass — an unverifiable guarantee is not a
+guarantee, and treating a missing token as "probably fine" is how a session reads back its own
+missing write.
+
+`consistencyPosture()` is the exception, and says so in the row: it is a **capability** view
+("may this region serve this context at all?"), not a per-read gate. Session-scoped rows are marked
+`sessionDependent: true` and the reason ends *"the per-session guarantee is settled at read time"*.
+Reporting them as refused would make the operator view useless during a partition; reporting them as
+allowed would overstate what had actually been checked.
+
+## Consistency dependency map
+
+A context can be no stronger than the contexts it reads. `consistencyDependencyMap()` walks the
+context map and reports, per context, its governed dependencies, any **weaker** ones, and whether
+that constitutes an inversion.
+
+An inversion is **reported, not failed**. A strongly-consistent context reading an eventually-
+consistent one is sometimes perfectly correct — the read may not be on the path the guarantee
+covers. What must never happen is for it to be invisible. A human judges each one; the map only
+guarantees that nobody has to discover it in production.
+
+## Failover validation
+
+`validateFailover({ regions, failed })` answers the question a healthy-day design never asks: does
+each declared model still hold once the regions it depends on are gone?
+
+| Quorum | Strong contexts | Everything else |
+|---|---|---|
+| held | full | full |
+| lost | **unavailable** | read-only (writes refused) |
+
+The property that matters is `noGuaranteeWeakened`. Under failover a model is **refused, never
+quietly downgraded** — a context that cannot meet its declared model reports `unavailable` rather
+than serving a weaker answer under the stronger name. A model that only holds when everything is
+healthy is a model that holds when you do not need it.
+
+## HTTP
+
+| Route | Role | Returns |
+|---|---|---|
+| `GET /api/resilience/consistency` | admin | Models, replication policies, per-context stances, validation |
+| `GET /api/resilience/consistency/dependencies` | admin | The dependency map and its inversions |
+| `GET /api/resilience/consistency/failover/:failed` | admin | Failover validation for a comma-separated region list |

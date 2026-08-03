@@ -401,6 +401,51 @@ class DataGovernance {
     return this.remediations({ state: 'open' }).filter((t) => t.dueAt < at).map((t) => ({ ...t, overdueByMs: at - t.dueAt }));
   }
 
+  // Executive quality dashboard (Phase 12, Part 7). The board's question is not "what is the
+  // completeness of oversight-aggregates?" — it is "can I rely on what this platform tells me?"
+  // So the dashboard reports by DOMAIN and by owning steward, names the worst thing, and states
+  // what unmeasured means, rather than presenting eight dimensions and leaving the reader to
+  // work out which of them matters.
+  executiveQualityDashboard({ threshold = 0.9, now = null } = {}) {
+    const card = this.qualityScorecard({ threshold });
+    const readiness = this.governanceReadiness({ threshold, now });
+    const byDomain = {};
+    for (const row of card.datasets) {
+      const d = row.domain || 'unassigned';
+      (byDomain[d] = byDomain[d] || { domain: d, datasets: [], measured: 0, failing: 0 }).datasets.push(row.dataset);
+      if (row.measured) byDomain[d].measured += 1;
+      if (!row.meets) byDomain[d].failing += 1;
+    }
+    for (const d of Object.values(byDomain)) {
+      const rows = card.datasets.filter((r) => (r.domain || 'unassigned') === d.domain && r.measured);
+      d.score = rows.length ? +(rows.reduce((a, r) => a + r.score, 0) / rows.length).toFixed(3) : null;
+      d.status = rows.length === 0 ? 'unmeasured' : d.failing ? 'at-risk' : 'sound';
+    }
+    const byOwner = {};
+    for (const row of card.datasets) (byOwner[row.owner || 'unowned'] = byOwner[row.owner || 'unowned'] || []).push({ dataset: row.dataset, score: row.score, band: row.band });
+    return {
+      question: 'Can the board rely on what this platform reports?',
+      answer: readiness.acceptable
+        ? 'Yes, for every measured dataset — with the caveats listed.'
+        : 'Not fully. The blockers below must be closed before a figure derived from them is quoted.',
+      qualityReadiness: readiness.qualityReadiness,
+      acceptable: readiness.acceptable,
+      blockers: readiness.blockers,
+      byDomain: Object.values(byDomain).sort((a, b) => (a.score ?? -1) - (b.score ?? -1) || a.domain.localeCompare(b.domain)),
+      byOwner,
+      worstDataset: card.worst,
+      overallScore: card.overallScore,
+      coverage: card.coverage,
+      // Said in as many words, because it is the sentence a dashboard usually omits.
+      unmeasuredMeans: 'A dataset with no quality observation is reported as unmeasured, not as sound. Absence of a measurement is not evidence of quality.',
+      trends: this.datasets().map((id) => ({ dataset: id, ...this.qualityTrend(id) })),
+      alerts: this.qualityAlerts({ threshold }).alerts,
+      openRemediations: this.remediations({ state: 'open' }).length,
+      overdueRemediations: this.overdueRemediations({ now }).length,
+      informationalOnly: true, authorizes: false,
+    };
+  }
+
   // POOR QUALITY REDUCES GOVERNANCE READINESS. This is the whole point of Part 7: a data-quality
   // scorecard that nothing consumes is a report; one that moves the readiness number is a control.
   governanceReadiness({ threshold = 0.9, now = null } = {}) {
@@ -474,6 +519,7 @@ class DataGovernance {
       qualityAlerts: this.qualityAlerts(),
       remediations: this.remediations(),
       governanceReadiness: this.governanceReadiness({ now }),
+      executiveDashboard: this.executiveQualityDashboard({ now }),
       validation: this.validate(), audit: this.auditTrail(),
       note: 'Every governed record traces origin → transformations → consumers → retention → deletion. Deletion is refused under a legal hold.',
     };

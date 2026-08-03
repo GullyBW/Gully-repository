@@ -401,6 +401,96 @@ class SupplyChainAttestation {
     };
   }
 
+  // --- Trusted builders, vulnerability trends, deployability (Phase 12, Part 8) ---------------
+
+  // A trusted builder is one the platform has decided may produce deployable artifacts. Naming
+  // them is the point: "built by CI" means nothing if any runner can call itself CI.
+  registerBuilder(id, { operator, hardened = false, isolated = false, ephemeral = false, attestsProvenance = false, by, rationale } = {}) {
+    if (!id || !operator) throw new Error('a builder needs an id and an operating authority');
+    if (!by || !rationale) { const e = new Error('trusting a builder is a decision — it requires a named human and a rationale'); e.failClosed = true; throw e; }
+    if (!this._builders) this._builders = new Map();
+    this._builders.set(id, { id, operator, hardened, isolated, ephemeral, attestsProvenance, trustedBy: by, rationale, at: this._clock() });
+    return this.builder(id);
+  }
+  builder(id) { const b = this._builders && this._builders.get(id); return b ? { ...b } : null; }
+  builders() { return [...((this._builders && this._builders.values()) || [])].map((b) => ({ ...b })); }
+  // Verify a builder against what SLSA actually requires of one. Each property is checked
+  // separately so a partially-hardened builder reads as partially hardened.
+  verifyBuilder(id) {
+    const b = this.builder(id);
+    if (!b) return { trusted: false, builder: id, reason: 'this builder is not registered as trusted — an unregistered builder may not produce a deployable artifact' };
+    const checks = [
+      { property: 'hardened', held: b.hardened, why: 'the build environment resists tampering by the build itself' },
+      { property: 'isolated', held: b.isolated, why: 'builds cannot influence one another' },
+      { property: 'ephemeral', held: b.ephemeral, why: 'the environment is destroyed after the build, so nothing persists between them' },
+      { property: 'attestsProvenance', held: b.attestsProvenance, why: 'the builder — not the build — signs the provenance' },
+    ];
+    const failing = checks.filter((c) => !c.held);
+    return {
+      builder: id, operator: b.operator, trustedBy: b.trustedBy,
+      checks, failing: failing.map((c) => c.property),
+      trusted: failing.length === 0,
+      reason: failing.length ? `builder properties not met: ${failing.map((c) => c.property).join(', ')}` : 'every builder property holds',
+    };
+  }
+
+  // Vulnerability trends. A count is a snapshot; the useful signal is whether it is going up, and
+  // whether anything is ageing past the remediation window it was given.
+  recordVulnerabilityScan({ at, critical = 0, high = 0, medium = 0, low = 0, oldestCriticalAgeDays = null } = {}) {
+    if (!Number.isFinite(at)) throw new Error('a vulnerability scan must be timestamped');
+    if (!this._vulnScans) this._vulnScans = [];
+    if (this._vulnScans.some((s) => s.at === at)) throw new Error(`a scan is already recorded at ${at} — scan history is append-only`);
+    const rec = { at, critical, high, medium, low, total: critical + high + medium + low, oldestCriticalAgeDays };
+    this._vulnScans.push(rec);
+    this._vulnScans.sort((a, b) => a.at - b.at);
+    return { ...rec };
+  }
+  vulnerabilityTrend({ slaDays = { critical: 7, high: 30 } } = {}) {
+    const scans = (this._vulnScans || []).map((s) => ({ ...s }));
+    if (scans.length < 2) {
+      return { scans: scans.length, direction: 'insufficient-data', latest: scans[scans.length - 1] || null, slaBreached: null, reason: 'at least two scans are needed before a direction exists' };
+    }
+    const series = scans.map((s) => s.critical * 4 + s.high * 2 + s.medium);   // weighted exposure
+    const n = series.length;
+    const meanX = (n - 1) / 2, meanY = series.reduce((a, b) => a + b, 0) / n;
+    let sxy = 0, sxx = 0;
+    for (let i = 0; i < n; i++) { const dx = i - meanX; sxy += dx * (series[i] - meanY); sxx += dx * dx; }
+    const slope = sxx === 0 ? 0 : sxy / sxx;
+    const latest = scans[n - 1];
+    const slaBreached = latest.oldestCriticalAgeDays !== null && latest.oldestCriticalAgeDays > slaDays.critical;
+    return {
+      scans: n, series, latest, slope: +slope.toFixed(4),
+      direction: Math.abs(slope) < 1e-9 ? 'flat' : slope > 0 ? 'worsening' : 'improving',
+      slaDays, slaBreached,
+      // Zero findings is a real result; zero SCANS is not. The two must not read alike.
+      openCritical: latest.critical, openHigh: latest.high,
+      clean: latest.critical === 0 && latest.high === 0 && !slaBreached,
+      reason: slaBreached ? `a critical finding has been open ${latest.oldestCriticalAgeDays} days against a ${slaDays.critical}-day remediation window` : 'within the remediation windows',
+    };
+  }
+
+  // The deployability report Part 8 asks for: one verdict, every input traceable, fail-closed.
+  deployabilityReport({ artifact, artifactDigest, builderId = null, ...rest } = {}) {
+    const release = this.verifyRelease({ artifact, artifactDigest, ...rest });
+    const builder = builderId ? this.verifyBuilder(builderId) : { trusted: false, builder: null, reason: 'no builder identified — an artifact of unknown origin is not deployable' };
+    const vulns = this.vulnerabilityTrend();
+    const blockers = [];
+    if (!release.verified) for (const f of release.failed) blockers.push({ check: f, reason: (release.checks.find((c) => c.check === f) || {}).detail || f });
+    if (!builder.trusted) blockers.push({ check: 'trusted-builder', reason: builder.reason });
+    if (vulns.scans === 0) blockers.push({ check: 'vulnerability-scan', reason: 'no vulnerability scan has ever been recorded — zero scans is not zero findings' });
+    else if (vulns.clean === false) blockers.push({ check: 'vulnerability-posture', reason: vulns.reason });
+    return {
+      artifact, artifactDigest, builder,
+      supplyChain: release, vulnerabilities: vulns,
+      trustScore: release.trust ? release.trust.score : null,
+      blockers, deployable: blockers.length === 0,
+      failClosed: true, authorizes: false,
+      note: blockers.length
+        ? 'NOT DEPLOYABLE. Every blocker below is a verification that did not pass; an untrusted artifact is not deployable whatever the schedule says.'
+        : 'The artifact is deployable on supply-chain grounds. Deployment itself remains a recorded decision by a named human authority.',
+    };
+  }
+
   transparencyLog() { return this._log; }
 
   // --- SLSA posture -------------------------------------------------------------------------------
@@ -423,6 +513,8 @@ class SupplyChainAttestation {
       dependencyRisk: this.dependencyRisk({ dependencies, approvedSuppliers }),
       licenses: this.licenseCompliance({ dependencies }),
       transparencyLog: { size: this._log.size(), chain: this._log.verifyChain() },
+      builders: this.builders().map((b) => this.verifyBuilder(b.id)),
+      vulnerabilityTrend: this.vulnerabilityTrend(),
       signedImages: [...this._images.keys()].map((d) => ({ imageDigest: d, image: this._images.get(d).image, verified: this.verifyImage(d).valid })),
       sbom: sbom ? this.sbomAttestation({ artifact: 'njtip-app', artifactDigest: hash.sha256(sbom), sbom }) : null,
       reproducible: buildFn ? this.verifyReproducible({ buildFn }) : null,

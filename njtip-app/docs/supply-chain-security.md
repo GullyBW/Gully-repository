@@ -143,3 +143,63 @@ could be pasted onto any digest and the score would not notice.
 > needs a keyless signature in the transparency log, a demonstrated reproducible build and a
 > lockfile that matches. The Phase 10 assertions were updated to supply that evidence rather than
 > the gate being relaxed to accept less.
+
+---
+
+# Trusted Builders, Vulnerability Trends & Deployability (Phase 12, Part 8)
+
+## Naming the builder
+
+"Built by CI" means nothing if any runner can call itself CI. `registerBuilder()` records a builder
+as trusted only with an **operating authority**, a **named human** and a **rationale** — trusting a
+builder is a decision, and an undocumented one fails closed.
+
+`verifyBuilder()` checks the four SLSA builder properties **separately**, so a partially hardened
+builder reads as partially hardened rather than as untrusted-for-unclear-reasons:
+
+| Property | What it buys |
+|---|---|
+| `hardened` | The build environment resists tampering by the build itself |
+| `isolated` | Builds cannot influence one another |
+| `ephemeral` | The environment is destroyed afterwards, so nothing persists between builds |
+| `attestsProvenance` | The **builder** — not the build — signs the provenance |
+
+An unregistered builder is not trusted, and an artifact of unknown origin is not deployable.
+
+## Vulnerability trends
+
+A count is a snapshot; the signal is the **direction** and whether anything is ageing past the
+window it was given. `recordVulnerabilityScan()` is append-only by timestamp — a scan cannot be
+overwritten, because a history you can edit is not a history.
+
+`vulnerabilityTrend()` fits a slope over weighted exposure (`critical×4 + high×2 + medium`) and
+reports `improving` · `flat` · `worsening`, plus SLA breach against the remediation window
+(critical 7 days, high 30). The two are independent on purpose: **a flat count with a critical
+finding open for 40 days is not a stable posture**, it is one unfixed critical and a chart that
+cannot see it.
+
+With fewer than two scans the direction is `insufficient-data` — a single point has no slope, and
+drawing one is worse than saying so.
+
+## Deployability
+
+`deployabilityReport()` is the one verdict, fail-closed, every input traceable:
+
+```
+release verification (trust score ≥ 80, provenance, signature, transparency log, SBOM, licenses)
++ trusted builder
++ vulnerability posture
+= deployable | blockers[]
+```
+
+Two blockers are worth calling out because they are the ones a permissive gate omits:
+
+- **No builder identified.** An artifact of unknown origin is not deployable, whatever else verifies.
+- **No vulnerability scan has ever been recorded.** *Zero scans is not zero findings.* An unscanned
+  artifact must not read like a clean one.
+
+A blocked report says `NOT DEPLOYABLE` in as many words, and `authorizes: false` throughout —
+passing the gate makes an artifact deployable *on supply-chain grounds*. Deployment itself remains a
+recorded decision by a named human authority.
+
+Live: `GET /api/supply-chain/builders` · `POST /api/supply-chain/deployability` (admin).

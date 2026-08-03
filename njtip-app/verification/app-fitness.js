@@ -3149,6 +3149,151 @@ module.exports = [
     if (!cc.versionLifecycle().every((x) => typeof x.version === 'number')) v.push('the version lifecycle is incomplete');
   }),
 
+  fit('APP-FIT-ENTERPRISE-INTELLIGENCE', 'Quality dashboards, builder trust, AI fairness and calibration, and session consistency all hold — and fail when they should', (v) => {
+    // --- Part 7: executive data-quality dashboard ---------------------------------------------
+    const dgm = require('../src/fabric/data-governance');
+    const dg = dgm.seedPlatformDatasets(new dgm.DataGovernance({ clock: () => 1_000_000 }));
+    const blindDash = dg.executiveQualityDashboard();
+    if (blindDash.acceptable) v.push('an entirely unmeasured estate produced an acceptable executive dashboard');
+    if (!/not evidence of quality/i.test(blindDash.unmeasuredMeans)) v.push('the dashboard does not say what unmeasured means');
+    if (!blindDash.question || !blindDash.answer) v.push('the executive dashboard does not state the question it answers');
+    const good = Object.fromEntries(dgm.OBSERVED_DIMENSIONS.map((d) => [d, 0.99]));
+    for (const id of dg.datasets()) dg.observeQuality(id, good, { recordCount: 10 });
+    const dash = dg.executiveQualityDashboard();
+    if (!dash.acceptable || dash.qualityReadiness !== 1) v.push('a fully measured healthy estate was not acceptable');
+    if (!dash.byDomain.length || !Object.keys(dash.byOwner).length) v.push('the dashboard does not group by domain and owner');
+    for (const d of dash.byDomain) if (!d.status) v.push(`domain '${d.domain}' has no status`);
+    if (dash.authorizes !== false) v.push('the executive quality dashboard claims authority');
+    // A degraded dataset changes the answer, not just a number.
+    dg.observeQuality('case-records', Object.fromEntries(dgm.OBSERVED_DIMENSIONS.map((d) => [d, 0.3])), { recordCount: 10 });
+    const degraded = dg.executiveQualityDashboard();
+    if (degraded.acceptable) v.push('a poor dataset left the executive answer unchanged');
+    if (!degraded.blockers.length) v.push('a degraded estate named no blocker');
+
+    // --- Part 8: trusted builders, vulnerability trends, deployability -----------------------
+    const slsa = require('../src/supplychain/slsa');
+    const sc = new slsa.SupplyChainAttestation({ clock: () => 1_000 });
+    if (sc.verifyBuilder('nobody').trusted) v.push('an unregistered builder was trusted');
+    let unattributedBuilder = false;
+    try { sc.registerBuilder('ci', { operator: 'GovCI' }); } catch (e) { unattributedBuilder = !!e.failClosed; }
+    if (!unattributedBuilder) v.push('a builder was trusted with no named human behind the decision');
+    sc.registerBuilder('partial', { operator: 'GovCI', hardened: true, isolated: true, by: 'ISRB Chair', rationale: 'audited' });
+    const partial = sc.verifyBuilder('partial');
+    if (partial.trusted) v.push('a partially-hardened builder was fully trusted');
+    if (!partial.failing.includes('ephemeral') || !partial.failing.includes('attestsProvenance')) v.push('the unmet builder properties were not named');
+    sc.registerBuilder('full', { operator: 'GovCI', hardened: true, isolated: true, ephemeral: true, attestsProvenance: true, by: 'ISRB Chair', rationale: 'audited' });
+    if (!sc.verifyBuilder('full').trusted) v.push('a fully hardened builder was not trusted');
+
+    // Zero SCANS and zero FINDINGS must not read alike.
+    if (sc.vulnerabilityTrend().direction !== 'insufficient-data') v.push('a vulnerability trend was produced from no scans');
+    let replayed = false;
+    sc.recordVulnerabilityScan({ at: 1, critical: 0, high: 1 });
+    try { sc.recordVulnerabilityScan({ at: 1, critical: 0, high: 1 }); } catch (_) { replayed = true; }
+    if (!replayed) v.push('a vulnerability scan timestamp was overwritten — scan history must be append-only');
+    sc.recordVulnerabilityScan({ at: 2, critical: 1, high: 3, oldestCriticalAgeDays: 10 });
+    const worsening = sc.vulnerabilityTrend();
+    if (worsening.direction !== 'worsening') v.push('a rising vulnerability count was not reported as worsening');
+    if (!worsening.slaBreached) v.push('a critical finding open past its remediation window was not flagged');
+    if (worsening.clean) v.push('an estate with an open critical finding was reported clean');
+
+    const nothing = sc.deployabilityReport({ artifact: 'a', artifactDigest: 'never-built' });
+    if (nothing.deployable) v.push('an artifact with no provenance, no builder and open criticals was deployable');
+    if (!nothing.blockers.some((b) => b.check === 'trusted-builder')) v.push('an unidentified builder did not block deployability');
+    if (nothing.failClosed !== true || nothing.authorizes !== false) v.push('the deployability report is not fail-closed / claims authority');
+    if (!/NOT DEPLOYABLE/.test(nothing.note)) v.push('a blocked deployability report did not say so');
+
+    // --- Part 9: fairness, calibration, retirement -------------------------------------------
+    const { AiLifecycle, FAIRNESS_CRITERIA } = require('../src/ai/ai-lifecycle');
+    const ai = new AiLifecycle({ clock: () => 1_000 });
+    ai.register('model', 'm', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'high' });
+    ai.approve('model', 'm', { by: 'AI Governance Board', rationale: 'explainable, advisory-only' });
+    // Several fairness criteria exist and are mutually incompatible — the platform will not pick.
+    if (Object.keys(FAIRNESS_CRITERIA).length < 3) v.push('too few fairness criteria to represent the trade-off');
+    for (const [id, c] of Object.entries(FAIRNESS_CRITERIA)) if (!c.description || !c.suitsWhen) v.push(`fairness criterion '${id}' does not say when it applies`);
+    if (ai.fairnessReport('m').assessed) v.push('fairness was assessed with no criterion declared — "fair" means several things');
+    let unattributedCriterion = false;
+    try { ai.declareFairnessCriterion('m', { criterion: 'demographic-parity' }); } catch (e) { unattributedCriterion = !!e.failClosed; }
+    if (!unattributedCriterion) v.push('a fairness criterion was chosen with no named human behind it');
+    let unknownCriterion = false;
+    try { ai.declareFairnessCriterion('m', { criterion: 'vibes', by: 'x', rationale: 'y' }); } catch (_) { unknownCriterion = true; }
+    if (!unknownCriterion) v.push('an unknown fairness criterion was accepted');
+    ai.declareFairnessCriterion('m', { criterion: 'equal-opportunity', threshold: 0.2, by: 'AI Governance Board', rationale: 'missing a real case matters more than a false alarm' });
+    for (const [g, rate] of [['region-a', 0.5], ['region-b', 0.9]]) ai.observeBias('m', { group: g, outcomeRate: rate, sampleSize: 100 });
+    const unfair = ai.fairnessReport('m');
+    if (!unfair.assessed) v.push('fairness was not assessed with a criterion and enough observations');
+    if (unfair.fair) v.push('a 0.4 outcome disparity was reported as fair against a 0.2 threshold');
+    if (!unfair.criterionMeaning) v.push('the fairness report does not state what the criterion means');
+
+    // Calibration: overconfidence is the direction that makes a confidence floor useless.
+    if (ai.calibrationReport('m').assessed) v.push('a calibration curve was drawn from no observations');
+    for (let i = 0; i < 100; i++) ai.recordCalibration('m', { confidence: 0.9, correct: i < 60 });
+    const miscal = ai.calibrationReport('m');
+    if (!miscal.assessed) v.push('calibration was not assessed with a hundred observations');
+    if (miscal.calibrated) v.push('a model claiming 0.9 and right 60% of the time was reported calibrated');
+    if (!miscal.overconfidentBuckets.length) v.push('the overconfident bucket was not named');
+    if (!/confidence floor/.test(miscal.reason)) v.push('the calibration report does not connect overconfidence to the confidence floors that depend on it');
+    let badCal = false;
+    try { ai.recordCalibration('m', { confidence: 0.9, correct: 'probably' }); } catch (_) { badCal = true; }
+    if (!badCal) v.push('calibration accepted a non-boolean outcome');
+    const wellCal = new AiLifecycle({ clock: () => 1_000 });
+    wellCal.register('model', 'w', { owner: 'analytics', purpose: 'case-prioritisation', riskClass: 'high' });
+    for (let i = 0; i < 100; i++) wellCal.recordCalibration('w', { confidence: 0.9, correct: i < 90 });
+    for (let i = 0; i < 100; i++) wellCal.recordCalibration('w', { confidence: 0.3, correct: i < 30 });
+    for (let i = 0; i < 100; i++) wellCal.recordCalibration('w', { confidence: 0.5, correct: i < 50 });
+    for (let i = 0; i < 100; i++) wellCal.recordCalibration('w', { confidence: 0.7, correct: i < 70 });
+    for (let i = 0; i < 100; i++) wellCal.recordCalibration('w', { confidence: 0.1, correct: i < 10 });
+    if (!wellCal.calibrationReport('w').calibrated) v.push('a genuinely calibrated model was reported miscalibrated');
+
+    // Retirement: a retired artifact loses its approval, and cannot be inferred from.
+    let unattributedRetire = false;
+    try { ai.retire('model', 'm', { by: 'x' }); } catch (e) { unattributedRetire = !!e.failClosed; }
+    if (!unattributedRetire) v.push('an AI artifact was retired with no rationale');
+    ai.retire('model', 'm', { by: 'AI Governance Board', rationale: 'superseded by a re-approved version' });
+    if (ai.isApproved('model', 'm').approved) v.push('a retired model kept its approval');
+    let inferredFromRetired = false;
+    try { ai.infer({ model: 'm', output: 'x', explanation: 'e', confidence: 0.9, requestedBy: 'inv' }); } catch (e) { inferredFromRetired = !!e.failClosed; }
+    if (!inferredFromRetired) v.push('an inference was drawn from a retired model');
+    if (!ai.retired().length) v.push('the retired artifact was not listed');
+    if (!ai.validate().valid) v.push('retiring an artifact broke estate validation: ' + ai.validate().violations.join('; '));
+
+    // --- Part 10: session consistency, dependency map, failover ------------------------------
+    const mr = require('../src/twin2/multi-region');
+    for (const model of ['strong', 'eventual', 'causal', 'read-your-writes', 'monotonic-reads']) {
+      if (!mr.CONSISTENCY_MODELS[model]) v.push(`consistency model '${model}' is not declared`);
+    }
+    for (const violation of mr.validateConsistency().violations) v.push(violation);
+    // Every consistency decision cites the ADR that made it.
+    for (const c of mr.contextConsistency()) if (!c.adr) v.push(`${c.context}: consistency model cites no ADR`);
+
+    // Read-your-writes: a session must observe its own write.
+    const ownWrite = mr.readAllowed({ context: 'investigation', replicaLagMs: 100, session: { lastWriteSequence: 10 }, replicaSequence: 5 });
+    if (ownWrite.allowed) v.push('a session was served a replica that had not applied its own write');
+    if (!/own write/.test(ownWrite.reason)) v.push('the read-your-writes denial did not say why');
+    if (!mr.readAllowed({ context: 'investigation', replicaLagMs: 100, session: { lastWriteSequence: 10 }, replicaSequence: 12 }).allowed) v.push('a caught-up replica was refused a read-your-writes read');
+    // An unverifiable session guarantee is not a guarantee.
+    if (mr.readAllowed({ context: 'investigation', replicaLagMs: 100 }).allowed) v.push('a per-session guarantee was assumed to hold with no session token');
+    // Monotonic reads: time may not run backwards for a reader.
+    const backwards = mr.readAllowed({ context: 'analytics', replicaLagMs: 100, session: { lastReadSequence: 50 }, replicaSequence: 40 });
+    if (backwards.allowed) v.push('a reader was served an earlier state than one it had already seen');
+    if (!mr.readAllowed({ context: 'analytics', replicaLagMs: 100, session: { lastReadSequence: 50 }, replicaSequence: 55 }).allowed) v.push('a forward-moving monotonic read was refused');
+
+    // Dependency map: an inversion is reported, not silently resolved.
+    const depMap = mr.consistencyDependencyMap();
+    if (!depMap.contexts.length) v.push('the consistency dependency map is empty');
+    for (const row of depMap.contexts) if (!row.note) v.push(`${row.context}: dependency row states nothing`);
+    if (!/human to judge/.test(depMap.note)) v.push('the dependency map does not say who resolves an inversion');
+
+    // Failover: a model is REFUSED, never quietly downgraded.
+    const healthy = mr.validateFailover({ failed: [] });
+    if (healthy.unavailable.length) v.push('a context was unavailable with every region healthy');
+    const lostQuorum = mr.validateFailover({ failed: ['bw-south', 'bw-north'] });
+    if (!lostQuorum.unavailable.length) v.push('losing quorum left every strongly-consistent context available');
+    if (!lostQuorum.noGuaranteeWeakened) v.push('a consistency guarantee was weakened rather than refused under failover');
+    if (lostQuorum.failClosed !== true || lostQuorum.authorizes !== false) v.push('failover validation is not fail-closed / claims authority');
+    for (const row of lostQuorum.contexts) if (!row.reason) v.push(`${row.context}: failover row states no reason`);
+    if (JSON.stringify(mr.validateFailover({ failed: ['bw-south'] })) !== JSON.stringify(mr.validateFailover({ failed: ['bw-south'] }))) v.push('failover validation is not deterministic');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');
@@ -3189,8 +3334,10 @@ module.exports = [
     if (mr.readAllowed({ context: 'intake', replicaLagMs: 500, hasQuorum: true }).allowed) v.push('a strongly consistent context served a replica read');
     if (mr.readAllowed({ context: 'intake', replicaLagMs: 0, hasQuorum: false }).allowed) v.push('a strongly consistent context served a read without quorum');
     if (!mr.readAllowed({ context: 'intake', replicaLagMs: 0, hasQuorum: true }).allowed) v.push('a strongly consistent context refused a fresh quorum read');
-    if (!mr.readAllowed({ context: 'analytics', replicaLagMs: 30_000 }).allowed) v.push('an eventually consistent context refused a read inside its staleness bound');
-    if (mr.readAllowed({ context: 'analytics', replicaLagMs: 90_000 }).allowed) v.push('a read beyond the declared staleness bound was served');
+    // 'analytics' is monotonic-reads (Phase 12), which is session-scoped: a lag-only read is
+    // refused because the guarantee cannot be checked without a session token.
+    if (!mr.readAllowed({ context: 'assurance', replicaLagMs: 30_000 }).allowed) v.push('an eventually consistent context refused a read inside its staleness bound');
+    if (mr.readAllowed({ context: 'assurance', replicaLagMs: 90_000 }).allowed) v.push('a read beyond the declared staleness bound was served');
     if (mr.readAllowed({ context: 'investigation', replicaLagMs: 30_000 }).allowed) v.push('a causally consistent context served a read far beyond its bound');
     // FAIL-CLOSED: an undeclared context is refused, never defaulted to something permissive.
     const undeclared = mr.readAllowed({ context: 'not-a-context' });

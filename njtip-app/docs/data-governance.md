@@ -131,3 +131,48 @@ mean anything. Two properties fall out of that:
 - `oversight-aggregates` inherits its source's quality **dimension by dimension**. A derived
   dataset can never look cleaner than what it was derived from; an aggregate that does is the
   aggregation hiding the defect.
+
+---
+
+# Executive Quality Intelligence (Phase 12, Part 7)
+
+`executiveQualityDashboard()` exists because the board's question is not *"what is the completeness
+of `oversight-aggregates`?"* — it is **"can I rely on what this platform tells me?"** A dashboard
+that presents eight dimensions across a dozen datasets and leaves the reader to work out which of
+them matters has answered a question nobody asked.
+
+So the dashboard states the question, answers it in a sentence, and only then shows the working:
+
+| Field | What it is |
+|---|---|
+| `question` / `answer` | The board's question, and a one-sentence answer that changes when the estate changes |
+| `qualityReadiness` | The readiness figure the rest of governance consumes — not a separate number |
+| `acceptable` | The verdict. `false` while any blocker stands |
+| `blockers` | Never-measured datasets, poor-band datasets, overdue remediations — named individually |
+| `byDomain` | Per-domain score and status (`sound` · `at-risk` · `unmeasured`), **worst domain first** |
+| `byOwner` | Every dataset grouped under its accountable steward |
+| `worstDataset` | Named, because an average hides exactly the thing a board needs to see |
+
+## Unmeasured is not sound
+
+The dashboard carries this sentence verbatim, because it is the one a quality dashboard usually
+omits:
+
+> A dataset with no quality observation is reported as **unmeasured**, not as sound. Absence of a
+> measurement is not evidence of quality.
+
+An estate that has never been measured therefore produces `acceptable: false` and a blocker per
+dataset — not a blank scorecard that reads like a clean one. This is the same rule the readiness
+model applies: an unmeasured dataset reduces readiness exactly as a poor one does.
+
+## The answer moves, not just a number
+
+Degrading a single dataset flips `answer` from *"Yes, for every measured dataset"* to *"Not fully.
+The blockers below must be closed before a figure derived from them is quoted."* A dashboard whose
+prose is constant regardless of the estate is decoration; this one is wired to the same
+`governanceReadiness()` that gates the build.
+
+`informationalOnly: true`, `authorizes: false`. The dashboard can **block** a figure from being
+quoted. It cannot approve anything.
+
+Live: `GET /api/data/quality/executive` (oversight-board).

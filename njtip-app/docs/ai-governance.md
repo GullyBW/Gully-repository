@@ -137,3 +137,62 @@ not keep running on an approval granted against data that no longer exists.
 
 As everywhere in this module: `advisoryOnly: true`, `authorizes: false`. Monitoring can **require**
 a re-approval. It can never grant one.
+
+---
+
+# Fairness, Calibration & Retirement (Phase 12, Part 9)
+
+## The platform will not choose a fairness criterion for you
+
+Demographic parity, equal opportunity, equalised odds and predictive parity are **mutually
+incompatible** in general — outside degenerate cases you cannot satisfy them simultaneously. A
+module that reports "fair: true" without saying *which* of them it checked has hidden the only part
+of the question that carries consequences for real people.
+
+So `FAIRNESS_CRITERIA` declares all four with what each one buys and when it applies:
+
+| Criterion | Equalises | Suits when |
+|---|---|---|
+| `demographic-parity` | Outcome rates across groups | The outcome should not depend on group membership at all |
+| `equal-opportunity` | True-positive rates | Missing a real case matters more than a false alarm |
+| `equalised-odds` | True-positive **and** false-positive rates | Both kinds of error carry consequences for the person |
+| `predictive-parity` | Precision | The output is acted on directly by a human who cannot see the group |
+
+`declareFairnessCriterion()` requires a named human and a rationale, and refuses an unknown
+criterion. Until one is declared, `fairnessReport()` returns `assessed: false` — *"fair" means
+several different things and the platform will not pick one silently*.
+
+Once declared, fairness is assessed against **that** criterion and **that** threshold. The same 0.4
+disparity is unfair at a 0.2 threshold and acceptable at 0.5 — which is precisely why the threshold
+is a recorded decision rather than a constant.
+
+## Confidence calibration
+
+Every confidence floor elsewhere in this module — the advisory threshold, the hallucination rate,
+the human-review trigger — assumes that a model saying 0.9 is right about 90% of the time. A model
+that says 0.9 and is right 60% of the time is not "usually right"; it is **miscalibrated**, and it
+makes every one of those floors useless.
+
+`calibrationReport()` bins observations into confidence buckets and reports, per bucket, mean
+confidence against observed accuracy, plus the **expected calibration error** across all of them.
+Two design choices:
+
+- **Overconfidence is named separately from ECE.** It is the dangerous direction; underconfidence
+  wastes a model, overconfidence gets a wrong answer acted on.
+- **Too few observations produces `assessed: false`,** not a curve. A calibration curve drawn from
+  too few points is a shape, not a measurement.
+
+## Retirement
+
+A model that is no longer used but was never retired keeps its approval — and an approval nobody
+revisits is how a superseded model quietly stays in production.
+
+`retire()` requires a named human and a rationale, optionally records what supersedes it, and is
+irreversible. A retired artifact:
+
+- **loses its approval** — `isApproved()` returns false with the retiring authority named;
+- **cannot be inferred from** — `infer()` fails closed;
+- **does not break estate validation.** A retired high-risk artifact is not an unapproved one, and
+  conflating the two would push operators to leave things approved rather than retire them.
+
+Live: `GET /api/ai/fairness` (oversight-board) · `GET /api/ai/calibration` (admin).

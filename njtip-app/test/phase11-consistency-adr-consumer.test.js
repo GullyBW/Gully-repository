@@ -38,8 +38,10 @@ test('consistency: a read outside the declared model is refused, not served', ()
   assert.strictEqual(mr.readAllowed({ context: 'intake', replicaLagMs: 500, hasQuorum: true }).allowed, false);
   assert.strictEqual(mr.readAllowed({ context: 'intake', replicaLagMs: 0, hasQuorum: false }).allowed, false);
   assert.strictEqual(mr.readAllowed({ context: 'intake', replicaLagMs: 0, hasQuorum: true }).allowed, true);
-  assert.strictEqual(mr.readAllowed({ context: 'analytics', replicaLagMs: 30_000 }).allowed, true);
-  assert.strictEqual(mr.readAllowed({ context: 'analytics', replicaLagMs: 90_000 }).allowed, false);
+  // Phase 12 moved 'analytics' to monotonic-reads and 'investigation' to read-your-writes, both
+  // session-scoped; 'assurance' remains plainly eventual, so it is the lag-bound example now.
+  assert.strictEqual(mr.readAllowed({ context: 'assurance', replicaLagMs: 30_000 }).allowed, true);
+  assert.strictEqual(mr.readAllowed({ context: 'assurance', replicaLagMs: 90_000 }).allowed, false);
   assert.strictEqual(mr.readAllowed({ context: 'investigation', replicaLagMs: 30_000 }).allowed, false);
 });
 

@@ -76,7 +76,7 @@ function controlOwnership(fitnessIds = []) {
     { match: /^APP-FIT-AI/, context: 'ai-advisory' },
     { match: /^APP-FIT-THREAT|^APP-FIT-DEVSECOPS|^APP-FIT-RISK/, context: 'security' },
     { match: /^INFRA-FIT|^APP-FIT-INFRA/, context: 'infrastructure' },
-    { match: /^APP-FIT-CONTEXT-MAP|^APP-FIT-MIGRATION|^APP-FIT-ADR|^APP-FIT-CONTINUOUS-ASSURANCE|^APP-FIT-EVIDENCE|^APP-FIT-READINESS|^APP-FIT-ENGINEERING|^FIT-AUDITABILITY/, context: 'assurance' },
+    { match: /^APP-FIT-CONTEXT-MAP|^APP-FIT-MIGRATION|^APP-FIT-ADR|^APP-FIT-CONTINUOUS-ASSURANCE|^APP-FIT-EVIDENCE|^APP-FIT-READINESS|^APP-FIT-ENGINEERING|^APP-FIT-ENTERPRISE|^FIT-AUDITABILITY/, context: 'assurance' },
     { match: /^APP-FIT-INTEGRATION-CONTRACTS|^APP-FIT-CONSUMER|^APP-FIT-API/, context: 'api-governance' },
     { match: /^APP-FIT-GOVERNANCE|^APP-FIT-RACI|^FIT-GOVERNANCE|^APP-FIT-EVOLUTION|^APP-FIT-COMMAND/, context: 'governance-oversight' },
     { match: /^APP-FIT-CORRELATION|^APP-FIT-PLATFORM-INTELLIGENCE/, context: 'intelligence' },

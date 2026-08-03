@@ -99,6 +99,16 @@ const CONSISTENCY_MODELS = {
     maxStalenessMs: 5_000, readsFromReplica: true, requiresQuorumRead: false,
     cost: 'Requires session tracking; a different session may still see an older state.',
   },
+  'read-your-writes': {
+    description: 'A session always observes its own writes, even from a replica that has not caught up for anyone else.',
+    maxStalenessMs: 30_000, readsFromReplica: true, requiresQuorumRead: false, sessionScoped: true,
+    cost: 'Requires session affinity or a write token; the guarantee is per session, so another session may still see older state.',
+  },
+  'monotonic-reads': {
+    description: 'A session never observes an EARLIER state than one it has already seen — time does not run backwards for a reader.',
+    maxStalenessMs: 30_000, readsFromReplica: true, requiresQuorumRead: false, sessionScoped: true,
+    cost: 'Requires tracking the highest sequence a session has observed; cheap, and prevents the single most confusing failure mode.',
+  },
   eventual: {
     description: 'Replicas converge; a read may observe a stale value within the declared bound.',
     maxStalenessMs: 60_000, readsFromReplica: true, requiresQuorumRead: false,
@@ -110,8 +120,8 @@ const CONSISTENCY_MODELS = {
 // resolution strategy is last-writer-wins by accident, which silently loses data.
 const REPLICATION_POLICIES = {
   synchronous: { description: 'Write completes only when quorum has applied it.', rpoMinutes: 0, appliesTo: ['strong'] },
-  'semi-synchronous': { description: 'Write completes when one replica has applied it; the rest follow.', rpoMinutes: 1, appliesTo: ['strong', 'causal'] },
-  asynchronous: { description: 'Write completes locally and replicates in the background.', rpoMinutes: 5, appliesTo: ['causal', 'eventual'] },
+  'semi-synchronous': { description: 'Write completes when one replica has applied it; the rest follow.', rpoMinutes: 1, appliesTo: ['strong', 'causal', 'read-your-writes', 'monotonic-reads'] },
+  asynchronous: { description: 'Write completes locally and replicates in the background.', rpoMinutes: 5, appliesTo: ['causal', 'eventual', 'read-your-writes', 'monotonic-reads'] },
 };
 
 const CONFLICT_RESOLUTION = {
@@ -126,22 +136,22 @@ const CONFLICT_RESOLUTION = {
 // whose data is a derived view gets eventual, because a stale dashboard misleads nobody who has
 // been told it is a dashboard.
 const CONTEXT_CONSISTENCY = {
-  intake: { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A filed report must never be lost or duplicated — this is the constitutional guarantee.', staleReadsAcceptable: false },
-  custody: { model: 'strong', replication: 'synchronous', conflictResolution: 'append-only-chain', rationale: 'Chain of custody admits no divergent branch; a merged custody chain is not evidence.', staleReadsAcceptable: false },
-  'governance-oversight': { model: 'strong', replication: 'synchronous', conflictResolution: 'append-only-chain', rationale: 'A recorded human decision has RPO zero. Losing one destroys accountability.', staleReadsAcceptable: false },
-  'identity-access': { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A revocation that replicates late is an authorization that should not exist.', staleReadsAcceptable: false },
-  'policy-governance': { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A region evaluating an older policy version is a region enforcing a policy nobody approved.', staleReadsAcceptable: false },
-  investigation: { model: 'causal', replication: 'semi-synchronous', conflictResolution: 'human-adjudicated', rationale: 'An investigator must never see their own work disappear; conflicting case edits go to a human.', staleReadsAcceptable: false },
-  orchestration: { model: 'causal', replication: 'semi-synchronous', conflictResolution: 'human-adjudicated', rationale: 'Workflow state must move forward monotonically within a session.', staleReadsAcceptable: false },
-  'platform-events': { model: 'causal', replication: 'semi-synchronous', conflictResolution: 'append-only-chain', rationale: 'Event order is causal by construction; the chain rejects a divergent branch.', staleReadsAcceptable: false },
-  persistence: { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'The storage substrate cannot be weaker than the strongest context it serves.', staleReadsAcceptable: false },
-  'crypto-agility': { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A key or algorithm state that differs between regions makes ciphertext unreadable.', staleReadsAcceptable: false },
-  analytics: { model: 'eventual', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'Aggregates are derived and labelled as such; a minute-old count misleads nobody.', staleReadsAcceptable: true },
-  observability: { model: 'eventual', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'Telemetry is a stream of observations; the latest wins and nothing is lost that matters.', staleReadsAcceptable: true },
-  'data-fabric': { model: 'eventual', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'Catalogue metadata converges; a stale entry delays discovery, it does not corrupt data.', staleReadsAcceptable: true },
-  'data-exchange': { model: 'causal', replication: 'semi-synchronous', conflictResolution: 'human-adjudicated', rationale: 'A partner reading an exchange agreement must see it in causal order with its amendments.', staleReadsAcceptable: false },
-  privacy: { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A withdrawn consent that replicates late is processing without consent.', staleReadsAcceptable: false },
-  assurance: { model: 'eventual', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'Assurance evidence is recomputed from source on every build; a stale copy is replaced, not merged.', staleReadsAcceptable: true },
+  intake: { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A filed report must never be lost or duplicated — this is the constitutional guarantee.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  custody: { model: 'strong', replication: 'synchronous', conflictResolution: 'append-only-chain', rationale: 'Chain of custody admits no divergent branch; a merged custody chain is not evidence.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  'governance-oversight': { model: 'strong', replication: 'synchronous', conflictResolution: 'append-only-chain', rationale: 'A recorded human decision has RPO zero. Losing one destroys accountability.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  'identity-access': { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A revocation that replicates late is an authorization that should not exist.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  'policy-governance': { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A region evaluating an older policy version is a region enforcing a policy nobody approved.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  investigation: { model: 'read-your-writes', replication: 'semi-synchronous', conflictResolution: 'human-adjudicated', rationale: 'An investigator must never see their own work disappear — that is precisely read-your-writes, and calling it causal overstated what was actually needed.', staleReadsAcceptable: false, adr: 'ADR-0007' },
+  orchestration: { model: 'causal', replication: 'semi-synchronous', conflictResolution: 'human-adjudicated', rationale: 'Workflow state must move forward monotonically within a session.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  'platform-events': { model: 'causal', replication: 'semi-synchronous', conflictResolution: 'append-only-chain', rationale: 'Event order is causal by construction; the chain rejects a divergent branch.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  persistence: { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'The storage substrate cannot be weaker than the strongest context it serves.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  'crypto-agility': { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A key or algorithm state that differs between regions makes ciphertext unreadable.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  analytics: { model: 'monotonic-reads', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'A dashboard whose numbers go backwards between refreshes destroys trust faster than one that is a minute stale, so the reader-facing guarantee is monotonic reads rather than plain eventual.', staleReadsAcceptable: true, adr: 'ADR-0007' },
+  observability: { model: 'eventual', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'Telemetry is a stream of observations; the latest wins and nothing is lost that matters.', staleReadsAcceptable: true, adr: 'ADR-0006' },
+  'data-fabric': { model: 'eventual', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'Catalogue metadata converges; a stale entry delays discovery, it does not corrupt data.', staleReadsAcceptable: true, adr: 'ADR-0006' },
+  'data-exchange': { model: 'causal', replication: 'semi-synchronous', conflictResolution: 'human-adjudicated', rationale: 'A partner reading an exchange agreement must see it in causal order with its amendments.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  privacy: { model: 'strong', replication: 'synchronous', conflictResolution: 'quorum-serialized', rationale: 'A withdrawn consent that replicates late is processing without consent.', staleReadsAcceptable: false, adr: 'ADR-0006' },
+  assurance: { model: 'eventual', replication: 'asynchronous', conflictResolution: 'last-writer-wins', rationale: 'Assurance evidence is recomputed from source on every build; a stale copy is replaced, not merged.', staleReadsAcceptable: true, adr: 'ADR-0006' },
 };
 
 function consistencyModels() { return Object.entries(CONSISTENCY_MODELS).map(([id, m]) => ({ id, ...m })); }
@@ -155,9 +165,28 @@ function contextConsistency(context = null) {
   return Object.keys(CONTEXT_CONSISTENCY).sort().map((id) => contextConsistency(id));
 }
 
+// Session guarantees (Phase 12, Part 10). Read-your-writes and monotonic-reads are per-SESSION
+// properties: they cannot be checked from replica lag alone, because whether a replica is fresh
+// enough depends on what THIS session has already done. A session token carries the highest
+// sequence the session has written and the highest it has read.
+function sessionGuaranteeHolds({ model, session = null, replicaSequence = null } = {}) {
+  const spec = CONSISTENCY_MODELS[model];
+  if (!spec || !spec.sessionScoped) return { applicable: false, holds: true };
+  if (!session || replicaSequence === null) {
+    return { applicable: true, holds: false, reason: `'${model}' is a per-session guarantee and cannot be checked without a session token and the replica's sequence — an unverifiable guarantee is not a guarantee` };
+  }
+  if (model === 'read-your-writes' && replicaSequence < (session.lastWriteSequence ?? 0)) {
+    return { applicable: true, holds: false, reason: `replica is at sequence ${replicaSequence}; this session wrote at ${session.lastWriteSequence} and must observe its own write` };
+  }
+  if (model === 'monotonic-reads' && replicaSequence < (session.lastReadSequence ?? 0)) {
+    return { applicable: true, holds: false, reason: `replica is at sequence ${replicaSequence}; this session already observed ${session.lastReadSequence} — time would run backwards for this reader` };
+  }
+  return { applicable: true, holds: true, reason: `the '${model}' session guarantee holds for this reader` };
+}
+
 // Is this read safe from this replica, given how far behind it is? The answer is a function of
 // the context's declared model, not of how convenient it would be to say yes.
-function readAllowed({ context, replicaLagMs = 0, hasQuorum = true, sameSession = false } = {}) {
+function readAllowed({ context, replicaLagMs = 0, hasQuorum = true, sameSession = false, session = null, replicaSequence = null } = {}) {
   const c = contextConsistency(context);
   if (!c.declared) return { allowed: false, reason: c.reason, failClosed: true };
   const model = CONSISTENCY_MODELS[c.model];
@@ -172,6 +201,12 @@ function readAllowed({ context, replicaLagMs = 0, hasQuorum = true, sameSession 
   }
   if (replicaLagMs > model.maxStalenessMs) {
     return { allowed: false, context, model: c.model, reason: `replica lag ${replicaLagMs}ms exceeds the ${model.maxStalenessMs}ms staleness bound for '${c.model}'`, failClosed: true };
+  }
+  // Session guarantees are checked LAST because they are the only ones that depend on who is
+  // asking rather than on how stale the replica is.
+  const guarantee = sessionGuaranteeHolds({ model: c.model, session, replicaSequence });
+  if (guarantee.applicable && !guarantee.holds) {
+    return { allowed: false, context, model: c.model, reason: guarantee.reason, failClosed: true, sessionGuarantee: guarantee };
   }
   return { allowed: true, context, model: c.model, replicaLagMs, maxStalenessMs: model.maxStalenessMs, reason: `within the ${model.maxStalenessMs}ms bound for '${c.model}' consistency` };
 }
@@ -188,6 +223,9 @@ function validateConsistency({ contextIds = null } = {}) {
     if (!CONFLICT_RESOLUTION[c.conflictResolution]) violations.push(`${id}: unknown conflict resolution '${c.conflictResolution}'`);
     if (!c.rationale) violations.push(`${id}: no rationale for its consistency choice`);
     if (typeof c.staleReadsAcceptable !== 'boolean') violations.push(`${id}: does not state whether stale reads are acceptable`);
+    // Phase 12, Part 10: every consistency decision must cite the ADR that made it. A consistency
+    // model chosen without a recorded decision is a default somebody inherited.
+    if (!c.adr) violations.push(`${id}: cites no ADR — a consistency model with no recorded decision behind it is a default nobody chose`);
     // A strongly consistent context cannot also declare stale reads acceptable.
     if (c.model === 'strong' && c.staleReadsAcceptable) violations.push(`${id}: claims strong consistency but accepts stale reads`);
     // Last-writer-wins silently loses an update, so it may only govern data where that is fine.
@@ -202,6 +240,67 @@ function validateConsistency({ contextIds = null } = {}) {
   return { valid: violations.length === 0, violations, contexts: Object.keys(CONTEXT_CONSISTENCY).length };
 }
 
+// Consistency dependency map (Phase 12, Part 10). A context can be no stronger than the contexts
+// it depends on: a strongly-consistent context reading from an eventually-consistent one is
+// strongly consistent about a stale answer, which is worse than being honestly eventual.
+function consistencyDependencyMap() {
+  const contextMap = require('../architecture/context-map');
+  const rank = { strong: 4, 'read-your-writes': 3, 'monotonic-reads': 3, causal: 2, eventual: 1 };
+  const rows = [];
+  for (const id of Object.keys(CONTEXT_CONSISTENCY).sort()) {
+    let deps = [];
+    try { deps = contextMap.describe(id).dependsOn.map((d) => d.context); } catch (_) { deps = []; }
+    const governed = deps.filter((d) => CONTEXT_CONSISTENCY[d]);
+    const weaker = governed.filter((d) => rank[CONTEXT_CONSISTENCY[d].model] < rank[CONTEXT_CONSISTENCY[id].model]);
+    rows.push({
+      context: id, model: CONTEXT_CONSISTENCY[id].model, adr: CONTEXT_CONSISTENCY[id].adr ?? null,
+      dependsOn: governed.map((d) => ({ context: d, model: CONTEXT_CONSISTENCY[d].model })),
+      ungovernedDependencies: deps.filter((d) => !CONTEXT_CONSISTENCY[d]),
+      weakerDependencies: weaker,
+      // Reported, not failed: a strong context reading a weak one is sometimes correct (the read
+      // may not be on the critical path). It must be VISIBLE, and a human must decide.
+      inversion: weaker.length > 0,
+      note: weaker.length ? `depends on weaker contexts (${weaker.join(', ')}) — verify those reads are not on the path this context's guarantee covers` : 'no consistency inversion',
+    });
+  }
+  return {
+    contexts: rows, inversions: rows.filter((r) => r.inversion).map((r) => r.context),
+    note: 'A context can be no stronger than what it reads. An inversion is reported for a human to judge, not silently resolved.',
+  };
+}
+
+// Failover validation (Phase 12, Part 10): does each declared consistency model still hold after
+// the regions it depends on are lost? A model that only holds when everything is healthy is a
+// model that holds when you do not need it.
+function validateFailover({ regions = ['bw-central', 'bw-south', 'bw-north'], failed = [] } = {}) {
+  const healthy = regions.filter((r) => !failed.includes(r));
+  const q = quorum({ regions, healthy });
+  const rows = Object.entries(CONTEXT_CONSISTENCY).map(([id, c]) => {
+    const model = CONSISTENCY_MODELS[c.model];
+    const readsAvailable = model.requiresQuorumRead ? q.hasQuorum : healthy.length >= 1;
+    const writesAvailable = q.hasQuorum;
+    return {
+      context: id, model: c.model,
+      readsAvailable, writesAvailable,
+      degradedTo: !writesAvailable && readsAvailable ? 'read-only' : readsAvailable ? 'full' : 'unavailable',
+      holds: readsAvailable || !writesAvailable,
+      reason: !readsAvailable ? `'${c.model}' requires quorum reads and quorum is lost — this context is unavailable rather than serving a weaker guarantee`
+        : !writesAvailable ? 'reads continue; writes require quorum and are refused'
+          : 'unaffected',
+    };
+  }).sort((a, b) => a.context.localeCompare(b.context));
+  return {
+    failed: [...failed].sort(), healthy, quorum: q,
+    contexts: rows,
+    unavailable: rows.filter((r) => r.degradedTo === 'unavailable').map((r) => r.context),
+    readOnly: rows.filter((r) => r.degradedTo === 'read-only').map((r) => r.context),
+    // The guarantee holds because it is REFUSED rather than weakened — that is the whole point.
+    noGuaranteeWeakened: rows.every((r) => r.holds),
+    failClosed: true, authorizes: false,
+    note: 'Under failover a consistency model is refused, never quietly downgraded. A context that cannot meet its declared model reports unavailable.',
+  };
+}
+
 // What each region may serve for each context, given its current lag. This is the report an
 // operator reads during a partition to decide what to shed.
 function consistencyPosture({ committedSequence = 0, replicas = {}, healthy = [], regions = ['bw-central', 'bw-south', 'bw-north'] } = {}) {
@@ -210,9 +309,24 @@ function consistencyPosture({ committedSequence = 0, replicas = {}, healthy = []
   const lagMsPerSeq = 1000;   // deterministic mapping from sequence lag to a staleness estimate
   const rows = [];
   for (const context of Object.keys(CONTEXT_CONSISTENCY).sort()) {
+    const model = CONSISTENCY_MODELS[CONTEXT_CONSISTENCY[context].model];
     for (const r of cc.replicas) {
-      const decision = readAllowed({ context, replicaLagMs: r.lag * lagMsPerSeq, hasQuorum: q.hasQuorum });
-      rows.push({ context, region: r.region, lag: r.lag, model: CONTEXT_CONSISTENCY[context].model, readAllowed: decision.allowed, reason: decision.reason });
+      // The posture is a CAPABILITY view — "may this region serve this context at all?" — not a
+      // per-read gate. A session-scoped guarantee cannot be settled here because it depends on
+      // who is asking, so it is reported as session-dependent and settled at read time by
+      // readAllowed(). Reporting it as refused would make the operator view useless; reporting it
+      // as allowed would overstate what has been checked.
+      const decision = readAllowed({
+        context, replicaLagMs: r.lag * lagMsPerSeq, hasQuorum: q.hasQuorum,
+        // Supply a satisfied session so the lag bound is what decides; the session guarantee is
+        // then reported separately rather than silently assumed.
+        ...(model.sessionScoped ? { session: { lastWriteSequence: 0, lastReadSequence: 0 }, replicaSequence: r.applied } : {}),
+      });
+      rows.push({
+        context, region: r.region, lag: r.lag, model: CONTEXT_CONSISTENCY[context].model,
+        readAllowed: decision.allowed, sessionDependent: !!model.sessionScoped,
+        reason: model.sessionScoped ? `${decision.reason} (the per-session guarantee is settled at read time)` : decision.reason,
+      });
     }
   }
   const refused = rows.filter((x) => !x.readAllowed);
@@ -221,6 +335,8 @@ function consistencyPosture({ committedSequence = 0, replicas = {}, healthy = []
     refusedReads: refused.map((x) => `${x.context}@${x.region}: ${x.reason}`),
     writesAvailable: q.hasQuorum,
     validation: validateConsistency(),
+    dependencyMap: consistencyDependencyMap(),
+    failover: validateFailover({ regions, failed: regions.filter((r) => !healthy.includes(r)) }),
     failClosed: true, authorizes: false,
     note: 'A stale read is either declared acceptable in advance or refused. It is never discovered by a citizen.',
   };
@@ -344,5 +460,6 @@ module.exports = {
   CONSISTENCY_MODELS, REPLICATION_POLICIES, CONFLICT_RESOLUTION, CONTEXT_CONSISTENCY,
   quorum, splitBrainCheck, consistencyCheck, route, failover, verifyBackupRecovery,
   consistencyModels, replicationPolicies, contextConsistency, readAllowed, validateConsistency, consistencyPosture,
+  sessionGuaranteeHolds, consistencyDependencyMap, validateFailover,
   simulate, simulateAll, validate, report,
 };

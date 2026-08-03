@@ -34,6 +34,17 @@ const DRIFT_PSI_BANDS = [
 const DATASET_QUALITY_DIMENSIONS = ['completeness', 'balance', 'labelAccuracy', 'representativeness', 'freshness'];
 const DATASET_QUALITY_FLOOR = 0.8;
 
+// Fairness criteria (Phase 12, Part 9). These are mutually incompatible in general — you cannot
+// satisfy demographic parity and equalised odds simultaneously except in degenerate cases — so the
+// platform refuses to pick one. Which criterion applies to a given model is a governance decision
+// with consequences for real people, and making it silently would hide exactly that.
+const FAIRNESS_CRITERIA = {
+  'demographic-parity': { description: 'Outcome rates are equal across groups, regardless of any difference in underlying rates.', suitsWhen: 'The outcome should not depend on group membership at all.' },
+  'equal-opportunity': { description: 'True-positive rates are equal across groups.', suitsWhen: 'Missing a real case matters more than a false alarm.' },
+  'equalised-odds': { description: 'True-positive AND false-positive rates are both equal across groups.', suitsWhen: 'Both kinds of error carry consequences for the person.' },
+  'predictive-parity': { description: 'Precision is equal across groups — a positive means the same thing whoever it is about.', suitsWhen: 'The output is acted on directly by a human who cannot see the group.' },
+};
+
 // Uses that are refused by name — not merely unimplemented.
 const PROHIBITED_USES = {
   'automated-case-decision': 'A case outcome is a human decision. No model may produce one.',
@@ -127,6 +138,7 @@ class AiLifecycle {
   isApproved(kind, id) {
     const a = this._artifacts.get(`${kind}:${id}`);
     if (!a) return { approved: false, reason: 'unknown artifact' };
+    if (a.current.status === 'retired') return { approved: false, reason: `this ${a.kind} was retired by ${a.current.retiredBy}` };
     if (!RISK_CLASSES[a.current.riskClass].humanApproval) return { approved: true, reason: 'minimal risk — approval not required' };
     return a.current.status === 'approved' ? { approved: true, by: a.current.approvedBy } : { approved: false, reason: 'this version is not approved by a named human' };
   }
@@ -384,6 +396,94 @@ class AiLifecycle {
     };
   }
 
+  // --- Fairness, calibration, retirement (Phase 12, Part 9) --------------------------------------
+
+  // Fairness monitoring. Bias monitoring (Phase 10) reports disparity between groups; fairness
+  // asks whether the disparity clears the specific criterion the model was approved against.
+  // Which criterion applies is a governance decision, not a statistical one — the module refuses
+  // to pick, because "fair" means different things and choosing silently would hide that.
+  fairnessCriteria() { return Object.entries(FAIRNESS_CRITERIA).map(([id, c]) => ({ id, ...c })); }
+  declareFairnessCriterion(model, { criterion, threshold = 0.1, by, rationale } = {}) {
+    this.describe('model', model);
+    if (!FAIRNESS_CRITERIA[criterion]) throw new Error(`unknown fairness criterion '${criterion}' — choose one of ${Object.keys(FAIRNESS_CRITERIA).join(', ')}`);
+    if (!by || !rationale) { const e = new Error('choosing a fairness criterion is a governance decision — it requires a named human and a rationale'); e.failClosed = true; throw e; }
+    if (!this._fairness) this._fairness = new Map();
+    this._fairness.set(model, { model, criterion, threshold, by, rationale, at: this._clock() });
+    return { model, criterion, threshold, by };
+  }
+  fairnessReport(model, { minSample = 30 } = {}) {
+    const declared = this._fairness && this._fairness.get(model);
+    if (!declared) return { model, assessed: false, reason: 'no fairness criterion has been declared for this model — "fair" means several different things and the platform will not pick one silently' };
+    const bias = this.biasReport(model, { threshold: declared.threshold, minSample });
+    if (!bias.measured) return { model, assessed: false, criterion: declared.criterion, reason: bias.note || 'not enough observations to assess fairness' };
+    const spec = FAIRNESS_CRITERIA[declared.criterion];
+    return {
+      model, assessed: true, criterion: declared.criterion, criterionMeaning: spec.description,
+      threshold: declared.threshold, declaredBy: declared.by, rationale: declared.rationale,
+      disparity: bias.disparity ?? null, groups: bias.groups ?? [], suppressed: bias.suppressed ?? 0,
+      fair: bias.withinThreshold === true,
+      reason: bias.withinThreshold === true
+        ? `outcome disparity is within the ${declared.threshold} threshold for ${declared.criterion}`
+        : `outcome disparity ${bias.disparity} exceeds the ${declared.threshold} threshold for ${declared.criterion}`,
+      note: 'Fairness is assessed against the criterion this model was approved under, not against a general notion of fairness.',
+    };
+  }
+
+  // Confidence calibration. A model that says 0.9 should be right about 90% of the time; one that
+  // says 0.9 and is right 60% of the time is not "usually right", it is MISCALIBRATED — and every
+  // confidence floor elsewhere in this module is built on the assumption that it is not.
+  recordCalibration(model, { confidence, correct } = {}) {
+    if (typeof confidence !== 'number' || confidence < 0 || confidence > 1) throw new Error('calibration requires a confidence in [0, 1]');
+    if (typeof correct !== 'boolean') throw new Error('calibration requires whether the output was correct, as a boolean');
+    if (!this._calibration) this._calibration = new Map();
+    if (!this._calibration.has(model)) this._calibration.set(model, []);
+    this._calibration.get(model).push({ confidence, correct });
+    return { model, observations: this._calibration.get(model).length };
+  }
+  calibrationReport(model, { buckets = 5, minPerBucket = 10, tolerance = 0.15 } = {}) {
+    const obs = (this._calibration && this._calibration.get(model)) || [];
+    if (obs.length < buckets * minPerBucket) {
+      return { model, assessed: false, observations: obs.length, required: buckets * minPerBucket, reason: `only ${obs.length} observations — a calibration curve drawn from too few points is a shape, not a measurement` };
+    }
+    const rows = [];
+    let ece = 0;                                   // expected calibration error
+    for (let b = 0; b < buckets; b++) {
+      const lo = b / buckets, hi = (b + 1) / buckets;
+      const inBucket = obs.filter((o) => o.confidence >= lo && (b === buckets - 1 ? o.confidence <= hi : o.confidence < hi));
+      if (!inBucket.length) { rows.push({ bucket: `${lo.toFixed(1)}–${hi.toFixed(1)}`, n: 0, meanConfidence: null, accuracy: null, gap: null, assessed: false }); continue; }
+      const meanConfidence = inBucket.reduce((a, o) => a + o.confidence, 0) / inBucket.length;
+      const accuracy = inBucket.filter((o) => o.correct).length / inBucket.length;
+      const gap = +(meanConfidence - accuracy).toFixed(4);
+      ece += (inBucket.length / obs.length) * Math.abs(gap);
+      rows.push({ bucket: `${lo.toFixed(1)}–${hi.toFixed(1)}`, n: inBucket.length, meanConfidence: +meanConfidence.toFixed(4), accuracy: +accuracy.toFixed(4), gap, assessed: true, overconfident: gap > tolerance, underconfident: gap < -tolerance });
+    }
+    const assessedRows = rows.filter((r) => r.assessed);
+    const overconfident = assessedRows.filter((r) => r.overconfident);
+    return {
+      model, assessed: true, observations: obs.length, buckets: rows, tolerance,
+      expectedCalibrationError: +ece.toFixed(4),
+      calibrated: overconfident.length === 0 && ece <= tolerance,
+      overconfidentBuckets: overconfident.map((r) => r.bucket),
+      // Overconfidence is the dangerous direction: it is what makes a confidence floor useless.
+      reason: overconfident.length
+        ? `the model is overconfident in ${overconfident.map((r) => r.bucket).join(', ')} — every confidence floor in this module assumes it is not`
+        : ece > tolerance ? `expected calibration error ${ece.toFixed(4)} exceeds the ${tolerance} tolerance` : 'confidence is calibrated within tolerance',
+    };
+  }
+
+  // Retirement. A model that is no longer used but never retired keeps its approval, and an
+  // approval nobody revisits is how a superseded model quietly stays in production.
+  retire(kind, id, { by, rationale, supersededBy = null } = {}) {
+    const a = this._artifacts.get(`${kind}:${id}`); if (!a) throw new Error('unknown artifact');
+    if (!by || !rationale) { const e = new Error('retiring an AI artifact requires a named human and a rationale'); e.failClosed = true; throw e; }
+    if (a.current.status === 'retired') throw new Error(`${kind} '${id}' is already retired`);
+    if (supersededBy && !this._artifacts.has(`${kind}:${supersededBy}`)) throw new Error(`superseding ${kind} '${supersededBy}' does not exist`);
+    a.current.status = 'retired'; a.current.retiredBy = by; a.current.retirementRationale = rationale;
+    a.current.retiredAt = this._clock(); a.current.supersededBy = supersededBy;
+    return this.describe(kind, id);
+  }
+  retired() { return this.catalogue().filter((a) => a.status === 'retired'); }
+
   prohibitedUses() { return Object.entries(PROHIBITED_USES).map(([id, why]) => ({ use: id, why })); }
   riskClasses() { return Object.entries(RISK_CLASSES).map(([id, r]) => ({ id, ...r })); }
 
@@ -391,7 +491,7 @@ class AiLifecycle {
     const violations = [];
     for (const a of this.catalogue()) {
       if (!RISK_CLASSES[a.riskClass]) violations.push(`${a.kind}:${a.id}: unknown risk class`);
-      if (RISK_CLASSES[a.riskClass].humanApproval && a.status !== 'approved') violations.push(`${a.kind}:${a.id}: risk class '${a.riskClass}' requires human approval and has none`);
+      if (RISK_CLASSES[a.riskClass].humanApproval && !['approved', 'retired'].includes(a.status)) violations.push(`${a.kind}:${a.id}: risk class '${a.riskClass}' requires human approval and has none`);
       if (!a.purpose) violations.push(`${a.kind}:${a.id}: no declared purpose`);
       if (PROHIBITED_USES[a.purpose]) violations.push(`${a.kind}:${a.id}: prohibited purpose`);
       for (const f of a.fields) if (IDENTITY_FIELDS.has(String(f).toLowerCase())) violations.push(`${a.kind}:${a.id}: identity field '${f}'`);
@@ -421,6 +521,10 @@ class AiLifecycle {
       datasetLineage: this.catalogue('dataset').map((d) => this.datasetLineage(d.id)),
       datasetQuality: this.catalogue('dataset').map((d) => this.datasetQuality(d.id)),
       monitoring: this.catalogue('model').map((m) => this.monitoringPosture(m.id)),
+      fairness: this.catalogue('model').map((m) => this.fairnessReport(m.id)),
+      calibration: this.catalogue('model').map((m) => this.calibrationReport(m.id)),
+      retired: this.retired(),
+      fairnessCriteria: this.fairnessCriteria(),
       validation: this.validate(),
       advisoryOnly: true, authorizes: false,
       note: 'AI output is an input to a human decision and nothing else. There is no apply(); the only exit from an inference is a recorded human decision.',
@@ -430,5 +534,5 @@ class AiLifecycle {
 
 module.exports = {
   AiLifecycle, RISK_CLASSES, PROHIBITED_USES, ARTIFACT_KINDS,
-  HALLUCINATION_THRESHOLD, DRIFT_PSI_BANDS, DATASET_QUALITY_DIMENSIONS, DATASET_QUALITY_FLOOR,
+  HALLUCINATION_THRESHOLD, DRIFT_PSI_BANDS, DATASET_QUALITY_DIMENSIONS, DATASET_QUALITY_FLOOR, FAIRNESS_CRITERIA,
 };
