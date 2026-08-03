@@ -3863,6 +3863,63 @@ module.exports = [
     if (shallow.dependents.length > impact.dependents.length) v.push('a shallower traversal found more than a deeper one');
   }),
 
+  fit('APP-FIT-RUNBOOK-ACCURACY', 'Every API path an operational document tells someone to call actually exists', (v) => {
+    // "Keep documentation synchronized with implementation" is a requirement everywhere in this
+    // platform and, until now, an aspiration in the one place it matters most at 03:00: the
+    // runbook. A route renamed in `server.js` leaves the runbook telling an operator to call
+    // something that 404s, and nothing catches it. This check makes the requirement executable.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const root = path.join(__dirname, '..');
+
+    // Routes as they are actually served: exact-match literals plus the path regexes.
+    const src = fs.readFileSync(path.join(root, 'src', 'server.js'), 'utf8');
+    const literals = new Set([...src.matchAll(/p === '(\/api\/[^']+)'/g)].map((m) => m[1]));
+    const patterns = [...src.matchAll(/p\.match\((\/(?:\\.|\[[^\]]*\]|[^/\\])+\/)\)/g)]
+      .map((m) => m[1]).filter((r) => r.includes('api')).map((r) => new RegExp(r.slice(1, -1)));
+    if (literals.size < 50) v.push(`only ${literals.size} literal routes were extracted from server.js — the extractor has stopped working, which would make this check pass vacuously`);
+    if (patterns.length < 10) v.push(`only ${patterns.length} parameterised routes were extracted — the extractor has stopped working`);
+
+    // Paths a document tells an operator to call. `{a,b}` expands; `<placeholder>` and `:param`
+    // become a sample segment so a documented parameterised route still resolves.
+    const documentedPaths = (text) => {
+      const out = new Set();
+      for (const m of text.matchAll(/(\/api\/[A-Za-z0-9/{},:<>_-]*)/g)) {
+        const raw = m[1].replace(/[.,)]+$/, '');
+        const brace = raw.match(/^(.*)\{([^}]*)\}(.*)$/);
+        const variants = brace ? brace[2].split(',').map((o) => `${brace[1]}${o.trim()}${brace[3]}`) : [raw];
+        for (const variant of variants) {
+          const normalised = variant.replace(/\/$/, '').split('/')
+            .map((seg) => (seg.startsWith('<') || seg.startsWith(':') ? 'sample' : seg)).join('/');
+          if (normalised.length > 4) out.add(normalised);
+        }
+      }
+      return [...out].sort();
+    };
+    const resolves = (p) => literals.has(p) || patterns.some((r) => r.test(p))
+      || literals.has(`${p}/sample`) || patterns.some((r) => r.test(`${p}/sample`));
+
+    // The operational documents an operator is actually sent to.
+    const docs = ['docs/operations/runbook.md'];
+    let checked = 0;
+    for (const rel of docs) {
+      const file = path.join(root, rel);
+      if (!fs.existsSync(file)) { v.push(`${rel} is missing — an operational document that does not exist cannot be followed`); continue; }
+      const paths = documentedPaths(fs.readFileSync(file, 'utf8'));
+      if (!paths.length) v.push(`${rel} names no API path — either it is not an operational document or the extractor is broken`);
+      for (const p of paths) { checked += 1; if (!resolves(p)) v.push(`${rel} tells an operator to call '${p}', which no route serves`); }
+    }
+    if (checked < 5) v.push(`only ${checked} documented paths were checked — too few for this control to be meaningful`);
+
+    // THE CHECK MUST BE ABLE TO FAIL. A resolver that says yes to everything would pass the whole
+    // suite above while proving nothing, so it is fed a route that does not exist.
+    for (const invented of documentedPaths('Call `GET /api/does-not-exist/anything` and `POST /api/nonsense`.')) {
+      if (resolves(invented)) v.push(`the route resolver accepted '${invented}', which no route serves — the check cannot fail and is therefore decoration`);
+    }
+    // …and it must say yes to one that does, or it would pass by refusing everything.
+    if (!resolves('/api/resilience/consistency')) v.push('the route resolver rejected a route that plainly exists');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

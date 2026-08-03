@@ -57,7 +57,7 @@ ls deploy/k8s/ deploy/pilot/
 > [pre-deployment release impact](./docs/consumer-contracts.md),
 > [active governance ownership](./docs/governance-ownership.md), and
 > [evidence provenance, readiness dependency analysis and engineering forecasting](./docs/evidence-confidence.md).
-> Combined gate: **128 invariants**, 600 tests. Full summary: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·
+> Combined gate: **129 invariants**, 607 tests. Full summary: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·
 > v1.11: [`docs/adaptive-assurance.md`](./docs/adaptive-assurance.md) ·
 > v1.10: [`docs/high-assurance.md`](./docs/high-assurance.md) ·
 > v1.9: [`docs/stabilization.md`](./docs/stabilization.md) ·

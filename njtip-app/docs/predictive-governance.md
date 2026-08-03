@@ -43,14 +43,14 @@ recorded as [ADR-0007](./adr/0007-session-consistency-and-adr-review-lifecycle.m
 ## Assurance
 
 ```bash
-npm test                    # 600 deterministic tests
-npm run twin                # combined gate: 14 twin + 105 app + 9 infra = 128 invariants
+npm test                    # 607 deterministic tests
+npm run twin                # combined gate: 14 twin + 106 app + 9 infra = 129 invariants
 npm run chaos               # 17 chaos scenarios, each proving all four resilience stages
 npm run assurance           # 16 assurance domains → deployment authorization package
 npm run production-readiness # …plus the items only a human can close
 ```
 
-Ten new fitness functions, each written so it **can** fail — fed a crafted counterexample that must
+Eleven new fitness functions, each written so it **can** fail — fed a crafted counterexample that must
 be rejected. That discipline caught real defects again, recorded where they happened rather than
 quietly fixed:
 
@@ -69,6 +69,11 @@ quietly fixed:
 - **An evidence node property named `kind` shadowed the node's own kind**, silently reclassifying
   every evidence node and taking graph traceability to zero. Caught by the traceability check
   reporting a number that could not be right.
+- **ADR-0007 stated a consequence that was never carried out.** Its *Operational impact* section
+  says the partition runbook gains a line about session-dependent rows. It did not, until close-out.
+  `APP-FIT-RUNBOOK-ACCURACY` now checks every API path an operational document tells an operator to
+  call against the routes actually served — the requirement "keep documentation synchronized with
+  implementation" made executable in the one place it matters most at 03:00.
 
 ## Three things worth carrying forward
 
