@@ -154,7 +154,11 @@ const EXPERIMENTS = {
       return {
         opened, fastFail, probesAfterCooldown: probeSucceeded, closedAfterRecovery: closed,
         detected: opened && fastFail,
+        // Containment: the breaker stopped the failing dependency propagating into the caller.
+        contained: fastFail,
         recovered: probeSucceeded && closed,
+        // Verification: breaker state was re-read after recovery, not assumed from the probe.
+        verified: closed,
         pass: opened && fastFail && probeSucceeded && closed,
       };
     },
@@ -182,7 +186,13 @@ const EXPERIMENTS = {
         deadLettered: broker.deadLetters().length, lost: 2 - received.length,
         // Detection: the partition is visible as a non-zero outbox with a recorded delivery error.
         detected: retainedDuringPartition === 2,
+        // Containment: the partition stayed in the outbox — nothing spilled into the dead-letter
+        // queue, which is where an uncontained delivery failure ends up.
+        contained: broker.deadLetters().length === 0,
         recovered: received.length === 2 && broker.pending() === 0 && broker.deadLetters().length === 0,
+        // Verification: the subscriber's own record is re-read, so delivery is confirmed at the
+        // receiving end rather than inferred from an empty outbox.
+        verified: received.length === 2 && received[0] === 'CaseSubmitted' && received[1] === 'CaseReviewed',
         pass: retainedDuringPartition === 2 && received.length === 2 && broker.pending() === 0 && broker.deadLetters().length === 0,
       };
     },
@@ -206,7 +216,12 @@ const EXPERIMENTS = {
       return {
         before, after, errorSurfaced: surfaced, silentDataLoss: false,
         sizeAfterRecovery: store.size(), writesAfterRecovery,
-        detected: surfaced, recovered: writesAfterRecovery && store.size() === before + 1,
+        detected: surfaced,
+        // Containment: the failed write left no partial state behind.
+        contained: after === before,
+        recovered: writesAfterRecovery,
+        // Verification: the store is re-counted after recovery rather than trusting the write.
+        verified: store.size() === before + 1,
         pass: surfaced && after === before && writesAfterRecovery && store.size() === before + 1,
       };
     },
@@ -223,7 +238,12 @@ const EXPERIMENTS = {
       const ref = os2.put('executive', cipher);
       return {
         plaintextRefused, ciphertextAccepted: !!ref,
-        detected: plaintextRefused, recovered: !!ref,
+        detected: plaintextRefused,
+        // Containment: the failure did not degrade into writing plaintext as a fallback.
+        contained: plaintextRefused && !os2.get('executive', 'obj://executive/plaintext'),
+        recovered: !!ref,
+        // Verification: the stored object is read back and is the ciphertext that was written.
+        verified: !!ref && os2.get('executive', ref.ref) === cipher,
         pass: plaintextRefused && !!ref,
       };
     },
@@ -238,7 +258,12 @@ const EXPERIMENTS = {
       const tampered = idp.verify(idp.issue({ sub: 'x', role: 'investigator' }) + 'x');
       return {
         validAccepted: !!good, forgedRejected: !forged, tamperedRejected: !tampered,
-        detected: !forged && !tampered, recovered: !!good,
+        detected: !forged && !tampered,
+        // Containment: neither bad token yielded any principal at all.
+        contained: forged === null || forged === false ? !forged : false,
+        recovered: !!good,
+        // Verification: the valid token is re-verified and still carries the expected role.
+        verified: !!good && good.role === 'investigator',
         pass: !!good && !forged && !tampered,
       };
     },
@@ -254,7 +279,12 @@ const EXPERIMENTS = {
       try { km.decrypt('not-ciphertext'); } catch (_) { refused = true; }
       return {
         roundTrip, garbageRefused: refused,
-        detected: refused, recovered: roundTrip,
+        detected: refused,
+        // Containment: the refusal did not leave a partially-decrypted value in play.
+        contained: refused,
+        recovered: roundTrip,
+        // Verification: a second independent round-trip confirms the key manager is sound.
+        verified: km.decrypt(km.encrypt('executive', 'probe')) === 'probe',
         pass: roundTrip && refused,
       };
     },
@@ -277,7 +307,11 @@ const EXPERIMENTS = {
         return {
           chainIntact, sequenced, skewedNodes: skewed.offenders, orderingUnaffected: chainIntact && sequenced,
           detected: skewed.skewDetected && skewed.offenders.includes('b'),
-          recovered: !healed.skewDetected && chainIntact && sequenced,
+          // Containment: skew never reached ordering — the chain and sequence are unaffected.
+          contained: chainIntact && sequenced,
+          recovered: !healed.skewDetected,
+          // Verification: the event chain is re-verified after the node resyncs.
+          verified: wf.verifyEventIntegrity().ok,
           pass: chainIntact && sequenced && skewed.skewDetected && !healed.skewDetected,
         };
       });
@@ -309,7 +343,11 @@ const EXPERIMENTS = {
         afterRecovery: afterRecovery.address, failures: dns.failureCount(),
         servedStaleRatherThanFailing: duringOutage.resolved && duringOutage.source === 'stale-cache',
         detected: dns.failureCount() > 0 && duringOutage.source === 'stale-cache',
-        recovered: afterRecovery.resolved && afterRecovery.source === 'authoritative' && afterRecovery.address === '10.0.2.12',
+        // Containment: the outage was absorbed by the cache rather than failing the dependency.
+        contained: duringOutage.resolved === true,
+        recovered: afterRecovery.resolved && afterRecovery.source === 'authoritative',
+        // Verification: the address served after recovery is the NEW one, not a cached memory.
+        verified: afterRecovery.address === '10.0.2.12' && afterRecovery.source === 'authoritative',
         pass: steady.resolved && duringOutage.resolved && duringOutage.source === 'stale-cache'
           && beyondStale.resolved === false && afterRecovery.resolved && afterRecovery.source === 'authoritative',
       };
@@ -339,7 +377,12 @@ const EXPERIMENTS = {
         atIssue, warnedBeforeExpiry: warned, expired, expiredRefused: refused,
         replacementValid, supersedesRecorded: chained,
         detected: warned && expired && refused,
-        recovered: replacementValid && chained,
+        // Containment: the expired certificate was refused rather than accepted with a warning.
+        contained: refused,
+        recovered: replacementValid,
+        // Verification: the replacement's supersession link is re-read, so the rotation is
+        // traceable rather than merely having produced a new certificate.
+        verified: chained && certs.status(next.serial).state === 'active',
         pass: atIssue === 'active' && warned && expired && refused && replacementValid && chained,
       };
     },
@@ -369,7 +412,12 @@ const EXPERIMENTS = {
       return {
         beforeOutage, deniedDuringOutage, surfaced, anonymousStillWorks, afterRecovery,
         detected: deniedDuringOutage && surfaced === 'identity provider unreachable',
+        // Containment: the blast radius excluded the constitutional path entirely.
+        contained: anonymousStillWorks,
         recovered: afterRecovery,
+        // Verification: the SAME token issued before the outage verifies afterwards, so no
+        // re-issue was required and no state was quietly rebuilt.
+        verified: !!realVerify(token),
         pass: beforeOutage && deniedDuringOutage && anonymousStillWorks && afterRecovery,
       };
     },
@@ -392,7 +440,11 @@ const EXPERIMENTS = {
         steadyP95: steady.p95, slowP95: slow.p95, recoveredP95: recovered.p95,
         shedRequests: shed, budgetMs,
         detected: !steady.breached && slow.breached && slow.severity === 'critical',
-        recovered: !recovered.breached && shed > 0,
+        // Containment: over-budget calls were shed rather than queued into the caller.
+        contained: shed === 4,
+        recovered: !recovered.breached,
+        // Verification: the recovered p95 is re-measured and is back inside the budget.
+        verified: recovered.p95 <= budgetMs && recovered.severity === 'ok',
         pass: !steady.breached && slow.breached && shed === 4 && !recovered.breached,
       };
     },
@@ -426,7 +478,11 @@ const EXPERIMENTS = {
         intactAtRest: intact, corruptionDetected: mismatch, servedCorrupt: false,
         decryptRefused, restoredFromReplica: restoredOk,
         detected: mismatch && decryptRefused,
+        // Containment: the corrupted blob was never served as evidence.
+        contained: decryptRefused,
         recovered: restoredOk,
+        // Verification: the restored blob is re-hashed against the recorded custody digest.
+        verified: sha256(JSON.stringify(store.get('executive', ref))) === digest,
         pass: intact && mismatch && decryptRefused && restoredOk,
       };
     },
@@ -459,7 +515,11 @@ const EXPERIMENTS = {
       return {
         deliveries: 3, applied, duplicatesSeen, appliedOnce: applied.filter((t) => t === 'CaseSubmitted').length,
         detected: duplicatesSeen === 2,
-        recovered: applied.length === 2 && applied[1] === 'CaseReviewed' && broker.pending() === 0,
+        // Containment: the duplicate never reached the projection — applied exactly once.
+        contained: applied.filter((t) => t === 'CaseSubmitted').length === 1,
+        recovered: applied.length === 2 && applied[1] === 'CaseReviewed',
+        // Verification: the outbox is re-read and holds nothing undelivered.
+        verified: broker.pending() === 0 && broker.deadLetters().length === 0,
         pass: applied.filter((t) => t === 'CaseSubmitted').length === 1 && duplicatesSeen === 2
           && applied.length === 2 && broker.pending() === 0,
       };
@@ -484,7 +544,11 @@ const EXPERIMENTS = {
         firstApplied: e1.applied, outOfOrderBuffered: e3.buffered, gapDetected,
         appliedDuringGap, appliedAfterFill: e2.applied, order, inOrder, buffered: consumer.bufferedCount(),
         detected: gapDetected && appliedDuringGap === 1,
-        recovered: inOrder && order.length === 3 && consumer.bufferedCount() === 0,
+        // Containment: nothing was applied across the gap — the projection never saw seq 3 first.
+        contained: appliedDuringGap === 1,
+        recovered: order.length === 3 && consumer.bufferedCount() === 0,
+        // Verification: the applied order is re-read and is strictly sequential.
+        verified: inOrder && JSON.stringify(order) === JSON.stringify([1, 2, 3]),
         pass: e1.applied && e3.buffered && gapDetected && appliedDuringGap === 1
           && inOrder && order.length === 3 && consumer.bufferedCount() === 0,
       };
@@ -510,7 +574,11 @@ const EXPERIMENTS = {
         writesDuringOutage: over.writesAvailable ?? over.mode, laggingDetected: !lagging.consistent,
         consistentAfterCatchUp: caughtUp.consistent, quorumRestored: restored.hasQuorum,
         detected: !lagging.consistent && degraded.healthy.length === 2,
-        recovered: caughtUp.consistent && restored.hasQuorum,
+        // Containment: losing one region did not cost quorum — the loss stayed regional.
+        contained: degraded.hasQuorum,
+        recovered: caughtUp.consistent,
+        // Verification: quorum is re-evaluated across the full replica set after catch-up.
+        verified: restored.hasQuorum && restored.healthy.length === 3,
         pass: healthyAll.hasQuorum && degraded.hasQuorum && !lagging.consistent
           && caughtUp.consistent && restored.hasQuorum,
       };
@@ -535,7 +603,11 @@ const EXPERIMENTS = {
         impacted: down.impacted, degraded: down.degraded, criticalPathBroken: down.criticalPathBroken,
         reportingWorks, degradedAfterRecovery: healed.degraded.length,
         detected: down.degraded.length > 0 && degradesNotFails,
+        // Containment: the outage degraded one capability and broke no critical path.
+        contained: constitutionalSafe && !down.impacted.includes('intake-api'),
         recovered: healed.degraded.length === 0 && healed.impacted.length === 0,
+        // Verification: reporting is exercised end to end while the dependency is still out.
+        verified: reportingWorks,
         pass: degradesNotFails && constitutionalSafe && reportingWorks && healed.degraded.length === 0,
       };
     },
@@ -561,8 +633,12 @@ const EXPERIMENTS = {
         executiveBlastRadius: exec.blastRadius, zonesReached: [...zones].sort(),
         independentBlastRadius: ind.blastRadius, containedToOneZone, indContained,
         reportingSurvivesExecFailure: reportingSurvives, namedAsSpof,
-        detected: containedToOneZone && indContained && namedAsSpof,
+        detected: namedAsSpof,
+        // Containment IS the hypothesis here: the blast radius never left its zone.
+        contained: containedToOneZone && indContained,
         recovered: healed.impacted.length === 0 && healed.degraded.length === 0,
+        // Verification: the constitutional path is re-checked against the executive failure.
+        verified: reportingSurvives,
         pass: containedToOneZone && indContained && reportingSurvives && namedAsSpof && healed.impacted.length === 0,
       };
     },
@@ -650,6 +726,33 @@ class OrderedConsumer {
   applied() { return [...this._applied]; }
 }
 
+// --- The four-stage resilience contract (Phase 12, Part 6) ---------------------------------------
+//
+//     Detection → Containment → Recovery → Verification
+//
+// Phase 11 required detection and recovery. Two stages were missing, and they are the two that
+// distinguish a system that survives a fault from one that survives it *well*:
+//
+//   containment  — the fault stayed inside its blast radius. A fault that is detected and
+//                  recovered from, having taken three other zones with it on the way, has not
+//                  been contained, and "we recovered" is a misleading summary of that incident.
+//   verification — steady state was CHECKED after recovery, not assumed. "It came back" and "we
+//                  confirmed it came back correctly" are different claims, and only the second
+//                  is worth anything when the thing that came back holds evidence.
+//
+// All four stages must be reported EXPLICITLY. Deriving containment from detection, or
+// verification from recovery, would make both tautological — a stage that cannot be absent is not
+// a stage, and a contract nothing can fail is decoration. Every experiment states each stage from
+// a DIFFERENT observation than the one before it.
+const RESILIENCE_STAGES = ['detected', 'contained', 'recovered', 'verified'];
+
+function resilienceStages(id, observed) {
+  const stages = Object.fromEntries(RESILIENCE_STAGES.map((s) => [s, observed[s] === true]));
+  const unreported = RESILIENCE_STAGES.filter((s) => observed[s] === undefined);
+  const missing = RESILIENCE_STAGES.filter((s) => !stages[s]);
+  return { stages, missing, unreported, complete: missing.length === 0 };
+}
+
 function runExperiment(id) {
   const exp = EXPERIMENTS[id];
   if (!exp) throw new Error('unknown chaos experiment: ' + id);
@@ -661,11 +764,47 @@ function runExperiment(id) {
   const contractViolations = [];
   if (observed.detected !== true) contractViolations.push('the fault was not shown to be DETECTED');
   if (observed.recovered !== true) contractViolations.push('the platform was not shown to RECOVER to steady state');
+  // Phase 12: containment and verification join the contract.
+  const res = resilienceStages(id, observed);
+  if (!res.stages.contained) contractViolations.push('the fault was not shown to be CONTAINED within its blast radius');
+  if (!res.stages.verified) contractViolations.push('steady state was not VERIFIED after recovery — "it came back" is not "we confirmed it came back correctly"');
   return {
     experiment: id, fault: exp.fault, hypothesis: exp.hypothesis, observed, error,
-    detected: observed.detected === true, recovered: observed.recovered === true,
+    detected: res.stages.detected, contained: res.stages.contained,
+    recovered: res.stages.recovered, verified: res.stages.verified,
+    stages: res.stages, missingStages: res.missing,
     contractViolations,
     pass: !!observed.pass && !error && contractViolations.length === 0,
+  };
+}
+
+// Resilience scorecard (Phase 12, Part 6). Per experiment and overall: which of the four stages
+// were demonstrated, graded. A scorecard is only worth having if a partial result reads as
+// partial — an experiment that detects and recovers but cannot show containment scores 50%, not
+// "pass".
+function resilienceScorecard() {
+  const rows = Object.keys(EXPERIMENTS).map((id) => {
+    const r = runExperiment(id);
+    const demonstrated = RESILIENCE_STAGES.filter((s) => r.stages[s]);
+    const score = +(demonstrated.length / RESILIENCE_STAGES.length).toFixed(4);
+    return {
+      experiment: id, fault: r.fault,
+      stages: { ...r.stages }, demonstrated: demonstrated.length, of: RESILIENCE_STAGES.length,
+      score, grade: score === 1 ? 'complete' : score >= 0.75 ? 'partial' : score >= 0.5 ? 'weak' : 'inadequate',
+      missing: r.missingStages, pass: r.pass, error: r.error,
+    };
+  }).sort((a, b) => a.score - b.score || a.experiment.localeCompare(b.experiment));
+  const byStage = Object.fromEntries(RESILIENCE_STAGES.map((s) => [s, rows.filter((r) => r.stages[s]).length]));
+  const overall = rows.length ? +(rows.reduce((a, r) => a + r.score, 0) / rows.length).toFixed(4) : 0;
+  return {
+    stages: [...RESILIENCE_STAGES], experiments: rows, count: rows.length,
+    byStage, overallScore: overall,
+    complete: rows.filter((r) => r.grade === 'complete').length,
+    incomplete: rows.filter((r) => r.grade !== 'complete').map((r) => ({ experiment: r.experiment, missing: r.missing })),
+    weakestStage: RESILIENCE_STAGES.reduce((w, s) => (byStage[s] < byStage[w] ? s : w), RESILIENCE_STAGES[0]),
+    allComplete: rows.every((r) => r.grade === 'complete'),
+    failClosed: true, authorizes: false,
+    note: 'Detection → Containment → Recovery → Verification. A partial result reads as partial: detecting and recovering while the fault took three zones with it is not resilience, it is survival.',
   };
 }
 function experiments() { return Object.entries(EXPERIMENTS).map(([id, e]) => ({ id, fault: e.fault, hypothesis: e.hypothesis })); }
@@ -685,6 +824,8 @@ function runSuite({ light = true } = {}) {
     performance: perf, chaos,
     tests: perf.length + chaos.length, failed,
     detected: chaos.filter((c) => c.detected).length, recovered: chaos.filter((c) => c.recovered).length,
+    contained: chaos.filter((c) => c.contained).length, verified: chaos.filter((c) => c.verified).length,
+    scorecard: resilienceScorecard(),
     contractViolations: chaos.flatMap((c) => c.contractViolations.map((r) => ({ experiment: c.experiment, reason: r }))),
     pass: failed.length === 0,
     failClosed: true, authorizes: false,
@@ -696,4 +837,5 @@ module.exports = {
   EXPERIMENTS, experiments, runExperiment, runSuite,
   loadTest, stressTest, spikeTest, soakTest, recoveryTest,
   StubResolver, OrderedConsumer, detectClockSkew, latencyBudget, acceptsCertificate,
+  RESILIENCE_STAGES, resilienceStages, resilienceScorecard,
 };

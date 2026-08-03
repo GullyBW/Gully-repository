@@ -1,4 +1,4 @@
-# Reliability Engineering (Phase 10, Part 4 · Phase 11, Part 4)
+# Reliability Engineering (Phase 10, Part 4 · Phase 11, Part 4 · Phase 12, Part 4)
 
 Site Reliability Engineering as executable practice: service-level objectives per **user journey**,
 error budgets with burn rate, availability / latency / **recovery** targets, capacity planning,
@@ -140,3 +140,45 @@ budget remaining, 20 for compliance history — then A–F. Two rules matter mor
 `releaseReadiness()` wraps the fail-closed error-budget gate and adds *advisory* warnings — a
 degrading trend or a budget under 25% warns without blocking. A green gate is not an all-clear, and
 the report says so. As everywhere: `authorizes: false`.
+
+---
+
+# Predictive Operations (Phase 12, Part 4)
+
+Gated by `APP-FIT-SRE-PREDICTIVE-OPS`. Live: `GET /api/observability/predictive`.
+
+Phase 11 forecast *reliability*. This forecasts the operational conditions that **cause** reliability
+to fail — in one shape, so a dashboard renders them together and an operator can compare "how long
+have I got?" across six unrelated things.
+
+| Predictor | Threshold it heads for | The insight |
+|---|---|---|
+| **Storage exhaustion** | 85% of capacity, not 100% | The time you need is *before* it is full |
+| **Certificate expiry** | The renewal window | Not a forecast so much as arithmetic nobody does until the outage |
+| **Capacity ceiling** | Replicas × rps, **less reserved headroom** | The ceiling is where surge capacity runs out, not where the service stops |
+| **Queue saturation** | Max depth, via arrival − service rate | A queue with utilization > 1 has no steady state, and its current depth says nothing about that |
+| **Dependency degradation** | The latency budget | The question is *when* it breaches, not whether it has |
+| **SLO burn** | Error budget exhausted | At this burn, when is the budget gone? |
+
+Every predictor returns the same four things — current value, threshold, days remaining, urgency
+band — and:
+
+> **An unmeasurable prediction reports `unknown`, never `healthy`.** `predicted: false` and
+> `daysUntilThreshold: null`. The report enumerates exactly what could not be projected.
+
+Lead-time bands: `imminent ≤ 7d · near-term ≤ 30d · planned ≤ 90d · distant`, plus `breached` for a
+threshold already crossed. `maintenanceRecommendations` is the ordered list of what to do and
+roughly when — one list, rather than six dashboards each insisting it is the urgent one.
+
+## Prediction in the release gate
+
+```
+threshold already breached   → BLOCK
+≤ 7 days of headroom         → BLOCK   shipping now spends slack that is not there
+≤ 30 days                    → warn
+otherwise                    → allow
+```
+
+Fail-closed, with the same recorded-human-risk-acceptance override as the reliability gate. A
+near-term prediction **warns** rather than blocking — the gate distinguishes "this needs planning"
+from "this needs stopping".

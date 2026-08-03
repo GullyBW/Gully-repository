@@ -1,4 +1,4 @@
-# Business Observability (Phase 11, Part 5)
+# Business Observability (Phase 11, Part 5 · Phase 12, Part 5)
 
 Technical telemetry answers *"is the system up?"*. This module answers the question the Oversight
 Board actually asks: **"is justice moving?"** (`src/observability/business.js`).
@@ -66,3 +66,58 @@ the availability history of the services it depends on, then reports a **hypothe
   correlation engine that only confirms its own assumptions is worse than none.
 
 Nothing here triggers an action. It gives a named human a specific thing to go and check.
+
+---
+
+# The Mission Correlation Chain (Phase 12, Part 5)
+
+Gated by `APP-FIT-MISSION-CORRELATION`. Live: `GET /api/observability/mission` ·
+`GET /api/observability/mission-impact/{component}`.
+
+```
+Infrastructure → Applications → Business Processes → Mission Outcomes
+```
+
+The chain exists because those four layers are owned by four different groups who each see their
+own and none of the others. An infrastructure engineer knows a broker is degraded; nobody
+downstream knows that means evidence is queuing, which means cases stall, which means the platform
+is failing at the thing it exists to do.
+
+**Every link states a mechanism.** A link with no mechanism is a diagram, not a model — and the
+validator refuses one.
+
+## Mission outcomes
+
+| Outcome | Constitutional | Board |
+|---|---|---|
+| A citizen can file a report anonymously | **yes** | OB |
+| Reported conduct is investigated and reaches an outcome | no | SDB |
+| Evidence retains an unbroken, admissible chain of custody | **yes** | OB |
+| Every governance decision is attributable to a named human | **yes** | OB |
+| Oversight can see the true state of the system | no | OB |
+
+## Tracing a failure to the board's language
+
+```
+persistence-ind fails
+  → event-store-ind, intake-api unavailable
+  → case-throughput falls to zero
+  → "A citizen can file a report anonymously"  ← CONSTITUTIONAL
+```
+
+`impactOf({ failed })` returns each layer separately plus a `boardSummary` in the Oversight Board's
+own words. That is the point: an incident commander should not have to translate.
+
+## Two rules the validator enforces
+
+- **Every business metric must reach a mission outcome** — otherwise nobody can say why it is
+  measured. This immediately found `governance-review-time` measured and reaching nothing; the link
+  was real and simply missing from the record.
+- **Every mission outcome must be reachable** — otherwise nothing the platform measures says
+  anything about it.
+
+## Executive analytics
+
+Mission health derived from the business metrics that feed each outcome, through the declared
+chain. An outcome fed only by unmeasured metrics reports **`unknown`** — which, as the payload says
+in as many words, *is not the same as fine*.

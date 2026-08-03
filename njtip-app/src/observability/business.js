@@ -278,6 +278,170 @@ function correlateWithReliability({ businessHistory = {}, technicalHistory = {} 
   };
 }
 
+// --- The correlation chain (Phase 12, Part 5) ----------------------------------------------------
+//
+//     Infrastructure → Applications → Business Processes → Mission Outcomes
+//
+// The chain exists because the four layers are owned by four different groups who each see their
+// own layer and none of the others. An infrastructure engineer knows a broker is degraded; nobody
+// downstream knows that means evidence is queuing, which means cases stall, which means the
+// platform is failing at the thing it exists to do. The links are DECLARED so the trace can be
+// followed mechanically — and each link states the mechanism, so a reader can disagree with it.
+const CHAIN_LAYERS = ['infrastructure', 'application', 'business', 'mission'];
+
+// Mission outcomes: what the platform exists to achieve, in the Oversight Board's language.
+const MISSION_OUTCOMES = {
+  'reports-can-be-filed': { title: 'A citizen can file a report anonymously', constitutional: true, board: 'OB' },
+  'cases-progress': { title: 'Reported conduct is investigated and reaches an outcome', constitutional: false, board: 'SDB' },
+  'evidence-is-admissible': { title: 'Evidence retains an unbroken, admissible chain of custody', constitutional: true, board: 'OB' },
+  'decisions-are-accountable': { title: 'Every governance decision is attributable to a named human', constitutional: true, board: 'OB' },
+  'oversight-is-informed': { title: 'Oversight can see the true state of the system', constitutional: false, board: 'OB' },
+};
+
+// Declared links, layer to layer. `mechanism` is how the influence actually travels — a link with
+// no mechanism is a diagram, not a model.
+const CHAIN_LINKS = [
+  // infrastructure → application
+  { from: 'persistence-ind', fromLayer: 'infrastructure', to: 'intake-api', toLayer: 'application', mechanism: 'the intake service cannot durably record a report without its store' },
+  { from: 'broker-ind', fromLayer: 'infrastructure', to: 'notification-service', toLayer: 'application', mechanism: 'status notifications are delivered through the broker' },
+  { from: 'kms', fromLayer: 'infrastructure', to: 'evidence-store', toLayer: 'application', mechanism: 'evidence is encrypted at rest; no keys, no evidence' },
+  { from: 'persistence-exec', fromLayer: 'infrastructure', to: 'case-service', toLayer: 'application', mechanism: 'case state is persisted in the executive zone' },
+  { from: 'persistence-jud', fromLayer: 'infrastructure', to: 'governance-ledger', toLayer: 'application', mechanism: 'the decision ledger is persisted in the judiciary zone' },
+  // application → business
+  { from: 'intake-api', fromLayer: 'application', to: 'case-throughput', toLayer: 'business', mechanism: 'reports that cannot be filed never enter the pipeline' },
+  { from: 'case-service', fromLayer: 'application', to: 'investigation-latency', toLayer: 'business', mechanism: 'case transitions are what move a case toward an outcome' },
+  { from: 'evidence-store', fromLayer: 'application', to: 'evidence-processing-time', toLayer: 'business', mechanism: 'evidence cannot be admitted while the store is unavailable' },
+  { from: 'governance-ledger', fromLayer: 'application', to: 'judicial-workflow-duration', toLayer: 'business', mechanism: 'a decision is not made until it is recorded' },
+  { from: 'oversight-api', fromLayer: 'application', to: 'audit-completion-rate', toLayer: 'business', mechanism: 'audits are conducted through the oversight surface' },
+  // business → mission
+  { from: 'case-throughput', fromLayer: 'business', to: 'cases-progress', toLayer: 'mission', mechanism: 'throughput is the rate at which reported conduct reaches an outcome' },
+  { from: 'investigation-latency', fromLayer: 'business', to: 'cases-progress', toLayer: 'mission', mechanism: 'a case that never concludes has not progressed, however active it looks' },
+  { from: 'evidence-processing-time', fromLayer: 'business', to: 'evidence-is-admissible', toLayer: 'mission', mechanism: 'evidence left unprocessed decays in relevance even as custody holds' },
+  { from: 'judicial-workflow-duration', fromLayer: 'business', to: 'decisions-are-accountable', toLayer: 'mission', mechanism: 'a decision deferred indefinitely is a decision nobody has taken' },
+  { from: 'approval-delay', fromLayer: 'business', to: 'decisions-are-accountable', toLayer: 'mission', mechanism: 'delay between asking a human to decide and their deciding' },
+  { from: 'audit-completion-rate', fromLayer: 'business', to: 'oversight-is-informed', toLayer: 'mission', mechanism: 'an incomplete audit programme is an assurance claim with no evidence' },
+  // Found by validateChain(): this metric was measured and reached nothing. A board that takes too
+  // long to review is a board that is not holding the system accountable, so the link is real and
+  // was simply missing from the record.
+  { from: 'governance-review-time', fromLayer: 'business', to: 'decisions-are-accountable', toLayer: 'mission', mechanism: 'a review that never concludes leaves the decision it was meant to test unmade' },
+  { from: 'compliance-rate', fromLayer: 'business', to: 'oversight-is-informed', toLayer: 'mission', mechanism: 'compliance checks are how oversight sees whether practice matches policy' },
+  { from: 'policy-violation-rate', fromLayer: 'business', to: 'oversight-is-informed', toLayer: 'mission', mechanism: 'rising violations mean policy and practice have drifted apart' },
+];
+// The one link that is structural rather than causal: the constitutional path.
+const CONSTITUTIONAL_CHAIN = { from: 'intake-api', to: 'reports-can-be-filed', mechanism: 'if intake is unavailable, a citizen cannot file — the platform has failed at its purpose' };
+
+function chainLinks() { return [...CHAIN_LINKS.map((l) => ({ ...l })), { ...CONSTITUTIONAL_CHAIN, fromLayer: 'application', toLayer: 'mission', constitutional: true }]; }
+function missionOutcomes() { return Object.entries(MISSION_OUTCOMES).map(([id, m]) => ({ id, ...m })); }
+
+// Trace a technical event forward through the chain to the mission outcomes it reaches. This is
+// the question an incident commander actually has: "what does this break, in the language the
+// board uses?"
+function traceForward(origin, { visited = new Set() } = {}) {
+  if (visited.has(origin)) return [];
+  visited.add(origin);
+  const links = chainLinks().filter((l) => l.from === origin);
+  const paths = [];
+  for (const l of links) {
+    if (l.toLayer === 'mission') paths.push([{ ...l }]);
+    else for (const rest of traceForward(l.to, { visited: new Set(visited) })) paths.push([{ ...l }, ...rest]);
+  }
+  return paths;
+}
+
+// The full impact of one or more failed technical components, expressed at every layer.
+// Which topology services are infrastructure rather than application. Stated rather than inferred:
+// "it has no dependencies" would classify a leaf application service as infrastructure.
+const INFRASTRUCTURE_COMPONENTS = new Set(['persistence-ind', 'persistence-exec', 'persistence-jud', 'kms', 'object-store', 'broker-ind', 'broker-exec', 'broker-jud']);
+
+function impactOf({ failed = [] } = {}) {
+  const telemetry = require('./telemetry');
+  const propagation = telemetry.failurePropagation(failed);
+  const paths = [];
+  for (const component of propagation.impacted) for (const path of traceForward(component)) paths.push({ origin: component, path });
+  const businessAffected = [...new Set(paths.flatMap((p) => p.path.filter((l) => l.toLayer === 'business').map((l) => l.to)))].sort();
+  const missionAffected = [...new Set(paths.flatMap((p) => p.path.filter((l) => l.toLayer === 'mission').map((l) => l.to)))].sort();
+  const constitutional = missionAffected.filter((m) => MISSION_OUTCOMES[m] && MISSION_OUTCOMES[m].constitutional);
+  return {
+    failed: [...failed].sort(),
+    infrastructure: propagation.impacted.filter((s) => INFRASTRUCTURE_COMPONENTS.has(s)).sort(),
+    applications: propagation.impacted.filter((s) => !INFRASTRUCTURE_COMPONENTS.has(s)).sort(),
+    degraded: propagation.degraded,
+    businessProcesses: businessAffected,
+    missionOutcomes: missionAffected.map((id) => ({ id, ...MISSION_OUTCOMES[id] })),
+    constitutionalOutcomesAffected: constitutional,
+    constitutionalImpact: constitutional.length > 0,
+    paths: paths.map((p) => ({ origin: p.origin, chain: p.path.map((l) => `${l.from} → ${l.to}`).join(' → '), mechanisms: p.path.map((l) => l.mechanism) })),
+    blastRadius: propagation.blastRadius,
+    // Stated in the board's language, because that is the point of the chain.
+    boardSummary: constitutional.length
+      ? `A constitutional guarantee is affected: ${constitutional.map((c) => MISSION_OUTCOMES[c].title).join('; ')}.`
+      : missionAffected.length
+        ? `Mission outcomes affected: ${missionAffected.map((m) => MISSION_OUTCOMES[m].title).join('; ')}.`
+        : 'No mission outcome is reached by this failure.',
+    informationalOnly: true, authorizes: false,
+  };
+}
+
+// Validate the chain itself: every link must join declared things, every business metric must
+// reach a mission outcome, and every mission outcome must be reachable. A chain with an orphan at
+// either end is a chain that will silently fail to trace the thing you needed it for.
+function validateChain() {
+  const telemetry = require('./telemetry');
+  const violations = [];
+  const known = { infrastructure: new Set(Object.keys(telemetry.TOPOLOGY)), application: new Set(Object.keys(telemetry.TOPOLOGY)), business: new Set(Object.keys(BUSINESS_METRICS)), mission: new Set(Object.keys(MISSION_OUTCOMES)) };
+  for (const l of chainLinks()) {
+    if (!CHAIN_LAYERS.includes(l.fromLayer) || !CHAIN_LAYERS.includes(l.toLayer)) violations.push(`link ${l.from} → ${l.to}: unknown layer`);
+    if (CHAIN_LAYERS.indexOf(l.toLayer) <= CHAIN_LAYERS.indexOf(l.fromLayer)) violations.push(`link ${l.from} → ${l.to}: does not move forward through the chain`);
+    if (!known[l.fromLayer] || !known[l.fromLayer].has(l.from)) violations.push(`link ${l.from} → ${l.to}: '${l.from}' is not a declared ${l.fromLayer}`);
+    if (!known[l.toLayer] || !known[l.toLayer].has(l.to)) violations.push(`link ${l.from} → ${l.to}: '${l.to}' is not a declared ${l.toLayer}`);
+    if (!l.mechanism) violations.push(`link ${l.from} → ${l.to}: no mechanism — a link with no mechanism is a diagram, not a model`);
+  }
+  // Every business metric must reach the mission, or nobody can say why it is measured.
+  for (const metric of Object.keys(BUSINESS_METRICS)) {
+    if (!chainLinks().some((l) => l.from === metric && l.toLayer === 'mission')) violations.push(`business metric '${metric}' reaches no mission outcome — why is it measured?`);
+  }
+  // Every mission outcome must be reachable, or nothing observable tells us about it.
+  for (const outcome of Object.keys(MISSION_OUTCOMES)) {
+    if (!chainLinks().some((l) => l.to === outcome)) violations.push(`mission outcome '${outcome}' is unreachable — nothing the platform measures says anything about it`);
+  }
+  return { valid: violations.length === 0, violations, links: chainLinks().length, layers: CHAIN_LAYERS.length, missionOutcomes: Object.keys(MISSION_OUTCOMES).length };
+}
+
+// Executive analytics: mission-level health, derived from the business metrics that feed each
+// outcome. Every figure traces to measured evidence — an outcome fed only by unmeasured metrics
+// reports as unknown, never as healthy.
+function executiveAnalytics({ events = [], periods = 1, businessHistory = {} } = {}) {
+  const dash = dashboard({ events, periods, businessHistory });
+  const byMetric = Object.fromEntries(dash.metrics.map((m) => [m.metric, m]));
+  const outcomes = Object.entries(MISSION_OUTCOMES).map(([id, outcome]) => {
+    const feeding = chainLinks().filter((l) => l.to === id && l.fromLayer === 'business').map((l) => l.from);
+    const measured = feeding.map((f) => byMetric[f]).filter((m) => m && m.status !== 'no-evidence');
+    const breached = measured.filter((m) => m.status === 'breached');
+    return {
+      outcome: id, title: outcome.title, constitutional: outcome.constitutional, board: outcome.board,
+      fedBy: feeding, measuredInputs: measured.length, totalInputs: feeding.length,
+      status: measured.length === 0 ? 'unknown' : breached.length ? 'at-risk' : 'on-track',
+      breachedInputs: breached.map((m) => m.metric),
+      evidenceCoverage: feeding.length ? +(measured.length / feeding.length).toFixed(4) : 0,
+      reason: measured.length === 0
+        ? 'no measured business metric feeds this outcome — its state is unknown, which is not the same as fine'
+        : breached.length ? `${breached.map((m) => m.title).join('; ')}` : 'every feeding metric is within objective',
+    };
+  });
+  const atRisk = outcomes.filter((o) => o.status === 'at-risk');
+  return {
+    layers: CHAIN_LAYERS, missionOutcomes: outcomes,
+    atRisk: atRisk.map((o) => o.outcome),
+    constitutionalAtRisk: atRisk.filter((o) => o.constitutional).map((o) => o.outcome),
+    unknown: outcomes.filter((o) => o.status === 'unknown').map((o) => o.outcome),
+    businessDashboard: dash,
+    chainValidation: validateChain(),
+    derivedFromVerifiedEvidence: true,
+    informationalOnly: true, authorizes: false,
+    note: 'Mission outcomes derived from measured business metrics through the declared chain. An outcome with no measured input reports as unknown — which is not the same as fine.',
+  };
+}
+
 // --- Dashboard & report --------------------------------------------------------------------------
 
 function catalogue() { return Object.entries(BUSINESS_METRICS).map(([id, m]) => ({ id, ...m })); }
@@ -318,6 +482,8 @@ function report({ events = [], periods = 1, businessHistory = {}, technicalHisto
     catalogue: catalogue(), dashboard: dash,
     dwell: Object.keys(DWELL_METRICS).map((m) => dwellTimes(events, m)),
     correlation: correlateWithReliability({ businessHistory, technicalHistory }),
+    chain: { layers: CHAIN_LAYERS, links: chainLinks(), missionOutcomes: missionOutcomes(), validation: validateChain() },
+    executiveAnalytics: executiveAnalytics({ events, periods, businessHistory }),
     piiFree: true, informationalOnly: true, authorizes: false,
     note: 'Business observability report. It describes how justice is moving; it decides nothing and identifies no one.',
   };
@@ -325,6 +491,8 @@ function report({ events = [], periods = 1, businessHistory = {}, technicalHisto
 
 module.exports = {
   BUSINESS_METRICS, DWELL_METRICS, EVENT_ALIASES, catalogue,
+  CHAIN_LAYERS, CHAIN_LINKS, MISSION_OUTCOMES, INFRASTRUCTURE_COMPONENTS, chainLinks, missionOutcomes,
+  traceForward, impactOf, validateChain, executiveAnalytics,
   assertPiiFree, fromEventLog, dwellTimes, derive, assess,
   correlation, correlateWithReliability, dashboard, report,
 };

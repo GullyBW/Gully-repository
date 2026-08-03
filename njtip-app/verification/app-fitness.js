@@ -2037,6 +2037,261 @@ module.exports = [
     if (!warned.warnings.some((w) => w.service === 'anonymous-reporting' && /degrading/.test(w.warning))) v.push('a degrading trend produced no warning on a passing gate');
   }),
 
+  fit('APP-FIT-SRE-PREDICTIVE-OPS', 'Operational thresholds are predicted with lead time, and an unmeasurable prediction never reads as healthy', (v) => {
+    const sre = require('../src/observability/sre');
+
+    // Lead-time banding is ordered and covers the breached case.
+    if (sre.leadTime(3).urgency !== 'imminent') v.push('three days of headroom was not imminent');
+    if (sre.leadTime(20).urgency !== 'near-term') v.push('twenty days was not near-term');
+    if (sre.leadTime(200).urgency !== 'distant') v.push('two hundred days was not distant');
+    if (sre.leadTime(-1).urgency !== 'breached') v.push('an already-crossed threshold was not reported as breached');
+    if (sre.leadTime(null).urgency !== 'unknown') v.push('an unmakeable projection was not reported as unknown');
+    for (const b of sre.LEAD_TIME_BANDS) if (!b.action) v.push(`lead-time band '${b.urgency}' recommends no action`);
+
+    // Compound-growth arithmetic, including the cases where no projection exists.
+    if (sre.daysUntil({ current: 100, threshold: 200, growthPctPerMonth: 0 }) !== null) v.push('a non-growing series was projected to reach a threshold');
+    if (sre.daysUntil({ current: 200, threshold: 100, growthPctPerMonth: 10 }) !== -1) v.push('an already-crossed threshold was not reported as breached');
+    const d = sre.daysUntil({ current: 100, threshold: 200, growthPctPerMonth: 100 });
+    if (!(d >= 29 && d <= 31)) v.push(`doubling at 100%/month should take about 30 days, got ${d}`);
+
+    // --- Each predictor: unmeasured reads as unmeasured, never as healthy -------------------
+    const unmeasured = [
+      ['storage', sre.predictStorageExhaustion({})],
+      ['certificates', sre.predictCertificateExpiry({})],
+      ['capacity', sre.predictCapacity({})],
+      ['queue', sre.predictQueueSaturation({})],
+      ['dependency', sre.predictDependencyDegradation({ latencyHistory: [] })],
+      ['budget', sre.predictBudgetExhaustion({ service: 'investigation' })],
+    ];
+    for (const [name, p] of unmeasured) {
+      if (p.predicted) v.push(`${name}: an unmeasured predictor claimed to have predicted something`);
+      if (p.urgency !== 'unknown') v.push(`${name}: an unmeasured predictor was banded '${p.urgency}' rather than unknown`);
+      if (p.daysUntilThreshold !== null) v.push(`${name}: an unmeasured predictor produced a number`);
+    }
+
+    // Storage: the alarm is at the warn threshold, not at 100% of capacity.
+    const storage = sre.predictStorageExhaustion({ usedGb: 500, capacityGb: 1000, growthPctPerMonth: 10 });
+    if (!storage.predicted || storage.daysUntilThreshold === null) v.push('a measured storage series was not projected');
+    if (storage.threshold >= 1000) v.push('storage exhaustion alarms at full capacity — by then there is no time left');
+    const full = sre.predictStorageExhaustion({ usedGb: 950, capacityGb: 1000, growthPctPerMonth: 10 });
+    if (full.urgency !== 'breached') v.push('storage already past the warn threshold was not reported as breached');
+    if (sre.predictStorageExhaustion({ usedGb: 100, capacityGb: 1000, growthPctPerMonth: 0 }).daysUntilThreshold !== null) v.push('flat storage was projected to exhaust');
+
+    // Certificates.
+    const certs = sre.predictCertificateExpiry({ certificates: [{ subject: 'a.internal', notAfter: 5 * 24 * 3600_000 }, { subject: 'b.internal', notAfter: 200 * 24 * 3600_000 }], now: 0 });
+    if (certs.urgency !== 'imminent') v.push('a certificate expiring in five days was not imminent');
+    if (!certs.expiring.includes('a.internal')) v.push('a certificate inside the renewal window was not listed as expiring');
+    if (certs.certificates[0].subject !== 'a.internal') v.push('certificates are not ordered by how soon they expire');
+    if (!sre.predictCertificateExpiry({ certificates: [{ subject: 'x', notAfter: -1 }], now: 0 }).expired.length) v.push('an already-expired certificate was not reported as expired');
+
+    // Capacity: the ceiling is where surge headroom runs out, not where the service stops.
+    const cap = sre.predictCapacity({ currentRps: 100, monthlyGrowthPct: 20, maxReplicas: 12, rpsPerInstance: 25, headroomPct: 40 });
+    if (cap.threshold >= 12 * 25) v.push('the capacity ceiling ignores the reserved surge headroom');
+    if (!cap.predicted) v.push('a measured capacity series was not projected');
+
+    // Queue: utilization above 1 has no steady state, whatever the current depth says.
+    const unstable = sre.predictQueueSaturation({ depth: 100, arrivalRate: 12, serviceRate: 10 });
+    if (unstable.stable) v.push('a queue whose arrivals exceed service was reported stable');
+    if (unstable.daysUntilThreshold === null) v.push('an accumulating queue was not projected to saturate');
+    const stable = sre.predictQueueSaturation({ depth: 9000, arrivalRate: 5, serviceRate: 10 });
+    if (!stable.stable) v.push('a draining queue was reported unstable');
+    if (stable.daysUntilThreshold !== null) v.push('a draining queue was projected to saturate');
+    if (!(unstable.utilization > 1) || !(stable.utilization < 1)) v.push('queue utilization was miscomputed');
+
+    // Dependency degradation: the question is when it breaches, not whether it has.
+    const degrading = sre.predictDependencyDegradation({ service: 'kms', latencyHistory: [100, 150, 200, 250], budgetMs: 500 });
+    if (degrading.daysUntilThreshold === null) v.push('a degrading dependency was not projected to breach its budget');
+    if (degrading.trend.direction !== 'improving' && degrading.trend.direction !== 'degrading') v.push('the dependency trend has no direction');
+    const steadyDep = sre.predictDependencyDegradation({ service: 'kms', latencyHistory: [100, 100, 100, 100], budgetMs: 500 });
+    if (steadyDep.daysUntilThreshold !== null) v.push('a flat dependency latency was projected to breach');
+    if (sre.predictDependencyDegradation({ service: 'kms', latencyHistory: [600, 610], budgetMs: 500 }).urgency !== 'breached') v.push('a dependency already over budget was not reported as breached');
+
+    // SLO burn: at this burn, when is the budget gone?
+    const burning = sre.predictBudgetExhaustion({ service: 'investigation', attained: 0.9975, windowDays: 30, elapsedDays: 3 });
+    if (burning.daysUntilThreshold === null) v.push('a burning error budget was not projected to exhaust');
+    if (sre.predictBudgetExhaustion({ service: 'investigation', attained: 0.9, windowDays: 30, elapsedDays: 3 }).urgency !== 'breached') v.push('an exhausted budget was not reported as breached');
+    if (sre.predictBudgetExhaustion({ service: 'investigation', attained: 1, windowDays: 30, elapsedDays: 3 }).daysUntilThreshold !== null) v.push('a perfect service was projected to exhaust its budget');
+
+    // The combined view is ordered by how little time is left, and names the work.
+    const ops = sre.predictiveOperations({
+      storage: { usedGb: 900, capacityGb: 1000, growthPctPerMonth: 20 },
+      certificates: { certificates: [{ subject: 'a', notAfter: 400 * 24 * 3600_000 }], now: 0 },
+      capacity: { currentRps: 10, monthlyGrowthPct: 1 },
+      queue: { depth: 0, arrivalRate: 1, serviceRate: 10 },
+    });
+    if (ops.healthy) v.push('a platform with breached storage was reported healthy');
+    if (!ops.breached.includes('storage-exhaustion')) v.push('the breached predictor was not named');
+    for (let i = 1; i < ops.predictions.length; i++) {
+      const a = ops.predictions[i - 1].daysUntilThreshold, b = ops.predictions[i].daysUntilThreshold;
+      if ((a === null ? Infinity : a) > (b === null ? Infinity : b)) v.push('predictions are not ordered by remaining time');
+    }
+    if (!ops.maintenanceRecommendations.length) v.push('an actionable prediction produced no maintenance recommendation');
+    if (ops.authorizes !== false) v.push('the predictive operations report claims authority');
+    if (JSON.stringify(sre.predictiveOperations({})) !== JSON.stringify(sre.predictiveOperations({}))) v.push('predictive operations are not deterministic');
+
+    // --- THE RELEASE GATE INCORPORATES PREDICTION --------------------------------------------
+    const healthy = Object.fromEntries(Object.keys(sre.SERVICE_LEVELS).map((sv) => [sv, { availability: 1, latencyUnder: 1 }]));
+    const history = new sre.SloComplianceHistory();
+    for (const sv of Object.keys(sre.SERVICE_LEVELS)) for (let p = 0; p < 4; p++) history.record({ service: sv, period: p, availability: 1, latencyUnder: 1 });
+    const quiet = sre.predictiveOperations({ storage: { usedGb: 10, capacityGb: 1000, growthPctPerMonth: 1 } });
+    const ok = sre.predictiveReleaseGate({ measurements: healthy, history, predictions: quiet });
+    if (!ok.ready) v.push('a healthy platform with distant predictions was blocked: ' + JSON.stringify(ok.predictiveBlockers));
+    const blocked = sre.predictiveReleaseGate({ measurements: healthy, history, predictions: ops });
+    if (blocked.ready) v.push('a release was permitted with an operational threshold already breached');
+    if (!blocked.predictiveBlockers.length) v.push('a predictively blocked release named no blocker');
+    if (blocked.failClosed !== true || blocked.authorizes !== false) v.push('the predictive release gate is not fail-closed / claims authority');
+    const overridden = sre.predictiveReleaseGate({ measurements: healthy, history, predictions: ops, riskAcceptedBy: 'ORB Chair', riskRationale: 'storage expansion already provisioned' });
+    if (!overridden.ready || !overridden.overridden) v.push('a recorded human risk acceptance did not unblock a predictively blocked release');
+    // A near-term prediction WARNS rather than blocks — the gate distinguishes the two.
+    const nearTerm = sre.predictiveOperations({ storage: { usedGb: 830, capacityGb: 1000, growthPctPerMonth: 5 } });
+    const warned = sre.predictiveReleaseGate({ measurements: healthy, history, predictions: nearTerm });
+    if (!warned.ready) v.push('a near-term prediction blocked a release rather than warning');
+    if (!warned.predictiveWarnings.length) v.push('a near-term prediction produced no warning');
+  }),
+
+  fit('APP-FIT-MISSION-CORRELATION', 'Infrastructure → application → business → mission is declared, traceable and complete', (v) => {
+    const bus = require('../src/observability/business');
+    const telemetry = require('../src/observability/telemetry');
+
+    for (const violation of bus.validateChain().violations) v.push(violation);
+    if (JSON.stringify(bus.CHAIN_LAYERS) !== JSON.stringify(['infrastructure', 'application', 'business', 'mission'])) v.push('the correlation chain does not have the four declared layers');
+
+    // Every link moves forward, joins declared things, and states a mechanism.
+    for (const l of bus.chainLinks()) {
+      if (!l.mechanism) v.push(`link ${l.from} → ${l.to}: no mechanism — a link with no mechanism is a diagram, not a model`);
+      if (bus.CHAIN_LAYERS.indexOf(l.toLayer) <= bus.CHAIN_LAYERS.indexOf(l.fromLayer)) v.push(`link ${l.from} → ${l.to} does not move forward`);
+    }
+    // Every business metric reaches the mission; every mission outcome is reachable.
+    for (const metric of Object.keys(bus.BUSINESS_METRICS)) {
+      if (!bus.chainLinks().some((l) => l.from === metric && l.toLayer === 'mission')) v.push(`business metric '${metric}' reaches no mission outcome`);
+    }
+    for (const outcome of Object.keys(bus.MISSION_OUTCOMES)) {
+      if (!bus.chainLinks().some((l) => l.to === outcome)) v.push(`mission outcome '${outcome}' is unreachable from anything measured`);
+      if (!bus.MISSION_OUTCOMES[outcome].board) v.push(`mission outcome '${outcome}' has no owning board`);
+    }
+    if (!Object.values(bus.MISSION_OUTCOMES).some((m) => m.constitutional)) v.push('no mission outcome is marked constitutional');
+
+    // A failure traces all the way to the board's language.
+    const intake = bus.impactOf({ failed: ['persistence-ind'] });
+    if (!intake.constitutionalImpact) v.push('losing independent-zone persistence did not reach a constitutional outcome');
+    if (!intake.missionOutcomes.some((m) => m.id === 'reports-can-be-filed')) v.push('losing intake persistence did not reach the filing guarantee');
+    if (!/constitutional/i.test(intake.boardSummary)) v.push('the board summary did not state the constitutional impact');
+    if (!intake.paths.length || !intake.paths.every((p) => p.mechanisms.length)) v.push('an impact path carried no mechanisms');
+    const kms = bus.impactOf({ failed: ['kms'] });
+    if (!kms.missionOutcomes.some((m) => m.id === 'evidence-is-admissible')) v.push('losing key management did not reach evidence admissibility');
+    // Layers are classified, not inferred from topology shape.
+    if (!intake.infrastructure.includes('persistence-ind')) v.push('a persistence component was not classified as infrastructure');
+    if (intake.applications.includes('persistence-ind')) v.push('a persistence component was also classified as an application');
+    // A failure that reaches nothing says so rather than inventing an outcome.
+    const isolated = bus.impactOf({ failed: [] });
+    if (isolated.missionOutcomes.length) v.push('a failure of nothing reached a mission outcome');
+    if (isolated.constitutionalImpact) v.push('a failure of nothing claimed constitutional impact');
+
+    // THE VALIDATOR MUST BITE: an orphaned metric and an unreachable outcome both fail.
+    const original = [...bus.CHAIN_LINKS];
+    try {
+      const idx = bus.CHAIN_LINKS.findIndex((l) => l.from === 'compliance-rate');
+      bus.CHAIN_LINKS.splice(idx, 1);
+      const orphaned = bus.validateChain();
+      if (orphaned.valid) v.push('a business metric reaching no mission outcome passed chain validation');
+      if (!orphaned.violations.some((x) => /why is it measured/.test(x))) v.push('the orphaned metric was not named');
+    } finally { bus.CHAIN_LINKS.length = 0; bus.CHAIN_LINKS.push(...original); }
+    try {
+      bus.CHAIN_LINKS.push({ from: 'case-throughput', fromLayer: 'business', to: 'not-an-outcome', toLayer: 'mission', mechanism: 'crafted' });
+      if (bus.validateChain().valid) v.push('a link to an undeclared mission outcome passed validation');
+    } finally { bus.CHAIN_LINKS.length = 0; bus.CHAIN_LINKS.push(...original); }
+
+    // Executive analytics derive from measured evidence, and unknown is not healthy.
+    const blind = bus.executiveAnalytics({ events: [] });
+    if (blind.missionOutcomes.some((o) => o.status === 'on-track' && o.measuredInputs === 0)) v.push('a mission outcome with no measured input was reported on-track');
+    for (const o of blind.missionOutcomes) if (o.status === 'unknown' && !/not the same as fine/.test(o.reason)) v.push(`${o.outcome}: an unknown outcome did not say what unknown means`);
+    const H = 3600_000;
+    const events = [
+      { type: 'CaseCreated', correlationId: 'C1', at: 0 },
+      { type: 'CaseTransitioned', correlationId: 'C1', to: 'closed', at: 10 * H },
+      { type: 'ComplianceChecked', correlationId: 'X', outcome: 'ok', at: 0 },
+    ];
+    const ea = bus.executiveAnalytics({ events });
+    if (!ea.derivedFromVerifiedEvidence) v.push('executive analytics do not declare their evidence basis');
+    if (ea.authorizes !== false) v.push('executive analytics claim authority');
+    if (!ea.chainValidation.valid) v.push('executive analytics were produced over an invalid chain');
+    if (ea.missionOutcomes.length !== Object.keys(bus.MISSION_OUTCOMES).length) v.push('executive analytics omit a mission outcome');
+    for (const o of ea.missionOutcomes) if (!o.board || !o.title) v.push(`${o.outcome}: analytics row is missing its board or title`);
+    if (JSON.stringify(bus.executiveAnalytics({ events })) !== JSON.stringify(ea)) v.push('executive analytics are not deterministic');
+    void telemetry;
+  }),
+
+  fit('APP-FIT-RESILIENCE-STAGES', 'Detection → Containment → Recovery → Verification: all four are stated, and the contract fails when any is missing', (v) => {
+    const chaos = require('../src/twin2/chaos');
+
+    if (JSON.stringify(chaos.RESILIENCE_STAGES) !== JSON.stringify(['detected', 'contained', 'recovered', 'verified'])) v.push('the resilience contract does not have the four declared stages');
+
+    // Every experiment states all four EXPLICITLY — none is derived from another.
+    for (const id of chaos.experiments().map((e) => e.id)) {
+      const r = chaos.runExperiment(id);
+      if (r.error) v.push(`${id}: threw — ${r.error}`);
+      for (const stage of chaos.RESILIENCE_STAGES) {
+        if (r.observed[stage] === undefined) v.push(`${id}: does not report '${stage}' — deriving it would make the stage tautological`);
+        if (r.stages[stage] !== true) v.push(`${id}: '${stage}' was not demonstrated`);
+      }
+      if (!r.pass) v.push(`${id}: ${r.contractViolations.join('; ')}`);
+    }
+
+    // THE CONTRACT MUST BITE, per stage. Each half-contract must be rejected, naming what is missing.
+    const original = chaos.EXPERIMENTS['dns-failure'];
+    try {
+      for (const omitted of chaos.RESILIENCE_STAGES) {
+        const observed = { pass: true };
+        for (const s of chaos.RESILIENCE_STAGES) if (s !== omitted) observed[s] = true;
+        chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: `omits ${omitted}`, run: () => ({ ...observed }) };
+        const r = chaos.runExperiment('dns-failure');
+        if (r.pass) v.push(`an experiment that never demonstrated '${omitted}' was allowed to pass`);
+        if (!r.missingStages.includes(omitted)) v.push(`the missing '${omitted}' stage was not named`);
+      }
+      // Detection and recovery alone — the Phase 11 contract — is no longer sufficient.
+      chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'phase 11 contract only', run: () => ({ pass: true, detected: true, recovered: true }) };
+      const halfway = chaos.runExperiment('dns-failure');
+      if (halfway.pass) v.push('detection and recovery alone still passed — the two new stages are inert');
+      if (halfway.contractViolations.length !== 2) v.push('the two missing stages were not both named');
+    } finally { chaos.EXPERIMENTS['dns-failure'] = original; }
+
+    // Containment is a distinct claim: bounded blast radius, not merely "we recovered".
+    const cascading = chaos.runExperiment('cascading-failure').observed;
+    if (!cascading.contained) v.push('the cascading-failure experiment did not demonstrate containment');
+    if (cascading.contained === cascading.recovered && cascading.contained === cascading.detected) {
+      // Not an error in itself, but they must come from different observations — checked above by
+      // requiring each to be reported. Here we assert the experiment's own containment claim is
+      // about the blast radius rather than about recovery.
+      if (!cascading.containedToOneZone) v.push('containment was claimed without a bounded blast radius');
+    }
+    const degraded = chaos.runExperiment('degraded-service').observed;
+    if (degraded.criticalPathBroken) v.push('a contained degradation broke the critical path');
+
+    // The scorecard grades partial results as partial.
+    const sc = chaos.resilienceScorecard();
+    if (!sc.allComplete) v.push('a chaos scenario did not demonstrate all four stages: ' + JSON.stringify(sc.incomplete));
+    if (sc.overallScore !== 1) v.push(`the resilience score is ${sc.overallScore}, not 1`);
+    for (const stage of chaos.RESILIENCE_STAGES) if (sc.byStage[stage] !== sc.count) v.push(`only ${sc.byStage[stage]} of ${sc.count} experiments demonstrated '${stage}'`);
+    if (sc.authorizes !== false || sc.failClosed !== true) v.push('the resilience scorecard is not fail-closed / claims authority');
+    // A partial result must grade as partial, not pass.
+    try {
+      chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'two of four', run: () => ({ pass: true, detected: true, recovered: true, contained: false, verified: false }) };
+      const partial = chaos.resilienceScorecard();
+      if (partial.allComplete) v.push('a scorecard containing a two-of-four experiment reported all complete');
+      const row = partial.experiments.find((r) => r.experiment === 'dns-failure');
+      if (row.score !== 0.5) v.push(`a two-of-four experiment scored ${row.score}, not 0.5`);
+      if (row.grade === 'complete') v.push('a two-of-four experiment was graded complete');
+      if (partial.overallScore >= 1) v.push('the overall score ignored a partial experiment');
+    } finally { chaos.EXPERIMENTS['dns-failure'] = original; }
+
+    // The suite reports all four stages at the top level.
+    const suite = chaos.runSuite({ light: true });
+    for (const stage of ['detected', 'contained', 'recovered', 'verified']) {
+      if (suite[stage] !== suite.chaos.length) v.push(`the suite did not report '${stage}' for every experiment`);
+    }
+    if (!suite.scorecard || !suite.scorecard.allComplete) v.push('the suite scorecard is missing or incomplete');
+  }),
+
   fit('APP-FIT-BUSINESS-OBSERVABILITY', 'Business KPIs are derived from PII-free events, never hand-entered, and correlate without claiming cause', (v) => {
     const bus = require('../src/observability/business');
     const H = 3600_000;
@@ -2157,7 +2412,9 @@ module.exports = [
       chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'survives silently', run: () => ({ pass: true }) };
       const silent = chaos.runExperiment('dns-failure');
       if (silent.pass) v.push('an experiment that proved neither detection nor recovery was allowed to pass');
-      if (silent.contractViolations.length !== 2) v.push('the detect-and-recover contract did not name both missing halves');
+      // Phase 12 extended the contract to four stages, so an experiment reporting nothing now
+      // fails on all four rather than on the original two.
+      if (silent.contractViolations.length !== chaos.RESILIENCE_STAGES.length) v.push('the resilience contract did not name every missing stage');
       chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'detected but never recovers', run: () => ({ pass: true, detected: true, recovered: false }) };
       const stuck = chaos.runExperiment('dns-failure');
       if (stuck.pass) v.push('an experiment that detected a fault but never recovered was allowed to pass');

@@ -1,4 +1,4 @@
-# Performance & Resilience Engineering (Phase 10, Part 6 · Phase 11, Part 6)
+# Performance & Resilience Engineering (Phase 10, Part 6 · Phase 11, Part 6 · Phase 12, Part 6)
 
 Load, stress, spike, soak and recovery testing plus fault injection and chaos experiments — all
 **deterministic and executable in CI**, so resilience is verified on every commit rather than at an
@@ -89,3 +89,47 @@ now advances an injected clock past the backoff rather than assuming instant red
 consumer in the reference driver. A durable broker (Kafka/RabbitMQ/NATS) retains by partition offset
 instead, which is one of the reasons the messaging migration item exists in the
 [migration roadmap](./component-migration-roadmap.md).
+
+---
+
+# The Four-Stage Resilience Contract (Phase 12, Part 6)
+
+Gated by `APP-FIT-RESILIENCE-STAGES`. Live: `GET /api/admin/resilience/scorecard`.
+
+```
+Detection → Containment → Recovery → Verification
+```
+
+Phase 11 required detection and recovery. The two stages that were missing are the two that
+separate a system which *survives* a fault from one that survives it **well**:
+
+| Stage | The question | Why it is not covered by the other two |
+|---|---|---|
+| **Containment** | Did the fault stay inside its blast radius? | A fault detected and recovered from, having taken three zones with it, has not been contained — and "we recovered" is a misleading summary of that incident |
+| **Verification** | Was steady state *checked* after recovery, or assumed? | "It came back" and "we confirmed it came back correctly" are different claims, and only the second is worth anything when the thing that came back holds evidence |
+
+## All four are stated, never derived
+
+Deriving containment from detection, or verification from recovery, would make both tautological —
+**a stage that cannot be absent is not a stage.** Every one of the seventeen experiments reports
+each stage from a *different* observation:
+
+| Experiment | Contained by | Verified by |
+|---|---|---|
+| dependency-failure | the breaker fast-failing | re-reading breaker state after the probe |
+| network-partition | nothing reaching the dead-letter queue | the subscriber's own record of what it received |
+| storage-corruption | the corrupt blob never being served | re-hashing the restored blob against the custody digest |
+| message-reordering | nothing applied across the gap | re-reading the applied order as strictly sequential |
+| identity-provider-outage | the constitutional path being outside the blast radius | the *same* pre-outage token verifying afterwards |
+| cascading-failure | the blast radius never leaving its zone | re-checking the constitutional path |
+
+The gate proves the contract bites **once per stage**: it substitutes a crafted experiment omitting
+each stage in turn and asserts the runner rejects it, naming what is missing. It also asserts that
+the Phase 11 contract — detection and recovery alone — is no longer sufficient.
+
+## Resilience scorecard
+
+Per experiment: which of the four stages were demonstrated, out of four, graded
+`complete · partial · weak · inadequate`. **A partial result reads as partial** — an experiment
+that detects and recovers but cannot show containment scores 0.5, not "pass". Currently
+**17/17 complete, overall 1.0.**

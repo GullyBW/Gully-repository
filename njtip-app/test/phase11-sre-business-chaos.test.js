@@ -257,7 +257,9 @@ test('the detect-and-recover contract bites: silent survival is not a pass', () 
     chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'survives silently', run: () => ({ pass: true }) };
     const silent = chaos.runExperiment('dns-failure');
     assert.equal(silent.pass, false);
-    assert.equal(silent.contractViolations.length, 2);
+    // Phase 12 extended the contract from two stages to four, so an experiment reporting nothing
+    // now fails on all four rather than on the original two.
+    assert.equal(silent.contractViolations.length, chaos.RESILIENCE_STAGES.length);
 
     chaos.EXPERIMENTS['dns-failure'] = { fault: 'crafted', hypothesis: 'detected, never recovers', run: () => ({ pass: true, detected: true, recovered: false }) };
     assert.equal(chaos.runExperiment('dns-failure').pass, false);

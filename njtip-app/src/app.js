@@ -370,6 +370,13 @@ function createApp(overrides = {}) {
     // Business observability (Phase 11, Part 5): the same event log the ledger is built from,
     // read as "is justice moving?" rather than "is the system up?". PII-free by construction.
     businessMetrics: () => business.report({ events: business.fromEventLog(workflow.eventLog()), periods: 1 }),
+    // Phase 12, Part 4: operational predictions from live infrastructure state.
+    predictiveOperations: () => sre.predictiveOperations({
+      certificates: { certificates: safeCall(() => certs.inventory(), []), now: 0 },
+      queue: { depth: safeCall(() => broker.pending(), null), arrivalRate: null, serviceRate: null },
+    }),
+    // Phase 12, Part 5: mission outcomes derived through the declared correlation chain.
+    missionAnalytics: () => business.executiveAnalytics({ events: business.fromEventLog(workflow.eventLog()), periods: 1 }),
     dashboard: (id) => dashboards.dashboard(id, dashboardSources()),
     all: () => dashboards.all(dashboardSources()),
     audiences: () => dashboards.audiences(),

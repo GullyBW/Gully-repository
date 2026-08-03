@@ -413,6 +413,216 @@ function scorecard({ measurements = {}, history = null, windowDays = 30, elapsed
 
 // Release readiness combines the error-budget gate with burn-rate alerting and compliance trend,
 // and stays FAIL-CLOSED: no measurement, no release.
+// --- Predictive operations (Phase 12, Part 4) ----------------------------------------------------
+//
+// Phase 11 forecast reliability. This forecasts the operational conditions that CAUSE reliability
+// to fail — and does it in the same shape every time, so a dashboard can render them together and
+// an operator can compare "how long have I got?" across six unrelated things.
+//
+// Every predictor returns: current value, the threshold it is heading for, the projected time to
+// reach it, and a lead-time band. `null` when it cannot be projected — a prediction you cannot
+// make is reported as absent, never as "fine".
+const LEAD_TIME_BANDS = [
+  { withinDays: 7, urgency: 'imminent', action: 'act this week; there is no slack left' },
+  { withinDays: 30, urgency: 'near-term', action: 'schedule the work into the next maintenance window' },
+  { withinDays: 90, urgency: 'planned', action: 'put it in the quarterly plan' },
+  { withinDays: Infinity, urgency: 'distant', action: 'monitor at the review cadence' },
+];
+function leadTime(days) {
+  if (days === null || days === undefined) return { urgency: 'unknown', action: 'the projection could not be made — measure before deciding' };
+  if (days < 0) return { urgency: 'breached', action: 'the threshold has already been crossed' };
+  const b = LEAD_TIME_BANDS.find((x) => days <= x.withinDays);
+  return { urgency: b.urgency, action: b.action };
+}
+// Compound growth: days until `current` reaches `threshold` at `growthPctPerMonth`.
+function daysUntil({ current, threshold, growthPctPerMonth }) {
+  if (!(current > 0) || !(threshold > 0)) return null;
+  if (current >= threshold) return -1;
+  if (!(growthPctPerMonth > 0)) return null;               // not growing → never reached
+  const months = Math.log(threshold / current) / Math.log(1 + growthPctPerMonth / 100);
+  return Math.floor(months * 30);
+}
+function prediction({ id, title, current, threshold, unit, days, detail }) {
+  const lt = leadTime(days);
+  return {
+    predictor: id, title, current, threshold, unit,
+    daysUntilThreshold: days, projectedAt: days === null ? null : days,
+    urgency: lt.urgency, recommendedAction: lt.action, detail,
+    predicted: days !== null,
+  };
+}
+
+// Storage exhaustion — the classic one nobody sees coming because the graph is linear until it is
+// not, and because retention is what actually determines the ceiling.
+function predictStorageExhaustion({ usedGb = null, capacityGb = null, growthPctPerMonth = null, warnAtPct = 85 } = {}) {
+  if (usedGb === null || capacityGb === null) {
+    return prediction({ id: 'storage-exhaustion', title: 'Storage exhaustion', current: usedGb, threshold: capacityGb, unit: 'GB', days: null, detail: 'storage usage or capacity is not measured' });
+  }
+  const warnAt = capacityGb * (warnAtPct / 100);
+  const days = daysUntil({ current: usedGb, threshold: warnAt, growthPctPerMonth });
+  return prediction({
+    id: 'storage-exhaustion', title: 'Storage exhaustion', current: usedGb, threshold: +warnAt.toFixed(2), unit: 'GB', days,
+    detail: growthPctPerMonth ? `${usedGb}GB of ${capacityGb}GB, growing ${growthPctPerMonth}%/month; the alarm is at ${warnAtPct}% of capacity, not 100% — the time you need is before it is full` : 'no growth rate measured',
+  });
+}
+
+// Certificate expiry. Not a forecast so much as arithmetic nobody does until the outage.
+function predictCertificateExpiry({ certificates = [], now = 0, renewWithinDays = 30 } = {}) {
+  const rows = certificates.map((c) => {
+    const days = c.notAfter === undefined || c.notAfter === null ? null : Math.floor((c.notAfter - now) / (24 * 3600_000));
+    const lt = leadTime(days);
+    return { subject: c.subject ?? c.serial ?? 'unnamed', serial: c.serial ?? null, daysUntilExpiry: days, urgency: lt.urgency, renewDue: days !== null && days <= renewWithinDays, expired: days !== null && days < 0 };
+  }).sort((a, b) => (a.daysUntilExpiry ?? Infinity) - (b.daysUntilExpiry ?? Infinity));
+  const soonest = rows.length ? rows[0] : null;
+  return {
+    ...prediction({
+      id: 'certificate-expiry', title: 'Certificate expiry', current: rows.length, threshold: renewWithinDays, unit: 'certificates',
+      days: soonest ? soonest.daysUntilExpiry : null,
+      detail: soonest ? `${soonest.subject} expires in ${soonest.daysUntilExpiry} day(s)` : 'no certificates supplied',
+    }),
+    certificates: rows, expiring: rows.filter((r) => r.renewDue).map((r) => r.subject), expired: rows.filter((r) => r.expired).map((r) => r.subject),
+  };
+}
+
+// Resource utilization and capacity growth against the autoscaling ceiling.
+function predictCapacity({ currentRps = null, rpsPerInstance = 25, maxReplicas = 12, monthlyGrowthPct = null, headroomPct = 40 } = {}) {
+  if (currentRps === null || monthlyGrowthPct === null) {
+    return prediction({ id: 'capacity-ceiling', title: 'Capacity ceiling', current: currentRps, threshold: null, unit: 'rps', days: null, detail: 'current demand or its growth rate is not measured' });
+  }
+  const ceiling = maxReplicas * rpsPerInstance / (1 + headroomPct / 100);
+  const days = daysUntil({ current: currentRps, threshold: ceiling, growthPctPerMonth: monthlyGrowthPct });
+  return prediction({
+    id: 'capacity-ceiling', title: 'Capacity ceiling', current: currentRps, threshold: +ceiling.toFixed(2), unit: 'rps', days,
+    detail: `${maxReplicas} replicas × ${rpsPerInstance} rps, less ${headroomPct}% reserved headroom — the ceiling is where surge capacity runs out, not where the service stops`,
+  });
+}
+
+// Queue saturation. Little's law: a queue whose arrival rate exceeds its service rate has no
+// steady state, and reporting its current depth tells you nothing about that.
+function predictQueueSaturation({ depth = null, arrivalRate = null, serviceRate = null, maxDepth = 10_000 } = {}) {
+  if (depth === null || arrivalRate === null || serviceRate === null) {
+    return prediction({ id: 'queue-saturation', title: 'Queue saturation', current: depth, threshold: maxDepth, unit: 'messages', days: null, detail: 'queue depth, arrival rate or service rate is not measured' });
+  }
+  const net = arrivalRate - serviceRate;              // messages per second accumulating
+  const utilization = serviceRate > 0 ? +(arrivalRate / serviceRate).toFixed(4) : Infinity;
+  let days = null;
+  if (net > 0) days = Math.floor((maxDepth - depth) / (net * 86_400));
+  else if (depth >= maxDepth) days = -1;
+  return {
+    ...prediction({
+      id: 'queue-saturation', title: 'Queue saturation', current: depth, threshold: maxDepth, unit: 'messages', days,
+      detail: net > 0
+        ? `arrivals exceed service by ${net}/s — the queue has no steady state and its current depth says nothing about that`
+        : `service keeps up (utilization ${utilization}); the queue drains`,
+    }),
+    utilization, netAccumulation: net, stable: net <= 0,
+  };
+}
+
+// Dependency degradation: a dependency whose latency is trending upward will breach its budget,
+// and the useful question is when — not whether it is over the line right now.
+function predictDependencyDegradation({ service = null, latencyHistory = [], budgetMs = 500, periodDays = 1 } = {}) {
+  const t = trend(latencyHistory);
+  if (t.direction === 'insufficient-data') {
+    return prediction({ id: 'dependency-degradation', title: 'Dependency degradation', current: null, threshold: budgetMs, unit: 'ms', days: null, detail: `${service ?? 'dependency'}: fewer than two latency observations` });
+  }
+  const latest = latencyHistory[latencyHistory.length - 1];
+  let days = null;
+  if (latest >= budgetMs) days = -1;
+  else if (t.slope > 0) days = Math.floor(((budgetMs - latest) / t.slope) * periodDays);
+  return {
+    ...prediction({
+      id: 'dependency-degradation', title: 'Dependency degradation', current: latest, threshold: budgetMs, unit: 'ms', days,
+      detail: `${service ?? 'dependency'}: p95 ${latest}ms against a ${budgetMs}ms budget, ${t.direction} at ${t.slope.toFixed(3)}ms/period`,
+    }),
+    service, trend: t, confidence: t.r2 >= 0.75 ? 'high' : t.r2 >= 0.4 ? 'moderate' : 'low',
+  };
+}
+
+// SLO burn-rate prediction: at the current burn, when is the error budget gone?
+function predictBudgetExhaustion({ service, objective = null, attained = null, windowDays = 30, elapsedDays = 1 } = {}) {
+  const sl = SERVICE_LEVELS[service];
+  const target = objective ?? (sl ? sl.availability : null);
+  if (target === null || attained === null) {
+    return prediction({ id: 'budget-exhaustion', title: 'Error budget exhaustion', current: attained, threshold: target, unit: 'attainment', days: null, detail: `${service ?? 'service'}: attainment or objective not measured` });
+  }
+  const eb = errorBudget({ objective: target, attained, windowDays, elapsedDays });
+  let days = null;
+  if (eb.exhausted) days = -1;
+  else if (eb.burnRate > 0 && elapsedDays > 0) {
+    const perDay = eb.consumed / elapsedDays;
+    days = perDay > 0 ? Math.floor((1 - eb.consumed) / perDay) : null;
+  }
+  return {
+    ...prediction({
+      id: 'budget-exhaustion', title: 'Error budget exhaustion', current: +eb.consumed.toFixed(4), threshold: 1, unit: 'budget consumed', days,
+      detail: `${service}: ${(eb.consumed * 100).toFixed(1)}% of the budget consumed in ${elapsedDays} of ${windowDays} days, burning at ${eb.burnRate}×`,
+    }),
+    service, errorBudget: eb,
+  };
+}
+
+// The whole predictive picture, in one shape, ordered by how little time is left.
+function predictiveOperations({ storage = {}, certificates = {}, capacity = {}, queue = {}, dependencies = [], budgets = [] } = {}) {
+  const predictions = [
+    predictStorageExhaustion(storage),
+    predictCertificateExpiry(certificates),
+    predictCapacity(capacity),
+    predictQueueSaturation(queue),
+    ...dependencies.map((d) => predictDependencyDegradation(d)),
+    ...budgets.map((b) => predictBudgetExhaustion(b)),
+  ];
+  const ordered = [...predictions].sort((a, b) => {
+    const av = a.daysUntilThreshold === null ? Infinity : a.daysUntilThreshold;
+    const bv = b.daysUntilThreshold === null ? Infinity : b.daysUntilThreshold;
+    return av - bv || String(a.predictor).localeCompare(String(b.predictor));
+  });
+  const actionable = ordered.filter((p) => ['breached', 'imminent', 'near-term'].includes(p.urgency));
+  return {
+    predictions: ordered,
+    unmeasured: predictions.filter((p) => !p.predicted).map((p) => p.predictor),
+    breached: ordered.filter((p) => p.urgency === 'breached').map((p) => p.predictor),
+    imminent: ordered.filter((p) => p.urgency === 'imminent').map((p) => p.predictor),
+    actionable: actionable.map((p) => ({ predictor: p.predictor, daysUntilThreshold: p.daysUntilThreshold, action: p.recommendedAction })),
+    // A maintenance recommendation is what an operator actually wants: the ordered list of things
+    // to do and roughly when, not six separate dashboards each insisting it is the urgent one.
+    maintenanceRecommendations: actionable.map((p, i) => ({ order: i + 1, predictor: p.predictor, within: p.daysUntilThreshold === null ? 'unknown' : `${Math.max(0, p.daysUntilThreshold)} day(s)`, action: p.recommendedAction, detail: p.detail })),
+    healthy: actionable.length === 0,
+    leadTimeBands: LEAD_TIME_BANDS.map((b) => ({ ...b })),
+    informationalOnly: true, authorizes: false,
+    note: 'Operational predictions. Each states what is being measured, what threshold it is heading for and how long there is. An unmeasurable prediction reports as unmeasured, never as healthy.',
+  };
+}
+
+// The release gate, extended with prediction (Phase 12). Reliability that is fine today but
+// forecast to break inside the release horizon is not a reason to block — it is a reason to say
+// so — but a threshold ALREADY breached, or breaching within a week, blocks.
+function predictiveReleaseGate({ measurements = {}, history = null, windowDays = 30, elapsedDays = 30, predictions = null, riskAcceptedBy = null, riskRationale = null } = {}) {
+  const base = releaseReadiness({ measurements, history, windowDays, elapsedDays, riskAcceptedBy, riskRationale });
+  const pred = predictions || predictiveOperations({});
+  const blockers = [];
+  const warnings = [];
+  for (const p of pred.predictions) {
+    if (p.urgency === 'breached') blockers.push({ predictor: p.predictor, reason: `${p.title}: the threshold has already been crossed — ${p.detail}` });
+    else if (p.urgency === 'imminent') blockers.push({ predictor: p.predictor, reason: `${p.title}: ${p.daysUntilThreshold} day(s) of headroom — shipping now spends slack that is not there` });
+    else if (p.urgency === 'near-term') warnings.push({ predictor: p.predictor, warning: `${p.title}: ${p.daysUntilThreshold} day(s) of headroom` });
+  }
+  const clean = base.ready && blockers.length === 0;
+  const override = !clean && !!(riskAcceptedBy && riskRationale);
+  return {
+    ready: clean || override,
+    reliabilityGate: base.gate, predictions: pred,
+    predictiveBlockers: blockers, predictiveWarnings: [...warnings, ...base.warnings],
+    overridden: override, riskAcceptedBy: override ? riskAcceptedBy : null, riskRationale: override ? riskRationale : null,
+    failClosed: true, authorizes: false,
+    note: clean
+      ? 'Reliability and its predictors both permit a release. Deployment remains a recorded human decision.'
+      : override
+        ? 'Release proceeds on a RECORDED risk acceptance by a named human authority.'
+        : 'Release BLOCKED. A breached or imminent operational threshold is a reason not to ship, not a warning to read afterwards.',
+  };
+}
+
 function releaseReadiness({ measurements = {}, history = null, windowDays = 30, elapsedDays = 30, riskAcceptedBy = null, riskRationale = null } = {}) {
   const gate = releaseGate({ measurements, windowDays, elapsedDays, riskAcceptedBy, riskRationale });
   const card = scorecard({ measurements, history, windowDays, elapsedDays });
@@ -436,7 +646,7 @@ function releaseReadiness({ measurements = {}, history = null, windowDays = 30, 
 
 function serviceLevels() { return Object.entries(SERVICE_LEVELS).map(([id, sl]) => ({ id, ...sl })); }
 
-function reliabilityReport({ measurements = {}, windowDays = 30, elapsedDays = 30, autoscaling = DEFAULT_AUTOSCALING, capacity = {}, forecast = {}, history = null, recovery = {} } = {}) {
+function reliabilityReport({ measurements = {}, windowDays = 30, elapsedDays = 30, autoscaling = DEFAULT_AUTOSCALING, capacity = {}, forecast = {}, history = null, recovery = {}, predictions = {} } = {}) {
   const ev = evaluate(measurements, { windowDays, elapsedDays });
   return {
     serviceLevels: serviceLevels(), evaluation: ev,
@@ -445,6 +655,7 @@ function reliabilityReport({ measurements = {}, windowDays = 30, elapsedDays = 3
     autoscaling: validateAutoscaling(autoscaling),
     capacity: capacityPlan(capacity), forecast: resourceForecast(forecast),
     burnAlertPolicy: BURN_ALERTS,
+    predictive: predictiveOperations(predictions),
     scorecard: scorecard({ measurements, history, windowDays, elapsedDays }),
     complianceHistory: history ? history.all() : [],
     dependencyRisk: dependencyRisk(),
@@ -474,4 +685,7 @@ module.exports = {
   validateAutoscaling, releaseGate, reliabilityReport, fromSliSnapshot,
   burnRateAlerts, trend, reliabilityForecast, recoveryForecast, dependencyRisk,
   SloComplianceHistory, scorecard, releaseReadiness,
+  LEAD_TIME_BANDS, leadTime, daysUntil,
+  predictStorageExhaustion, predictCertificateExpiry, predictCapacity, predictQueueSaturation,
+  predictDependencyDegradation, predictBudgetExhaustion, predictiveOperations, predictiveReleaseGate,
 };
