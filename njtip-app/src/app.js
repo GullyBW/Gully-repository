@@ -92,6 +92,8 @@ const { NationalDataExchange } = require('./fabric/data-exchange');
 const { DataGovernance, seedPlatformDatasets, measurePlatformQuality } = require('./fabric/data-governance');
 const { LegislativeRegistry } = require('./legislation/registry');
 const { LegislativeImpactAnalyzer } = require('./legislation/impact');
+const { ComplianceIntelligence } = require('./legislation/compliance-intelligence');
+const { EnterpriseGraph } = require('./graph/enterprise-graph');
 const { CorrelationGovernance } = require('./intelligence/correlation-governance');
 const { UsabilityValidation, seedRound } = require('./ux/usability-validation');
 const { ApiRegistry } = require('./apigov/registry');
@@ -328,6 +330,10 @@ function createApp(overrides = {}) {
   // Legislative impact analysis (Part 7): transitive reach, control traceability, simulation
   // and obsolescence — advisory; enactment stays a human legal decision.
   legislation.impact = new LegislativeImpactAnalyzer(legislation);
+  // Automated compliance intelligence (Phase 12, Part 19). Starts with an EMPTY change register:
+  // the platform has observed no legislative or regulatory change yet, and seeding one would
+  // record a compliance history that never happened.
+  legislation.intelligence = new ComplianceIntelligence({ registry: legislation, clock: () => Date.now() });
   legislation.register('data-protection-act', { title: 'Data Protection Act', type: 'act', mapsToControls: ['FIT-IDENTITY-MINIMIZATION', 'APP-FIT-ANONYMITY-BOUNDARY'], mapsToSystems: ['reporting', 'analytics'] });
   // API governance (Phase 37): registry seeded from the live OpenAPI contract.
   const apiRegistry = new ApiRegistry();
@@ -536,6 +542,15 @@ function createApp(overrides = {}) {
     // ran — a control is covered when a check holds it, not when a document mentions it. History
     // and forecasting take caller-supplied snapshots: this module owns no store and no clock, and
     // inventing a history would be worse than reporting that there is none.
+    // Enterprise knowledge graph (Phase 12, Part 20). Built fresh per call from the registries and
+    // the checks that actually ran, on the same rule as the operations twin: a graph held as state
+    // is a graph that drifts the moment anything it models changes.
+    enterpriseGraph: () => new EnterpriseGraph({
+      fitnessResults: safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })), []),
+      contracts,
+      datasets: safeCall(() => fabric.dataGovernance.datasets().map((id) => ({ id, ...fabric.dataGovernance.describe(id) })), []),
+      obligations: safeCall(() => legislation.registryList(), []),
+    }),
     engineeringIntelligence: (extra = {}) => {
       const ids = safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => r.id), []);
       const coverage = evidenceConfidence.assuranceCoverage({ controls: raci.controlOwnership(ids).controls.map((c) => c.control), executableCheckIds: ids });

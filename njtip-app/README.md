@@ -34,24 +34,31 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.11 — adaptive assurance & predictive operations.** The architecture stays **frozen** at
-> [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md) — no new bounded context, every capability
-> added inside an existing one ([ADR-0006](./docs/adr/0006-adaptive-assurance-and-predictive-operations.md)).
-> Phase 11 answers the question Phase 10 left over — *is it getting worse?* — and turns four
-> advisory signals into controls that block: [predictive SRE](./docs/reliability-engineering.md)
-> with two-window burn-rate alerting and recovery forecasting,
-> [business observability](./docs/business-observability.md) that refuses identity-bearing events,
-> [17 chaos scenarios](./docs/resilience-engineering.md) each proving **detection and recovery**,
-> [data-quality governance](./docs/data-governance.md) where poor quality reduces readiness,
-> [supply-chain trust scoring](./docs/supply-chain-security.md) that fails deployment for an
-> untrusted artifact, [AI confidence floors, hallucination monitoring and drift detection](./docs/ai-governance.md),
-> [per-context consistency governance](./docs/multi-region.md),
-> [an extended ADR schema](./docs/architecture-governance.md) that rejects an unmeasurable success
-> criterion, [consumer impact analysis](./docs/consumer-contracts.md),
-> [governance continuity](./docs/governance-ownership.md) with deputies and ownership-gap detection,
-> and an [evidence confidence framework, ten-dimension readiness model and engineering metrics
-> intelligence](./docs/evidence-confidence.md).
-> Combined gate: **115 invariants**, 435 tests. Full summary: [`docs/adaptive-assurance.md`](./docs/adaptive-assurance.md) ·
+> **v1.12 — predictive governance, digital twin operations & enterprise intelligence.** The
+> architecture stays **frozen** at [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md) — no new
+> bounded context, every capability added inside an existing one
+> ([ADR-0007](./docs/adr/0007-session-consistency-and-adr-review-lifecycle.md)).
+> Phase 12 answers the question after Phase 11's — *what will this change do, and to whom?* — with a
+> [digital twin of operations](./docs/operations-twin.md) built from the architecture-of-record,
+> whose isolation from production state is verified by digest after every simulation;
+> [predictive mission impact analysis](./docs/business-observability.md) tracing a technical event
+> through justice services to **citizen impact** and strategic goals, stated in the citizen's words;
+> [automated compliance intelligence](./docs/compliance-intelligence.md) where an unassessed change
+> is a gap rather than silence; an [enterprise knowledge graph](./docs/enterprise-graph.md) whose
+> traceability is a per-entity question with named answers;
+> [context-aware Zero Trust](./docs/zero-trust.md), [quantitative risk](./docs/risk-intelligence.md),
+> [predictive SRE gates](./docs/reliability-engineering.md),
+> [four-stage resilience scoring](./docs/resilience-engineering.md),
+> [executive data-quality dashboards](./docs/data-governance.md),
+> [trusted-builder verification and deployability reports](./docs/supply-chain-security.md),
+> [AI fairness criteria and confidence calibration](./docs/ai-governance.md),
+> [session-scoped consistency](./docs/multi-region.md),
+> [an ADR review lifecycle](./docs/architecture-governance.md) that rejects incomplete decisions,
+> [pre-deployment release impact](./docs/consumer-contracts.md),
+> [active governance ownership](./docs/governance-ownership.md), and
+> [evidence provenance, readiness dependency analysis and engineering forecasting](./docs/evidence-confidence.md).
+> Combined gate: **128 invariants**, 600 tests. Full summary: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·
+> v1.11: [`docs/adaptive-assurance.md`](./docs/adaptive-assurance.md) ·
 > v1.10: [`docs/high-assurance.md`](./docs/high-assurance.md) ·
 > v1.9: [`docs/stabilization.md`](./docs/stabilization.md) ·
 > production migration: [`docs/migration-guidance.md`](./docs/migration-guidance.md) ·

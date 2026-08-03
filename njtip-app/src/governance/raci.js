@@ -72,7 +72,7 @@ function controlOwnership(fitnessIds = []) {
     { match: /^APP-FIT-SUPPLY-CHAIN/, context: 'supply-chain' },
     { match: /^APP-FIT-DATA-GOVERNANCE|^APP-FIT-DATA-QUALITY|^APP-FIT-PROVENANCE/, context: 'data-fabric' },
     { match: /^APP-FIT-DATA-EXCHANGE|^APP-FIT-LEGISLATION-MARKETPLACE/, context: 'data-exchange' },
-    { match: /^APP-FIT-LEGISLATIVE/, context: 'legislation' },
+    { match: /^APP-FIT-LEGISLATIVE|^APP-FIT-COMPLIANCE-INTELLIGENCE/, context: 'legislation' },
     { match: /^APP-FIT-AI/, context: 'ai-advisory' },
     { match: /^APP-FIT-THREAT|^APP-FIT-DEVSECOPS|^APP-FIT-RISK/, context: 'security' },
     { match: /^INFRA-FIT|^APP-FIT-INFRA/, context: 'infrastructure' },

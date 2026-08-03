@@ -3688,6 +3688,181 @@ module.exports = [
     if (!bus.missionImpactForecast({ change: 'kms outage', failed: ['kms'] }).undeliveredServices.includes('evidence-custody')) v.push('a mapped component stopped reaching its justice service');
   }),
 
+  fit('APP-FIT-COMPLIANCE-INTELLIGENCE', 'A change maps onto every artefact it touches, and an unassessed change is a gap rather than silence', (v) => {
+    const { ComplianceIntelligence, CHANGE_KINDS, KIND_READINESS } = require('../src/legislation/compliance-intelligence');
+    const ec = require('../src/assurance/evidence-confidence');
+    const ci = new ComplianceIntelligence({ clock: () => 1_000 });
+
+    const validation = ci.validate();
+    if (!validation.valid) v.push('compliance intelligence invalid: ' + validation.violations.join('; '));
+    for (const [kind, spec] of Object.entries(CHANGE_KINDS)) {
+      if (!spec.originator || !spec.missedMeans) v.push(`change kind '${kind}' does not say who originates it or what a missed one costs`);
+      for (const d of KIND_READINESS[kind] || []) if (!ec.READINESS_DIMENSIONS[d]) v.push(`change kind '${kind}' maps to unknown readiness dimension '${d}'`);
+    }
+    for (const d of ci.mappingDimensions()) if (!d.source) v.push(`mapping dimension '${d.dimension}' names no source registry`);
+
+    // Observation is attributed and validated, or it does not happen.
+    let unattributed = false;
+    try { ci.observe({ kind: 'legislative-change', summary: 'x' }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a compliance change was recorded with nobody observing it');
+    let unknownKind = false;
+    try { ci.observe({ kind: 'vibes-shift', summary: 'x', observedBy: 'y' }); } catch (_) { unknownKind = true; }
+    if (!unknownKind) v.push('an unknown change kind was accepted');
+
+    const change = ci.observe({
+      kind: 'legislative-change', summary: 'Data Protection Act amended', severity: 'critical', observedBy: 'Legal Counsel',
+      affects: { contexts: ['privacy', 'ministry-of-typos'], controls: ['APP-FIT-ANONYMITY-BOUNDARY', 'APP-FIT-NEVER-WRITTEN'], datasets: ['case-records', 'a-spreadsheet-somewhere'] },
+    });
+    const controls = [{ id: 'APP-FIT-ANONYMITY-BOUNDARY', pass: true }, { id: 'APP-FIT-FAILING-PROBE', pass: false }];
+    const mapped = ci.mapChange(change.id, { controls, datasets: ['case-records'] });
+
+    // Everything is resolved against a registry; a name the architecture does not contain is
+    // reported, not carried through.
+    if (!mapped.boundedContexts.includes('privacy')) v.push('a real bounded context was not mapped');
+    if (!mapped.unresolvedContexts.includes('ministry-of-typos')) v.push('a context the architecture does not contain was carried through as if real');
+    if (!mapped.policies.length) v.push('no policy was mapped for an affected context');
+    if (!mapped.adrs.length) v.push('no ADR was mapped for an affected context');
+    if (!mapped.workflows.length) v.push('no workflow was mapped for an affected context');
+    if (!mapped.readinessDimensions.includes('legal')) v.push('a legislative change did not reach the legal readiness dimension');
+    if (!mapped.owners.length || !mapped.owners.every((o) => o.responsibleAuthority)) v.push('the mapping resolved no accountable owner');
+    if (mapped.authorizes !== false) v.push('a compliance mapping claims authority');
+
+    // "Missing" and "failing" are different facts, reported separately.
+    const states = Object.fromEntries(mapped.controls.map((c) => [c.control, c.state]));
+    if (states['APP-FIT-ANONYMITY-BOUNDARY'] !== 'holding') v.push('a holding control was not reported as holding');
+    if (states['APP-FIT-NEVER-WRITTEN'] !== 'missing') v.push('a control with no executable check was not reported missing');
+
+    let gaps = ci.gapAnalysis({ controls, datasets: ['case-records'] });
+    if (gaps.clear) v.push('an unassessed change with a missing control produced a clear compliance report');
+    if (!gaps.unassessed.includes(change.id)) v.push('an unassessed change was not named');
+    if (!gaps.gaps.some((g) => g.gap === 'unassessed')) v.push('an unassessed change did not produce a gap — silence is not compliance');
+    if (!gaps.gaps.some((g) => g.gap === 'no-control')) v.push('a control that was never written did not produce a gap');
+    if (!gaps.gaps.some((g) => g.gap === 'unresolved-context')) v.push('an unresolved context did not produce a gap');
+    if (!gaps.gaps.some((g) => g.gap === 'ungoverned-dataset')) v.push('an ungoverned dataset did not produce a gap');
+    if (!/not evidence that no unrecorded change exists/.test(gaps.coverageCaveat)) v.push('a clear compliance report does not caveat what it has not seen');
+
+    // A control that exists but does not hold is not a control.
+    const failing = new ComplianceIntelligence({ clock: () => 1_000 });
+    failing.observe({ kind: 'control-effectiveness', summary: 'control regression', observedBy: 'Assurance', severity: 'critical', affects: { controls: ['APP-FIT-FAILING-PROBE'] } });
+    const failingGaps = failing.gapAnalysis({ controls });
+    if (!failingGaps.gaps.some((g) => g.gap === 'control-failing')) v.push('a control that ran and failed was not reported as a gap');
+    if (!failingGaps.gaps.some((g) => /does not hold is not a control/.test(g.detail))) v.push('the failing-control gap does not say why it matters');
+    // Unverified is not holding either.
+    const unverified = new ComplianceIntelligence({ clock: () => 1_000 });
+    unverified.observe({ kind: 'policy-update', summary: 'p', observedBy: 'Board', affects: { controls: ['APP-FIT-ANONYMITY-BOUNDARY'] } });
+    if (!unverified.gapAnalysis({ controls: ['APP-FIT-ANONYMITY-BOUNDARY'] }).gaps.some((g) => g.gap === 'control-unverified')) v.push('a control whose result was not supplied was treated as holding');
+
+    // Assessment is a recorded human act; it closes the assessment gap and nothing else.
+    let unattributedAssessment = false;
+    try { ci.assess(change.id, { by: 'someone' }); } catch (e) { unattributedAssessment = !!e.failClosed; }
+    if (!unattributedAssessment) v.push('a change was assessed with no stated conclusion');
+    ci.assess(change.id, { by: 'Legal Counsel', conclusion: 'the amendment is implemented by the anonymity boundary control' });
+    gaps = ci.gapAnalysis({ controls, datasets: ['case-records'] });
+    if (gaps.gaps.some((g) => g.gap === 'unassessed')) v.push('assessment did not close the assessment gap');
+    if (gaps.clear) v.push('assessing a change silently closed the control and context gaps too');
+
+    // Remediation recommends; it never acts.
+    const rem = ci.remediation({ controls, datasets: ['case-records'] });
+    if (!rem.recommendations.length) v.push('open gaps produced no recommendation');
+    if (rem.recommendationsOnly !== true || rem.authorizes !== false) v.push('remediation claims to be more than a recommendation');
+    for (const r of rem.recommendations) {
+      if (!r.recommendedAction || !r.owners.length || !r.derivedFrom) v.push(`recommendation for ${r.gap} lacks an action, an owner or a derivation`);
+    }
+    const order = { critical: 0, major: 1, minor: 2 };
+    const ranks = rem.recommendations.map((r) => order[r.severity]);
+    if (JSON.stringify(ranks) !== JSON.stringify([...ranks].sort((a, b) => a - b))) v.push('recommendations are not ranked by severity');
+    // A clean estate produces a clear report, so the analysis can pass as well as fail.
+    const clean = new ComplianceIntelligence({ clock: () => 1_000 });
+    const ok = clean.observe({ kind: 'policy-update', summary: 'threshold updated', observedBy: 'ARB Chair', severity: 'minor', affects: { contexts: ['privacy'], controls: ['APP-FIT-ANONYMITY-BOUNDARY'] } });
+    clean.assess(ok.id, { by: 'ARB Chair', conclusion: 'implemented' });
+    const cleanGaps = clean.gapAnalysis({ controls: [{ id: 'APP-FIT-ANONYMITY-BOUNDARY', pass: true }] });
+    if (!cleanGaps.clear) v.push('a fully assessed change with a holding control was not clear: ' + JSON.stringify(cleanGaps.gaps));
+  }),
+
+  fit('APP-FIT-ENTERPRISE-GRAPH', 'Every platform entity is linked and its traceability to executable evidence is reported by name', (v) => {
+    const { EnterpriseGraph, NODE_KINDS, EDGE_KINDS } = require('../src/graph/enterprise-graph');
+    const { ContractRegistry } = require('../src/contracts/integration-contracts');
+    const contextMap = require('../src/architecture/context-map');
+    // The graph's evidence is the declared fitness identifiers, read the same way the RACI control
+    // check reads them. They are recorded as holding here — this function runs inside the suite and
+    // cannot re-run it without recursing — and the failure paths below use crafted results instead.
+    const results = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const build = (opts = {}) => new EnterpriseGraph({
+      fitnessResults: results, contracts: new ContractRegistry(),
+      datasets: [{ id: 'case-records', domain: 'investigation' }],
+      obligations: [{ id: 'data-protection-act', mapsToControls: ['APP-FIT-ANONYMITY-BOUNDARY'] }],
+      ...opts,
+    });
+    const g = build();
+
+    // Every node kind Part 20 names is present and says where it comes from.
+    for (const required of ['adr', 'bounded-context', 'service', 'api', 'risk', 'control', 'evidence', 'policy', 'dataset', 'metric', 'owner', 'readiness-dimension', 'compliance-obligation']) {
+      if (!NODE_KINDS[required]) v.push(`node kind '${required}' is not declared`);
+      if (!g.stats().byKind[required]) v.push(`the graph contains no '${required}' nodes`);
+    }
+    for (const [kind, spec] of Object.entries(NODE_KINDS)) if (!spec.source) v.push(`node kind '${kind}' names no source registry`);
+    for (const [rel, meaning] of Object.entries(EDGE_KINDS)) if (!meaning) v.push(`edge kind '${rel}' states no meaning — an edge with no meaning is a line on a diagram`);
+    for (const e of g.edges()) if (!e.meaning) v.push(`edge ${e.from} → ${e.to} carries no meaning`);
+    const validation = g.validate();
+    if (!validation.valid) v.push('enterprise graph invalid: ' + validation.violations.join('; '));
+    // Drift, same check as the operations twin.
+    for (const id of contextMap.ids()) if (!g.node(`bounded-context:${id}`)) v.push(`'${id}' is in the architecture-of-record but not in the graph`);
+    // Deterministic: built from the registries, not from history.
+    if (build().digest() !== g.digest()) v.push('two graphs built from the same registries disagree');
+    let badEdge = false;
+    try { g._link('adr:ADR-0001', 'bounded-context:privacy', 'vibes-with'); } catch (_) { badEdge = true; }
+    if (!badEdge) v.push('an edge with no declared meaning was accepted');
+
+    // --- Traceability: named answers, not a tick over the graph --------------------------------
+    const trace = g.traceability();
+    if (trace.coverage === null) v.push('traceability produced no coverage figure');
+    if (trace.complete && trace.untraceable.length) v.push('traceability reported complete while naming untraceable entities');
+    if (!trace.byKind.length) v.push('traceability is not broken down by kind');
+    // Aggregation is to the WEAKEST kind, not the mean.
+    const weakest = trace.byKind.filter((b) => b.coverage !== null).sort((a, b) => a.coverage - b.coverage || a.kind.localeCompare(b.kind))[0];
+    if (!trace.weakestKind || trace.weakestKind.kind !== weakest.kind) v.push('traceability does not aggregate to the weakest kind');
+    // Untraceable entities are NAMED, and the count matches.
+    if (trace.untraceable.length !== trace.total - trace.traceable) v.push('the untraceable list does not match the traceable count');
+    for (const key of trace.untraceable) if (!g.node(key)) v.push(`untraceable entity '${key}' is not a node`);
+    // A control traces to its own evidence; that is the edge the whole property rests on.
+    const anyControl = g.nodes('control')[0];
+    if (!anyControl) v.push('the graph contains no controls');
+    else {
+      const row = trace.nodes.find((n) => n.node === anyControl.key);
+      if (!row.traceable || !row.evidence) v.push('a control did not trace to its own evidence');
+    }
+    // A path to a FAILING check is not traceability.
+    const withFailure = new EnterpriseGraph({ fitnessResults: [{ id: 'APP-FIT-PROBE', pass: false }], contracts: new ContractRegistry() });
+    const strict = withFailure.traceability({ requireHolding: true });
+    if (strict.nodes.find((n) => n.node === 'control:APP-FIT-PROBE').traceable) v.push('a control whose only evidence FAILED was reported traceable');
+    if (!/demonstrated defect/.test(strict.note)) v.push('the traceability note does not distinguish a failing check from an absent one');
+    const lenient = withFailure.traceability({ requireHolding: false });
+    if (!lenient.nodes.find((n) => n.node === 'control:APP-FIT-PROBE').traceable) v.push('a control with a ran-but-failed check was untraceable even when holding was not required');
+    // A graph with no evidence at all traces nothing — absence must not read as coverage.
+    const blind = new EnterpriseGraph({ fitnessResults: [] });
+    if (blind.traceability().coverage !== 0) v.push('a graph with no evidence reported non-zero traceability');
+    if (blind.traceability().complete) v.push('a graph with no evidence at all reported complete traceability');
+
+    // --- Impact analysis ------------------------------------------------------------------------
+    const unknown = g.impactOf('bounded-context:atlantis');
+    if (unknown.known) v.push('impact analysis answered for an entity that does not exist');
+    if (!/absence of a node is not absence of the thing/.test(unknown.reason)) v.push('an unknown entity was not caveated');
+    const impact = g.impactOf('bounded-context:identity-access');
+    if (!impact.known || !impact.dependents.length) v.push('a high-fan-in context has no dependents in the graph');
+    if (!impact.dependsOn.length) v.push('a context that is verified by controls depends on nothing');
+    if (!/lower bound/.test(impact.caveat)) v.push('impact analysis does not state that it is a lower bound');
+    if (impact.authorizes !== false) v.push('impact analysis claims authority');
+    for (const d of impact.dependents) if (!(d.depth > 0)) v.push('a dependent was reported at depth zero');
+    // Depth is bounded and the bound is reported.
+    const shallow = g.impactOf('bounded-context:identity-access', { maxDepth: 1 });
+    if (shallow.dependents.some((d) => d.depth > 1)) v.push('maxDepth was not respected');
+    if (shallow.dependents.length > impact.dependents.length) v.push('a shallower traversal found more than a deeper one');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');
