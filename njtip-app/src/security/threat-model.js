@@ -294,8 +294,59 @@ const DEFAULT_ACCEPTANCE_DAYS = 90;
 // How often a risk must be reassessed, by severity.
 const REVIEW_CADENCE_DAYS = { critical: 30, high: 90, medium: 180, low: 365 };
 
+// --- Quantitative scales (Phase 12, Part 2) -----------------------------------------------------
+//
+// Ordinal 1–5 scales with a stated meaning for each point. The meanings matter more than the
+// numbers: without them, two assessors use the same word for different things and the register
+// stops being comparable across contexts, which is the whole reason it exists.
+const LIKELIHOOD_SCALE = {
+  rare: { value: 1, description: 'Not expected within the platform\'s planning horizon; no known instance.' },
+  unlikely: { value: 2, description: 'Conceivable but would require an unusual combination of conditions.' },
+  possible: { value: 3, description: 'Has occurred in comparable systems; no reason it could not occur here.' },
+  likely: { value: 4, description: 'Expected at least once within the planning horizon absent a control.' },
+  'almost-certain': { value: 5, description: 'Occurring, or will occur, unless something changes.' },
+};
+const IMPACT_SCALE = {
+  negligible: { value: 1, description: 'No effect on a case, a person or an institutional obligation.' },
+  minor: { value: 2, description: 'Recoverable operational disruption; no case or person affected.' },
+  moderate: { value: 3, description: 'A case is delayed, or an institutional obligation is missed.' },
+  major: { value: 4, description: 'Evidence integrity, a case outcome, or a governance decision is affected.' },
+  severe: { value: 5, description: 'A constitutional guarantee fails — reporter anonymity, evidence custody, or the ability to file at all.' },
+};
+// Severity maps to a default impact so a threat that was never explicitly scored still carries a
+// defensible impact — but never a default likelihood, which would be a guess wearing a number.
+const SEVERITY_IMPACT = { critical: 'severe', high: 'major', medium: 'moderate', low: 'minor' };
+
+// Residual score 1..25 banded, with what each band obliges.
+const RISK_BANDS = [
+  { floor: 15, band: 'critical', tolerance: 'outside tolerance', toleranceCeiling: 4, action: 'treat immediately; a time-boxed acceptance requires the Oversight Board' },
+  { floor: 9, band: 'high', tolerance: 'outside tolerance', toleranceCeiling: 4, action: 'treatment plan required with a named owner and a due date' },
+  { floor: 5, band: 'medium', tolerance: 'outside tolerance', toleranceCeiling: 4, action: 'treat or accept with a recorded rationale' },
+  { floor: 1, band: 'low', tolerance: 'within tolerance', toleranceCeiling: 4, action: 'monitor at the review cadence' },
+  { floor: 0, band: 'none', tolerance: 'within tolerance', toleranceCeiling: 4, action: 'none' },
+];
+// The enterprise's stated appetite for total residual exposure. Above this, the forecast reports
+// a breach — a tolerance nobody wrote down is a tolerance nobody can exceed.
+const ENTERPRISE_TOLERANCE = 2.0;
+
+const TREATMENT_STRATEGIES = {
+  treat: { intent: 'Reduce likelihood or impact by implementing or strengthening a control.', requiresBoard: false },
+  transfer: { intent: 'Move the consequence to another party — contractually or by insurance.', requiresBoard: true },
+  avoid: { intent: 'Stop doing the thing that creates the risk.', requiresBoard: true },
+  accept: { intent: 'Bear the risk knowingly, time-boxed, with a named authority.', requiresBoard: true },
+};
+
+// A compensating control earns partial credit, capped: a stack of compensating controls is not
+// equivalent to the primary control that was supposed to be there.
+const COMPENSATING_CREDIT_EACH = 0.1;
+const COMPENSATING_CREDIT_CAP = 0.3;
+
 class RiskRegister {
-  constructor({ clock = () => Date.now() } = {}) { this._clock = clock; this._acceptances = new Map(); this._reassessments = []; this._intel = []; this._trend = []; this._seq = 0; }
+  constructor({ clock = () => Date.now() } = {}) {
+    this._clock = clock; this._acceptances = new Map(); this._reassessments = []; this._intel = []; this._trend = []; this._seq = 0;
+    this._likelihoods = new Map(); this._impacts = new Map(); this._scoreHistory = [];
+    this._compensating = new Map(); this._treatments = [];
+  }
 
   // Control effectiveness for one threat, scored from the live fitness gate.
   controlEffectiveness(threatId, fitnessResults = []) {
@@ -325,6 +376,166 @@ class RiskRegister {
       owner: th.owner, acceptance,
       treatment: residual === 0 ? 'controlled' : acceptance && acceptance.current ? 'accepted (time-boxed)' : 'open — treat or accept',
       reviewDue: this.reviewDue(threatId, { now: at }),
+    };
+  }
+
+  // --- Quantitative risk (Phase 12, Part 2) -----------------------------------------------------
+  //
+  //   Risk           = Likelihood × Impact
+  //   Residual risk  = Risk × (1 − control effectiveness)
+  //
+  // Both scales are ordinal-but-declared, so "high" means the same thing to everyone reading the
+  // register. A qualitative band is DERIVED from the quantitative score rather than entered
+  // beside it: two people calling the same risk "high" and "medium" is how a register stops being
+  // comparable, and the only way to prevent it is to have one number underneath.
+  quantitative(threatId, { likelihood = null, impact = null, fitnessResults = [], compensating = [], now = null } = {}) {
+    const th = describe(threatId);
+    const at = now ?? this._clock();
+    // Where a likelihood is not stated, the threat's declared severity supplies the impact and the
+    // likelihood is reported as UNSTATED rather than assumed — an assumed likelihood is a guess
+    // wearing a number.
+    const l = likelihood === null ? (this._likelihoods.get(threatId) ?? null) : likelihood;
+    const i = impact === null ? (this._impacts.get(threatId) ?? SEVERITY_IMPACT[th.severity] ?? null) : impact;
+    if (l !== null && !LIKELIHOOD_SCALE[l]) throw new Error(`unknown likelihood '${l}' — use one of ${Object.keys(LIKELIHOOD_SCALE).join(', ')}`);
+    if (i !== null && !IMPACT_SCALE[i]) throw new Error(`unknown impact '${i}' — use one of ${Object.keys(IMPACT_SCALE).join(', ')}`);
+
+    const eff = this.controlEffectiveness(threatId, fitnessResults);
+    // Compensating controls are credited only when they are themselves verified by a control the
+    // fitness gate actually runs. A compensating control nobody checks is a claim.
+    const comp = this.compensatingCredit(threatId, { fitnessResults, extra: compensating });
+    const combined = Math.min(1, Math.max(0, eff.score) + comp.credit);
+
+    if (l === null || i === null) {
+      return {
+        threat: threatId, measured: false, likelihood: l, impact: i,
+        inherentScore: null, residualScore: null, band: 'unscored',
+        controlEffectiveness: eff.score, compensating: comp,
+        reason: l === null ? 'no likelihood stated — a risk without a stated likelihood is not quantified' : 'no impact stated',
+      };
+    }
+    const inherentScore = LIKELIHOOD_SCALE[l].value * IMPACT_SCALE[i].value;   // 1..25
+    const residualScore = +(inherentScore * (1 - combined)).toFixed(3);
+    const banding = RISK_BANDS.find((b) => residualScore >= b.floor);
+    return {
+      threat: threatId, measured: true,
+      likelihood: l, likelihoodValue: LIKELIHOOD_SCALE[l].value, likelihoodMeaning: LIKELIHOOD_SCALE[l].description,
+      impact: i, impactValue: IMPACT_SCALE[i].value, impactMeaning: IMPACT_SCALE[i].description,
+      inherentScore, controlEffectiveness: +eff.score.toFixed(3), compensating: comp,
+      combinedEffectiveness: +combined.toFixed(3), residualScore,
+      band: banding.band, tolerance: banding.tolerance, action: banding.action,
+      // The qualitative band is derived, never supplied alongside — see the note above.
+      qualitative: banding.band, derivedFromQuantitative: true,
+      formula: `${LIKELIHOOD_SCALE[l].value} × ${IMPACT_SCALE[i].value} × (1 − ${+combined.toFixed(3)}) = ${residualScore}`,
+      withinTolerance: residualScore <= banding.toleranceCeiling,
+      owner: th.owner, assessedAt: at,
+    };
+  }
+
+  // Record a quantitative assessment. Likelihood and impact are stated by a named human — they
+  // are judgements, and a judgement with no name on it cannot be challenged.
+  score(threatId, { likelihood, impact, by, rationale, now = null } = {}) {
+    describe(threatId);
+    if (!by || !rationale) { const e = new Error('a risk score requires a named assessor and a rationale — an unattributed judgement cannot be challenged'); e.failClosed = true; throw e; }
+    if (!LIKELIHOOD_SCALE[likelihood]) throw new Error(`unknown likelihood '${likelihood}'`);
+    if (!IMPACT_SCALE[impact]) throw new Error(`unknown impact '${impact}'`);
+    const at = now ?? this._clock();
+    this._likelihoods.set(threatId, likelihood);
+    this._impacts.set(threatId, impact);
+    this._scoreHistory.push({ threat: threatId, likelihood, impact, by, rationale, at });
+    return { threat: threatId, likelihood, impact, by, at };
+  }
+  scoreHistory(threatId = null) { return this._scoreHistory.filter((s) => !threatId || s.threat === threatId).map((s) => ({ ...s })); }
+
+  // Compensating controls: something that reduces a risk without being the primary control for
+  // it. Credit is capped, because a stack of compensating controls is not equivalent to the one
+  // that was supposed to be there.
+  registerCompensating(threatId, { control, rationale, by, now = null } = {}) {
+    describe(threatId);
+    if (!control || !rationale || !by) { const e = new Error('a compensating control needs a control id, a rationale and a named owner'); e.failClosed = true; throw e; }
+    if (!this._compensating.has(threatId)) this._compensating.set(threatId, []);
+    this._compensating.get(threatId).push({ threat: threatId, control, rationale, by, at: now ?? this._clock() });
+    return { threat: threatId, control, by };
+  }
+  compensatingCredit(threatId, { fitnessResults = [], extra = [] } = {}) {
+    const declared = [...(this._compensating.get(threatId) || []), ...extra.map((c) => (typeof c === 'string' ? { control: c, rationale: null, by: null } : c))];
+    const state = new Map(fitnessResults.map((r) => [r.id, r.pass]));
+    const rows = declared.map((c) => {
+      const holding = state.get(c.control);
+      return {
+        control: c.control, rationale: c.rationale ?? null, by: c.by ?? null,
+        verified: holding === true,
+        // Unverified and failing are both worth zero. A compensating control that nobody checks
+        // is indistinguishable from one that is not there.
+        credited: holding === true ? COMPENSATING_CREDIT_EACH : 0,
+        reason: holding === undefined ? 'no fitness function verifies this compensating control' : holding ? 'verified by the fitness gate' : 'the verifying control is failing',
+      };
+    });
+    const credit = Math.min(COMPENSATING_CREDIT_CAP, rows.reduce((a, r) => a + r.credited, 0));
+    return { controls: rows, declared: rows.length, verified: rows.filter((r) => r.verified).length, credit: +credit.toFixed(3), cap: COMPENSATING_CREDIT_CAP };
+  }
+
+  // Treatment plan: what is being done about a risk, by whom, by when. `treat` is the option the
+  // register defaults to — accepting, transferring or avoiding are all decisions someone signs.
+  planTreatment(threatId, { strategy, owner, dueInDays = 90, actions = [], by, rationale, now = null } = {}) {
+    describe(threatId);
+    if (!TREATMENT_STRATEGIES[strategy]) throw new Error(`unknown treatment strategy '${strategy}' — use one of ${Object.keys(TREATMENT_STRATEGIES).join(', ')}`);
+    if (!owner || !by || !rationale) { const e = new Error('a treatment plan needs an owner, a named author and a rationale'); e.failClosed = true; throw e; }
+    if (!(dueInDays > 0 && dueInDays <= 365)) { const e = new Error('a treatment plan must be due within 365 days'); e.failClosed = true; throw e; }
+    if (!actions.length) { const e = new Error('a treatment plan with no actions is an intention, not a plan'); e.failClosed = true; throw e; }
+    const at = now ?? this._clock();
+    const plan = {
+      id: 'TP-' + (++this._seq).toString().padStart(4, '0'),
+      threat: threatId, strategy, ...TREATMENT_STRATEGIES[strategy],
+      owner, by, rationale, actions: [...actions],
+      openedAt: at, dueAt: at + dueInDays * 24 * 3600_000,
+      state: 'open', closedBy: null, closedAt: null, evidence: null,
+    };
+    this._treatments.push(plan);
+    return { ...plan };
+  }
+  closeTreatment(id, { by, evidence } = {}) {
+    const p = this._treatments.find((t) => t.id === id);
+    if (!p) throw new Error('unknown treatment plan: ' + id);
+    if (p.state !== 'open') throw new Error(`treatment ${id} is already ${p.state}`);
+    if (!by || !evidence) { const e = new Error('closing a treatment plan requires a named human and evidence of the change'); e.failClosed = true; throw e; }
+    p.state = 'closed'; p.closedBy = by; p.closedAt = this._clock(); p.evidence = evidence;
+    return { ...p };
+  }
+  treatments({ state = null, now = null } = {}) {
+    const at = now ?? this._clock();
+    return this._treatments
+      .filter((t) => !state || t.state === state)
+      .map((t) => ({ ...t, overdue: t.state === 'open' && t.dueAt < at }));
+  }
+  overdueTreatments({ now = null } = {}) { return this.treatments({ state: 'open', now }).filter((t) => t.overdue); }
+
+  // Predictive risk forecasting. Deterministic least-squares over the recorded exposure history,
+  // projecting when the register is expected to cross the tolerance ceiling.
+  forecast({ periodsAhead = 6, tolerance = ENTERPRISE_TOLERANCE } = {}) {
+    const series = this._trend.map((s) => s.totalResidual);
+    const n = series.length;
+    if (n < 3) return { periods: n, projection: [], breachExpected: null, direction: 'insufficient-data', reason: 'at least three snapshots are needed before a trend can be projected' };
+    const meanX = (n - 1) / 2;
+    const meanY = series.reduce((a, b) => a + b, 0) / n;
+    let sxy = 0, sxx = 0, syy = 0;
+    for (let k = 0; k < n; k++) { const dx = k - meanX, dy = series[k] - meanY; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+    const slope = sxx === 0 ? 0 : sxy / sxx;
+    const intercept = meanY - slope * meanX;
+    const r2 = syy === 0 ? 1 : Math.max(0, Math.min(1, (sxy * sxy) / (sxx * syy)));
+    const projection = Array.from({ length: periodsAhead }, (_, k) => {
+      const x = n + k;
+      const value = +Math.max(0, intercept + slope * x).toFixed(4);
+      return { period: x, projectedExposure: value, withinTolerance: value <= tolerance };
+    });
+    const breach = projection.find((p) => !p.withinTolerance) || null;
+    return {
+      periods: n, history: series, slope: +slope.toFixed(6), r2: +r2.toFixed(4),
+      direction: Math.abs(slope) < 1e-9 ? 'flat' : slope > 0 ? 'worsening' : 'improving',
+      projection, tolerance,
+      breachExpected: !!breach, periodsToBreach: breach ? breach.period - (n - 1) : null,
+      confidence: r2 >= 0.75 ? 'high' : r2 >= 0.4 ? 'moderate' : 'low',
+      note: 'Linear projection of recorded exposure. A forecast is an early warning, not a measurement — treat it as a reason to look, not as a result.',
+      authorizes: false,
     };
   }
 
@@ -459,6 +670,14 @@ class RiskRegister {
     return {
       lifecycle: this.lifecycle({ fitnessResults, now }),
       heatMap: this.heatMap({ fitnessResults, now }),
+      // Phase 12, Part 2: quantitative scoring, compensating controls, treatment plans and the
+      // exposure forecast, alongside the qualitative lifecycle they are derived from.
+      scales: { likelihood: LIKELIHOOD_SCALE, impact: IMPACT_SCALE, bands: RISK_BANDS, tolerance: ENTERPRISE_TOLERANCE },
+      quantitative: ids().map((id) => this.quantitative(id, { fitnessResults, now })),
+      scoreHistory: this.scoreHistory(),
+      treatments: this.treatments({ now }),
+      overdueTreatments: this.overdueTreatments({ now }),
+      forecast: this.forecast(),
       trend: this.trend(),
       reviewReminders: this.reviewReminders({ now }),
       expiredAcceptances: this.expiredAcceptances({ now }),
@@ -481,4 +700,6 @@ function report({ fitnessResults = [], knownFitnessIds = [] } = {}) {
   };
 }
 
-module.exports = { THREATS, PLAYBOOKS, KILL_CHAIN, CLASSES, RiskRegister, REVIEW_CADENCE_DAYS, EFFECTIVENESS, ids, describe, threats, attackPaths, killChainCoverage, attckCoverage, capecCoverage, playbooks, traceability, residualRisk, validate, report };
+module.exports = { THREATS, PLAYBOOKS, KILL_CHAIN, CLASSES, RiskRegister, REVIEW_CADENCE_DAYS, EFFECTIVENESS,
+  LIKELIHOOD_SCALE, IMPACT_SCALE, SEVERITY_IMPACT, RISK_BANDS, ENTERPRISE_TOLERANCE, TREATMENT_STRATEGIES,
+  COMPENSATING_CREDIT_EACH, COMPENSATING_CREDIT_CAP, ids, describe, threats, attackPaths, killChainCoverage, attckCoverage, capecCoverage, playbooks, traceability, residualRisk, validate, report };

@@ -27,6 +27,55 @@ const MAX_DECISION_TTL_MS = 30_000;
 // re-evaluating costs microseconds and getting it wrong costs a case.
 const NEVER_CACHED = new Set([...zeroTrust.SENSITIVE]);
 
+// --- Authorization context (Phase 12, Part 1) ---------------------------------------------
+//
+// Authentication assurance, NIST SP 800-63 shaped. The level is DERIVED from what the subject
+// actually presented, never accepted as a claim: a request that says "I am AAL3" is a request
+// making an assertion about itself, which is the one thing zero trust does not accept.
+const ASSURANCE_LEVELS = {
+  AAL1: { rank: 1, description: 'Single factor. Something the subject knows.', mechanisms: ['password', 'case-code'] },
+  AAL2: { rank: 2, description: 'Two factors, at least one cryptographic.', mechanisms: ['totp', 'push'] },
+  AAL3: { rank: 3, description: 'Hardware-bound authenticator with verifier impersonation resistance.', mechanisms: ['fido2', 'piv', 'smartcard'] },
+};
+const MECHANISM_ASSURANCE = Object.entries(ASSURANCE_LEVELS)
+  .flatMap(([level, spec]) => spec.mechanisms.map((m) => [m, level]))
+  .reduce((acc, [m, level]) => ((acc[m] = level), acc), {});
+function assuranceLevelOf(subject = {}) {
+  const mech = subject.mfa ?? subject.authenticator ?? null;
+  if (!mech) return 'AAL0';
+  return MECHANISM_ASSURANCE[String(mech).toLowerCase()] || 'AAL1';
+}
+function assuranceRank(level) { return ASSURANCE_LEVELS[level] ? ASSURANCE_LEVELS[level].rank : 0; }
+
+// The minimum assurance each action demands. Reading evidence and recording a governance
+// decision need a hardware-bound authenticator; filing a report needs none at all, because the
+// constitutional path must remain open to a citizen with nothing but a browser.
+const ACTION_ASSURANCE_FLOOR = {
+  'submit-report': 'AAL0',
+  'check-status': 'AAL0',
+  'review-case': 'AAL2',
+  'transition-case': 'AAL2',
+  'admit-evidence': 'AAL3',
+  'read-evidence': 'AAL3',
+  'record-governance-decision': 'AAL3',
+  'break-glass': 'AAL3',
+  'cross-agency-share': 'AAL3',
+};
+
+// Security clearance lattice. A subject may only reach a resource classified at or below their
+// clearance — the classic no-read-up rule, checked rather than assumed.
+const CLEARANCE_RANK = { public: 0, internal: 1, restricted: 2, secret: 3 };
+const CLASSIFICATION_RANK = { public: 0, internal: 1, restricted: 2, secret: 3 };
+
+// Environmental conditions that form part of the context. `timeWindow` buckets the request into
+// business hours or outside them: a deliberately coarse bucket, because a per-second timestamp
+// in the digest would make every decision uncacheable and turn the cache into dead code.
+function timeWindowOf(env = {}) {
+  if (typeof env.hourOfDay !== 'number') return null;
+  return env.hourOfDay >= 7 && env.hourOfDay < 19 ? 'business-hours' : 'out-of-hours';
+}
+const TRUSTED_NETWORKS = new Set(['gov-wan', 'zone-internal', 'managed-vpn']);
+
 // --- Workload / service identity ---------------------------------------------------------
 
 class WorkloadIdentityRegistry {
@@ -146,12 +195,34 @@ class AuthorizationDecisionCache {
   // change the outcome — role, MFA assurance, device, zone, subject kind — is in the key, so a
   // decision issued for one context can never be reused under another. (Learned the hard way:
   // keying on the principal alone turns the cache into a privilege-escalation vector.)
+  //
+  // Phase 12, Part 1: the digest now covers the full authorization context. Anything omitted from
+  // here is, by construction, something the platform is willing to let change without
+  // re-evaluating — so the list is the security boundary, and every field in it earns its place.
   static subjectContextDigest({ subject = {}, resource = {}, env = {} } = {}) {
     return hash.sha256({
+      // Who, and how well they proved it.
       role: subject.role ?? null, mfa: subject.mfa ?? null, kind: subject.kind ?? null,
-      zone: subject.zone ?? null, deviceId: subject.deviceId ?? null, suspended: subject.suspended ?? null,
+      assuranceLevel: assuranceLevelOf(subject),
+      clearance: subject.clearance ?? null,
+      credentialVersion: subject.credentialVersion ?? null,
+      // Where they sit institutionally.
+      tenant: subject.tenant ?? null, jurisdiction: subject.jurisdiction ?? null,
+      zone: subject.zone ?? null, suspended: subject.suspended ?? null,
+      // What they are asking for. The resource's OWN tenant and jurisdiction belong here as much
+      // as the subject's: with only the subject side keyed, a cached permit for one agency's
+      // resource is replayable against another agency's, which is a cross-tenant exposure and
+      // exactly the shape of the Phase 11 role-escalation flaw.
       resourceZone: resource.zone ?? null, resourceId: resource.id ?? null,
+      resourceClassification: resource.classification ?? null,
+      resourceTenant: resource.tenant ?? null, resourceJurisdiction: resource.jurisdiction ?? null,
+      // The device and the conditions around the request.
+      deviceId: subject.deviceId ?? null, devicePosture: subject.devicePosture ?? null,
+      workloadId: subject.workloadId ?? null,
       geoAllowed: env.geoAllowed !== false,
+      network: env.network ?? null, country: env.country ?? null,
+      timeWindow: timeWindowOf(env),
+      policyVersion: env.policyVersion ?? null,
     }).slice(0, 16);
   }
   static key({ principal, action, sessionId, contextDigest }) { return `${principal}|${action}|${sessionId || ''}|${contextDigest}`; }
@@ -230,7 +301,15 @@ class PolicyAdministrationPoint {
   }
   policySet() { return this._set; }
   version() { return this._version; }
-  registry() { return this._set.list(); }
+  // The FULL policy documents, so `publish(pap.registry(), …)` is a faithful round-trip.
+  //
+  // This used to return `PolicySet.list()`, which is a display summary that drops `conditions`.
+  // Republishing it — the obvious way to re-issue the current policy — silently turned every
+  // conditional deny into a blanket deny, taking authorization down platform-wide. It failed in
+  // the safe direction, but an operator re-publishing the current policy set should not be able
+  // to cause an outage, so the round-trip is now lossless and `summary()` keeps the short form.
+  registry() { return JSON.parse(JSON.stringify(this._policies)); }
+  summary() { return this._set.list(); }
   history() { return this._history.map((h) => ({ ...h })); }
 }
 
@@ -241,9 +320,80 @@ class PolicyDecisionPoint {
     this._pap = pap; this._workloads = workloads; this._boundaries = boundaries;
     this._devices = devices || new zeroTrust.DeviceRegistry(); this._clock = clock; this._decisions = 0; this._fullEvaluations = 0;
     this._cache = cache; this._revocations = revocations; this._policySync = policySync;
+    this._seenRequestNonces = new Set();
   }
   decisionsEvaluated() { return this._decisions; }
   fullEvaluations() { return this._fullEvaluations; }
+
+  // --- Authorization context evaluation (Phase 12, Part 1) ------------------------------------
+  //
+  // Each condition is checked and REPORTED, not folded into a score. When a request is denied the
+  // person who hit it needs to know which condition failed, and a composite number cannot tell
+  // them. The order runs cheapest-and-most-decisive first.
+  evaluateContext(request = {}) {
+    const { subject = {}, action, resource = {}, env = {} } = request;
+    const checks = [];
+    const add = (name, satisfied, detail) => { checks.push({ check: name, satisfied, detail }); return satisfied; };
+
+    // 1. Authentication assurance. The level is DERIVED from the authenticator presented, never
+    //    read from a claim — a request asserting its own assurance is asserting about itself.
+    const level = assuranceLevelOf(subject);
+    const floor = ACTION_ASSURANCE_FLOOR[action] ?? 'AAL2';
+    const assuranceOk = assuranceRank(level) >= assuranceRank(floor);
+    add('assurance-level', assuranceOk, `${level} presented, ${floor} required for '${action}'`);
+
+    // 2. Clearance vs classification — no read up.
+    let clearanceOk = true;
+    if (resource.classification) {
+      const need = CLASSIFICATION_RANK[resource.classification];
+      const held = subject.clearance ? CLEARANCE_RANK[subject.clearance] : undefined;
+      clearanceOk = held !== undefined && need !== undefined && held >= need;
+      add('clearance', clearanceOk, subject.clearance
+        ? `clearance '${subject.clearance}' vs classification '${resource.classification}'`
+        : `no clearance held; resource is '${resource.classification}'`);
+    }
+
+    // 3. Tenant and jurisdiction. A request from one jurisdiction may not reach another's
+    //    resource — residency is a sovereign obligation, not a preference.
+    let tenancyOk = true;
+    if (resource.tenant && subject.tenant && resource.tenant !== subject.tenant) {
+      tenancyOk = add('tenant', false, `subject tenant '${subject.tenant}' may not reach resource tenant '${resource.tenant}'`);
+    } else if (resource.jurisdiction && subject.jurisdiction && resource.jurisdiction !== subject.jurisdiction) {
+      tenancyOk = add('jurisdiction', false, `subject jurisdiction '${subject.jurisdiction}' may not reach '${resource.jurisdiction}'`);
+    } else add('tenant-jurisdiction', true, 'same tenant and jurisdiction, or unscoped');
+
+    // 4. Credential version. A superseded credential is a credential the platform has replaced
+    //    and therefore no longer trusts, whatever its expiry says.
+    let credentialOk = true;
+    if (typeof env.minCredentialVersion === 'number') {
+      credentialOk = typeof subject.credentialVersion === 'number' && subject.credentialVersion >= env.minCredentialVersion;
+      add('credential-version', credentialOk, `credential v${subject.credentialVersion ?? 'unknown'}, minimum v${env.minCredentialVersion}`);
+    }
+
+    // 5. Device posture. A device known to be compromised is refused outright; an unknown device
+    //    is refused for anything the RBAC ceiling treats as sensitive.
+    let deviceOk = true;
+    if (subject.devicePosture === 'compromised') deviceOk = add('device-posture', false, 'device posture is compromised');
+    else if (NEVER_CACHED.has(action) && subject.deviceId && subject.devicePosture === 'unknown') {
+      deviceOk = add('device-posture', false, `device posture is unknown, and '${action}' is a sensitive action`);
+    } else add('device-posture', true, subject.devicePosture ?? 'not asserted');
+
+    // 6. Environmental conditions. An untrusted network may not carry a sensitive action, and a
+    //    geo-denied request never proceeds.
+    let envOk = true;
+    if (env.geoAllowed === false) envOk = add('geo', false, `requests from '${env.country ?? 'this location'}' are not permitted`);
+    else if (NEVER_CACHED.has(action) && env.network && !TRUSTED_NETWORKS.has(env.network)) {
+      envOk = add('network', false, `'${action}' may not be performed over the '${env.network}' network`);
+    } else add('environment', true, `network '${env.network ?? 'unspecified'}', ${timeWindowOf(env) ?? 'time unspecified'}`);
+
+    const failed = checks.filter((c) => !c.satisfied);
+    return {
+      satisfied: failed.length === 0, checks, failed: failed.map((c) => c.check),
+      assuranceLevel: level, requiredAssurance: floor,
+      reason: failed.length ? failed.map((c) => c.detail).join('; ') : 'every authorization context condition is satisfied',
+      ok: assuranceOk && clearanceOk && tenancyOk && credentialOk && deviceOk && envOk,
+    };
+  }
 
   // Continuous re-evaluation triggers. Any of these forces a full evaluation regardless of a
   // valid cached decision — the cache is an optimisation over UNCHANGED conditions only.
@@ -278,6 +428,20 @@ class PolicyDecisionPoint {
     if (this._policySync && env.region) {
       const st = this._policySync.state(env.region);
       if (st && st.version !== this._pap.version()) return deny('policy-sync', `region '${env.region}' is at policy version ${st.version}, authoritative is ${this._pap.version()}`);
+    }
+    // 0c. POLICY FRESHNESS (Phase 12). A caller may state the policy version it believes is
+    //     current. Deciding against a version the caller has already moved past — or has not yet
+    //     seen — is deciding on a policy nobody agreed applies to this request.
+    if (env.policyVersion !== undefined && env.policyVersion !== null && env.policyVersion !== this._pap.version()) {
+      trace.push('policy-freshness');
+      return deny('policy-freshness', `request asserts policy version ${env.policyVersion}, authoritative is ${this._pap.version()} — refusing to decide against a policy that is not current`);
+    }
+    // 0d. REPLAY DETECTION (Phase 12). A request nonce may be presented once. A replayed
+    //     authorization request is either a bug or an attack, and both deserve a denial.
+    if (request.nonce) {
+      trace.push('replay-detection');
+      if (this._seenRequestNonces.has(request.nonce)) return deny('replay', `request nonce '${request.nonce}' has already been used — replayed authorization requests are refused`);
+      this._seenRequestNonces.add(request.nonce);
     }
     const triggers = this.reevaluationTriggers(request);
     const contextDigest = AuthorizationDecisionCache.subjectContextDigest(request);
@@ -314,6 +478,13 @@ class PolicyDecisionPoint {
       if (hit.reason && hit.reason !== 'no-decision') trace.push('decision-cache-rejected:' + hit.reason);
     } else if (triggers.length) trace.push('re-evaluation-triggered:' + triggers.join(','));
     this._fullEvaluations += 1;
+
+    // 2c. AUTHORIZATION CONTEXT (Phase 12, Part 1). Assurance level, clearance, tenant and
+    //     jurisdiction, credential version and environmental conditions — each checked against
+    //     what the action actually demands, before any policy gets a chance to permit.
+    trace.push('authorization-context');
+    const ctx = this.evaluateContext(request);
+    if (!ctx.satisfied) return deny('authorization-context', ctx.reason);
 
     // 3. Trust boundary — an undeclared crossing does not exist.
     trace.push('trust-boundary');
@@ -432,4 +603,6 @@ module.exports = {
   PolicyAdministrationPoint, PolicyDecisionPoint, PolicyEnforcementPoint,
   AuthorizationDecisionCache, RevocationRegistry, PolicySyncRegistry,
   WORKLOAD_ID, MAX_CREDENTIAL_TTL_MS, MAX_AUTH_AGE_MS, MAX_DECISION_TTL_MS, NEVER_CACHED,
+  ASSURANCE_LEVELS, MECHANISM_ASSURANCE, ACTION_ASSURANCE_FLOOR, CLEARANCE_RANK, CLASSIFICATION_RANK,
+  TRUSTED_NETWORKS, assuranceLevelOf, assuranceRank, timeWindowOf,
 };

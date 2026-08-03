@@ -359,12 +359,134 @@ const PROPERTY_GUARANTEES = {
   'deadlock-freedom': 'Every reachable state can still reach a terminal state.',
 };
 
-function catalogue() {
+// --- Property governance (Phase 12, Part 3) ------------------------------------------------------
+//
+// A proven property nobody owns is a proof nobody maintains. Every specification carries the
+// bounded context it constrains, the ADR that decided it must hold, and the accountable owner —
+// resolved from the ownership model rather than restated here, so the two cannot drift.
+const SPEC_GOVERNANCE = {
+  'SPEC-AUTHZ-DEFAULT-DENY': { context: 'identity-access', adr: 'ADR-0001' },
+  'SPEC-STEP-UP-MFA': { context: 'identity-access', adr: 'ADR-0001' },
+  'SPEC-ZONE-CONFINEMENT': { context: 'privacy', adr: 'ADR-0001' },
+  'SPEC-SUSPENDED-DENIED': { context: 'identity-access', adr: 'ADR-0001' },
+  'SPEC-SEPARATION-OF-DUTIES': { context: 'governance-oversight', adr: 'ADR-0002' },
+  'SPEC-APPROVAL-CHAIN': { context: 'governance-oversight', adr: 'ADR-0002' },
+  'SPEC-ESCALATION-MONOTONIC': { context: 'orchestration', adr: 'ADR-0002' },
+  'SPEC-CUSTODY-UNBROKEN': { context: 'custody', adr: 'ADR-0001' },
+  'SPEC-DATA-RESIDENCY': { context: 'resilience', adr: 'ADR-0006' },
+  'SPEC-NON-INTERFERENCE': { context: 'privacy', adr: 'ADR-0006' },
+  'SPEC-NO-PRIVILEGE-ESCALATION': { context: 'identity-access', adr: 'ADR-0005' },
+  'SPEC-EVIDENCE-INTEGRITY': { context: 'custody', adr: 'ADR-0006' },
+  'SPEC-WORKFLOW-CONSISTENCY': { context: 'orchestration', adr: 'ADR-0006' },
+  'SPEC-EVENT-ORDERING': { context: 'platform-events', adr: 'ADR-0006' },
+  'SPEC-DEADLOCK-FREEDOM': { context: 'orchestration', adr: 'ADR-0006' },
+  'SPEC-LEGISLATIVE-COMPLIANCE': { context: 'legislation', adr: 'ADR-0004' },
+};
+
+// How each kind of property is actually established. Naming the method matters: "proven" means
+// something different for an exhaustive model check than for a structural invariant, and a
+// catalogue that blurs the two overstates what has been established.
+const VERIFICATION_METHODS = {
+  authorization: { method: 'bounded exhaustive model checking', description: 'Every state in the bounded access-request domain is enumerated and the property evaluated at each.' },
+  'separation-of-duties': { method: 'bounded exhaustive model checking', description: 'Every actor assignment over the conflicting-duty pairs is enumerated.' },
+  'approval-chain': { method: 'bounded exhaustive model checking', description: 'Every permitted ordering of review and approval steps is enumerated.' },
+  escalation: { method: 'bounded exhaustive model checking', description: 'Every escalation path through the authority chain is enumerated and checked for monotonicity.' },
+  'evidence-custody': { method: 'structural invariant over generated chains', description: 'Custody chains are constructed and re-linked; any break in the hash linkage is a counterexample.' },
+  'evidence-integrity': { method: 'structural invariant over generated chains', description: 'Evidence chains are constructed and re-verified; a tampered link is returned as a counterexample.' },
+  'data-residency': { method: 'bounded exhaustive model checking', description: 'Every classification × region placement is enumerated against the residency rules.' },
+  'non-interference': { method: 'bounded exhaustive model checking', description: 'Every declared information flow is enumerated; a flow from high to low is a counterexample.' },
+  'privilege-escalation': { method: 'bounded exhaustive model checking', description: 'Every privilege transition is enumerated and checked against the RBAC ceiling.' },
+  'workflow-consistency': { method: 'bounded exhaustive model checking', description: 'Every reachable workflow state and transition is enumerated from the declared graph.' },
+  'event-ordering': { method: 'bounded exhaustive model checking', description: 'Every permitted interleaving in the bounded event domain is enumerated.' },
+  'deadlock-freedom': { method: 'reachability analysis', description: 'Every reachable state is checked for a path to a terminal state.' },
+  legislative: { method: 'traceability check against the live fitness gate', description: 'Each mandate is resolved to a control and the control\'s current result is read; an unimplemented or failing control is a counterexample.' },
+};
+
+// The machine-readable catalogue Part 3 requires: one row per property, carrying everything a
+// reviewer needs to decide whether the proof means what they hope it means.
+function catalogue(options = {}) {
+  const ownership = require('../governance/ownership');
+  const properties = specifications().map((sp) => {
+    const gov = SPEC_GOVERNANCE[sp.id] || {};
+    const vm = VERIFICATION_METHODS[sp.kind] || null;
+    let result = null;
+    try { result = check(sp.id, options); } catch (e) { result = { proven: false, error: e.message, statesExplored: 0, statesInDomain: 0, counterexample: null }; }
+    let owner = null;
+    try { owner = gov.context ? ownership.describe(gov.context) : null; } catch (_) { owner = null; }
+    return {
+      id: sp.id,
+      description: sp.title,
+      statement: sp.statement,
+      kind: sp.kind,
+      boundedContext: gov.context ?? null,
+      verificationMethod: vm ? vm.method : null,
+      verificationDescription: vm ? vm.description : null,
+      proofStatus: result.error ? 'error' : result.proven ? 'proven' : 'refuted',
+      statesExplored: result.statesExplored ?? 0,
+      statesInDomain: result.statesInDomain ?? 0,
+      proofCoverage: result.statesInDomain ? +(result.statesExplored / result.statesInDomain).toFixed(4) : 1,
+      exhaustive: (result.statesExplored ?? 0) === (result.statesInDomain ?? 0),
+      counterexample: result.counterexample ?? null,
+      owningAdr: gov.adr ?? null,
+      responsibleOwner: owner ? owner.responsibleAuthority : null,
+      approvingAuthority: owner ? owner.approvingAuthority : null,
+      governanceBoard: owner ? owner.board.name : null,
+      guarantee: PROPERTY_GUARANTEES[sp.kind] || null,
+    };
+  });
+  const proven = properties.filter((p) => p.proofStatus === 'proven');
   return {
-    properties: specifications().map((sp) => ({ ...sp, guarantee: PROPERTY_GUARANTEES[sp.kind] || null })),
+    properties,
     kinds: [...new Set(specifications().map((sp) => sp.kind))].sort(),
     guarantees: { ...PROPERTY_GUARANTEES },
-    note: 'Every property is machine-checked on every build. A property without a guarantee statement is not published.',
+    verificationMethods: { ...VERIFICATION_METHODS },
+    total: properties.length, proven: proven.length,
+    refuted: properties.filter((p) => p.proofStatus !== 'proven').map((p) => p.id),
+    totalStatesExplored: properties.reduce((a, p) => a + p.statesExplored, 0),
+    allProven: proven.length === properties.length,
+    machineReadable: true,
+    note: 'Every property is machine-checked on every build. A property without a guarantee statement, an owner and an owning ADR is not published.',
+  };
+}
+
+// Validate the catalogue itself: a property missing its governance metadata is a property nobody
+// is accountable for, which is exactly the state this catalogue exists to prevent.
+function validateCatalogue(options = {}) {
+  const violations = [];
+  const cat = catalogue(options);
+  const contextMap = require('../architecture/context-map');
+  const known = new Set(contextMap.ids());
+  for (const p of cat.properties) {
+    if (!p.boundedContext) violations.push(`${p.id}: no bounded context — a property nobody's context owns is a property nobody maintains`);
+    else if (!known.has(p.boundedContext)) violations.push(`${p.id}: bounded context '${p.boundedContext}' is not in the context map`);
+    if (!p.owningAdr) violations.push(`${p.id}: no owning ADR — nothing records why this property must hold`);
+    if (!p.responsibleOwner) violations.push(`${p.id}: no responsible owner`);
+    if (!p.verificationMethod) violations.push(`${p.id}: no verification method — 'proven' means different things by method`);
+    if (!p.guarantee) violations.push(`${p.id}: no published guarantee statement`);
+    if (!p.statement) violations.push(`${p.id}: no formal statement`);
+    if (p.proofStatus !== 'proven') violations.push(`${p.id}: ${p.proofStatus} — ${JSON.stringify(p.counterexample)}`);
+  }
+  // Every specification must be governed; a spec added without a governance record fails here.
+  for (const id of Object.keys(SPECIFICATIONS)) if (!SPEC_GOVERNANCE[id]) violations.push(`${id}: no governance record (context + owning ADR)`);
+  for (const id of Object.keys(SPEC_GOVERNANCE)) if (!SPECIFICATIONS[id]) violations.push(`${id}: governance recorded for a specification that does not exist`);
+  return { valid: violations.length === 0, violations, properties: cat.total, proven: cat.proven };
+}
+
+// The continuous proof report Part 3 asks for: the catalogue plus the coverage and the summary,
+// regenerated on every build so it can never describe a proof that no longer runs.
+function proofReport(options = {}) {
+  const cat = catalogue(options);
+  return {
+    generatedFrom: 'src/iam/formal-policy.js — regenerated on every build',
+    catalogue: cat,
+    coverage: stateCoverage(options),
+    summary: proofSummary(options),
+    validation: validateCatalogue(options),
+    byContext: cat.properties.reduce((acc, p) => ((acc[p.boundedContext || 'unowned'] = (acc[p.boundedContext || 'unowned'] || 0) + 1), acc), {}),
+    byMethod: cat.properties.reduce((acc, p) => ((acc[p.verificationMethod || 'unknown'] = (acc[p.verificationMethod || 'unknown'] || 0) + 1), acc), {}),
+    byAdr: cat.properties.reduce((acc, p) => ((acc[p.owningAdr || 'none'] = (acc[p.owningAdr || 'none'] || 0) + 1), acc), {}),
+    informationalOnly: true, authorizes: false,
+    note: 'A continuous proof report. It states what has been established, by what method, over how much of each domain, and who answers for it.',
   };
 }
 
@@ -422,4 +544,8 @@ function continuousValidation({ policies = DEFAULT_POLICIES, mandates = [] } = {
   };
 }
 
-module.exports = { SPECIFICATIONS, UNIVERSE, PROPERTY_GUARANTEES, specifications, catalogue, stateCoverage, proofSummary, check, verifyAll, continuousValidation, accessRequests, domainFor };
+module.exports = {
+  SPECIFICATIONS, UNIVERSE, PROPERTY_GUARANTEES, SPEC_GOVERNANCE, VERIFICATION_METHODS,
+  specifications, catalogue, validateCatalogue, proofReport, stateCoverage, proofSummary,
+  check, verifyAll, continuousValidation, accessRequests, domainFor,
+};

@@ -63,7 +63,7 @@ function controlOwnership(fitnessIds = []) {
   const byPrefix = [
     { match: /^FIT-IDENTITY|^APP-FIT-ANONYMITY|^APP-FIT-PRIVACY|^APP-FIT-ANALYTICS-PRIVACY|^APP-FIT-TRACE-PRIVACY|^APP-FIT-GEO/, context: 'privacy' },
     { match: /^APP-FIT-AUTHZ|^APP-FIT-OIDC|^APP-FIT-CREDENTIAL|^APP-FIT-SECRETS|^APP-FIT-DIGITAL-IDENTITY|^APP-FIT-ZERO-TRUST|^FIT-ZERO-TRUST|^FIT-LEAST/, context: 'identity-access' },
-    { match: /^APP-FIT-POLICY|^APP-FIT-FORMAL-POLICY|^FIT-POLICY/, context: 'policy-governance' },
+    { match: /^APP-FIT-POLICY|^APP-FIT-FORMAL|^FIT-POLICY/, context: 'policy-governance' },
     { match: /^APP-FIT-CIPHERTEXT|^APP-FIT-CRYPTO|^APP-FIT-QUANTUM|^FIT-ENCRYPTION/, context: 'crypto-agility' },
     { match: /^APP-FIT-CUSTODY|^FIT-CHAIN-OF-CUSTODY/, context: 'custody' },
     { match: /^APP-FIT-EVENT|^APP-FIT-PII-FREE|^FIT-SECURE-DATA-FLOWS/, context: 'platform-events' },

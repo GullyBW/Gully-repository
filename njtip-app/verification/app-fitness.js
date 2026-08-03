@@ -1450,6 +1450,242 @@ module.exports = [
     if (rep.advisoryOnly !== true || rep.authorizes !== false) v.push('the risk report claims authority');
   }),
 
+  fit('APP-FIT-ZERO-TRUST-CONTEXT', 'Authorization context is fully evaluated; stale policy, replayed requests and context changes all fail', (v) => {
+    const zt = require('../src/iam/zero-trust-architecture');
+    let now = 1_000_000;
+    const z = zt.makeZeroTrust({ clock: () => now });
+    z.devices.register('dev-1', { trusted: true });
+    const req = (over = {}) => ({
+      subject: { principal: 'inv-001', role: 'investigator', mfa: 'fido2', authenticatedAt: now, deviceId: 'dev-1', devicePosture: 'healthy', zone: 'executive', sessionId: 'S1', clearance: 'secret', tenant: 'dcec', jurisdiction: 'BW', credentialVersion: 3, ...(over.subject || {}) },
+      action: over.action || 'review-case',
+      resource: { zone: 'executive', ...(over.resource || {}) },
+      env: { network: 'gov-wan', hourOfDay: 10, ...(over.env || {}) },
+      ...(over.nonce ? { nonce: over.nonce } : {}),
+    });
+
+    // --- Assurance levels are DERIVED from the authenticator, never taken as a claim ----------
+    if (zt.assuranceLevelOf({ mfa: 'fido2' }) !== 'AAL3') v.push('a hardware authenticator did not resolve to AAL3');
+    if (zt.assuranceLevelOf({ mfa: 'totp' }) !== 'AAL2') v.push('a soft OTP did not resolve to AAL2');
+    if (zt.assuranceLevelOf({}) !== 'AAL0') v.push('no authenticator did not resolve to AAL0');
+    // A request cannot assert its own assurance level.
+    if (zt.assuranceLevelOf({ assuranceLevel: 'AAL3' }) === 'AAL3') v.push('a self-asserted assurance level was believed');
+    if (!(zt.assuranceRank('AAL3') > zt.assuranceRank('AAL2') && zt.assuranceRank('AAL2') > zt.assuranceRank('AAL1'))) v.push('assurance levels are not ordered');
+    // The constitutional path demands no assurance at all — a citizen has only a browser.
+    if (zt.ACTION_ASSURANCE_FLOOR['submit-report'] !== 'AAL0') v.push('filing a report requires an authenticator');
+    for (const sensitive of ['read-evidence', 'record-governance-decision', 'break-glass']) {
+      if (zt.ACTION_ASSURANCE_FLOOR[sensitive] !== 'AAL3') v.push(`'${sensitive}' does not demand a hardware-bound authenticator`);
+    }
+
+    // --- Each context condition denies on its own, and names itself --------------------------
+    const baseline = z.pdp.decide(req());
+    if (baseline.decision !== 'permit') v.push('a fully compliant request was denied: ' + baseline.reason);
+
+    const weakAssurance = z.pdp.decide(req({ subject: { mfa: 'totp' }, action: 'read-evidence' }));
+    if (weakAssurance.decision === 'permit') v.push('a sensitive action was permitted at AAL2');
+    if (!/AAL3 required/.test(weakAssurance.reason)) v.push('the assurance denial did not name the required level');
+
+    const noClearance = z.pdp.decide(req({ subject: { clearance: 'internal' }, resource: { classification: 'secret' } }));
+    if (noClearance.decision === 'permit') v.push('a subject read above their clearance');
+    if (!/clearance/.test(noClearance.reason)) v.push('the clearance denial did not name clearance');
+    if (z.pdp.decide(req({ subject: { clearance: 'secret' }, resource: { classification: 'restricted' } })).decision !== 'permit') v.push('reading below clearance was denied');
+
+    const wrongTenant = z.pdp.decide(req({ resource: { tenant: 'other-agency' } }));
+    if (wrongTenant.decision === 'permit') v.push('a request reached another tenant\'s resource');
+    const wrongJurisdiction = z.pdp.decide(req({ resource: { jurisdiction: 'ZA' } }));
+    if (wrongJurisdiction.decision === 'permit') v.push('a request crossed a jurisdiction boundary');
+
+    const oldCredential = z.pdp.decide(req({ subject: { credentialVersion: 1 }, env: { minCredentialVersion: 3 } }));
+    if (oldCredential.decision === 'permit') v.push('a superseded credential version was accepted');
+    if (z.pdp.decide(req({ env: { minCredentialVersion: 3 } })).decision !== 'permit') v.push('a current credential version was rejected');
+
+    const compromised = z.pdp.decide(req({ subject: { devicePosture: 'compromised' } }));
+    if (compromised.decision === 'permit') v.push('a compromised device was permitted');
+    const unknownDevice = z.pdp.decide(req({ subject: { devicePosture: 'unknown' }, action: 'read-evidence' }));
+    if (unknownDevice.decision === 'permit') v.push('a sensitive action ran from a device of unknown posture');
+
+    const untrustedNetwork = z.pdp.decide(req({ action: 'read-evidence', env: { network: 'public-internet' } }));
+    if (untrustedNetwork.decision === 'permit') v.push('a sensitive action was permitted over an untrusted network');
+    const geoDenied = z.pdp.decide(req({ env: { geoAllowed: false } }));
+    if (geoDenied.decision === 'permit') v.push('a geo-denied request was permitted');
+
+    // --- POLICY FRESHNESS: deciding against a superseded policy is refused -------------------
+    const currentVersion = z.pap.version();
+    if (z.pdp.decide(req({ env: { policyVersion: currentVersion } })).decision !== 'permit') v.push('a request stating the current policy version was denied');
+    const stale = z.pdp.decide(req({ env: { policyVersion: currentVersion - 1 } }));
+    if (stale.decision === 'permit') v.push('a request asserting a superseded policy version was permitted');
+    if (!/policy version/.test(stale.reason)) v.push('the policy-freshness denial did not name the version');
+    const ahead = z.pdp.decide(req({ env: { policyVersion: currentVersion + 5 } }));
+    if (ahead.decision === 'permit') v.push('a request asserting a policy version that does not exist yet was permitted');
+
+    // --- REPLAY DETECTION: a nonce is single-use ---------------------------------------------
+    const first = z.pdp.decide(req({ nonce: 'REQ-1' }));
+    if (first.decision !== 'permit') v.push('the first use of a nonce was denied: ' + first.reason);
+    const replayed = z.pdp.decide(req({ nonce: 'REQ-1' }));
+    if (replayed.decision === 'permit') v.push('a replayed authorization request was permitted');
+    if (!/replay/.test(replayed.reason)) v.push('the replay denial did not say so');
+    if (z.pdp.decide(req({ nonce: 'REQ-2' })).decision !== 'permit') v.push('a fresh nonce was rejected');
+
+    // --- CONTEXT DIGEST: every context field participates ------------------------------------
+    const Cache = zt.AuthorizationDecisionCache;
+    const baseDigest = Cache.subjectContextDigest(req());
+    const perturbations = [
+      ['assurance', req({ subject: { mfa: 'totp' } })],
+      ['clearance', req({ subject: { clearance: 'internal' } })],
+      ['tenant', req({ subject: { tenant: 'other' } })],
+      ['jurisdiction', req({ subject: { jurisdiction: 'ZA' } })],
+      ['credential version', req({ subject: { credentialVersion: 9 } })],
+      ['device posture', req({ subject: { devicePosture: 'unknown' } })],
+      ['resource classification', req({ resource: { classification: 'secret' } })],
+      ['network', req({ env: { network: 'public-internet' } })],
+      ['time window', req({ env: { hourOfDay: 23 } })],
+      ['country', req({ env: { country: 'ZA' } })],
+      ['policy version', req({ env: { policyVersion: 42 } })],
+    ];
+    for (const [what, r] of perturbations) {
+      if (Cache.subjectContextDigest(r) === baseDigest) v.push(`changing the ${what} did not change the context digest — that field is not in the security boundary`);
+    }
+    // Something genuinely outside the context must NOT change the digest, or the cache is dead.
+    if (Cache.subjectContextDigest(req({ subject: { displayHint: 'x' } })) !== baseDigest) v.push('an irrelevant field changed the context digest — nothing would ever cache');
+
+    // --- A CONTEXT CHANGE INVALIDATES A CACHED DECISION --------------------------------------
+    const z2 = zt.makeZeroTrust({ clock: () => now });
+    z2.devices.register('dev-1', { trusted: true });
+    const warm = z2.pdp.decide(req());
+    if (warm.decision !== 'permit') v.push('the cache-warming request was denied: ' + warm.reason);
+    const hit = z2.pdp.decide(req());
+    if (!hit.cached) v.push('an identical repeated request was not served from cache — caching is inert');
+    const changed = z2.pdp.decide(req({ subject: { clearance: 'internal' } }));
+    if (changed.cached) v.push('a decision was reused after the security context changed');
+
+    // --- POLICY PUBLICATION PROPAGATES AND INVALIDATES ---------------------------------------
+    const before = z2.pap.version();
+    z2.pap.publish(z2.pap.registry(), { by: 'ISRB Chair', rationale: 'periodic republication' });
+    if (z2.pap.version() !== before + 1) v.push('publishing policy did not advance the version');
+    const afterPublish = z2.pdp.decide(req());
+    if (afterPublish.cached) v.push('a decision issued under the previous policy version was reused after publication');
+    // Cross-region: a lagging region may not serve at all.
+    z2.policySync.register('bw-south', { version: before });
+    const lagging = z2.pdp.decide({ ...req(), env: { ...req().env, region: 'bw-south' } });
+    if (lagging.decision === 'permit') v.push('a region on a superseded policy version served authorization');
+    z2.policySync.sync('bw-south', z2.pap.version());
+    if (z2.pdp.decide({ ...req(), env: { ...req().env, region: 'bw-south' } }).decision !== 'permit') v.push('a synchronised region was still refused');
+
+    // --- REVOCATION PROPAGATES IMMEDIATELY ---------------------------------------------------
+    z2.pdp.decide(req());
+    z2.revocations.revokeSession('S1', { by: 'SOC Lead', reason: 'suspected compromise' });
+    const afterRevoke = z2.pdp.decide(req());
+    if (afterRevoke.decision === 'permit') v.push('a revoked session was permitted, cached or otherwise');
+    if (!/revoked/.test(afterRevoke.reason)) v.push('the revocation denial did not say so');
+
+    // The context evaluation is reportable in its own right, and every check names itself.
+    const ctx = z.pdp.evaluateContext(req());
+    if (!ctx.satisfied) v.push('the baseline context evaluation was not satisfied');
+    for (const c of ctx.checks) if (!c.check || c.detail === undefined) v.push('a context check did not describe itself');
+    if (!ctx.assuranceLevel || !ctx.requiredAssurance) v.push('the context evaluation did not report the assurance levels it compared');
+  }),
+
+  fit('APP-FIT-RISK-QUANTITATIVE', 'Risk = likelihood × impact, residual is derived, and an unattributed or unquantified risk is refused', (v) => {
+    const tm = require('../src/security/threat-model');
+    const controlIds = [...new Set(tm.threats().flatMap((t) => t.controls))];
+    const green = controlIds.map((id) => ({ id, pass: true }));
+    const red = controlIds.map((id) => ({ id, pass: false }));
+    const threat = tm.ids()[0];
+
+    // Both scales are ordinal 1..5 with a STATED meaning per point.
+    for (const [scale, name] of [[tm.LIKELIHOOD_SCALE, 'likelihood'], [tm.IMPACT_SCALE, 'impact']]) {
+      const values = Object.values(scale).map((s) => s.value).sort((a, b) => a - b);
+      if (JSON.stringify(values) !== JSON.stringify([1, 2, 3, 4, 5])) v.push(`the ${name} scale is not a 1..5 ordinal scale`);
+      for (const [k, s] of Object.entries(scale)) if (!s.description) v.push(`${name} '${k}' has no stated meaning — two assessors will use it differently`);
+    }
+    // Severity supplies a default IMPACT but never a default likelihood.
+    if (!tm.SEVERITY_IMPACT.critical) v.push('a critical threat has no default impact');
+
+    const rr = new tm.RiskRegister({ clock: () => 0 });
+    // An unscored risk reports UNSCORED — never a plausible number.
+    const unscored = rr.quantitative(threat, { fitnessResults: green });
+    if (unscored.measured) v.push('a risk with no stated likelihood reported as measured');
+    if (unscored.residualScore !== null) v.push('an unquantified risk still produced a residual score');
+    if (unscored.band !== 'unscored') v.push('an unquantified risk was banded');
+
+    // A score is a judgement, and a judgement with no name on it cannot be challenged.
+    let unattributed = false;
+    try { rr.score(threat, { likelihood: 'possible', impact: 'severe' }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a risk score was accepted with no named assessor');
+    let unknownScale = false;
+    try { rr.score(threat, { likelihood: 'quite-likely', impact: 'severe', by: 'CISO', rationale: 'r' }); } catch (_) { unknownScale = true; }
+    if (!unknownScale) v.push('a likelihood outside the declared scale was accepted');
+
+    rr.score(threat, { likelihood: 'possible', impact: 'severe', by: 'Chief Information Security Officer', rationale: 'observed in comparable national systems' });
+    if (rr.scoreHistory(threat).length !== 1) v.push('the score was not recorded in the history');
+
+    // Risk = L × I, and residual = risk × (1 − effectiveness).
+    const uncontrolled = rr.quantitative(threat, { fitnessResults: red });
+    if (uncontrolled.inherentScore !== 15) v.push(`likelihood 3 × impact 5 produced ${uncontrolled.inherentScore}, not 15`);
+    if (uncontrolled.residualScore !== 15) v.push('residual risk was reduced although every control was failing');
+    if (uncontrolled.band !== 'critical') v.push('a residual score of 15 was not banded critical');
+    if (uncontrolled.withinTolerance) v.push('a critical residual risk was reported as within tolerance');
+    const controlled = rr.quantitative(threat, { fitnessResults: green });
+    if (!(controlled.residualScore < uncontrolled.residualScore)) v.push('holding controls did not reduce residual risk');
+    if (controlled.residualScore !== 0) v.push('fully effective controls did not drive residual risk to zero');
+    // The qualitative band is DERIVED, never supplied beside the number.
+    if (controlled.derivedFromQuantitative !== true) v.push('the qualitative band is not derived from the quantitative score');
+    if (controlled.qualitative !== controlled.band) v.push('the qualitative and quantitative verdicts disagree');
+    if (!controlled.formula) v.push('the residual calculation is not reproducible from the record');
+
+    // Compensating controls: credited only when verified, and capped.
+    let incomplete = false;
+    try { rr.registerCompensating(threat, { control: 'X' }); } catch (e) { incomplete = !!e.failClosed; }
+    if (!incomplete) v.push('a compensating control was registered with no rationale or owner');
+    rr.registerCompensating(threat, { control: controlIds[0], rationale: 'independent detective control', by: 'SOC Lead' });
+    const unverified = rr.quantitative(threat, { fitnessResults: red });
+    if (unverified.compensating.credit !== 0) v.push('a failing compensating control was credited');
+    const verified = rr.quantitative(threat, { fitnessResults: [{ id: controlIds[0], pass: true }, ...red.slice(1)] });
+    if (!(verified.compensating.credit > 0)) v.push('a verified compensating control earned no credit');
+    if (!(verified.residualScore < unverified.residualScore)) v.push('a verified compensating control did not reduce residual risk');
+    // A control nobody verifies is indistinguishable from one that is not there.
+    const phantom = rr.compensatingCredit(threat, { fitnessResults: [], extra: ['NO-SUCH-CONTROL'] });
+    if (phantom.credit !== 0) v.push('a compensating control with no verifying fitness function was credited');
+    // The cap holds however many are stacked.
+    const stacked = rr.compensatingCredit(threat, { fitnessResults: controlIds.map((id) => ({ id, pass: true })), extra: controlIds.slice(0, 8) });
+    if (stacked.credit > tm.COMPENSATING_CREDIT_CAP) v.push('stacked compensating controls exceeded the credit cap');
+
+    // Treatment plans: strategy, owner, actions, due date, evidence to close.
+    for (const bad of [{}, { strategy: 'ignore' }, { strategy: 'treat', owner: 'X' }, { strategy: 'treat', owner: 'X', by: 'Y', rationale: 'r', actions: [] }, { strategy: 'treat', owner: 'X', by: 'Y', rationale: 'r', actions: ['a'], dueInDays: 400 }]) {
+      let refused = false;
+      try { rr.planTreatment(threat, bad); } catch (_) { refused = true; }
+      if (!refused) v.push(`an invalid treatment plan was accepted: ${JSON.stringify(bad)}`);
+    }
+    const plan = rr.planTreatment(threat, { strategy: 'treat', owner: 'Security Operations Centre', by: 'CISO', rationale: 'residual above tolerance', dueInDays: 30, actions: ['implement the missing detective control'] });
+    if (plan.state !== 'open' || !plan.intent) v.push('a treatment plan did not record its state and intent');
+    for (const s of ['transfer', 'avoid', 'accept']) if (!tm.TREATMENT_STRATEGIES[s].requiresBoard) v.push(`strategy '${s}' does not require board sign-off`);
+    let noEvidence = false;
+    try { rr.closeTreatment(plan.id, { by: 'CISO' }); } catch (e) { noEvidence = !!e.failClosed; }
+    if (!noEvidence) v.push('a treatment plan was closed without evidence of the change');
+    if (rr.overdueTreatments({ now: 0 }).length) v.push('a fresh treatment plan was reported overdue');
+    if (!rr.overdueTreatments({ now: 60 * 24 * 3600_000 }).length) v.push('an elapsed treatment plan was not reported overdue');
+    if (rr.closeTreatment(plan.id, { by: 'CISO', evidence: 'control implemented and verified by APP-FIT-THREAT-MODEL' }).state !== 'closed') v.push('a properly evidenced treatment could not be closed');
+
+    // Predictive forecasting over the recorded exposure history.
+    const rr2 = new tm.RiskRegister({ clock: () => 0 });
+    if (rr2.forecast().direction !== 'insufficient-data') v.push('a forecast was produced from no history at all');
+    for (let i = 0; i < 4; i++) rr2.snapshot({ fitnessResults: green, now: i });
+    const flat = rr2.forecast();
+    if (flat.direction !== 'flat') v.push('an unchanging exposure history was not reported as flat');
+    const rr3 = new tm.RiskRegister({ clock: () => 0 });
+    // Exposure worsening as controls fail one by one.
+    for (let i = 0; i < 5; i++) rr3.snapshot({ fitnessResults: controlIds.map((id, idx) => ({ id, pass: idx >= i })), now: i });
+    const worsening = rr3.forecast();
+    if (worsening.direction !== 'worsening') v.push('a rising exposure history was not reported as worsening');
+    if (!worsening.breachExpected) v.push('a rising exposure trend was not forecast to breach tolerance');
+    if (worsening.authorizes !== false) v.push('the risk forecast claims authority');
+    if (JSON.stringify(rr3.forecast()) !== JSON.stringify(rr3.forecast())) v.push('risk forecasting is not deterministic');
+
+    // The report carries the quantitative view alongside the qualitative lifecycle.
+    const report = rr.report({ fitnessResults: green, now: 0 });
+    if (!report.scales || !report.quantitative || !report.forecast) v.push('the risk report omits the quantitative view');
+    if (!report.quantitative.some((q) => q.threat === threat && q.measured)) v.push('a scored threat did not appear as measured in the report');
+  }),
+
   fit('APP-FIT-FORMAL-POLICY', 'Critical governance policies are proven, and the checker can produce counterexamples', (v) => {
     const fp = require('../src/iam/formal-policy');
     const mandates = [{ instrument: 'data-protection-act', control: 'FIT-IDENTITY-MINIMIZATION', implemented: true, holding: true }];
@@ -1503,6 +1739,78 @@ module.exports = [
     // Continuous validation is fail-closed and never authorizes.
     const cv = fp.continuousValidation({ mandates });
     if (cv.failClosed !== true || cv.authorizes !== false) v.push('continuous policy validation is not fail-closed / claims authority');
+  }),
+
+  fit('APP-FIT-FORMAL-CATALOGUE', 'Every proven property is catalogued with its context, method, coverage, ADR and accountable owner', (v) => {
+    const fp = require('../src/iam/formal-policy');
+    const contextMap = require('../src/architecture/context-map');
+    const adr = require('../src/architecture/adr-governance');
+    const mandates = [{ instrument: 'data-protection-act', control: 'FIT-IDENTITY-MINIMIZATION', implemented: true, holding: true }];
+
+    for (const violation of fp.validateCatalogue({ mandates }).violations) v.push(violation);
+    const cat = fp.catalogue({ mandates });
+
+    // Part 3 requires every one of these areas to be covered by a property.
+    const kinds = new Set(cat.properties.map((p) => p.kind));
+    const required = {
+      'authorization correctness': 'authorization',
+      'privilege isolation': 'privilege-escalation',
+      'separation of duties': 'separation-of-duties',
+      'evidence integrity': 'evidence-integrity',
+      'workflow consistency': 'workflow-consistency',
+      'event ordering': 'event-ordering',
+      'legislative compliance': 'legislative',
+      'residency correctness': 'data-residency',
+      'deadlock freedom': 'deadlock-freedom',
+    };
+    for (const [area, kind] of Object.entries(required)) if (!kinds.has(kind)) v.push(`no property covers ${area}`);
+
+    // Every catalogue row carries everything a reviewer needs to judge what was established.
+    const knownContexts = new Set(contextMap.ids());
+    const knownAdrs = new Set(adr.adrFiles().map((f) => 'ADR-' + f.slice(0, 4)));
+    for (const p of cat.properties) {
+      for (const field of ['id', 'description', 'statement', 'kind', 'boundedContext', 'verificationMethod', 'proofStatus', 'proofCoverage', 'owningAdr', 'responsibleOwner', 'guarantee']) {
+        if (p[field] === undefined || p[field] === null) v.push(`${p.id}: catalogue row is missing '${field}'`);
+      }
+      if (!knownContexts.has(p.boundedContext)) v.push(`${p.id}: bounded context '${p.boundedContext}' is not a real context`);
+      if (!knownAdrs.has(p.owningAdr)) v.push(`${p.id}: owning ADR '${p.owningAdr}' does not exist`);
+      if (p.proofStatus !== 'proven') v.push(`${p.id}: ${p.proofStatus}`);
+      if (p.proofCoverage !== 1 || !p.exhaustive) v.push(`${p.id}: proof covered ${p.proofCoverage} of its domain — a partial proof is a sample`);
+      if (p.counterexample !== null) v.push(`${p.id}: a proven property carries a counterexample`);
+      if (!p.governanceBoard) v.push(`${p.id}: no governance board answers for this property`);
+    }
+    if (!cat.machineReadable) v.push('the catalogue does not declare itself machine-readable');
+    if (cat.total !== Object.keys(fp.SPECIFICATIONS).length) v.push('the catalogue does not cover every specification');
+    if (!cat.allProven) v.push('a catalogued property is not proven: ' + cat.refuted.join(', '));
+
+    // Verification method is stated per kind, because "proven" means different things by method.
+    for (const kind of kinds) if (!fp.VERIFICATION_METHODS[kind]) v.push(`kind '${kind}' declares no verification method`);
+    for (const [kind, m] of Object.entries(fp.VERIFICATION_METHODS)) {
+      if (!m.method || !m.description) v.push(`verification method for '${kind}' is incompletely described`);
+    }
+    if (new Set(Object.values(fp.VERIFICATION_METHODS).map((m) => m.method)).size < 2) v.push('every property claims the same verification method — the distinction is not being drawn');
+
+    // THE VALIDATOR MUST BITE: a specification with no governance record fails the catalogue.
+    const originalGov = fp.SPEC_GOVERNANCE['SPEC-AUTHZ-DEFAULT-DENY'];
+    try {
+      delete fp.SPEC_GOVERNANCE['SPEC-AUTHZ-DEFAULT-DENY'];
+      const orphaned = fp.validateCatalogue({ mandates });
+      if (orphaned.valid) v.push('a specification with no owning context or ADR passed catalogue validation');
+      if (!orphaned.violations.some((x) => /no governance record|no bounded context/.test(x))) v.push('the missing governance record was not named');
+    } finally { fp.SPEC_GOVERNANCE['SPEC-AUTHZ-DEFAULT-DENY'] = originalGov; }
+    // …and so does a governance record for a specification that does not exist.
+    try {
+      fp.SPEC_GOVERNANCE['SPEC-IMAGINARY'] = { context: 'assurance', adr: 'ADR-0001' };
+      if (fp.validateCatalogue({ mandates }).valid) v.push('governance recorded for a non-existent specification passed validation');
+    } finally { delete fp.SPEC_GOVERNANCE['SPEC-IMAGINARY']; }
+
+    // The continuous proof report is regenerated from the specifications, and is deterministic.
+    const rep = fp.proofReport({ mandates });
+    if (!rep.validation.valid) v.push('the proof report is internally inconsistent');
+    if (rep.authorizes !== false || rep.informationalOnly !== true) v.push('the proof report claims authority');
+    if (!Object.keys(rep.byContext).length || !Object.keys(rep.byMethod).length || !Object.keys(rep.byAdr).length) v.push('the proof report does not group by context, method and ADR');
+    if (rep.byContext.unowned) v.push('a property is grouped as unowned');
+    if (JSON.stringify(fp.proofReport({ mandates })) !== JSON.stringify(rep)) v.push('the proof report is not deterministic');
   }),
 
   fit('APP-FIT-SRE-RELIABILITY', 'SLOs, error budgets and the release gate hold — and fail when breached', (v) => {

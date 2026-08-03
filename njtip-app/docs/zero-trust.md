@@ -1,4 +1,4 @@
-# Zero Trust Architecture (Phase 10, Part 1)
+# Zero Trust Architecture (Phase 10, Part 1 · Phase 11, Part 1 · Phase 12, Part 1)
 
 The platform's existing pieces — trust scoring, device registry, break-glass, policy-as-data,
 RBAC/ABAC — are assembled into the named NIST SP 800-207 components, so "zero trust" is a structure
@@ -125,3 +125,63 @@ undeclared boundary crossing is denied; the RBAC ceiling holds; a sensitive acti
 MFA is not permitted; a workload request without a credential is denied; **two identical requests are
 each evaluated** (nothing cached); a PAP publication without a named human is refused; a published
 policy change reaches the PDP; and the PEP enforces and audits without leaking identity.
+
+---
+
+# Context-Aware Authorization (Phase 12, Part 1)
+
+Gated by `APP-FIT-ZERO-TRUST-CONTEXT`. Live: `POST /api/security/zero-trust/context`.
+
+Phase 11 made a decision reusable only while its context held. Phase 12 answers the question that
+leaves open: **what, exactly, is the context?** Nine dimensions, each checked and each reported
+separately — a request denied on clearance and a request denied on network are different problems
+for the person who hit them, and a composite score cannot tell them apart.
+
+| Dimension | Checked against | Denied when |
+|---|---|---|
+| **Authentication assurance** | The action's floor (`AAL0`–`AAL3`) | The authenticator presented is weaker than the action demands |
+| **Security clearance** | The resource's classification | Clearance is below classification — no read up |
+| **Tenant / jurisdiction** | The resource's own tenant and jurisdiction | They differ; residency is a sovereign obligation |
+| **Credential version** | `env.minCredentialVersion` | The credential has been superseded, whatever its expiry says |
+| **Device trust posture** | The action's sensitivity | Posture is `compromised`, or unknown for a sensitive action |
+| **Environmental conditions** | Network, country, time window | Untrusted network for a sensitive action, or geo-denied |
+| **Workload identity** | SPIFFE id + attestation | Unchanged from Phase 10 |
+| **Session** | Revocation registry | Session, credential or subject revoked |
+| **Policy version** | The PAP's authoritative version | The request asserts a version that is not current |
+
+## Assurance is derived, never asserted
+
+```
+fido2 · piv · smartcard → AAL3      (hardware-bound, verifier-impersonation resistant)
+totp · push             → AAL2
+password · case-code    → AAL1
+nothing                 → AAL0
+```
+
+A request that *says* it is AAL3 is a request making an assertion about itself, which is the one
+thing zero trust does not accept. The level is resolved from the authenticator actually presented.
+
+**Filing a report requires AAL0.** The constitutional path must stay open to a citizen with nothing
+but a browser; reading evidence and recording a governance decision require AAL3.
+
+## Policy freshness and replay
+
+- **Freshness** — a request may state the policy version it believes is current. If it disagrees
+  with the PAP, the request is **denied**: deciding against a policy the caller has already moved
+  past, or has not yet seen, is deciding on a policy nobody agreed applies.
+- **Replay** — a request nonce may be presented once. A replayed authorization request is either a
+  bug or an attack, and both deserve a denial.
+
+## Two defects this part found
+
+> **The resource's tenant was not in the context digest.** The tenant check itself worked — a
+> cross-tenant request was denied on evaluation. But the digest keyed only the *subject's* tenant,
+> so a cached permit for one agency's resource was replayable against another agency's. Same shape
+> as the Phase 11 role-escalation flaw, one level down. `resourceTenant` and `resourceJurisdiction`
+> are now in the digest.
+
+> **`pap.registry()` returned a display summary that dropped policy conditions.** Republishing it —
+> the obvious way to re-issue the current policy set — turned every conditional deny into a blanket
+> deny and took authorization down platform-wide. It failed in the safe direction, but an operator
+> republishing the current policy should not be able to cause an outage. `registry()` is now a
+> faithful round-trip and `summary()` keeps the short form.
