@@ -42,6 +42,8 @@ const raci = require('./governance/raci');
 const institutionalResilience = require('./governance/institutional-resilience');
 const { RehearsalRegister } = require('./governance/rehearsals');
 const { DecisionMemory } = require('./architecture/decision-memory');
+const institutional = require('./assurance/institutional');
+const driftPrevention = require('./architecture/drift-prevention');
 const { ContractRegistry } = require('./contracts/integration-contracts');
 const { ConsumerContracts } = require('./contracts/consumer-contracts');
 const evidenceConfidence = require('./assurance/evidence-confidence');
@@ -453,6 +455,9 @@ function createApp(overrides = {}) {
   // evaluated, so the reports say so rather than the platform congratulating itself.
   const rehearsals = new RehearsalRegister({ clock: () => Date.now(), exercises: ownership.exercises });
   const decisionMemory = new DecisionMemory({ clock: () => Date.now() });
+  // Phase 13, Part 19: the improvement loop. Empty — no fitness function has failed and been
+  // corrected on this build, and recording one that had not would be fabricated history.
+  const improvements = new institutional.ImprovementLoop({ clock: () => Date.now() });
   // Stable integration contracts (Part 3) + the component migration roadmap (Part 4). The
   // contract registry is the published interface surface; a boundary crossing without a
   // contract, or a migration item without a rollback, refuses composition.
@@ -670,7 +675,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, ownership, institutionalResilience, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

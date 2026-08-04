@@ -857,7 +857,81 @@ function missionDependencyGraph() {
   };
 }
 
+// --- Operational intelligence (Phase 13, Part 18) -------------------------------------------------
+//
+// The mission chain traces a technical event forward to a citizen. Part 18 asks the operational
+// version of the same question, one layer further: what does the state of the infrastructure right
+// now imply about business process, mission outcome, citizen experience and GOVERNANCE PERFORMANCE —
+// and what should somebody do about it before it becomes an incident?
+//
+// The rule that keeps this from being a dashboard of green ticks: A LAYER WITH NO MEASUREMENT IS
+// REPORTED AS UNMEASURED, and an unmeasured layer breaks the chain rather than being skipped over.
+// A correlation drawn across a gap is a correlation between one thing and an assumption.
+const OPERATIONAL_LAYERS = ['infrastructure', 'application-behaviour', 'business-process', 'mission-outcome', 'citizen-experience', 'governance-performance'];
+
+function operationalIntelligence({
+  infrastructure = null, applicationBehaviour = null, businessMetrics = null,
+  missionOutcomes = null, governance = null, now = 0,
+} = {}) {
+  const layers = [
+    { layer: 'infrastructure', measured: infrastructure !== null, state: infrastructure, means: 'Whether the services and stores are healthy.' },
+    { layer: 'application-behaviour', measured: applicationBehaviour !== null, state: applicationBehaviour, means: 'Whether the services are doing what they are for, not merely running.' },
+    { layer: 'business-process', measured: businessMetrics !== null, state: businessMetrics, means: 'Whether justice is moving: throughput, latency, backlog.' },
+    { layer: 'mission-outcome', measured: missionOutcomes !== null, state: missionOutcomes, means: 'Whether the outcomes the platform exists for are being achieved.' },
+    { layer: 'citizen-experience', measured: businessMetrics !== null, state: businessMetrics ? { derivedFrom: 'business-process' } : null, means: 'What a person filing a report actually experiences.' },
+    { layer: 'governance-performance', measured: governance !== null, state: governance, means: 'Whether the people accountable are acting within their cadences.' },
+  ];
+  const unmeasured = layers.filter((l) => !l.measured).map((l) => l.layer);
+
+  // Recommendations are derived from what IS measured, and each names the layer it came from and
+  // what would falsify it — a recommendation nobody can argue with is an instruction.
+  const recommendations = [];
+  if (infrastructure && Array.isArray(infrastructure.degraded) && infrastructure.degraded.length) {
+    recommendations.push({
+      from: 'infrastructure', urgency: 'act-now',
+      recommendation: `Restore ${infrastructure.degraded.join(', ')} before the business layer registers it — degradation reaches throughput after the backlog has already grown.`,
+      falsifiedBy: 'These services being healthy, or the capability not depending on them.',
+    });
+  }
+  if (businessMetrics && typeof businessMetrics.backlog === 'number' && businessMetrics.backlog > 0) {
+    recommendations.push({
+      from: 'business-process', urgency: 'this-week',
+      recommendation: `A backlog of ${businessMetrics.backlog} means people who filed reports are waiting. Add investigator capacity or triage, and tell them either way.`,
+      falsifiedBy: 'The backlog falling without intervention over the next period.',
+    });
+  }
+  if (governance && Array.isArray(governance.overdueReviews) && governance.overdueReviews.length) {
+    recommendations.push({
+      from: 'governance-performance', urgency: 'this-week',
+      recommendation: `${governance.overdueReviews.length} governance review(s) are overdue. An overdue review is a control nobody has confirmed still works.`,
+      falsifiedBy: 'The reviews being completed and recorded.',
+    });
+  }
+  if (unmeasured.length) {
+    recommendations.push({
+      from: 'coverage', urgency: 'act-now',
+      recommendation: `Instrument ${unmeasured.join(', ')}. A chain with an unmeasured layer cannot carry a conclusion across it.`,
+      falsifiedBy: 'Those layers being measured.',
+    });
+  }
+
+  return {
+    layers, chain: OPERATIONAL_LAYERS,
+    measuredLayers: layers.filter((l) => l.measured).length,
+    unmeasured,
+    // The chain carries a conclusion only if every layer between the ends is measured.
+    chainComplete: unmeasured.length === 0,
+    correlationValid: unmeasured.length === 0,
+    recommendations, recommendationCount: recommendations.length,
+    informationalOnly: true, authorizes: false,
+    note: unmeasured.length
+      ? `The correlation cannot be carried across ${unmeasured.join(', ')}: an unmeasured layer breaks the chain rather than being skipped. A correlation drawn across a gap is a correlation between one thing and an assumption.`
+      : 'Every layer is measured, so a conclusion drawn at one end is supported at the other.',
+  };
+}
+
 module.exports = {
+  OPERATIONAL_LAYERS, operationalIntelligence,
   missionDependencyGraph,
   BUSINESS_METRICS, DWELL_METRICS, EVENT_ALIASES, catalogue,
   CHAIN_LAYERS, CHAIN_LINKS, MISSION_OUTCOMES, INFRASTRUCTURE_COMPONENTS, chainLinks, missionOutcomes,

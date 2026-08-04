@@ -4948,6 +4948,116 @@ module.exports = [
     }
   }),
 
+  fit('APP-FIT-INSTITUTIONAL-ASSURANCE', 'Institutional readiness is proved from evidence and still never authorizes; an unmeasured domain is never a green one', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const bus = require('../src/observability/business');
+
+    // --- Part 15: every executive metric is derived ------------------------------------------
+    for (const [id, p] of Object.entries(inst.EXECUTIVE_PANELS)) {
+      if (!p.question || !p.derivedFrom) v.push(`executive panel '${id}' does not state its question or where it is derived from`);
+    }
+    const blind = inst.executiveGovernanceIntelligence({});
+    if (blind.sound) v.push('an executive dashboard with nothing measured reported sound');
+    if (blind.unmeasured.length !== Object.keys(inst.EXECUTIVE_PANELS).length) v.push('unmeasured panels were not all reported as unmeasured');
+    if (!blind.everyMetricDerived) v.push('an executive metric is not derived');
+    for (const p of blind.panels) {
+      if (p.manualEntry !== false) v.push(`panel '${p.panel}' permits manual entry`);
+      if (p.sound !== null) v.push(`panel '${p.panel}' reported a verdict with nothing measured`);
+    }
+    if (blind.authorizationStatus !== 'NOT AUTHORIZED') v.push('the executive dashboard produced something other than NOT AUTHORIZED');
+    // There is no path that accepts a figure: a caller-supplied value must not appear as a panel.
+    const injected = inst.executiveGovernanceIntelligence({ institutionalResilience: 1, governanceMaturity: 5 });
+    if (injected.panels.find((p) => p.panel === 'institutionalResilience').measured) v.push('a hand-entered executive metric was accepted');
+
+    // …and with real sources the panels populate, or this is a dashboard that can only be blank.
+    const wired = inst.executiveGovernanceIntelligence({
+      resilience: { holds: true, violationCount: 0 },
+      governanceMaturity: { level: 5, name: 'Continuously assured' },
+      readiness: { readyCount: 10, dimensionCount: 10, allDimensionsReady: true },
+      mission: { safeToDeploy: true, boardSummary: 'no service affected' },
+      documentation: { sound: true, verification: { claims: 132, unresolvedCount: 0 } },
+      continuity: { sound: true, minimumBusFactor: 2, singlePersonDependencies: [] },
+      compliance: { complianceRate: 1, direction: 'improving', recentDirection: 'improving', reconciliation: { sound: true } },
+      training: { sound: true, readinessContribution: 1, expiredQualifications: [] },
+      simulation: { confidence: 'high', uncalibrated: [] },
+      assumptions: { count: 9, sound: true, stale: [], overclaims: [] },
+    });
+    if (!wired.sound) v.push('a fully evidenced executive dashboard was not sound: ' + wired.unsound.join(', '));
+    if (wired.authorizationStatus !== 'NOT AUTHORIZED') v.push('ten green executive panels produced an authorization');
+    if (wired.authorizes !== false) v.push('the executive dashboard claims authority');
+
+    // --- Part 19: the improvement loop must close ---------------------------------------------
+    const loop = new inst.ImprovementLoop({ clock: () => 0 });
+    let speculative = false;
+    try { loop.observe({ detail: 'something', observedBy: 'CI' }); } catch (_) { speculative = true; }
+    if (!speculative) v.push('an improvement was opened with no control behind it — that is a project, not a correction');
+    let unattributed = false;
+    try { loop.observe({ control: 'APP-FIT-X', detail: 'failed' }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('an observed failure was recorded with nobody observing it');
+
+    const item = loop.observe({ control: 'APP-FIT-X', detail: 'the control failed', observedBy: 'CI' });
+    let skipped = false;
+    try { loop.advance(item.id, 'verified', { by: 'A', detail: 'd' }); } catch (e) { skipped = !!e.failClosed; }
+    if (!skipped) v.push('an improvement skipped from observed straight to verified');
+    loop.advance(item.id, 'root-caused', { by: 'Engineering', detail: 'the digest omitted the resource tenant' });
+    loop.advance(item.id, 'action-agreed', { by: 'ARB', detail: 'add resourceTenant to the digest' });
+    let noAdr = false;
+    try { loop.advance(item.id, 'decided', { by: 'ARB', detail: 'agreed' }); } catch (e) { noAdr = !!e.failClosed; }
+    if (!noAdr) v.push('a corrective action changing the architecture was recorded with no ADR');
+    loop.advance(item.id, 'decided', { by: 'ARB', detail: 'agreed', adr: 'ADR-0005' });
+    // THE RULE: verification is the control that FAILED now passing. Not a new one.
+    let unverified = false;
+    try { loop.advance(item.id, 'verified', { by: 'CI', detail: 'fixed', controls: [{ id: 'APP-FIT-X', pass: false }] }); } catch (e) { unverified = !!e.failClosed; }
+    if (!unverified) v.push('an improvement was verified while the control that failed was still failing');
+    let wrongControl = false;
+    try { loop.advance(item.id, 'verified', { by: 'CI', detail: 'fixed', controls: [{ id: 'APP-FIT-SOMETHING-ELSE', pass: true }] }); } catch (e) { wrongControl = !!e.failClosed; }
+    if (!wrongControl) v.push('an improvement was verified by a control other than the one that failed');
+    loop.advance(item.id, 'verified', { by: 'CI', detail: 'the control holds', controls: [{ id: 'APP-FIT-X', pass: true }] });
+    loop.advance(item.id, 'outcome-recorded', { by: 'ARB', detail: 'held across a quarter' });
+    const history = loop.history({});
+    if (history.closureRate !== 1) v.push('a fully closed improvement was not reported as closed');
+    if (history.authorizes !== false) v.push('the improvement history claims authority');
+    // An improvement stuck before verification is named, because the work was done and nobody checked.
+    const stalled = new inst.ImprovementLoop({ clock: () => 0 });
+    const s = stalled.observe({ control: 'APP-FIT-Y', detail: 'failed', observedBy: 'CI' });
+    stalled.advance(s.id, 'root-caused', { by: 'A', detail: 'cause' });
+    if (!stalled.history({}).stalled.some((x) => x.at === 'root-caused')) v.push('an improvement stalled before verification was not named');
+
+    // --- Part 18: an unmeasured layer breaks the correlation ----------------------------------
+    const noLayers = bus.operationalIntelligence({});
+    if (noLayers.correlationValid) v.push('a correlation was carried across six unmeasured layers');
+    if (noLayers.unmeasured.length !== bus.OPERATIONAL_LAYERS.length) v.push('unmeasured operational layers were not all reported');
+    if (!/correlation between one thing and an assumption/.test(noLayers.note)) v.push('the operational chain does not say what a gap costs');
+    const full = bus.operationalIntelligence({ infrastructure: { degraded: ['kms'] }, applicationBehaviour: {}, businessMetrics: { backlog: 12 }, missionOutcomes: {}, governance: { overdueReviews: ['intake'] } });
+    if (!full.chainComplete) v.push('a fully measured operational chain was reported incomplete');
+    if (!full.recommendations.length) v.push('a degraded estate produced no operational recommendation');
+    for (const r of full.recommendations) if (!r.falsifiedBy || !r.from) v.push('an operational recommendation states nothing that would falsify it');
+    if (full.authorizes !== false) v.push('operational intelligence claims authority');
+
+    // --- Part 20: the framework, and the invariant that outlives every phase ------------------
+    for (const [id, d] of Object.entries(inst.ASSURANCE_DOMAINS)) if (!d.unverifiedMeans) v.push(`assurance domain '${id}' does not say what unverified would mean`);
+    if (Object.keys(inst.ASSURANCE_DOMAINS).length < 13) v.push(`only ${Object.keys(inst.ASSURANCE_DOMAINS).length} assurance domains are declared; Part 20 names thirteen`);
+    const nothing = inst.institutionalAssurance({});
+    if (nothing.institutionallyReady) v.push('institutional readiness was claimed with nothing measured');
+    if (nothing.unmeasured.length !== Object.keys(inst.ASSURANCE_DOMAINS).length) v.push('unmeasured domains were not all reported as unmeasured');
+    if (nothing.domains.some((d) => d.state === 'verified')) v.push('a domain was verified with nothing measured');
+    for (const b of nothing.blockers) if (!/unmeasured|failing/.test(b)) v.push('a blocker does not say whether the domain is failing or unmeasured');
+    const green = inst.institutionalAssurance({
+      drift: { clean: true }, security: true, privacy: true,
+      governanceMaturity: { level: 5 }, documentation: { sound: true },
+      readiness: { allDimensionsReady: true }, continuity: { sound: true, minimumBusFactor: 2 },
+      resilience: { holds: true }, training: { sound: true },
+      compliance: { reconciliation: { sound: true } }, mission: { safeToDeploy: true },
+      evidenceQuality: { sound: true },
+    });
+    if (!green.institutionallyReady) v.push('a fully verified estate was not reported institutionally ready: ' + green.blockers.join('; '));
+    // THE INVARIANT. Thirteen verified domains still print NOT AUTHORIZED.
+    if (green.authorizationStatus !== 'NOT AUTHORIZED') v.push('thirteen verified assurance domains produced an authorization');
+    if (green.authorizes !== false || green.derivedFromReadiness !== false) v.push('the institutional assurance framework claims to derive authorization');
+    if (!/does not replace human authority/.test(green.note)) v.push('the framework does not state that it never replaces human authority');
+    if (green.failClosed !== true) v.push('the institutional assurance framework is not fail-closed');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

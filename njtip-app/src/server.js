@@ -204,6 +204,42 @@ async function route(app, req, url, body) {
   if (method === 'POST' && p === '/api/governance/exercises') { const u = requireRole('admin'); const o = require('./governance/ownership'); return json(201, o.exercises.recordParticipation({ ...(body || {}), by: (body && body.by) || u.principal })); }
   if (method === 'GET' && p === '/api/governance/institutional-resilience') { requireRole('oversight-board'); const o = require('./governance/ownership'); const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); const continuity = o.knowledgeContinuity({ availability: o.availabilityRegister, activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() }); return json(200, app.institutionalResilience.report({ continuity, controls: f, acceptances: o.resilienceAcceptances, now: Date.now() })); }
   if (method === 'POST' && p === '/api/governance/resilience-acceptances') { const u = requireRole('oversight-board'); const o = require('./governance/ownership'); return json(201, o.resilienceAcceptances.accept({ ...(body || {}), by: (body && body.by) || u.principal })); }
+  // --- Phase 13: executive intelligence, operational intelligence, institutional assurance ---
+  if (method === 'GET' && p === '/api/assurance/executive-governance') {
+    requireRole('oversight-board');
+    const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }));
+    const o = require('./governance/ownership');
+    const continuity = o.knowledgeContinuity({ availability: o.availabilityRegister, activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() });
+    return json(200, app.institutional.executiveGovernanceIntelligence({
+      resilience: app.institutionalResilience.evaluate({ continuity, controls: f }),
+      governanceMaturity: app.assurance.engineeringIntelligence().governanceMaturity,
+      readiness: app.assurance.readiness(),
+      documentation: require('./architecture/documentation-assurance').report({ controls: f }),
+      continuity,
+      training: o.trainingAssurance({ activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() }),
+      simulation: app.operationsTwin().confidenceReport({ controls: f }),
+      assumptions: app.assumptions.report({ controls: f }),
+      compliance: app.legislation.intelligence.evolution({ controls: f }),
+    }));
+  }
+  if (method === 'GET' && p === '/api/assurance/institutional') {
+    requireRole('oversight-board');
+    const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass }));
+    const o = require('./governance/ownership');
+    const continuity = o.knowledgeContinuity({ availability: o.availabilityRegister, activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() });
+    return json(200, app.institutional.institutionalAssurance({
+      drift: app.driftPrevention.detect({ controls: f, assumptions: app.assumptions }),
+      governanceMaturity: app.assurance.engineeringIntelligence().governanceMaturity,
+      documentation: require('./architecture/documentation-assurance').report({ controls: f }),
+      readiness: app.assurance.readiness(), continuity,
+      resilience: app.institutionalResilience.evaluate({ continuity, controls: f }),
+      training: o.trainingAssurance({ activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() }),
+      compliance: app.legislation.intelligence.evolution({ controls: f }),
+      evidenceQuality: require('./assurance/evidence-confidence').evidenceQualityDashboard(app.assurance.evidenceRegister(), { now: 0 }),
+    }));
+  }
+  if (method === 'GET' && p === '/api/assurance/improvements') { requireRole('admin'); return json(200, app.improvements.history({ now: Date.now() })); }
+  if (method === 'GET' && p === '/api/observability/operational-intelligence') { requireRole('admin'); return json(200, require('./observability/business').operationalIntelligence({ now: Date.now() })); }
   // --- Phase 13: evidence quality, architecture drift, governance analytics ---
   if (method === 'GET' && p === '/api/assurance/evidence-quality') { requireRole('admin'); return json(200, require('./assurance/evidence-confidence').evidenceQualityDashboard(app.assurance.evidenceRegister(), { now: 0 })); }
   if (method === 'GET' && p === '/api/architecture/drift') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); return json(200, require('./architecture/drift-prevention').detect({ controls: f, assumptions: app.assumptions })); }

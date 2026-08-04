@@ -20,6 +20,7 @@ without a demonstrated, implementation-driven need.
 | [0005](./adr/0005-authorization-decision-caching.md) | Replace "nothing is cached" with signed, revocable, policy-versioned authorization decisions | Accepted | Zero Trust authorization path; scalability without weakening the guarantee |
 | [0006](./adr/0006-adaptive-assurance-and-predictive-operations.md) | Adaptive assurance, predictive operations, and the extended ADR schema | Accepted | Phase 11 capabilities; ADR schema extension applied from 0006 onward |
 | [0007](./adr/0007-session-consistency-and-adr-review-lifecycle.md) | Session-scoped consistency, and the ADR review lifecycle | Accepted | Read-your-writes / monotonic-reads stances; ADR governance schema applied from 0007 onward |
+| [0008](./adr/0008-institutional-assurance-and-the-single-dependency-invariant.md) | Institutional assurance, and the single-dependency invariant | Accepted | The global invariant that no critical capability may rest on a single person, process, document or system |
 | [template](./adr/000-template.md) | ADR template | — | Required format for every new decision |
 
 **Schema, in four tiers.** Each ADR is validated against the standard that was in force when it was

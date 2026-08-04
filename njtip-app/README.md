@@ -34,30 +34,28 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.12 — predictive governance, digital twin operations & enterprise intelligence.** The
-> architecture stays **frozen** at [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md) — no new
-> bounded context, every capability added inside an existing one
-> ([ADR-0007](./docs/adr/0007-session-consistency-and-adr-review-lifecycle.md)).
-> Phase 12 answers the question after Phase 11's — *what will this change do, and to whom?* — with a
-> [digital twin of operations](./docs/operations-twin.md) built from the architecture-of-record,
-> whose isolation from production state is verified by digest after every simulation;
-> [predictive mission impact analysis](./docs/business-observability.md) tracing a technical event
-> through justice services to **citizen impact** and strategic goals, stated in the citizen's words;
-> [automated compliance intelligence](./docs/compliance-intelligence.md) where an unassessed change
-> is a gap rather than silence; an [enterprise knowledge graph](./docs/enterprise-graph.md) whose
-> traceability is a per-entity question with named answers;
-> [context-aware Zero Trust](./docs/zero-trust.md), [quantitative risk](./docs/risk-intelligence.md),
-> [predictive SRE gates](./docs/reliability-engineering.md),
-> [four-stage resilience scoring](./docs/resilience-engineering.md),
-> [executive data-quality dashboards](./docs/data-governance.md),
-> [trusted-builder verification and deployability reports](./docs/supply-chain-security.md),
-> [AI fairness criteria and confidence calibration](./docs/ai-governance.md),
-> [session-scoped consistency](./docs/multi-region.md),
-> [an ADR review lifecycle](./docs/architecture-governance.md) that rejects incomplete decisions,
-> [pre-deployment release impact](./docs/consumer-contracts.md),
-> [active governance ownership](./docs/governance-ownership.md), and
-> [evidence provenance, readiness dependency analysis and engineering forecasting](./docs/evidence-confidence.md).
-> Combined gate: **129 invariants**, 607 tests. Full summary: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·
+> **v1.13 — institutional resilience, documentation assurance & organizational continuity.** The
+> architecture stays **frozen** at [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md)
+> ([ADR-0008](./docs/adr/0008-institutional-assurance-and-the-single-dependency-invariant.md)).
+> Phase 13 asks what nothing had asked — *could the institution running this survive losing one of
+> anything?* — and adopts a new global invariant: **no critical capability may depend on a single
+> person, process, document or system**. It does not currently hold, which is the point of adopting
+> it: three constitutional capabilities rest on a single per-zone persistence store, recorded as a
+> ratchet so no new single dependency can join them.
+> Also: an [executable assumption registry](./docs/assumptions.md) where declared and assessed
+> confidence are separate and the gap is named an overclaim;
+> [twin confidence](./docs/assumptions.md) capped by calibration, so a simulation nobody has checked
+> against reality cannot claim to be trusted;
+> [documentation assurance](./docs/documentation-assurance.md) across the whole corpus, with the
+> extractor guarding its own yield; [governance rehearsals](./docs/rehearsals-and-memory.md) scored
+> against what the runbook promised rather than against effort;
+> [decision memory](./docs/rehearsals-and-memory.md) where a decision nobody checked is unevaluated
+> rather than successful; [evidence quality](./docs/drift-and-quality.md) in which corroboration
+> from the same source kind is not corroboration; and an
+> [institutional assurance framework](./docs/institutional-assurance.md) over thirteen domains that
+> proves readiness and still prints `NOT AUTHORIZED`.
+> Combined gate: **143 invariants**, 742 tests. Full summary: [`docs/institutional-assurance.md`](./docs/institutional-assurance.md) ·
+> v1.12: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·
 > v1.11: [`docs/adaptive-assurance.md`](./docs/adaptive-assurance.md) ·
 > v1.10: [`docs/high-assurance.md`](./docs/high-assurance.md) ·
 > v1.9: [`docs/stabilization.md`](./docs/stabilization.md) ·
