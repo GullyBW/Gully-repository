@@ -75,3 +75,48 @@ A single-direction traversal quietly answers only one of them. Depth is bounded 
 reported; the caveat states that traversal is over **declared** edges, so the result is a lower
 bound. An entity the graph does not contain returns `known: false` with *"absence of a node is not
 absence of the thing"* rather than an empty result that reads like safety.
+
+---
+
+# Temporal Knowledge Graph (Phase 13, Part 5)
+
+Phase 12's graph could answer *"what is true now"*. The questions that matter in an investigation are
+all of the form *"what was true **then**"* — which policies governed this dataset on that date, which
+controls existed during the investigation, which ADRs were active at deployment, who approved.
+
+Every edge now carries five temporal fields:
+
+| Field | Derived from |
+|---|---|
+| `createdAt` | The graph epoch, or the caller's history |
+| `expiredAt` | `null` while in force |
+| `version` | 1 unless re-established |
+| `evidence` | **The control that would fail if this edge were wrong** — declared per relationship |
+| `owner` | Resolved from the endpoints' ownership |
+
+`evidence` is what makes an edge evidenced rather than merely asserted, and it is declared per
+relationship rather than guessed: an edge whose evidence was inferred from a name would eventually
+cite a control that checks something else entirely. The fitness function asserts every cited control
+actually runs.
+
+## The queries
+
+| Call | Answers |
+|---|---|
+| `edgesAsOf(t)` | Which relationships were in force at that instant |
+| `asOf(t, { node })` | The policies, controls, ADRs, owners, datasets and readiness dimensions reachable from a node then |
+| `temporalImpact(from, to)` | What came into force, what ended, what was re-versioned |
+| `temporalIntegrity()` | Per-edge: dated, owned, evidenced, and no expiry before creation |
+
+## Two properties worth stating
+
+**An undated edge is excluded, not assumed eternal.** A half-migrated graph would otherwise answer
+historical questions confidently and wrongly. Undated edges are named in every temporal query:
+*"an undated relationship cannot honestly be placed in the past."*
+
+**History is supplied, never invented.** This module has no store. Superseded edges come from the
+caller; manufacturing a history it never observed is exactly the fabrication the global requirements
+forbid. A relationship that expired and was later re-established is **not** reported as removed —
+it still holds.
+
+Live: `GET /api/graph/enterprise/as-of/:instant?node=<key>`.

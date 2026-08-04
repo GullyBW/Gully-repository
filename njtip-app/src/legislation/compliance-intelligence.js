@@ -60,6 +60,37 @@ const KIND_READINESS = {
   'control-effectiveness': ['technical', 'security'],
 };
 
+// --- Compliance state lifecycle (Phase 13, Part 4) -----------------------------------------------
+//
+// The single rule that shapes this: NO UNKNOWN STATE MAY BE REPORTED AS COMPLIANT. Every state
+// therefore declares `compliant` explicitly rather than it being inferred from the name, and the
+// two states that look like success are kept apart — `compliant` is what we assess ourselves to be,
+// `verified` is what somebody independent confirmed. Collapsing them is how self-assessment becomes
+// assurance.
+const COMPLIANCE_STATES = {
+  unknown: { compliant: false, terminal: false, description: 'Nothing has been assessed. Not a neutral state — an obligation nobody has looked at is an obligation nobody can say is met.' },
+  'under-assessment': { compliant: false, terminal: false, description: 'Assessment is in progress. Still not compliant: work in progress is not an outcome.' },
+  compliant: { compliant: true, terminal: false, description: 'Assessed as met, on our own evidence.' },
+  'partially-compliant': { compliant: false, terminal: false, description: 'Some controls hold and others do not. Deliberately NOT compliant — partial compliance with a legal obligation is non-compliance with part of it.' },
+  failing: { compliant: false, terminal: false, description: 'Controls exist and do not hold.' },
+  'governance-gap': { compliant: false, terminal: false, description: 'No control exists at all. Distinct from failing, because the remedy is to build something rather than to fix something.' },
+  remediating: { compliant: false, terminal: false, description: 'A named human is closing a known gap, under a recorded plan.' },
+  verified: { compliant: true, terminal: false, description: 'Independently confirmed by somebody other than the party that assessed it.' },
+};
+
+// Which transitions are legal. Recorded as a machine, so a jump from `unknown` straight to
+// `verified` — the transition a hurried audit most wants to make — is refused.
+const COMPLIANCE_TRANSITIONS = {
+  unknown: ['under-assessment'],
+  'under-assessment': ['compliant', 'partially-compliant', 'failing', 'governance-gap', 'unknown'],
+  compliant: ['verified', 'under-assessment', 'failing', 'partially-compliant'],
+  'partially-compliant': ['remediating', 'under-assessment', 'failing'],
+  failing: ['remediating', 'under-assessment'],
+  'governance-gap': ['remediating', 'under-assessment'],
+  remediating: ['under-assessment', 'compliant', 'partially-compliant', 'failing'],
+  verified: ['under-assessment', 'failing', 'partially-compliant'],
+};
+
 class ComplianceIntelligence {
   constructor({ registry = null, clock = () => 0 } = {}) {
     this._registry = registry;
@@ -255,8 +286,143 @@ class ComplianceIntelligence {
     };
   }
 
+  // --- Compliance state lifecycle (Phase 13, Part 4) ---------------------------------------------
+
+  complianceStates() { return Object.entries(COMPLIANCE_STATES).map(([id, s]) => ({ state: id, ...s, transitionsTo: [...(COMPLIANCE_TRANSITIONS[id] || [])] })); }
+  state(obligation) { return (this._states && this._states.get(obligation)) || { obligation, state: 'unknown', since: null, by: null, rationale: null, history: [] }; }
+
+  // Move an obligation to a new state. Attributed, transition-checked and appended to a timeline;
+  // there is no path that sets a state without recording who said so and why.
+  transition(obligation, { to, by, rationale, at = null, independent = false } = {}) {
+    if (!COMPLIANCE_STATES[to]) throw new Error(`unknown compliance state '${to}' — one of ${Object.keys(COMPLIANCE_STATES).join(', ')}`);
+    if (!by || !rationale) { const e = new Error('a compliance state change requires a named human and a rationale'); e.failClosed = true; throw e; }
+    if (!this._states) this._states = new Map();
+    const current = this.state(obligation);
+    const legal = COMPLIANCE_TRANSITIONS[current.state] || [];
+    if (!legal.includes(to)) {
+      const e = new Error(`'${current.state}' → '${to}' is not a legal transition (from '${current.state}' the legal moves are: ${legal.join(', ')})`);
+      e.failClosed = true; throw e;
+    }
+    // The one state that cannot be self-declared. Verified means somebody OTHER than the assessor
+    // confirmed it; without that, `verified` and `compliant` would mean the same thing.
+    if (to === 'verified') {
+      if (!independent) { const e = new Error('`verified` requires independent confirmation — mark it on the verifier\'s authority, not the assessor\'s'); e.failClosed = true; throw e; }
+      if (by === current.by) { const e = new Error(`'${by}' assessed this obligation and cannot also be its independent verifier`); e.failClosed = true; throw e; }
+    }
+    const t = at ?? this._clock();
+    const entry = { obligation, from: current.state, to, by, rationale, at: t, independent };
+    const history = [...(current.history || []), entry];
+    this._states.set(obligation, { obligation, state: to, since: t, by, rationale, independent, history });
+    return { ...this._states.get(obligation) };
+  }
+
+  // What the evidence says the state should be, independent of what anyone declared. Derived, so it
+  // cannot be talked up; the caller compares it against the declared state and acts on the gap.
+  deriveState(obligation, { controls = [] } = {}) {
+    const declared = this._registry && this._registry.registryList().find((i) => i.id === obligation);
+    const mapped = declared ? declared.mapsToControls : [];
+    const known = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+    const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+    if (!mapped.length) return { obligation, derived: 'governance-gap', reason: 'no control is mapped to this obligation — nothing in the platform demonstrably responds to it' };
+    const missing = mapped.filter((c) => !known.has(c));
+    const failing = mapped.filter((c) => holding.get(c) === false);
+    const unverified = mapped.filter((c) => known.has(c) && !holding.has(c));
+    if (missing.length === mapped.length) return { obligation, derived: 'governance-gap', reason: `no mapped control ran: ${missing.join(', ')}` };
+    if (failing.length && failing.length === mapped.length) return { obligation, derived: 'failing', reason: `every mapped control ran and failed: ${failing.join(', ')}` };
+    if (failing.length || missing.length) return { obligation, derived: 'partially-compliant', reason: `some controls hold and others do not (failing: ${failing.join(', ') || 'none'}; missing: ${missing.join(', ') || 'none'})` };
+    if (unverified.length) return { obligation, derived: 'under-assessment', reason: `results were not supplied for: ${unverified.join(', ')} — unverified is not compliant` };
+    return { obligation, derived: 'compliant', reason: 'every mapped control ran and held' };
+  }
+
+  // Declared state against derived state. An obligation declared compliant whose evidence says
+  // otherwise is the finding this whole lifecycle exists to surface.
+  stateReconciliation({ controls = [] } = {}) {
+    const obligations = this._registry ? this._registry.registryList().map((i) => i.id) : [...(this._states || new Map()).keys()];
+    const rows = obligations.map((id) => {
+      const declared = this.state(id);
+      const derived = this.deriveState(id, { controls });
+      const declaredCompliant = COMPLIANCE_STATES[declared.state].compliant;
+      const derivedCompliant = COMPLIANCE_STATES[derived.derived].compliant;
+      return {
+        obligation: id, declared: declared.state, derived: derived.derived, reason: derived.reason,
+        declaredBy: declared.by, since: declared.since,
+        overstated: declaredCompliant && !derivedCompliant,
+        understated: !declaredCompliant && derivedCompliant,
+        agrees: declared.state === derived.derived,
+      };
+    });
+    return {
+      obligations: rows,
+      overstated: rows.filter((r) => r.overstated).map((r) => r.obligation),
+      understated: rows.filter((r) => r.understated).map((r) => r.obligation),
+      // The invariant, checked rather than asserted.
+      noUnknownReportedCompliant: rows.every((r) => !(r.declared === 'unknown' && COMPLIANCE_STATES[r.declared].compliant)),
+      sound: rows.every((r) => !r.overstated),
+      note: 'Declared state is what somebody recorded; derived state is what the controls demonstrate. An obligation declared compliant whose evidence disagrees is reported, not reconciled away.',
+    };
+  }
+
+  // The timeline Part 4 asks for: every state this obligation has been in, who moved it and why.
+  timeline(obligation) {
+    const s = this.state(obligation);
+    const entries = (s.history || []).map((h, i, all) => ({
+      ...h,
+      durationMs: i + 1 < all.length ? all[i + 1].at - h.at : null,
+      compliantDuring: COMPLIANCE_STATES[h.to].compliant,
+    }));
+    return {
+      obligation, current: s.state, since: s.since, entries, transitions: entries.length,
+      // An obligation with an empty timeline has never been assessed, and that is not the same as
+      // having been assessed and found compliant.
+      neverAssessed: entries.length === 0,
+      note: entries.length ? null : 'no state change has ever been recorded — this obligation is unknown, which is not a form of compliant',
+    };
+  }
+
+  // Historical evolution across every obligation: how the estate's compliance has moved over time.
+  evolution({ now = null, controls = [] } = {}) {
+    const t = now ?? this._clock();
+    const obligations = this._registry ? this._registry.registryList().map((i) => i.id) : [...(this._states || new Map()).keys()];
+    const all = obligations.flatMap((id) => this.timeline(id).entries);
+    const byState = {};
+    for (const id of obligations) { const st = this.state(id).state; byState[st] = (byState[st] || 0) + 1; }
+    const compliant = obligations.filter((id) => COMPLIANCE_STATES[this.state(id).state].compliant);
+    const verified = obligations.filter((id) => this.state(id).state === 'verified');
+    // Direction over the recorded transitions: did obligations move toward compliance or away?
+    const ordered = all.slice().sort((a, b) => a.at - b.at);
+    const scored = ordered.map((e) => (COMPLIANCE_STATES[e.to].compliant ? 1 : 0) - (COMPLIANCE_STATES[e.from].compliant ? 1 : 0));
+    const net = scored.reduce((a, b) => a + b, 0);
+    // Net movement and the LATEST movement are different facts and are reported separately. An
+    // estate that went unknown → compliant → failing has a net of zero: it began non-compliant and
+    // ended non-compliant, which is true and hides the thing a reader needs to see.
+    const lastMove = scored.length ? scored[scored.length - 1] : 0;
+    return {
+      now: t, obligations: obligations.length, byState,
+      compliant: compliant.length, verified: verified.length,
+      complianceRate: obligations.length ? +(compliant.length / obligations.length).toFixed(3) : null,
+      verificationRate: obligations.length ? +(verified.length / obligations.length).toFixed(3) : null,
+      transitions: all.length,
+      direction: all.length < 2 ? 'insufficient-data' : net > 0 ? 'improving' : net < 0 ? 'regressing' : 'flat',
+      recentDirection: !ordered.length ? 'insufficient-data' : lastMove > 0 ? 'improving' : lastMove < 0 ? 'regressing' : 'flat',
+      latestTransition: ordered.length ? { ...ordered[ordered.length - 1] } : null,
+      neverAssessed: obligations.filter((id) => this.timeline(id).neverAssessed),
+      reconciliation: this.stateReconciliation({ controls }),
+      informationalOnly: true, authorizes: false,
+      note: 'A rate computed over obligations that were never assessed would flatter the estate, so those are counted and named separately. `direction` is net movement across the window; `recentDirection` is the latest move, because an estate that rose and then fell has a net of zero and a problem.',
+    };
+  }
+
   validate() {
     const violations = [];
+    for (const [state, spec] of Object.entries(COMPLIANCE_STATES)) {
+      if (typeof spec.compliant !== 'boolean') violations.push(`compliance state '${state}' does not declare whether it counts as compliant`);
+      if (!spec.description) violations.push(`compliance state '${state}' has no description`);
+      if (!COMPLIANCE_TRANSITIONS[state]) violations.push(`compliance state '${state}' declares no legal transitions`);
+      for (const to of COMPLIANCE_TRANSITIONS[state] || []) if (!COMPLIANCE_STATES[to]) violations.push(`'${state}' transitions to unknown state '${to}'`);
+    }
+    // THE PART 4 INVARIANT, checked structurally rather than promised.
+    if (COMPLIANCE_STATES.unknown.compliant) violations.push('the unknown state is declared compliant — an obligation nobody has assessed may never read as met');
+    if (COMPLIANCE_STATES['partially-compliant'].compliant) violations.push('partial compliance is declared compliant — partial compliance with a legal obligation is non-compliance with part of it');
     for (const [kind, spec] of Object.entries(CHANGE_KINDS)) {
       if (!spec.originator || !spec.missedMeans) violations.push(`change kind '${kind}' does not say who originates it or what a missed one costs`);
       if (!KIND_READINESS[kind] || !KIND_READINESS[kind].length) violations.push(`change kind '${kind}' bears on no readiness dimension — then why is it watched?`);
@@ -270,6 +436,8 @@ class ComplianceIntelligence {
     return {
       changeKinds: this.changeKinds(), mappingDimensions: this.mappingDimensions(),
       changes: this.changes(),
+      complianceStates: this.complianceStates(),
+      evolution: this.evolution({ now, controls }),
       gapAnalysis: this.gapAnalysis({ controls, datasets, now }),
       remediation: this.remediation({ controls, datasets, now }),
       validation: this.validate(),
@@ -279,4 +447,4 @@ class ComplianceIntelligence {
   }
 }
 
-module.exports = { ComplianceIntelligence, CHANGE_KINDS, CHANGE_SEVERITY, MAPPING_DIMENSIONS, KIND_READINESS };
+module.exports = { ComplianceIntelligence, CHANGE_KINDS, CHANGE_SEVERITY, MAPPING_DIMENSIONS, KIND_READINESS, COMPLIANCE_STATES, COMPLIANCE_TRANSITIONS };

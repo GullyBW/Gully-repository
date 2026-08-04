@@ -502,7 +502,11 @@ function report({ events = [], periods = 1, businessHistory = {}, technicalHisto
 // happens to a person when they do not receive it — and it is stated in the citizen's words, not in
 // the platform's, because "intake-api unavailable" is not an impact on anybody. "A person who
 // decided today to report corruption cannot" is.
-const MISSION_IMPACT_LAYERS = ['technical-event', 'business-process', 'justice-service', 'citizen-impact', 'mission-objective', 'strategic-goal'];
+// Phase 13, Part 3 extends the chain past the citizen in both directions that were missing: what a
+// sustained failure does to the INSTITUTION, and what that does to a GOVERNMENT mission outcome.
+// The spec's "Service Impact" is the technical layer's service set and "Justice Process" is the
+// justice-service layer; those were already here, so they are not duplicated under new names.
+const MISSION_IMPACT_LAYERS = ['technical-event', 'business-process', 'justice-service', 'citizen-impact', 'institutional-impact', 'mission-objective', 'strategic-goal', 'government-mission-outcome'];
 
 // The services the state actually delivers through this platform.
 const JUSTICE_SERVICES = {
@@ -523,6 +527,24 @@ const CITIZEN_IMPACTS = {
   'case-stalls': { severity: 'serious', experience: 'A report sits without progressing, and the person who filed it is told nothing.', irreversible: false },
   'decision-unattributable': { severity: 'serious', experience: 'A decision affecting a person exists with nobody answerable for it, so it cannot be challenged.', irreversible: false },
   'accountability-invisible': { severity: 'material', experience: 'The public cannot tell whether the system is working, so trust rests on assertion.', irreversible: false },
+};
+
+// What a sustained citizen-level failure does to the institution itself. This layer is the one that
+// turns an outage into an institutional problem: a citizen harmed once is an incident, and the same
+// harm repeating is an institution that cannot discharge its mandate.
+const INSTITUTIONAL_IMPACTS = {
+  'mandate-undeliverable': { title: 'The institution cannot discharge its statutory mandate', institution: 'Directorate on Corruption and Economic Crime', escalatesTo: 'OB' },
+  'evidence-base-unreliable': { title: 'The judiciary cannot rely on the evidence this platform produces', institution: 'Judiciary', escalatesTo: 'OB' },
+  'oversight-cannot-report': { title: 'Oversight cannot report the true state of the system to Parliament', institution: 'Oversight Board', escalatesTo: 'OB' },
+  'institutional-credibility-lost': { title: 'Public willingness to use the institution falls, and does not recover quickly', institution: 'Whole of government', escalatesTo: 'OB' },
+};
+
+// Government-level outcomes the strategic goals serve. The terminal layer: past here the platform
+// has nothing further to say, and says so rather than inventing a level of abstraction.
+const GOVERNMENT_MISSION_OUTCOMES = {
+  'accountable-government': { title: 'Government is accountable for how it exercises power', owner: 'Government of Botswana' },
+  'equitable-access-to-justice': { title: 'People can obtain justice regardless of who they are', owner: 'Government of Botswana' },
+  'public-confidence-in-the-state': { title: 'People believe state institutions will act on what they are told', owner: 'Government of Botswana' },
 };
 
 // National strategic goals the mission objectives serve.
@@ -558,6 +580,20 @@ const MISSION_IMPACT_LINKS = [
   { from: 'evidence-custody', fromLayer: 'justice-service', to: 'evidence-unusable', toLayer: 'citizen-impact', mechanism: 'a broken chain of custody makes the evidence inadmissible' },
   { from: 'judicial-review', fromLayer: 'justice-service', to: 'decision-unattributable', toLayer: 'citizen-impact', mechanism: 'without a recorded accountable decision there is nothing to challenge' },
   { from: 'public-accountability', fromLayer: 'justice-service', to: 'accountability-invisible', toLayer: 'citizen-impact', mechanism: 'unpublished figures leave the public with assertions' },
+  // citizen impact → institutional impact (Phase 13, Part 3). A citizen harmed once is an incident;
+  // the same harm repeating is an institution that cannot discharge its mandate.
+  { from: 'cannot-report', fromLayer: 'citizen-impact', to: 'mandate-undeliverable', toLayer: 'institutional-impact', mechanism: 'an anti-corruption body that cannot receive reports has no input to its statutory function' },
+  { from: 'cannot-report', fromLayer: 'citizen-impact', to: 'institutional-credibility-lost', toLayer: 'institutional-impact', mechanism: 'someone turned away once does not return, and tells others' },
+  { from: 'identity-at-risk', fromLayer: 'citizen-impact', to: 'institutional-credibility-lost', toLayer: 'institutional-impact', mechanism: 'a single identified reporter ends anonymous reporting for everyone who hears about it' },
+  { from: 'evidence-unusable', fromLayer: 'citizen-impact', to: 'evidence-base-unreliable', toLayer: 'institutional-impact', mechanism: 'a court that has seen custody fail once discounts the next chain too' },
+  { from: 'case-stalls', fromLayer: 'citizen-impact', to: 'mandate-undeliverable', toLayer: 'institutional-impact', mechanism: 'cases that do not conclude are a mandate discharged on paper only' },
+  { from: 'decision-unattributable', fromLayer: 'citizen-impact', to: 'evidence-base-unreliable', toLayer: 'institutional-impact', mechanism: 'a decision nobody is answerable for cannot be defended on review' },
+  { from: 'accountability-invisible', fromLayer: 'citizen-impact', to: 'oversight-cannot-report', toLayer: 'institutional-impact', mechanism: 'oversight reporting to Parliament rests on published figures it can verify' },
+  // institutional impact → mission objective
+  { from: 'mandate-undeliverable', fromLayer: 'institutional-impact', to: 'cases-progress', toLayer: 'mission-objective', mechanism: 'the objective is the mandate, stated as an outcome' },
+  { from: 'evidence-base-unreliable', fromLayer: 'institutional-impact', to: 'evidence-is-admissible', toLayer: 'mission-objective', mechanism: 'admissibility is what an unreliable evidence base costs' },
+  { from: 'oversight-cannot-report', fromLayer: 'institutional-impact', to: 'oversight-is-informed', toLayer: 'mission-objective', mechanism: 'an oversight body that cannot report is not informed in any useful sense' },
+  { from: 'institutional-credibility-lost', fromLayer: 'institutional-impact', to: 'reports-can-be-filed', toLayer: 'mission-objective', mechanism: 'a reporting channel people do not trust is one they do not use, whatever its uptime' },
   // citizen impact → mission objective
   { from: 'cannot-report', fromLayer: 'citizen-impact', to: 'reports-can-be-filed', toLayer: 'mission-objective', mechanism: 'the mission objective is precisely that this does not happen' },
   { from: 'identity-at-risk', fromLayer: 'citizen-impact', to: 'reports-can-be-filed', toLayer: 'mission-objective', mechanism: 'reporting is only possible if reporting is safe' },
@@ -573,6 +609,12 @@ const MISSION_IMPACT_LINKS = [
   { from: 'decisions-are-accountable', fromLayer: 'mission-objective', to: 'institutional-integrity', toLayer: 'strategic-goal', mechanism: 'an institution whose decisions are unattributable has no integrity to point to' },
   { from: 'oversight-is-informed', fromLayer: 'mission-objective', to: 'institutional-integrity', toLayer: 'strategic-goal', mechanism: 'oversight is how integrity is demonstrated rather than claimed' },
   { from: 'oversight-is-informed', fromLayer: 'mission-objective', to: 'public-trust', toLayer: 'strategic-goal', mechanism: 'trust survives bad news that was reported; it does not survive bad news that was hidden' },
+  // strategic goal → government mission outcome (Phase 13, Part 3). The terminal hop.
+  { from: 'rule-of-law', fromLayer: 'strategic-goal', to: 'equitable-access-to-justice', toLayer: 'government-mission-outcome', mechanism: 'law that applies unevenly is access to justice for some people only' },
+  { from: 'rule-of-law', fromLayer: 'strategic-goal', to: 'accountable-government', toLayer: 'government-mission-outcome', mechanism: 'a government not subject to law in practice is not accountable in practice' },
+  { from: 'public-trust', fromLayer: 'strategic-goal', to: 'public-confidence-in-the-state', toLayer: 'government-mission-outcome', mechanism: 'confidence in the state is the aggregate of trust in the institutions people actually meet' },
+  { from: 'institutional-integrity', fromLayer: 'strategic-goal', to: 'accountable-government', toLayer: 'government-mission-outcome', mechanism: 'accountability is demonstrated institution by institution or not at all' },
+  { from: 'institutional-integrity', fromLayer: 'strategic-goal', to: 'public-confidence-in-the-state', toLayer: 'government-mission-outcome', mechanism: 'people judge the state by whether its institutions behave with integrity' },
 ];
 
 // The one structural link, matching CONSTITUTIONAL_CHAIN at the technical end: intake IS the
@@ -608,6 +650,8 @@ function mappedComponents() {
 }
 function citizenImpacts() { return Object.entries(CITIZEN_IMPACTS).map(([id, c]) => ({ id, ...c })); }
 function strategicGoals() { return Object.entries(STRATEGIC_GOALS).map(([id, g]) => ({ id, ...g })); }
+function institutionalImpacts() { return Object.entries(INSTITUTIONAL_IMPACTS).map(([id, i]) => ({ id, ...i })); }
+function governmentMissionOutcomes() { return Object.entries(GOVERNMENT_MISSION_OUTCOMES).map(([id, g]) => ({ id, ...g })); }
 function missionImpactLinks() { return MISSION_IMPACT_LINKS.map((l) => ({ ...l })); }
 
 // Validate the extended chain the same way the operational one is validated: every link joins
@@ -618,8 +662,10 @@ function validateMissionChain() {
     'business-process': new Set(Object.keys(BUSINESS_METRICS)),
     'justice-service': new Set(Object.keys(JUSTICE_SERVICES)),
     'citizen-impact': new Set(Object.keys(CITIZEN_IMPACTS)),
+    'institutional-impact': new Set(Object.keys(INSTITUTIONAL_IMPACTS)),
     'mission-objective': new Set(Object.keys(MISSION_OUTCOMES)),
     'strategic-goal': new Set(Object.keys(STRATEGIC_GOALS)),
+    'government-mission-outcome': new Set(Object.keys(GOVERNMENT_MISSION_OUTCOMES)),
   };
   for (const l of MISSION_IMPACT_LINKS) {
     if (!MISSION_IMPACT_LAYERS.includes(l.fromLayer) || !MISSION_IMPACT_LAYERS.includes(l.toLayer)) violations.push(`link ${l.from} → ${l.to}: unknown layer`);
@@ -642,6 +688,15 @@ function validateMissionChain() {
   }
   for (const g of Object.keys(STRATEGIC_GOALS)) {
     if (!MISSION_IMPACT_LINKS.some((l) => l.to === g)) violations.push(`strategic goal '${g}' is reached by no mission objective — nothing this platform does bears on it`);
+    if (!MISSION_IMPACT_LINKS.some((l) => l.from === g && l.toLayer === 'government-mission-outcome')) violations.push(`strategic goal '${g}' serves no government mission outcome`);
+  }
+  for (const i of Object.keys(INSTITUTIONAL_IMPACTS)) {
+    if (!MISSION_IMPACT_LINKS.some((l) => l.to === i)) violations.push(`institutional impact '${i}' is reached by no citizen impact — what causes it?`);
+    if (!MISSION_IMPACT_LINKS.some((l) => l.from === i)) violations.push(`institutional impact '${i}' reaches no mission objective — the platform has no stated position on it`);
+    if (!INSTITUTIONAL_IMPACTS[i].institution) violations.push(`institutional impact '${i}' names no institution`);
+  }
+  for (const g of Object.keys(GOVERNMENT_MISSION_OUTCOMES)) {
+    if (!MISSION_IMPACT_LINKS.some((l) => l.to === g)) violations.push(`government mission outcome '${g}' is reached by nothing`);
   }
   for (const o of Object.keys(MISSION_OUTCOMES)) {
     if (!MISSION_IMPACT_LINKS.some((l) => l.from === o && l.toLayer === 'strategic-goal')) violations.push(`mission objective '${o}' serves no strategic goal — why is it a mission objective?`);
@@ -657,7 +712,7 @@ function traceToStrategic(origin, { visited = new Set() } = {}) {
   const links = MISSION_IMPACT_LINKS.filter((l) => l.from === origin);
   const paths = [];
   for (const l of links) {
-    if (l.toLayer === 'strategic-goal') paths.push([{ ...l }]);
+    if (l.toLayer === 'government-mission-outcome') paths.push([{ ...l }]);
     else for (const rest of traceToStrategic(l.to, { visited: new Set(visited) })) paths.push([{ ...l }, ...rest]);
   }
   return paths;
@@ -698,8 +753,15 @@ function missionImpactForecast({ change = 'unnamed change', failed = [], degrade
   }
   const uniqueImpacts = [...new Map(impacts.map((i) => [i.impact, i])).values()].sort((a, b) => CITIZEN_IMPACT_SEVERITY.indexOf(a.severity) - CITIZEN_IMPACT_SEVERITY.indexOf(b.severity) || a.impact.localeCompare(b.impact));
 
-  const objectives = [...new Set(uniqueImpacts.flatMap((i) => MISSION_IMPACT_LINKS.filter((l) => l.from === i.impact && l.toLayer === 'mission-objective').map((l) => l.to)))].sort();
+  // Phase 13, Part 3: the chain now continues past the citizen into the institution, and past the
+  // strategic goal into the government mission outcome.
+  const institutional = [...new Set(uniqueImpacts.flatMap((i) => MISSION_IMPACT_LINKS.filter((l) => l.from === i.impact && l.toLayer === 'institutional-impact').map((l) => l.to)))].sort();
+  const objectives = [...new Set([
+    ...uniqueImpacts.flatMap((i) => MISSION_IMPACT_LINKS.filter((l) => l.from === i.impact && l.toLayer === 'mission-objective').map((l) => l.to)),
+    ...institutional.flatMap((i) => MISSION_IMPACT_LINKS.filter((l) => l.from === i && l.toLayer === 'mission-objective').map((l) => l.to)),
+  ])].sort();
   const goals = [...new Set(objectives.flatMap((o) => MISSION_IMPACT_LINKS.filter((l) => l.from === o && l.toLayer === 'strategic-goal').map((l) => l.to)))].sort();
+  const governmentOutcomes = [...new Set(goals.flatMap((g) => MISSION_IMPACT_LINKS.filter((l) => l.from === g && l.toLayer === 'government-mission-outcome').map((l) => l.to)))].sort();
   const paths = undelivered.flatMap((s) => traceToStrategic(s.service).map((p) => ({
     service: s.service,
     chain: [s.service, ...p.map((l) => l.to)].join(' → '),
@@ -731,8 +793,11 @@ function missionImpactForecast({ change = 'unnamed change', failed = [], degrade
     citizenImpacts: uniqueImpacts,
     worstCitizenImpact: worst ? { impact: worst.impact, severity: worst.severity, experience: worst.experience } : null,
     irreversibleImpacts: irreversible.map((i) => i.impact),
+    institutionalImpacts: institutional.map((id) => ({ id, ...INSTITUTIONAL_IMPACTS[id] })),
+    institutionsAffected: [...new Set(institutional.map((id) => INSTITUTIONAL_IMPACTS[id].institution))].sort(),
     missionObjectives: objectives.map((id) => ({ id, ...MISSION_OUTCOMES[id] })),
     strategicGoals: goals.map((id) => ({ id, ...STRATEGIC_GOALS[id] })),
+    governmentMissionOutcomes: governmentOutcomes.map((id) => ({ id, ...GOVERNMENT_MISSION_OUTCOMES[id] })),
     constitutionalServicesLost: undelivered.filter((s) => s.constitutional).map((s) => s.service),
     paths,
     unmappedComponents: unmapped, unmodelledComponents: unmodelled.sort(),
@@ -755,12 +820,50 @@ function missionImpactForecast({ change = 'unnamed change', failed = [], degrade
   };
 }
 
+// Mission dependency graph (Phase 13, Part 3): the whole chain as nodes and directed edges, with a
+// layer index so a renderer can lay it out and a reader can see which layer a node sits in. Reported
+// as data rather than drawn, so it cannot drift from the links the forecast actually traverses.
+function missionDependencyGraph() {
+  const sets = {
+    'business-process': BUSINESS_METRICS,
+    'justice-service': JUSTICE_SERVICES,
+    'citizen-impact': CITIZEN_IMPACTS,
+    'institutional-impact': INSTITUTIONAL_IMPACTS,
+    'mission-objective': MISSION_OUTCOMES,
+    'strategic-goal': STRATEGIC_GOALS,
+    'government-mission-outcome': GOVERNMENT_MISSION_OUTCOMES,
+  };
+  const nodes = [];
+  for (const [layer, set] of Object.entries(sets)) {
+    for (const [id, spec] of Object.entries(set)) {
+      nodes.push({ id, layer, layerIndex: MISSION_IMPACT_LAYERS.indexOf(layer), title: spec.title || spec.experience || id });
+    }
+  }
+  const edges = MISSION_IMPACT_LINKS.map((l) => ({ from: l.from, to: l.to, fromLayer: l.fromLayer, toLayer: l.toLayer, mechanism: l.mechanism }));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  // A node nothing reaches and that reaches nothing is a node the chain cannot use.
+  const isolated = nodes.filter((n) => !edges.some((e) => e.from === n.id || e.to === n.id)).map((n) => n.id);
+  return {
+    layers: MISSION_IMPACT_LAYERS.map((l, i) => ({ layer: l, index: i, nodes: nodes.filter((n) => n.layer === l).map((n) => n.id) })),
+    nodes: nodes.sort((a, b) => a.layerIndex - b.layerIndex || a.id.localeCompare(b.id)),
+    edges: edges.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to)),
+    isolated,
+    // Every edge moves strictly forward. A backward edge would make the chain a cycle and the
+    // forecast non-terminating, so it is a validation failure rather than a curiosity.
+    backwardEdges: edges.filter((e) => MISSION_IMPACT_LAYERS.indexOf(e.toLayer) <= MISSION_IMPACT_LAYERS.indexOf(e.fromLayer)).map((e) => `${e.from} → ${e.to}`),
+    nodeCount: nodes.length, edgeCount: edges.length,
+    unresolvedEndpoints: edges.filter((e) => !byId.has(e.from) || !byId.has(e.to)).map((e) => `${e.from} → ${e.to}`),
+    informationalOnly: true, authorizes: false,
+  };
+}
+
 module.exports = {
+  missionDependencyGraph,
   BUSINESS_METRICS, DWELL_METRICS, EVENT_ALIASES, catalogue,
   CHAIN_LAYERS, CHAIN_LINKS, MISSION_OUTCOMES, INFRASTRUCTURE_COMPONENTS, chainLinks, missionOutcomes,
   MISSION_IMPACT_LAYERS, MISSION_IMPACT_LINKS, JUSTICE_SERVICES, CITIZEN_IMPACTS, CITIZEN_IMPACT_SEVERITY,
-  STRATEGIC_GOALS, SERVICE_DEPENDENCIES,
-  justiceServices, citizenImpacts, strategicGoals, missionImpactLinks, mappedComponents,
+  STRATEGIC_GOALS, SERVICE_DEPENDENCIES, INSTITUTIONAL_IMPACTS, GOVERNMENT_MISSION_OUTCOMES,
+  justiceServices, citizenImpacts, strategicGoals, institutionalImpacts, governmentMissionOutcomes, missionImpactLinks, mappedComponents,
   validateMissionChain, traceToStrategic, missionImpactForecast,
   traceForward, impactOf, validateChain, executiveAnalytics,
   assertPiiFree, fromEventLog, dwellTimes, derive, assess,

@@ -78,3 +78,64 @@ their decision.
 
 The composition root starts the change register **empty**. The platform has observed no legislative
 or regulatory change yet, and seeding one would record a compliance history that never happened.
+
+---
+
+# Compliance State Lifecycle (Phase 13, Part 4)
+
+Eight states, and one rule that shapes all of them:
+
+> **No unknown state may be reported as compliant.**
+
+Every state therefore declares `compliant` explicitly rather than it being inferred from the name.
+
+| State | Compliant? | Meaning |
+|---|---|---|
+| `unknown` | ❌ | Nothing assessed. **Not neutral** — an obligation nobody has looked at is one nobody can say is met |
+| `under-assessment` | ❌ | In progress. Work in progress is not an outcome |
+| `compliant` | ✅ | Assessed as met, on our own evidence |
+| `partially-compliant` | ❌ | Deliberately not compliant — **partial compliance with a legal obligation is non-compliance with part of it** |
+| `failing` | ❌ | Controls exist and do not hold |
+| `governance-gap` | ❌ | No control exists at all. Distinct from failing: the remedy is to build, not to fix |
+| `remediating` | ❌ | A named human is closing a known gap under a recorded plan |
+| `verified` | ✅ | **Independently** confirmed by somebody other than the assessor |
+
+## Transitions are a machine
+
+`unknown` can only go to `under-assessment`. The jump a hurried audit most wants to make —
+`unknown` straight to `verified` — is refused, and so is any other undeclared move.
+
+**`verified` cannot be self-declared.** It requires `independent: true` *and* a different person from
+the one who assessed it. Collapsing `compliant` and `verified` is how self-assessment becomes
+assurance, so the two are kept apart structurally.
+
+## Derived state, and reconciliation
+
+`deriveState()` computes what the evidence says, independent of what anyone declared:
+
+```
+no control mapped        → governance-gap
+no mapped control ran    → governance-gap
+all ran and failed       → failing
+some hold, some do not   → partially-compliant
+ran but no result given  → under-assessment   ("unverified is not compliant")
+all ran and held         → compliant
+```
+
+`stateReconciliation()` compares the two. **An obligation declared compliant whose evidence
+disagrees is reported as `overstated`** — that is the finding this whole lifecycle exists for.
+
+## Timelines and evolution
+
+`timeline()` records every state an obligation has been in, who moved it, why, how long it stayed and
+whether it counted as compliant during that time. An obligation with an empty timeline is
+`neverAssessed` — *"no state change has ever been recorded — this obligation is unknown, which is not
+a form of compliant."*
+
+`evolution()` reports `direction` (net movement across the window) **and** `recentDirection`
+separately. An estate that went `unknown → compliant → failing` has a net of zero — literally true,
+because it began and ended non-compliant — and a problem. Reporting only the net would hide it.
+Obligations never assessed are counted and named separately rather than diluting the rate.
+
+Live: `GET /api/compliance/lifecycle` · `POST /api/compliance/obligations/:id/state` ·
+`GET /api/compliance/obligations/:id/timeline`.

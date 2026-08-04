@@ -155,8 +155,11 @@ test('the twin report runs a scenario set and still authorizes nothing', () => {
 // --- Part 18: predictive mission impact analysis --------------------------------------------------
 
 test('the mission impact chain has all six stages, joined end to end', () => {
+  // Phase 13, Part 3 extended this chain: institutional impact after the citizen, and a government
+  // mission outcome after the strategic goal.
   assert.deepStrictEqual(bus.MISSION_IMPACT_LAYERS, [
-    'technical-event', 'business-process', 'justice-service', 'citizen-impact', 'mission-objective', 'strategic-goal',
+    'technical-event', 'business-process', 'justice-service', 'citizen-impact',
+    'institutional-impact', 'mission-objective', 'strategic-goal', 'government-mission-outcome',
   ]);
   const v = bus.validateMissionChain();
   assert.strictEqual(v.valid, true, v.violations.join('; '));
@@ -266,8 +269,8 @@ test('traceToStrategic walks the whole chain from a justice service', () => {
   const paths = bus.traceToStrategic('anonymous-reporting');
   assert.ok(paths.length > 0);
   for (const p of paths) {
-    assert.strictEqual(p[p.length - 1].toLayer, 'strategic-goal');
+    assert.strictEqual(p[p.length - 1].toLayer, 'government-mission-outcome');
     for (const l of p) assert.ok(l.mechanism);
   }
-  assert.deepStrictEqual(bus.traceToStrategic('rule-of-law'), []);   // a terminal node goes nowhere
+  assert.deepStrictEqual(bus.traceToStrategic('accountable-government'), []);   // a terminal node goes nowhere
 });

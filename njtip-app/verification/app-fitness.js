@@ -3633,8 +3633,10 @@ module.exports = [
     const bus = require('../src/observability/business');
 
     // --- The six-stage chain is declared and joined end to end ---------------------------------
-    const expected = ['technical-event', 'business-process', 'justice-service', 'citizen-impact', 'mission-objective', 'strategic-goal'];
-    if (JSON.stringify(bus.MISSION_IMPACT_LAYERS) !== JSON.stringify(expected)) v.push('the mission impact chain does not have the six declared stages');
+    // Phase 13, Part 3 extended the chain past the citizen into the institution, and past the
+    // strategic goal into the government mission outcome.
+    const expected = ['technical-event', 'business-process', 'justice-service', 'citizen-impact', 'institutional-impact', 'mission-objective', 'strategic-goal', 'government-mission-outcome'];
+    if (JSON.stringify(bus.MISSION_IMPACT_LAYERS) !== JSON.stringify(expected)) v.push('the mission impact chain does not have the eight declared stages');
     for (const violation of bus.validateMissionChain().violations) v.push(violation);
     for (const l of bus.missionImpactLinks()) {
       if (!l.mechanism) v.push(`link ${l.from} → ${l.to}: no mechanism`);
@@ -4126,6 +4128,216 @@ module.exports = [
     if (report.confidence !== weakest.confidence) v.push('the confidence report does not aggregate to the weakest scenario');
     if (!report.uncalibrated.length) v.push('scenarios that have never been compared against reality were not named as uncalibrated');
     if (report.authorizes !== false) v.push('the confidence report claims authority');
+  }),
+
+  fit('APP-FIT-INSTITUTIONAL-CHAIN', 'The mission chain reaches the institution and the government outcome, and every hop states its mechanism', (v) => {
+    const bus = require('../src/observability/business');
+    for (const violation of bus.validateMissionChain().violations) v.push(violation);
+
+    // The two new layers are populated and joined at both ends.
+    if (!bus.institutionalImpacts().length) v.push('no institutional impacts are declared');
+    if (!bus.governmentMissionOutcomes().length) v.push('no government mission outcomes are declared');
+    for (const i of bus.institutionalImpacts()) {
+      if (!i.institution) v.push(`institutional impact '${i.id}' names no institution`);
+      if (!i.escalatesTo) v.push(`institutional impact '${i.id}' names no board it escalates to`);
+    }
+    for (const g of bus.governmentMissionOutcomes()) if (!g.owner || !g.title) v.push(`government mission outcome '${g.id}' is incomplete`);
+
+    // The dependency graph is derived from the same links the forecast traverses, so the picture
+    // and the calculation cannot disagree.
+    const graph = bus.missionDependencyGraph();
+    if (graph.edgeCount !== bus.missionImpactLinks().length) v.push('the mission dependency graph has a different number of edges than the chain it draws');
+    if (graph.backwardEdges.length) v.push('the mission chain contains a backward edge, which would make it a cycle: ' + graph.backwardEdges.join(', '));
+    if (graph.unresolvedEndpoints.length) v.push('the mission graph has edges to nodes it does not contain: ' + graph.unresolvedEndpoints.join(', '));
+    if (graph.isolated.length) v.push('mission graph nodes nothing reaches and that reach nothing: ' + graph.isolated.join(', '));
+    for (const l of graph.layers) if (!l.nodes.length && l.layer !== 'technical-event') v.push(`mission layer '${l.layer}' has no nodes`);
+
+    // A forecast now reaches all the way to a government mission outcome, through the institution.
+    const f = bus.missionImpactForecast({ change: 'withdraw the intake store', failed: ['persistence-ind'] });
+    if (!f.institutionalImpacts.length) v.push('a constitutional service failure reached no institutional impact');
+    if (!f.institutionsAffected.length) v.push('no institution was named as affected');
+    if (!f.governmentMissionOutcomes.length) v.push('the forecast did not reach a government mission outcome');
+    if (!f.paths.length) v.push('the forecast produced no traceable path');
+    for (const p of f.paths) if (!/→/.test(p.chain) || !p.mechanisms.length) v.push(`path '${p.chain}' is not traceable`);
+    // Unknown must still be distinct from no impact — the Phase 12 property, re-checked here
+    // because Part 3 is exactly the kind of extension that could quietly lose it.
+    const orphan = bus.missionImpactForecast({ change: 'broker withdrawal', failed: ['broker-exec'] });
+    if (orphan.safeToDeploy) v.push('an unmapped affected component was reported safe — unknown must remain distinct from no impact');
+    if (!/unknown, not nil/.test(orphan.boardSummary)) v.push('the extended chain lost the unknown-vs-none distinction');
+    const nothing = bus.missionImpactForecast({ change: 'docs only', failed: [] });
+    if (!nothing.safeToDeploy || nothing.institutionalImpacts.length) v.push('a change affecting nothing produced an institutional impact');
+    if (f.authorizes !== false || graph.authorizes !== false) v.push('the mission chain claims authority');
+  }),
+
+  fit('APP-FIT-COMPLIANCE-LIFECYCLE', 'Compliance states are a machine, unknown never reads as compliant, and verified cannot be self-declared', (v) => {
+    const ci = require('../src/legislation/compliance-intelligence');
+    const { LegislativeRegistry } = require('../src/legislation/registry');
+    const build = () => {
+      const reg = new LegislativeRegistry({ clock: () => 0 });
+      reg.register('act', { title: 'An Act', mapsToControls: ['APP-FIT-A', 'APP-FIT-B'] });
+      return new ci.ComplianceIntelligence({ registry: reg, clock: () => 0 });
+    };
+
+    // --- The eight states, and the invariant --------------------------------------------------
+    for (const required of ['unknown', 'under-assessment', 'compliant', 'partially-compliant', 'failing', 'governance-gap', 'remediating', 'verified']) {
+      if (!ci.COMPLIANCE_STATES[required]) v.push(`compliance state '${required}' is not declared`);
+    }
+    // THE PART 4 INVARIANT.
+    if (ci.COMPLIANCE_STATES.unknown.compliant) v.push('the unknown state is declared compliant');
+    if (ci.COMPLIANCE_STATES['under-assessment'].compliant) v.push('under-assessment is declared compliant — work in progress is not an outcome');
+    if (ci.COMPLIANCE_STATES['partially-compliant'].compliant) v.push('partial compliance is declared compliant');
+    if (!ci.COMPLIANCE_STATES.compliant.compliant || !ci.COMPLIANCE_STATES.verified.compliant) v.push('no state counts as compliant, so the model can never succeed');
+    for (const [id, spec] of Object.entries(ci.COMPLIANCE_STATES)) {
+      if (!spec.description) v.push(`state '${id}' has no description`);
+      if (!ci.COMPLIANCE_TRANSITIONS[id]) v.push(`state '${id}' declares no legal transitions`);
+      for (const to of ci.COMPLIANCE_TRANSITIONS[id]) if (!ci.COMPLIANCE_STATES[to]) v.push(`'${id}' transitions to undeclared state '${to}'`);
+    }
+    if (!build().validate().valid) v.push('the compliance lifecycle is invalid: ' + build().validate().violations.join('; '));
+
+    // --- The state machine refuses the transitions an audit most wants to make ----------------
+    const c = build();
+    let jumped = false;
+    try { c.transition('act', { to: 'verified', by: 'Compliance', rationale: 'looks fine' }); } catch (e) { jumped = !!e.failClosed; }
+    if (!jumped) v.push('an obligation jumped from unknown straight to verified');
+    let unattributed = false;
+    try { c.transition('act', { to: 'under-assessment', by: 'Compliance' }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a compliance state change was recorded with no rationale');
+    let unknownState = false;
+    try { c.transition('act', { to: 'probably-fine', by: 'x', rationale: 'y' }); } catch (_) { unknownState = true; }
+    if (!unknownState) v.push('an undeclared compliance state was accepted');
+
+    c.transition('act', { to: 'under-assessment', by: 'Compliance Officer', rationale: 'assessment opened' });
+    c.transition('act', { to: 'compliant', by: 'Compliance Officer', rationale: 'both controls hold' });
+    let selfVerified = false;
+    try { c.transition('act', { to: 'verified', by: 'Compliance Officer', rationale: 'confirmed', independent: true }); } catch (e) { selfVerified = !!e.failClosed; }
+    if (!selfVerified) v.push('the assessor verified their own assessment — verified and compliant would then mean the same thing');
+    let notIndependent = false;
+    try { c.transition('act', { to: 'verified', by: 'Auditor General', rationale: 'confirmed' }); } catch (e) { notIndependent = !!e.failClosed; }
+    if (!notIndependent) v.push('verified was set without independent confirmation');
+    c.transition('act', { to: 'verified', by: 'Auditor General', rationale: 'independently confirmed', independent: true });
+    if (c.state('act').state !== 'verified') v.push('a legal, independent verification did not take effect');
+
+    // --- Derivation from evidence, and reconciliation against what was declared ---------------
+    const holding = [{ id: 'APP-FIT-A', pass: true }, { id: 'APP-FIT-B', pass: true }];
+    const mixed = [{ id: 'APP-FIT-A', pass: true }, { id: 'APP-FIT-B', pass: false }];
+    const d = build();
+    if (d.deriveState('act', { controls: [] }).derived !== 'governance-gap') v.push('an obligation whose controls never ran did not derive as a governance gap');
+    if (d.deriveState('act', { controls: holding }).derived !== 'compliant') v.push('an obligation whose controls all hold did not derive as compliant');
+    if (d.deriveState('act', { controls: mixed }).derived !== 'partially-compliant') v.push('a partly-failing obligation did not derive as partially compliant');
+    if (d.deriveState('act', { controls: [{ id: 'APP-FIT-A', pass: false }, { id: 'APP-FIT-B', pass: false }] }).derived !== 'failing') v.push('an obligation whose controls all failed did not derive as failing');
+    if (d.deriveState('act', { controls: ['APP-FIT-A', 'APP-FIT-B'] }).derived !== 'under-assessment') v.push('controls with no supplied result derived as something other than under-assessment');
+
+    // An obligation declared compliant whose evidence disagrees is the finding this exists for.
+    const r = build();
+    r.transition('act', { to: 'under-assessment', by: 'Officer', rationale: 'opened' });
+    r.transition('act', { to: 'compliant', by: 'Officer', rationale: 'declared' });
+    const bad = r.stateReconciliation({ controls: mixed });
+    if (!bad.overstated.includes('act')) v.push('an obligation declared compliant whose controls fail was not reported as overstated');
+    if (bad.sound) v.push('a reconciliation with an overstated obligation reported sound');
+    const good = r.stateReconciliation({ controls: holding });
+    if (!good.sound || good.overstated.length) v.push('a correctly declared obligation was reported as overstated');
+    if (!good.noUnknownReportedCompliant) v.push('the unknown-is-never-compliant invariant is not checked');
+
+    // --- Timeline and evolution ---------------------------------------------------------------
+    const fresh = build();
+    if (!fresh.timeline('act').neverAssessed) v.push('an obligation with no recorded state change was not reported as never assessed');
+    if (!/not a form of compliant/.test(fresh.timeline('act').note || '')) v.push('a never-assessed obligation does not say that unknown is not compliant');
+    const tl = c.timeline('act');
+    if (tl.transitions !== 3) v.push(`expected three recorded transitions, found ${tl.transitions}`);
+    for (const e of tl.entries) if (!e.by || !e.rationale || typeof e.compliantDuring !== 'boolean') v.push('a timeline entry is missing its attribution or its compliance flag');
+    const evo = c.evolution({ controls: holding });
+    if (evo.verified !== 1 || evo.complianceRate !== 1) v.push('the evolution report disagrees with the recorded states');
+    if (evo.direction !== 'improving') v.push('an obligation that moved unknown → verified was not reported as improving');
+    // Net movement and the latest movement are separate facts: an estate that rose and then fell has
+    // a net of zero and a problem, and reporting only the net would hide it.
+    const upDown = build();
+    upDown.transition('act', { to: 'under-assessment', by: 'O', rationale: 'r', at: 1 });
+    upDown.transition('act', { to: 'compliant', by: 'O', rationale: 'r', at: 2 });
+    upDown.transition('act', { to: 'failing', by: 'O', rationale: 'a control broke', at: 3 });
+    const swung = upDown.evolution({ controls: mixed });
+    if (swung.direction !== 'flat') v.push('an estate that began and ended non-compliant did not report a flat net direction');
+    if (swung.recentDirection !== 'regressing') v.push('an estate whose latest move was downward was not reported as recently regressing');
+    if (fresh.evolution({ controls: holding }).neverAssessed.length !== 1) v.push('a never-assessed obligation was not counted separately');
+    if (evo.authorizes !== false) v.push('the evolution report claims authority');
+  }),
+
+  fit('APP-FIT-TEMPORAL-GRAPH', 'Every graph edge is placeable in time, and an undated edge is excluded rather than assumed eternal', (v) => {
+    const { EnterpriseGraph, EDGE_EVIDENCE, EDGE_KINDS } = require('../src/graph/enterprise-graph');
+    const { ContractRegistry } = require('../src/contracts/integration-contracts');
+    const results = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const known = new Set(results.map((r) => r.id));
+    // Every relationship declares the check that would fail if an edge of that kind were wrong,
+    // and that check must actually exist — otherwise the edge cites evidence nobody runs.
+    for (const rel of Object.keys(EDGE_KINDS)) if (!EDGE_EVIDENCE[rel]) v.push(`edge kind '${rel}' names no control that would fail if it were wrong`);
+    for (const [rel, control] of Object.entries(EDGE_EVIDENCE)) if (!known.has(control)) v.push(`edge kind '${rel}' cites '${control}', which is not a control that runs`);
+
+    const EPOCH = 1_000;
+    const g = new EnterpriseGraph({ fitnessResults: results, contracts: new ContractRegistry(), epoch: EPOCH });
+
+    // --- Every edge carries the five temporal fields ------------------------------------------
+    for (const e of g.edges()) {
+      for (const field of ['createdAt', 'version', 'evidence']) {
+        if (e[field] === undefined || e[field] === null) v.push(`edge ${e.from} → ${e.to} has no ${field}`);
+      }
+      if (!Object.prototype.hasOwnProperty.call(e, 'expiredAt')) v.push(`edge ${e.from} → ${e.to} has no expiry field`);
+    }
+    const integrity = g.temporalIntegrity();
+    if (integrity.coverage !== 1) v.push(`only ${integrity.coverage} of edges are dated: ${integrity.undated.slice(0, 3).join(', ')}`);
+    if (integrity.unevidenced.length) v.push('edges with no evidence: ' + integrity.unevidenced.slice(0, 3).join(', '));
+    if (!integrity.sound) v.push('temporal integrity is unsound: ' + JSON.stringify(integrity.expiredBeforeCreated));
+
+    // --- Temporal queries ----------------------------------------------------------------------
+    if (g.asOf(EPOCH - 1).totalEdgesInForce !== 0) v.push('edges created at the epoch were in force before it');
+    if (g.asOf(EPOCH).totalEdgesInForce === 0) v.push('no edge was in force at the epoch it was created');
+    let undatedQuery = false;
+    try { g.asOf(undefined); } catch (_) { undatedQuery = true; }
+    if (!undatedQuery) v.push('a temporal query without an instant was accepted');
+
+    // An edge with no creation time is EXCLUDED, not assumed eternal — the property that stops a
+    // half-migrated graph from silently answering historical questions wrongly.
+    const withUndated = new EnterpriseGraph({
+      fitnessResults: results, contracts: new ContractRegistry(), epoch: EPOCH,
+      history: [{ from: 'adr:ADR-0001', to: 'bounded-context:assurance', rel: 'decides', createdAt: null, expiredAt: null, version: 1, evidence: null, owner: null }],
+    });
+    if (withUndated.temporalIntegrity().coverage === 1) v.push('an undated edge was counted as dated');
+    if (withUndated.edgesAsOf(EPOCH + 10).some((e) => !Number.isFinite(e.createdAt))) v.push('an undated edge was reported as in force at an instant');
+    if (!withUndated.asOf(EPOCH).undated.length) v.push('an undated edge was not named in the temporal query');
+
+    // A superseded edge is in force before its expiry and not after — the query that makes
+    // "which policies governed this dataset on that date" answerable.
+    const historical = new EnterpriseGraph({
+      fitnessResults: results, contracts: new ContractRegistry(), epoch: EPOCH,
+      history: [
+        // Still in force today, so it proves the as-of query returns what governed then.
+        { from: 'policy:consistency:investigation', to: 'bounded-context:investigation', rel: 'governs', createdAt: 100, expiredAt: 500, version: 1, evidence: 'evidence:APP-FIT-RACI-GOVERNANCE', owner: 'ARB' },
+        // Retired: no current edge re-establishes this relationship, so it proves removal.
+        { from: 'policy:consistency:retired-stance', to: 'bounded-context:investigation', rel: 'governs', createdAt: 100, expiredAt: 500, version: 1, evidence: 'evidence:APP-FIT-RACI-GOVERNANCE', owner: 'ARB' },
+      ],
+    });
+    if (!historical.edgesAsOf(300).some((e) => e.historical)) v.push('a superseded edge was not in force before its expiry');
+    if (historical.edgesAsOf(600).some((e) => e.historical)) v.push('a superseded edge was still in force after its expiry');
+    const then = historical.asOf(300, { node: 'bounded-context:investigation' });
+    if (!then.policies.includes('policy:consistency:investigation')) v.push('a historical policy query did not return the policy in force at that instant');
+
+    // --- Temporal impact ------------------------------------------------------------------------
+    // Spans the epoch: the historical edge expires at 500 and the current graph comes into force at
+    // EPOCH, so this interval must report both a removal and additions.
+    const change = historical.temporalImpact(300, EPOCH + 500);
+    if (!change.removed.some((r) => /retired-stance/.test(r.edge))) v.push('an edge that expired between two instants was not reported as removed');
+    // …and a relationship that expired but was re-established is NOT a removal, because it still holds.
+    if (change.removed.some((r) => /policy:consistency:investigation/.test(r.edge))) v.push('a relationship that still holds today was reported as removed because an older version of it expired');
+    if (!change.added.length) v.push('edges that came into force between two instants were not reported as added');
+    let backwards = false;
+    try { historical.temporalImpact(600, 300); } catch (_) { backwards = true; }
+    if (!backwards) v.push('a temporal impact analysis accepted a second instant before the first');
+    if (change.authorizes !== false) v.push('temporal impact analysis claims authority');
+    // Nothing changed across an interval with no events.
+    const quiet = historical.temporalImpact(EPOCH + 100, EPOCH + 200);
+    if (quiet.added.length || quiet.removed.length) v.push('a quiet interval reported changes');
   }),
 
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {

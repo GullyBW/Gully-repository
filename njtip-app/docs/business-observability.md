@@ -202,3 +202,54 @@ Two real gaps, fixed in the record rather than by relaxing the check:
 
 `authorizes: false`, `failClosed: true`. The forecast tells a board what a change would do to people.
 It never approves the change.
+
+---
+
+# Institutional & Government Impact (Phase 13, Part 3)
+
+Phase 12's chain stopped at the strategic goal. Two hops were missing at the ends that matter most,
+and the chain is now eight stages:
+
+```
+Technical Event → Business Process → Justice Service → Citizen Impact
+                → Institutional Impact → Mission Objective → Strategic Goal
+                → Government Mission Outcome
+```
+
+The spec's *"Service Impact"* is the technical layer's service set and *"Justice Process"* is the
+justice-service layer; both were already here, so they are not duplicated under new names.
+
+## Institutional impact — the layer that changes the conversation
+
+> A citizen harmed once is an incident. The same harm repeating is an institution that cannot
+> discharge its mandate.
+
+| Impact | Institution | Escalates to |
+|---|---|---|
+| `mandate-undeliverable` | Directorate on Corruption and Economic Crime | OB |
+| `evidence-base-unreliable` | Judiciary | OB |
+| `oversight-cannot-report` | Oversight Board | OB |
+| `institutional-credibility-lost` | Whole of government | OB |
+
+The mechanisms are what make these arguable rather than assertions — *"a court that has seen custody
+fail once discounts the next chain too"*, *"someone turned away once does not return, and tells
+others"*.
+
+## Government mission outcomes
+
+`accountable-government` · `equitable-access-to-justice` · `public-confidence-in-the-state`. The
+terminal layer: past here the platform has nothing further to say, and says so rather than inventing
+another level of abstraction.
+
+## Mission dependency graph
+
+`missionDependencyGraph()` returns the whole chain as nodes and directed edges with a layer index,
+**derived from the same links the forecast traverses** — so the picture and the calculation cannot
+disagree. Validated for backward edges (which would make the chain a cycle), unresolved endpoints and
+isolated nodes.
+
+`GET /api/observability/mission-graph`.
+
+> **The unknown-vs-none distinction survives the extension.** Part 3 is exactly the kind of change
+> that could quietly lose it, so the fitness function re-checks it: an unmapped affected component
+> still reports `safeToDeploy: false` and *"the citizen impact is unknown, not nil."*

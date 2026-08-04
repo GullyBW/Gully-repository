@@ -63,8 +63,27 @@ const EDGE_KINDS = {
   'derived-from': 'The dataset is derived from the target.',
 };
 
+// Which executable check would fail if an edge of this kind were wrong. This is what makes an edge
+// evidenced rather than merely asserted.
+const EDGE_EVIDENCE = {
+  decides: 'APP-FIT-ADR-GOVERNANCE',
+  'depends-on': 'APP-FIT-CONTEXT-MAP',
+  'runs-in': 'APP-FIT-CONTEXT-MAP',
+  exposes: 'APP-FIT-CONSUMER-IMPACT',
+  governs: 'APP-FIT-RACI-GOVERNANCE',
+  'verified-by': 'APP-FIT-ENTERPRISE-GRAPH',
+  'owned-by': 'APP-FIT-RACI-GOVERNANCE',
+  measures: 'APP-FIT-MISSION-CORRELATION',
+  'assessed-by': 'APP-FIT-READINESS-MODEL',
+  'mandated-by': 'APP-FIT-COMPLIANCE-INTELLIGENCE',
+  threatens: 'APP-FIT-THREAT-MODEL',
+  'derived-from': 'APP-FIT-DATA-GOVERNANCE',
+};
+
 class EnterpriseGraph {
-  constructor({ fitnessResults = [], datasets = [], contracts = null, obligations = [] } = {}) {
+  constructor({ fitnessResults = [], datasets = [], contracts = null, obligations = [], epoch = 0, history = [] } = {}) {
+    this._epoch = epoch;                 // when the current graph state came into existence
+    this._history = history.map((h) => ({ ...h }));   // superseded edges, supplied by the caller
     this._nodes = new Map();
     this._out = new Map();
     this._in = new Map();
@@ -79,12 +98,42 @@ class EnterpriseGraph {
     if (!this._nodes.has(key)) { this._nodes.set(key, { key, kind, id, ...props }); this._out.set(key, new Set()); this._in.set(key, new Set()); }
     return key;
   }
-  _link(from, to, rel) {
+  // Every edge is TEMPORAL (Phase 13, Part 5): it came into existence at some point, may have ended,
+  // carries a version, and names what evidences it and who owns it. Without those five fields the
+  // graph can only answer "what is true now", and the questions that matter in an investigation are
+  // all of the form "what was true then".
+  _link(from, to, rel, { createdAt = null, expiredAt = null, version = 1, evidence = null, owner = null } = {}) {
     if (!EDGE_KINDS[rel]) throw new Error(`unknown edge kind '${rel}' — an edge with no stated meaning is a line on a diagram`);
     if (!this._nodes.has(from) || !this._nodes.has(to)) return null;
-    this._edges.push({ from, to, rel, meaning: EDGE_KINDS[rel] });
+    this._edges.push({
+      from, to, rel, meaning: EDGE_KINDS[rel],
+      createdAt: createdAt ?? this._epoch, expiredAt, version,
+      evidence: evidence ?? this._edgeEvidence(from, to, rel),
+      owner: owner ?? this._edgeOwner(from, to),
+    });
     this._out.get(from).add(to); this._in.get(to).add(from);
     return true;
+  }
+
+  // What evidences this edge, and who owns it — derived rather than asked for, so an edge cannot be
+  // added without them and they cannot drift from the registries.
+  _edgeEvidence(from, to, rel) {
+    if (rel === 'verified-by') return to.startsWith('evidence:') ? to : from;
+    if (from.startsWith('control:')) return `evidence:${from.slice('control:'.length)}`;
+    if (to.startsWith('control:')) return `evidence:${to.slice('control:'.length)}`;
+    // Otherwise: the check that would FAIL if this edge were wrong. Declared per relationship
+    // rather than guessed, on the same rule as everything else here — an edge whose evidence was
+    // inferred from a name would eventually cite a control that checks something else entirely.
+    return EDGE_EVIDENCE[rel] ? `evidence:${EDGE_EVIDENCE[rel]}` : null;
+  }
+  _edgeOwner(from, to) {
+    for (const key of [from, to]) {
+      const n = this._nodes.get(key);
+      if (n && n.owner) return n.owner;
+      if (n && n.kind === 'owner') return n.id;
+      if (n && n.kind === 'bounded-context') { try { return ownership.describe(n.id).responsibleAuthority; } catch (_) { /* not a governed subsystem */ } }
+    }
+    return null;
   }
 
   _build({ fitnessResults, datasets, contracts, obligations }) {
@@ -292,6 +341,94 @@ class EnterpriseGraph {
     };
   }
 
+  // --- Temporal queries (Phase 13, Part 5) --------------------------------------------------------
+
+  // Every edge, current and superseded, as one series. Historical edges are supplied by the caller
+  // rather than invented here: this module has no store, and manufacturing a history it never
+  // observed is precisely the fabrication the global requirements forbid.
+  allEdges() { return [...this._history.map((h) => ({ ...h, historical: true })), ...this._edges.map((e) => ({ ...e, historical: false }))]; }
+
+  // Which edges were in force at an instant. An edge with no creation time cannot be placed in time
+  // and is EXCLUDED rather than assumed to have always existed.
+  edgesAsOf(at) {
+    if (!Number.isFinite(at)) throw new Error('a temporal query needs an instant');
+    return this.allEdges().filter((e) => Number.isFinite(e.createdAt) && e.createdAt <= at && (e.expiredAt === null || e.expiredAt === undefined || e.expiredAt > at));
+  }
+
+  // The Part 5 questions, answered by one traversal over the edges in force at that instant: which
+  // policies governed this dataset then, which controls existed, which ADRs were active, which
+  // owners were accountable, which readiness dimensions were assessed.
+  asOf(at, { node = null } = {}) {
+    const edges = this.edgesAsOf(at);
+    const reachable = new Set();
+    if (node) {
+      const queue = [node]; reachable.add(node);
+      while (queue.length) {
+        const cur = queue.shift();
+        for (const e of edges) {
+          const next = e.from === cur ? e.to : (e.to === cur ? e.from : null);
+          if (next && !reachable.has(next)) { reachable.add(next); queue.push(next); }
+        }
+      }
+    }
+    const universe = node ? reachable : new Set(edges.flatMap((e) => [e.from, e.to]));
+    const of = (kind) => [...universe].filter((k) => k.startsWith(`${kind}:`)).sort();
+    return {
+      at, node,
+      edges: node ? edges.filter((e) => e.from === node || e.to === node).length : edges.length,
+      totalEdgesInForce: edges.length,
+      policies: of('policy'), controls: of('control'), adrs: of('adr'),
+      owners: of('owner'), readinessDimensions: of('readiness-dimension'),
+      datasets: of('dataset'), obligations: of('compliance-obligation'),
+      // An edge nobody dated cannot be placed in history, and saying so is the point.
+      undated: this.allEdges().filter((e) => !Number.isFinite(e.createdAt)).map((e) => `${e.from} → ${e.to}`),
+      informationalOnly: true, authorizes: false,
+      note: 'Edges in force at the given instant. An edge with no creation time is excluded rather than assumed eternal — an undated relationship cannot honestly be placed in the past.',
+    };
+  }
+
+  // What changed between two instants: what came into force, what ended, what was re-versioned.
+  temporalImpact(from, to) {
+    if (!Number.isFinite(from) || !Number.isFinite(to)) throw new Error('a temporal impact analysis needs two instants');
+    if (to < from) throw new Error('the second instant must not precede the first');
+    const key = (e) => `${e.from}|${e.to}|${e.rel}`;
+    const beforeEdges = this.edgesAsOf(from);
+    const before = new Set(beforeEdges.map(key));
+    const after = this.edgesAsOf(to);
+    const afterKeys = new Set(after.map(key));
+    const added = after.filter((e) => !before.has(key(e)));
+    const removed = beforeEdges.filter((e) => !afterKeys.has(key(e)));
+    const reversioned = this.allEdges().filter((e) => e.version > 1 && Number.isFinite(e.createdAt) && e.createdAt > from && e.createdAt <= to);
+    return {
+      from, to,
+      added: added.map((e) => ({ edge: `${e.from} → ${e.to}`, rel: e.rel, owner: e.owner, evidence: e.evidence })),
+      removed: removed.map((e) => ({ edge: `${e.from} → ${e.to}`, rel: e.rel, expiredAt: e.expiredAt })),
+      reversioned: reversioned.map((e) => ({ edge: `${e.from} → ${e.to}`, version: e.version })),
+      unchanged: after.length - added.length,
+      informationalOnly: true, authorizes: false,
+    };
+  }
+
+  // Are the edges actually placeable in time? Reported per edge rather than as a single boolean,
+  // because "mostly temporal" is the state a half-migrated graph is in and it should be visible.
+  temporalIntegrity() {
+    const edges = this.allEdges();
+    const undated = edges.filter((e) => !Number.isFinite(e.createdAt));
+    const unowned = edges.filter((e) => !e.owner);
+    const unevidenced = edges.filter((e) => !e.evidence);
+    const backwards = edges.filter((e) => Number.isFinite(e.expiredAt) && Number.isFinite(e.createdAt) && e.expiredAt < e.createdAt);
+    return {
+      edges: edges.length,
+      dated: edges.length - undated.length,
+      coverage: edges.length ? +((edges.length - undated.length) / edges.length).toFixed(4) : null,
+      undated: undated.map((e) => `${e.from} → ${e.to}`),
+      unowned: unowned.map((e) => `${e.from} → ${e.to}`),
+      unevidenced: unevidenced.map((e) => `${e.from} → ${e.to}`),
+      expiredBeforeCreated: backwards.map((e) => `${e.from} → ${e.to}`),
+      sound: undated.length === 0 && backwards.length === 0,
+    };
+  }
+
   // The graph must describe the platform rather than a convenient subset of it.
   validate() {
     const violations = [];
@@ -318,10 +455,11 @@ class EnterpriseGraph {
       stats: this.stats(), nodeKinds: this.nodeKinds(), edgeKinds: this.edgeKinds(),
       validation: this.validate(),
       traceability: this.traceability({ requireHolding }),
+      temporalIntegrity: this.temporalIntegrity(),
       informationalOnly: true, authorizes: false,
       note: 'Built from the registries on each construction, never maintained beside them. Traceability is a per-entity question with named answers, not a tick over the whole graph.',
     };
   }
 }
 
-module.exports = { EnterpriseGraph, NODE_KINDS, EDGE_KINDS };
+module.exports = { EnterpriseGraph, NODE_KINDS, EDGE_KINDS, EDGE_EVIDENCE };
