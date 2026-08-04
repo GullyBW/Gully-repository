@@ -193,6 +193,8 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/assurance/readiness-dependencies') { requireRole('admin'); return json(200, app.assurance.readiness().dependencyAnalysis); }
   if (method === 'GET' && p === '/api/assurance/engineering-intelligence') { requireRole('admin'); return json(200, app.assurance.engineeringIntelligence()); }
   // --- Phase 12: digital twin of operations, predictive mission impact ---
+  // --- Phase 13: documentation assurance ---
+  if (method === 'GET' && p === '/api/architecture/documentation') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); return json(200, require('./architecture/documentation-assurance').report({ controls: f })); }
   // --- Phase 13: assumption registry, twin confidence ---
   if (method === 'GET' && p === '/api/architecture/assumptions') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); return json(200, app.assumptions.report({ controls: f })); }
   if (method === 'POST' && (m = p.match(/^\/api\/architecture\/assumptions\/([^/]+)\/review$/))) { const u = requireRole('admin'); return json(200, app.assumptions.review(dec(m[1]), { by: (body && body.by) || u.principal, stillHolds: body ? body.stillHolds !== false : true, note: body && body.note })); }

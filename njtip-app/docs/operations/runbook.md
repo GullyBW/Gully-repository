@@ -3,6 +3,19 @@
 **Scope:** running the NJTIP MVP (synthetic). Production operations (real DB/HSM/IdP) extend these
 per the component transition matrix. **No production data; go-live is a human Oversight Board decision.**
 
+## Prerequisites
+
+Before you start, all of these must be true. If any is not, stop and escalate rather than improvising —
+a procedure begun without its prerequisites is how a recovery becomes an incident.
+
+| Prerequisite | Check |
+|---|---|
+| You hold the role the procedure requires | Every route below states one: `admin`, `oversight-board` or `investigator` |
+| Node.js is available | `node --version` — the platform has zero runtime dependencies, so nothing else is needed |
+| The invariant gate passes on the current build | `npm run twin` → all invariants hold |
+| You know which zone you are acting in | `independent`, `executive` or `judiciary`; they are separated on purpose |
+| For anything touching evidence or custody | A second named human is available to witness — no single person completes a custody action |
+
 ## Start / stop
 ```bash
 # local
@@ -123,3 +136,21 @@ be fully staffed on paper and still not actively owned.
 > **Expect `sound: false` on a fresh deployment.** The activity and training registers start empty,
 > so every owner reads as `never-acted` and the dashboard says so. That is accurate, not a defect —
 > record real governance acts and completions rather than seeding them.
+
+## Communication
+
+Who is told, and when. An incident nobody communicated is an incident that repeats, and a recovery
+nobody announced is one the next shift undoes.
+
+| Event | Notify | When |
+|---|---|---|
+| Any `/healthz` failure or paged alert | Operations Review Board duty officer | Immediately, before starting recovery |
+| Suspected integrity or security incident | Information Security Review Board **and** the Oversight Board | Immediately — do not wait for confirmation |
+| A context reported `unavailable` during a partition | ORB duty officer; the accountable authority for that context | Within the acknowledgement window (24 h), sooner if constitutional |
+| Constitutional path affected (anonymous reporting, evidence custody) | Oversight Board | Immediately. This is the one escalation that does not wait for triage |
+| Recovery complete | Everyone notified above, plus the next shift | Before standing down, with the `traceId` and what was changed |
+| A documented procedure that did not work | The document's owner, via an escalation | Same day — a runbook that misled somebody is a defect, not a nuisance |
+
+Record every notification against the incident's `traceId`. Notifications are part of the evidence
+package; an escalation raised and never acknowledged is reported by
+`GET /api/governance/continuity/dashboard` and does not close itself.

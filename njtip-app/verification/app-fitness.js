@@ -4340,6 +4340,86 @@ module.exports = [
     if (quiet.added.length || quiet.removed.length) v.push('a quiet interval reported changes');
   }),
 
+  fit('APP-FIT-DOCUMENTATION-ASSURANCE', 'Every claim a governed document makes resolves against the implementation, and the extractor cannot pass by matching nothing', (v) => {
+    const da = require('../src/architecture/documentation-assurance');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Every claim kind says what it is, what resolved means, and what a wrong one costs -----
+    for (const k of da.claimKinds()) {
+      if (!k.description || !k.resolvedMeans || !k.ifWrong) v.push(`claim kind '${k.kind}' does not say what it is, what resolution means, or what it costs when wrong`);
+    }
+    if (da.documents().length < 8) v.push(`only ${da.documents().length} documents are governed — the corpus is too small for this control to mean anything`);
+
+    const report = da.report({ controls });
+    if (!report.sound) for (const b of report.blockers) v.push(b);
+    if (report.verification.missingDocuments.length) v.push('governed documents that do not exist: ' + report.verification.missingDocuments.join(', '));
+    if (report.verification.documentsWithNoClaims.length) v.push('governed documents from which nothing could be extracted: ' + report.verification.documentsWithNoClaims.join(', '));
+    if (report.authorizes !== false) v.push('the documentation assurance report claims authority');
+    // It says what it did NOT do, rather than implying it ran the commands.
+    if (!/resolved, not executed|RESOLVE/.test(report.verification.verifiedNotExecuted)) v.push('the report does not distinguish resolving a command from executing it');
+
+    // --- The extractor guards itself ------------------------------------------------------------
+    if (!report.verification.extractorSound) v.push(`only ${report.verification.claims} claims extracted — below the ${da.MINIMUM_CLAIMS} floor, so the extractor has stopped working`);
+    for (const kind of ['api-route', 'adr-reference', 'fitness-id', 'source-module', 'doc-link']) {
+      const row = report.verification.byKind.find((b) => b.kind === kind);
+      if (!row || !row.total) v.push(`no '${kind}' claims were extracted from the entire corpus — the pattern for that kind has stopped matching`);
+    }
+
+    // --- Every kind of wrong claim is caught. Fed crafted text, so the check proves it can fail --
+    const world = { routes: da.serverRoutes(), scripts: da.npmScripts(), adrs: da.adrNumbers(), controls: new Set(controls.map((c) => c.id)) };
+    const bad = [
+      { kind: 'api-route', value: '/api/does-not-exist' },
+      { kind: 'npm-command', value: 'never-defined-script' },
+      { kind: 'adr-reference', value: 9999 },
+      { kind: 'doc-link', value: 'no-such-document.md' },
+      { kind: 'fitness-id', value: 'APP-FIT-NEVER-WRITTEN' },
+      { kind: 'source-module', value: 'src/imaginary/module.js' },
+      { kind: 'telepathy', value: 'anything' },
+    ];
+    for (const claim of bad) {
+      const r = da.verifyClaim({ ...claim, raw: '' }, world);
+      if (r.resolved) v.push(`a documentation claim of kind '${claim.kind}' with value '${claim.value}' resolved, but nothing of that name exists`);
+    }
+    // …and every kind of right claim passes, or the checker rejects everything and proves nothing.
+    const good = [
+      { kind: 'api-route', value: '/api/resilience/consistency' },
+      { kind: 'npm-command', value: 'test' },
+      { kind: 'adr-reference', value: 1 },
+      { kind: 'doc-link', value: 'adr/0001-baseline-and-mvp.md' },
+      { kind: 'fitness-id', value: 'APP-FIT-CONTEXT-MAP' },
+      { kind: 'source-module', value: 'src/server.js' },
+    ];
+    for (const claim of good) {
+      const r = da.verifyClaim({ ...claim, raw: '' }, world);
+      if (!r.resolved) v.push(`a valid documentation claim of kind '${claim.kind}' ('${claim.value}') was reported unresolvable: ${r.detail}`);
+    }
+    // Extraction itself works on crafted text, so a silent regex failure is caught here too.
+    const extracted = da.extractClaims('See `GET /api/reports` and run npm run test, per ADR-0002, in `src/server.js`, gated by APP-FIT-CONTEXT-MAP.');
+    for (const kind of ['api-route', 'npm-command', 'adr-reference', 'source-module', 'fitness-id']) {
+      if (!extracted.some((c) => c.kind === kind)) v.push(`the extractor did not find a '${kind}' claim in text that plainly contains one`);
+    }
+    for (const c of extracted) if (!c.raw) v.push(`an extracted claim carries no source text, so a finding could not be traced back to the sentence that made it`);
+
+    // --- Part 7: operational procedures carry what an operator needs at 03:00 -------------------
+    const procedures = da.verifyProcedures({});
+    if (!procedures.count) v.push('no document is classified as an operational procedure');
+    for (const p of procedures.procedures) {
+      if (p.missing) v.push(`operational procedure '${p.document}' does not exist`);
+      for (const g of p.gaps || []) v.push(`${p.document}: no ${g.requirement} — ${g.why}`);
+    }
+    if (!procedures.complete) v.push('an operational procedure is incomplete: ' + procedures.incomplete.join(', '));
+    for (const r of procedures.requirements) if (!r.why) v.push(`procedure requirement '${r.requirement}' does not say why it is needed`);
+    // The caveat is the honest part: presence is not correctness.
+    if (!/only a rehearsal catches that/.test(procedures.caveat)) v.push('the procedure check does not admit that presence of a section is not proof the procedure works');
+    // And it can fail: a document with none of the required elements must be reported incomplete.
+    const emptyProbe = Object.keys(da.PROCEDURE_REQUIREMENTS).filter((req) => da.PROCEDURE_REQUIREMENTS[req].pattern.test('This document says nothing operational whatsoever.'));
+    if (emptyProbe.length) v.push('a document containing nothing operational satisfied procedure requirements: ' + emptyProbe.join(', '));
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');
