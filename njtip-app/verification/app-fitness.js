@@ -4843,6 +4843,111 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-EVIDENCE-QUALITY', 'Evidence quality is its weakest dimension, and agreement from the same source kind is not corroboration', (v) => {
+    const ec = require('../src/assurance/evidence-confidence');
+    for (const required of ['completeness', 'freshness', 'provenance', 'integrity', 'reproducibility', 'corroboration', 'independence', 'historical-consistency']) {
+      if (!ec.QUALITY_DIMENSIONS[required]) v.push(`evidence quality dimension '${required}' is not assessed`);
+    }
+    for (const [id, d] of Object.entries(ec.QUALITY_DIMENSIONS)) if (!d.description || !d.weakMeans) v.push(`quality dimension '${id}' does not say what it is or what weak means`);
+
+    let clock = 0;
+    const reg = new ec.EvidenceRegister({ clock: () => clock });
+    reg.record({ id: 'check', source: 'executable-check', completeness: 1, verifiedAt: 0, now: 0 });
+    reg.record({ id: 'attestation', source: 'human-attestation', completeness: 1, verifiedAt: 0, now: 0 });
+    reg.record({ id: 'sibling', source: 'executable-check', completeness: 1, verifiedAt: 0, now: 0 });
+    clock = 3600_000;
+    reg.record({ id: 'check', source: 'executable-check', completeness: 1, verifiedAt: clock, now: clock });
+
+    if (ec.evidenceQuality(reg, 'never-recorded').known) v.push('quality was assessed for evidence that was never recorded');
+    // THE RULE: two checks reading the same registry agree by construction.
+    const sameKind = ec.evidenceQuality(reg, 'check', { corroborators: ['sibling'], now: clock });
+    if (sameKind.independentlyCorroborated) v.push('corroboration from the same source kind was counted as independent');
+    if (sameKind.dimensions.find((d) => d.dimension === 'independence').score !== 0) v.push('same-kind agreement scored above zero for independence');
+    const crossKind = ec.evidenceQuality(reg, 'check', { corroborators: ['attestation'], now: clock });
+    if (!crossKind.independentlyCorroborated) v.push('corroboration from a different source kind was not counted as independent');
+
+    // Quality is the WEAKEST dimension, never the mean, and the report says which.
+    if (crossKind.quality !== Math.min(...crossKind.dimensions.map((d) => d.score))) v.push('evidence quality is not its weakest dimension');
+    if (crossKind.quality === crossKind.mean && crossKind.dimensions.some((d) => d.score !== crossKind.mean)) v.push('quality was reported as the mean');
+    if (!crossKind.weakestDimension || !crossKind.note.includes(crossKind.weakestDimension)) v.push('the quality report does not name its weakest dimension');
+    // A human attestation is not reproducible and does not claim to be.
+    const attested = ec.evidenceQuality(reg, 'attestation', { now: clock });
+    if (attested.dimensions.find((d) => d.dimension === 'reproducibility').score !== 0) v.push('a human attestation was scored as reproducible');
+    // …and an executable check is, so the dimension can score both ways.
+    if (ec.evidenceQuality(reg, 'check', { now: clock }).dimensions.find((d) => d.dimension === 'reproducibility').score !== 1) v.push('an executable check was not scored as reproducible');
+    // One verification is no history to be consistent with.
+    if (ec.evidenceQuality(reg, 'sibling', { now: clock }).dimensions.find((d) => d.dimension === 'historical-consistency').score !== 0) v.push('a single verification was scored as historically consistent');
+
+    const dash = ec.evidenceQualityDashboard(reg, { now: clock, corroboration: { check: ['attestation'] } });
+    if (dash.quality !== Math.min(...dash.evidence.map((e) => e.quality))) v.push('the dashboard does not aggregate to the weakest item');
+    if (!dash.weakestDimension) v.push('the dashboard does not name the estate\'s weakest dimension');
+    if (dash.replacesAuthorization !== false || dash.authorizes !== false) v.push('evidence quality claims to replace authorization');
+    if (!/never replaces human authorization/.test(dash.note)) v.push('the dashboard does not say that quality never replaces authorization');
+    if (!dash.uncorroborated.length) v.push('uncorroborated evidence was not named');
+  }),
+
+  fit('APP-FIT-ARCHITECTURE-DRIFT', 'Every kind of drift is checked in both directions, and structural drift is zero', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const asm = require('../src/architecture/assumptions');
+    const contextMap = require('../src/architecture/context-map');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const assumptions = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+
+    // Both directions are declared for every kind — a checker looking one way passes a document
+    // describing a system nobody built.
+    for (const required of ['module', 'coupling', 'api', 'control', 'ownership', 'assumption']) {
+      if (!dp.DRIFT_KINDS[required]) v.push(`drift kind '${required}' is not checked`);
+      else if (!dp.DRIFT_KINDS[required].undocumented || !dp.DRIFT_KINDS[required].unrealised) v.push(`drift kind '${required}' is not checked in both directions`);
+    }
+
+    const drift = dp.detect({ controls, assumptions });
+    if (!drift.clean) for (const f of drift.structural) v.push(`architecture drift (${f.kind}/${f.direction}): ${f.subject} — ${f.detail}`);
+    if (drift.authorizes !== false) v.push('the drift report claims authority');
+
+    // The extractor must actually be finding things, or "clean" means "broken".
+    if (!dp.sourceFiles().length) v.push('no source modules were found — the drift scanner has stopped working');
+    if (!Object.keys(dp.actualDependencies()).length) v.push('no cross-context requires were found — the coupling scanner has stopped working');
+    // COUPLING RATCHET. Source coupling is not declared context dependency, so it is informational —
+    // but it must not grow unnoticed. If this trips, either reduce the coupling or move the baseline
+    // deliberately, with a reason.
+    const COUPLING_BASELINE = 121;
+    if (drift.couplingCount > COUPLING_BASELINE) v.push(`cross-context coupling has grown to ${drift.couplingCount} from a baseline of ${COUPLING_BASELINE} — reduce it or move the baseline deliberately`);
+
+    // The checks can fail: a fabricated module claim and a fabricated context are both caught.
+    const fakeOwner = dp.moduleOwner('src/nowhere/imaginary.js');
+    if (fakeOwner.length) v.push('a module that does not exist was reported as owned');
+    const realOwner = dp.moduleOwner('src/server.js');
+    if (realOwner.length !== 1) v.push('a real module was not claimed by exactly one context');
+    // Every bounded context has an accountability record and vice versa — checked here rather than
+    // assumed, because it is the pair most likely to drift apart when a context is renamed.
+    const ownership = require('../src/governance/ownership');
+    for (const id of contextMap.ids()) if (!ownership.subsystems().includes(id)) v.push(`bounded context '${id}' has no accountability record`);
+    for (const id of ownership.subsystems()) if (!contextMap.ids().includes(id)) v.push(`accountability record '${id}' names no bounded context`);
+
+    // --- Part 17: governance analytics ---------------------------------------------------------
+    const analytics = dp.governanceAnalytics({ assumptions, controls, now: 0 });
+    if (!analytics.ownershipLoad.length) v.push('no ownership load was computed');
+    if (analytics.auditReadiness === null) v.push('audit readiness was not computed from control evidence');
+    if (!analytics.bottlenecks.length) v.push('no governance bottleneck was forecast from an estate with no activity register — capacity is unknown and unknown is not capacity');
+    if (!analytics.bottlenecks.some((b) => b.kind === 'unmeasured-capacity')) v.push('an unmeasured governance capacity was not reported as a bottleneck');
+    if (!analytics.forecast) v.push('governance analytics produced no forecast');
+    if (analytics.authorizes !== false) v.push('governance analytics claims authority');
+    // An authority accountable for a quarter of the estate is a bottleneck whether or not anything
+    // has jammed yet, and the load figures must be derived rather than asserted.
+    const totalRoles = analytics.ownershipLoad.reduce((a, l) => a + l.roles, 0);
+    if (totalRoles !== require('../src/governance/ownership').subsystems().length * require('../src/governance/ownership').DEPUTY_ROLES.length) {
+      v.push('ownership load does not account for every (subsystem, role) pair');
+    }
+    // With nothing recorded, "no bottleneck visible" must not read as "no bottleneck".
+    if (!/not the same as none existing/.test(dp.governanceAnalytics({ controls, activity: {}, training: {}, now: 0 }).forecast) && !dp.governanceAnalytics({ controls, activity: {}, training: {}, now: 0 }).bottlenecks.length) {
+      v.push('an empty bottleneck list did not caveat what it had not seen');
+    }
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

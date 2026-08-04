@@ -379,6 +379,14 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     verificationMethod: 'unverifiable', confidence: 'low',
     claim: { subject: 'lag-to-staleness-ratio', predicate: 'equals', value: 1000 },
   });
+  add('ASM-0009', {
+    statement: 'A custody hand-over is always witnessed by a second person, and the witness is recorded.',
+    rationale: 'The custody ledger is append-only and hash-chained, which proves the record was not altered. It cannot prove a second person was present — that is an organisational control the platform can require but not observe.',
+    evidence: ['APP-FIT-CUSTODY-SIGNED-CHAIN'], contexts: ['custody'],
+    owner: 'Directorate of Forensic Services', reviewCadenceDays: 90, expiresAt: at + YEAR,
+    verificationMethod: 'human-attestation', confidence: 'low',
+    claim: { subject: 'custody-handover-witnessed', predicate: 'holds' },
+  });
   add('ASM-0008', {
     statement: 'The platform can continue to meet its requirements with zero runtime dependencies.',
     rationale: 'Zero dependencies is what makes the supply chain auditable and the build reproducible offline. It is an assumption about future requirements, not a property of the current code.',

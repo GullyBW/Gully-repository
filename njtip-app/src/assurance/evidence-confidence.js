@@ -272,6 +272,112 @@ function scoreDimension(id, { sources = {}, evidence = null } = {}) {
   };
 }
 
+// --- Evidence quality intelligence (Phase 13, Part 14) --------------------------------------------
+//
+// Phase 11 computed confidence from source, completeness and freshness. Three inputs is enough to
+// rank evidence and not enough to say whether it is any good. Five dimensions were missing, and
+// they are the ones an auditor asks about:
+//
+//   Can you reproduce it? Does anything else agree? Is the corroboration independent? Has it been
+//   consistent over time? Can you show it has not been altered?
+//
+// The rule that makes this more than a longer list: CORROBORATION FROM THE SAME SOURCE IS NOT
+// CORROBORATION. Two checks that read the same registry agree by construction, and counting them
+// as two would make the strongest-looking evidence the most inbred.
+const QUALITY_DIMENSIONS = {
+  completeness: { description: 'How much of what should be covered is covered.', weakMeans: 'The evidence is about part of the thing.' },
+  freshness: { description: 'How recently it was verified, against the horizon for its kind.', weakMeans: 'It was true once.' },
+  provenance: { description: 'Whether the chain from source to figure is recorded.', weakMeans: 'Nobody can say where the number came from.' },
+  integrity: { description: 'Whether it can be shown not to have been altered since.', weakMeans: 'It could have been edited and nothing would show.' },
+  reproducibility: { description: 'Whether re-running the derivation gives the same answer.', weakMeans: 'The figure depends on when or where it was computed.' },
+  corroboration: { description: 'Whether anything else supports the same conclusion.', weakMeans: 'One observation, and no way to tell whether it was a fluke.' },
+  independence: { description: 'Whether the corroborating evidence comes from a DIFFERENT source kind.', weakMeans: 'Everything agreeing reads the same registry, so agreement proves nothing.' },
+  'historical-consistency': { description: 'Whether it has told the same story over successive verifications.', weakMeans: 'It has been volatile, so the current value is not obviously the true one.' },
+};
+
+// Assess one piece of evidence across all eight. `corroborators` are other evidence ids the caller
+// says support the same conclusion; independence is derived from their SOURCE KINDS, not their count.
+function evidenceQuality(register, id, { corroborators = [], now = 0, reproducible = null, integrityVerified = null } = {}) {
+  const item = register.get(id);
+  if (!item) return { evidence: id, known: false, reason: 'no evidence with this identifier has been recorded — absence of a record is not poor quality, it is no evidence at all' };
+  const history = register.history(id);
+  const trend = register.confidenceTrend(id);
+
+  const others = corroborators.map((c) => register.get(c)).filter(Boolean);
+  const distinctKinds = new Set(others.map((o) => o.source));
+  distinctKinds.delete(item.source);
+
+  const dimensions = {
+    completeness: { score: item.completeness, basis: 'recorded completeness of the observation' },
+    freshness: { score: item.freshness, basis: `age ${item.ageMs ?? 'unknown'} against a ${item.maxAgeMs}ms horizon` },
+    provenance: { score: item.source && item.calculation ? 1 : 0, basis: item.calculation ? 'source kind and reproducible calculation are both recorded' : 'the derivation is not recorded' },
+    integrity: {
+      score: integrityVerified === true ? 1 : integrityVerified === false ? 0 : (item.source === 'recorded-decision' ? 1 : 0),
+      basis: integrityVerified === null ? 'not independently checked; hash-chained sources are credited, others are not' : 'explicitly checked',
+    },
+    reproducibility: {
+      score: reproducible === true ? 1 : reproducible === false ? 0 : (['executable-check', 'derived-computation'].includes(item.source) ? 1 : 0),
+      basis: reproducible === null ? 'inferred from the source kind: a check that re-runs is reproducible, a human attestation is not' : 'explicitly checked',
+    },
+    corroboration: { score: others.length ? Math.min(1, others.length / 2) : 0, basis: `${others.length} corroborating item(s)` },
+    // THE ONE THAT MATTERS: agreement from the same source kind is agreement by construction.
+    independence: { score: distinctKinds.size ? Math.min(1, distinctKinds.size / 2) : 0, basis: distinctKinds.size ? `corroborated by ${distinctKinds.size} different source kind(s)` : 'no corroboration from a different source kind — agreement from the same kind is agreement by construction' },
+    'historical-consistency': {
+      score: history.length < 2 ? 0 : trend.direction === 'degrading' ? 0.3 : trend.consecutiveFalls >= 2 ? 0.5 : 1,
+      basis: history.length < 2 ? 'fewer than two verifications — there is no history to be consistent with' : `${history.length} verifications, ${trend.direction}`,
+    },
+  };
+  for (const [k, d] of Object.entries(dimensions)) { d.dimension = k; d.score = +Number(d.score || 0).toFixed(4); d.description = QUALITY_DIMENSIONS[k].description; d.weakMeans = QUALITY_DIMENSIONS[k].weakMeans; }
+
+  const rows = Object.values(dimensions);
+  // Weakest link, as everywhere: evidence is as good as its worst dimension, not its average.
+  const weakest = rows.reduce((w, d) => (d.score < w.score ? d : w));
+  return {
+    evidence: id, known: true, source: item.source, confidence: item.confidence, band: item.band,
+    dimensions: rows.sort((a, b) => a.dimension.localeCompare(b.dimension)),
+    quality: weakest.score, weakestDimension: weakest.dimension,
+    mean: +(rows.reduce((a, d) => a + d.score, 0) / rows.length).toFixed(4),
+    corroborators: others.map((o) => ({ id: o.id, source: o.source })),
+    independentlyCorroborated: distinctKinds.size > 0,
+    // Never replaces a human decision, and says so.
+    contributesToReadiness: true, replacesAuthorization: false,
+    note: `Quality is the weakest dimension (${weakest.dimension}), not the mean. ${weakest.weakMeans}`,
+  };
+}
+
+// The dashboard: every recorded item, aggregated to the weakest, with the estate's own weak spots
+// named by dimension.
+function evidenceQualityDashboard(register, { now = 0, corroboration = {}, threshold = 0.6 } = {}) {
+  const ids = register.all().map((e) => e.id);
+  const rows = ids.map((id) => evidenceQuality(register, id, { corroborators: corroboration[id] || [], now }));
+  const byDimension = {};
+  for (const r of rows) {
+    for (const d of r.dimensions) {
+      const b = (byDimension[d.dimension] = byDimension[d.dimension] || { dimension: d.dimension, description: d.description, scores: [] });
+      b.scores.push(d.score);
+    }
+  }
+  for (const b of Object.values(byDimension)) {
+    b.weakest = b.scores.length ? Math.min(...b.scores) : null;
+    b.mean = b.scores.length ? +(b.scores.reduce((a, x) => a + x, 0) / b.scores.length).toFixed(4) : null;
+    delete b.scores;
+  }
+  const below = rows.filter((r) => r.quality < threshold);
+  return {
+    evidence: rows, count: rows.length, threshold,
+    dimensions: Object.entries(QUALITY_DIMENSIONS).map(([id, d]) => ({ dimension: id, ...d })),
+    byDimension: Object.values(byDimension).sort((a, b) => a.weakest - b.weakest || a.dimension.localeCompare(b.dimension)),
+    weakestDimension: Object.values(byDimension).sort((a, b) => a.weakest - b.weakest || a.dimension.localeCompare(b.dimension))[0] || null,
+    belowThreshold: below.map((r) => ({ evidence: r.evidence, quality: r.quality, weakest: r.weakestDimension })),
+    quality: rows.length ? Math.min(...rows.map((r) => r.quality)) : null,
+    uncorroborated: rows.filter((r) => !r.independentlyCorroborated).map((r) => r.evidence),
+    // The whole point, said out loud on the dashboard rather than in a footnote.
+    contributesToReadiness: true, replacesAuthorization: false, authorizes: false,
+    sound: rows.length > 0 && below.length === 0,
+    note: 'Evidence quality contributes to readiness and never replaces human authorization. Corroboration from the same source kind is not corroboration: two checks reading one registry agree by construction.',
+  };
+}
+
 // --- Readiness dependency analysis (Phase 12, Part 15) --------------------------------------------
 //
 // The dimensions stay INDEPENDENT — nothing below changes a score, and no dimension inherits another
@@ -743,7 +849,8 @@ function report({ sources = {}, evidence = null, metrics = {} } = {}) {
 module.exports = {
   SOURCE_KINDS, DEFAULT_MAX_AGE_MS, CONFIDENCE_BANDS, CONFIDENCE_METHOD,
   READINESS_DIMENSIONS, DORA_BANDS, MATURITY_LEVELS,
-  DIMENSION_DEPENDENCIES, TEST_TYPES, GOVERNANCE_MATURITY_LEVELS,
+  DIMENSION_DEPENDENCIES, TEST_TYPES, GOVERNANCE_MATURITY_LEVELS, QUALITY_DIMENSIONS,
+  evidenceQuality, evidenceQualityDashboard,
   assess, EvidenceRegister, scoreDimension, readinessModel,
   readinessDependencyGraph, readinessDependencyAnalysis,
   assuranceCoverage, governanceMaturity, engineeringHistory, engineeringForecast,
