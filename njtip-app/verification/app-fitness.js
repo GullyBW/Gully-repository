@@ -4611,6 +4611,238 @@ module.exports = [
     if (recs.recommendations.length && recs.recommendations[0].priority !== 'constitutional') v.push('recommendations are not ranked with constitutional capabilities first');
   }),
 
+  fit('APP-FIT-GOVERNANCE-REHEARSALS', 'A rehearsal is scored against what the document promised, and one nobody has run is reported as never rehearsed', (v) => {
+    const { RehearsalRegister, REHEARSALS } = require('../src/governance/rehearsals');
+    const own = require('../src/governance/ownership');
+    const MIN = 60_000;
+
+    // --- Every rehearsal declares its steps, expectations and where they come from -------------
+    for (const [id, spec] of Object.entries(REHEARSALS)) {
+      if (!spec.steps || spec.steps.length < 3) v.push(`rehearsal '${id}' has fewer than three steps`);
+      if (!Object.keys(spec.expectations || {}).length) v.push(`rehearsal '${id}' declares no expectations — there would be nothing to score it against`);
+      if (!spec.expectationSource) v.push(`rehearsal '${id}' does not say where its expectations come from — an expectation with no source is somebody's opinion`);
+      if (!spec.tests) v.push(`rehearsal '${id}' does not say what it tests`);
+    }
+    for (const required of ['incident-escalation', 'disaster-recovery', 'emergency-authorization', 'evidence-custody', 'legislative-change', 'executive-approval']) {
+      if (!REHEARSALS[required]) v.push(`rehearsal '${required}' is not declared`);
+    }
+
+    const reg = () => new RehearsalRegister({ clock: () => 0 });
+    // --- Scheduling and observation are attributed and constrained ----------------------------
+    let noFacilitator = false, noParticipants = false;
+    try { reg().schedule({ rehearsal: 'disaster-recovery', participants: ['A'] }); } catch (e) { noFacilitator = !!e.failClosed; }
+    if (!noFacilitator) v.push('a rehearsal was scheduled with no facilitator');
+    try { reg().schedule({ rehearsal: 'disaster-recovery', facilitator: 'ORB' }); } catch (e) { noParticipants = !!e.failClosed; }
+    if (!noParticipants) v.push('a rehearsal with no participants was scheduled — it rehearses nobody');
+    let unknownRehearsal = false;
+    try { reg().schedule({ rehearsal: 'a-quick-chat', facilitator: 'ORB', participants: ['A'] }); } catch (_) { unknownRehearsal = true; }
+    if (!unknownRehearsal) v.push('an undeclared rehearsal was scheduled');
+
+    // --- A rehearsal that misses a step, or runs late, FAILS ----------------------------------
+    const slow = reg();
+    const slowRun = slow.schedule({ rehearsal: 'disaster-recovery', facilitator: 'ORB', participants: ['Ops'], at: 0 });
+    slow.observe(slowRun.id, { step: 'detected', at: 0, by: 'Ops' });
+    slow.observe(slowRun.id, { step: 'declared', at: 5 * MIN, by: 'ORB' });
+    slow.observe(slowRun.id, { step: 'restore-started', at: 10 * MIN, by: 'Ops' });
+    slow.observe(slowRun.id, { step: 'service-restored', at: 200 * MIN, by: 'Ops' });
+    slow.observe(slowRun.id, { step: 'integrity-verified', at: 210 * MIN, by: 'Ops', integrityVerified: true });
+    const slowReport = slow.close(slowRun.id, { by: 'ORB' });
+    if (slowReport.passed) v.push('a recovery that took 210 minutes passed a 30-minute expectation');
+    if (!slowReport.unmetExpectations.includes('resolutionMinutes')) v.push('a rehearsal that overran its documented time did not report the expectation as unmet');
+    if (!slowReport.lessons.length) v.push('a failed rehearsal produced no lessons');
+
+    // A missed step is a failure, and it says which.
+    const partial = reg();
+    const pr = partial.schedule({ rehearsal: 'evidence-custody', facilitator: 'OB', participants: ['Custodian'], at: 0 });
+    partial.observe(pr.id, { step: 'sealed', at: 0, by: 'Custodian' });
+    partial.observe(pr.id, { step: 'transferred', at: MIN, by: 'Custodian' });
+    const partialReport = partial.close(pr.id, { by: 'OB' });
+    if (partialReport.passed) v.push('a rehearsal that skipped half its steps passed');
+    if (!partialReport.missedSteps.includes('chain-verified')) v.push('a missed step was not named');
+
+    // An unobserved boolean expectation is NOT met — silence is not success.
+    const silent = reg();
+    const sr = silent.schedule({ rehearsal: 'evidence-custody', facilitator: 'OB', participants: ['A', 'B'], at: 0 });
+    for (const [i, step] of REHEARSALS['evidence-custody'].steps.entries()) silent.observe(sr.id, { step, at: i * MIN, by: 'A' });
+    const silentReport = silent.close(sr.id, { by: 'OB' });
+    if (silentReport.passed) v.push('a rehearsal passed without anybody recording that the chain held or that it was witnessed');
+    if (!silentReport.unmetExpectations.includes('chainUnbroken')) v.push('an unobserved expectation was treated as met');
+
+    // Steps observed out of order are reported.
+    const jumbled = reg();
+    const jr = jumbled.schedule({ rehearsal: 'incident-escalation', facilitator: 'ORB', participants: ['A'], at: 0 });
+    jumbled.observe(jr.id, { step: 'detected', at: 100 * MIN, by: 'A' });
+    jumbled.observe(jr.id, { step: 'raised', at: 0, by: 'A' });
+    const jumbledReport = jumbled.afterAction(jr.id);
+    if (!jumbledReport.outOfOrder.length) v.push('steps observed out of the documented order were not reported');
+
+    // --- …and a well-run rehearsal PASSES, or this control can only fail ----------------------
+    const good = reg();
+    const gr = good.schedule({ rehearsal: 'evidence-custody', facilitator: 'OB', participants: ['A', 'B'], at: 0 });
+    good.observe(gr.id, { step: 'sealed', at: 0, by: 'A', witnessed: true });
+    good.observe(gr.id, { step: 'transferred', at: MIN, by: 'A' });
+    good.observe(gr.id, { step: 'received', at: 2 * MIN, by: 'B' });
+    good.observe(gr.id, { step: 'chain-verified', at: 3 * MIN, by: 'B', chainUnbroken: true });
+    const goodReport = good.close(gr.id, { by: 'OB' });
+    if (!goodReport.passed) v.push('a correctly run rehearsal did not pass: ' + goodReport.lessons.join('; '));
+    if (goodReport.authorizes !== false) v.push('an after-action report claims authority');
+
+    // Separation of duties inside the rehearsal itself.
+    const selfAuth = reg();
+    const sa = selfAuth.schedule({ rehearsal: 'executive-approval', facilitator: 'OB', participants: ['Chair'], at: 0 });
+    selfAuth.observe(sa.id, { step: 'package-assembled', at: 0, by: 'Chair' });
+    selfAuth.observe(sa.id, { step: 'reviewed', at: MIN, by: 'Chair' });
+    selfAuth.observe(sa.id, { step: 'decided', at: 2 * MIN, by: 'Chair' });
+    selfAuth.observe(sa.id, { step: 'recorded', at: 3 * MIN, by: 'Chair', decisionRecorded: true });
+    const saReport = selfAuth.close(sa.id, { by: 'OB' });
+    if (saReport.passed) v.push('one person assembled, reviewed, decided and recorded an approval, and the rehearsal passed');
+    if (!saReport.unmetExpectations.includes('distinctAuthoriser')) v.push('a self-authorised approval was not reported');
+
+    // --- A closed report cannot be edited ------------------------------------------------------
+    let edited = false;
+    try { good.observe(gr.id, { step: 'sealed', at: 99, by: 'A' }); } catch (e) { edited = !!e.failClosed; }
+    if (!edited) v.push('an observation was added to a closed after-action report');
+
+    // --- Coverage: never-rehearsed is its own state and the worst one -------------------------
+    const empty = reg().coverage({ now: 0 });
+    if (empty.neverRehearsed.length !== Object.keys(REHEARSALS).length) v.push('a register with no runs did not report every rehearsal as never rehearsed');
+    if (empty.sound) v.push('a register in which nothing has ever been rehearsed reported sound');
+    if (!/first test will be a real incident/.test(empty.note)) v.push('the coverage report does not say what never-rehearsed costs');
+    const covered = good.coverage({ now: 0 });
+    if (!covered.passing.includes('evidence-custody')) v.push('a passed rehearsal was not reported as passing');
+    if (!covered.neverRehearsed.includes('disaster-recovery')) v.push('an unrun rehearsal was not reported as never rehearsed');
+
+    // --- Part 11 linkage: closing a rehearsal makes participation current ----------------------
+    const exercises = new own.ExerciseRegister({ clock: () => 0 });
+    const linked = new RehearsalRegister({ clock: () => 0, exercises });
+    const lr = linked.schedule({ rehearsal: 'disaster-recovery', facilitator: 'ORB', participants: ['Operator'], at: 0 });
+    for (const [i, step] of REHEARSALS['disaster-recovery'].steps.entries()) linked.observe(lr.id, { step, at: i * MIN, by: 'Operator', integrityVerified: true });
+    linked.close(lr.id, { by: 'ORB' });
+    if (!exercises.participation('Operator').some((p) => p.exercise === 'disaster-recovery')) v.push('closing a rehearsal did not record participation — training currency and rehearsals would then be unrelated');
+  }),
+
+  fit('APP-FIT-DECISION-MEMORY', 'A decision with no recorded outcome is unevaluated, and an outcome with no evidence is claimed rather than evidenced', (v) => {
+    const dm = require('../src/architecture/decision-memory');
+    const adr = require('../src/architecture/adr-governance');
+    const controls = [{ id: 'APP-FIT-CONTEXT-MAP', pass: true }, { id: 'APP-FIT-BROKEN-PROBE', pass: false }];
+
+    for (const [id, s] of Object.entries(dm.LINEAGE_STAGES)) if (!s.requires || !s.description) v.push(`lineage stage '${id}' is underspecified`);
+    for (const [id, s] of Object.entries(dm.OUTCOME_VERDICTS)) if (!s.description) v.push(`outcome verdict '${id}' has no description`);
+    // `mixed` and `too-early` exist because forcing a binary pushes honest entries into the wrong box.
+    for (const required of ['as-predicted', 'mixed', 'not-as-predicted', 'too-early']) if (!dm.OUTCOME_VERDICTS[required]) v.push(`verdict '${required}' is missing`);
+
+    const fresh = () => new dm.DecisionMemory({ clock: () => 0 });
+    // A lineage entry for a decision nobody wrote is a note about nothing.
+    let ghost = false;
+    try { fresh().record('ADR-9999', 'implementation', { by: 'A', modules: ['src/x.js'] }); } catch (_) { ghost = true; }
+    if (!ghost) v.push('a lineage entry was recorded against an ADR that does not exist');
+    let unattributed = false;
+    try { fresh().record('ADR-0001', 'implementation', { modules: ['src/x.js'] }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a decision-memory entry was recorded with nobody named');
+    for (const [stage, payload] of [['implementation', {}], ['outcome', { verdict: 'as-predicted' }], ['lesson', {}]]) {
+      let missing = false;
+      try { fresh().record('ADR-0001', stage, { by: 'A', ...payload }); } catch (_) { missing = true; }
+      if (!missing) v.push(`a '${stage}' entry was accepted without what it requires`);
+    }
+    let noVerdict = false;
+    try { fresh().record('ADR-0001', 'outcome', { by: 'A', evidence: ['APP-FIT-CONTEXT-MAP'] }); } catch (_) { noVerdict = true; }
+    if (!noVerdict) v.push('an outcome was recorded with no verdict');
+
+    // An outcome citing evidence that does not resolve is CLAIMED, not evidenced.
+    const m = fresh();
+    m.record('ADR-0001', 'implementation', { by: 'ARB', modules: ['src/app.js'] });
+    m.record('ADR-0001', 'outcome', { by: 'ARB', verdict: 'as-predicted', evidence: ['APP-FIT-NEVER-WRITTEN'] });
+    const claimed = m.lineage('ADR-0001', { controls });
+    if (claimed.evidencedOutcome) v.push('an outcome citing a control that never ran was reported as evidenced');
+    if (claimed.outcomes[0].state !== 'claimed') v.push('an unevidenced outcome was not reported as claimed');
+    if (!claimed.gaps.some((g) => /claimed rather than evidenced/.test(g))) v.push('the claimed-only state was not reported as a gap');
+
+    // An outcome recorded as 'as-predicted' whose evidence is FAILING is a contradiction.
+    const c = fresh();
+    c.record('ADR-0001', 'outcome', { by: 'ARB', verdict: 'as-predicted', evidence: ['APP-FIT-BROKEN-PROBE'] });
+    const contradicted = c.lineage('ADR-0001', { controls });
+    if (!contradicted.outcomes[0].contradicted) v.push('an outcome claiming success on failing evidence was not reported as contradicted');
+    if (!contradicted.gaps.some((g) => /failing evidence/.test(g))) v.push('a contradicted outcome produced no gap');
+
+    // A complete lineage passes, so the check has a success path.
+    const full = fresh();
+    full.record('ADR-0001', 'implementation', { by: 'ARB', modules: ['src/app.js'] });
+    full.record('ADR-0001', 'outcome', { by: 'ARB', verdict: 'as-predicted', evidence: ['APP-FIT-CONTEXT-MAP'] });
+    full.record('ADR-0001', 'lesson', { by: 'ARB', statement: 'Freezing the baseline early made every later phase additive.' });
+    full.record('ADR-0001', 'supersession', { by: 'ARB', adr: 'ADR-0002' });
+    const complete = full.lineage('ADR-0001', { controls });
+    if (!complete.complete) v.push('a fully recorded lineage was not reported complete: ' + complete.gaps.join('; '));
+    if (!complete.ledTo.includes('ADR-0002')) v.push('a supersession did not appear in the lineage');
+    let ghostSupersession = false;
+    try { full.record('ADR-0001', 'supersession', { by: 'ARB', adr: 'ADR-9999' }); } catch (_) { ghostSupersession = true; }
+    if (!ghostSupersession) v.push('a decision was recorded as leading to an ADR that does not exist');
+
+    // --- The catalogue-wide report ------------------------------------------------------------
+    const report = full.report({ controls });
+    if (report.count !== adr.adrFiles().length) v.push('decision memory does not cover every ADR in the catalogue');
+    // The number this exists to surface: most decisions have never been evaluated, and silence must
+    // not read as success.
+    if (!report.unevaluated.length) v.push('no ADR is reported as unevaluated, yet outcomes have been recorded for only one — silence is being read as success');
+    if (report.evaluationRate === null || report.evaluationRate >= 1) v.push('the evaluation rate claims every decision has been checked');
+    if (!/UNEVALUATED, not successful/.test(report.note)) v.push('the report does not say that an unevaluated decision is not a successful one');
+    if (report.authorizes !== false) v.push('the decision memory report claims authority');
+  }),
+
+  fit('APP-FIT-ORGANIZATIONAL-TWIN', 'The twin simulates losing people, and a deputy nobody assessed does not cover anything', (v) => {
+    const twinMod = require('../src/twin2/operations-twin');
+    const own = require('../src/governance/ownership');
+    const asm = require('../src/architecture/assumptions');
+    const DAY = 24 * 3600_000, NOW = 400 * DAY;
+    const registry = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+    const twin = () => new twinMod.OperationsTwin({ evidenceIds: ['APP-FIT-ORGANIZATIONAL-TWIN'], assumptions: registry, clock: () => 0 });
+
+    for (const required of ['owner-absence', 'leadership-turnover', 'operational-overload']) {
+      if (!twinMod.SCENARIOS[required]) v.push(`organizational scenario '${required}' is not declared`);
+      else try { twinMod.assertDeclaredMetadata(required, twinMod.SCENARIOS[required]); } catch (e) { v.push(`scenario '${required}': ${e.message}`); }
+    }
+
+    // Losing an office AND its deputy leaves a governance object unowned.
+    const chair = own.OWNERSHIP[own.subsystems()[0]].approvingAuthority;
+    const turnover = twin().simulate({ scenario: 'leadership-turnover', change: { absent: [chair] } });
+    if (turnover.safe) v.push('an office changing hands with its deputy left every governance object owned');
+    if (!turnover.blocking.some((f) => /no accountable authority remains/.test(f.finding))) v.push('leadership turnover did not report an unowned governance object');
+    if (!turnover.findings.some((f) => f.entity === 'organizational-spof')) v.push('the organizational single point of failure was not named');
+    if (turnover.isolation.unchanged !== true) v.push('an organizational simulation touched the baseline model');
+
+    // A deputy nobody has assessed does not cover the absence: unknown is not cover.
+    const absence = twin().simulate({ scenario: 'owner-absence', change: { absent: [chair] } });
+    if (absence.safe) v.push('an absent primary was covered by a deputy nobody has assessed');
+    if (!absence.blocking.some((f) => /not assessed as ready/.test(f.finding))) v.push('an unassessed deputy was not reported as unable to take over');
+
+    // …and a deputy who IS assessed ready does cover it, so the scenario has a success path.
+    const availability = new own.AvailabilityRegister({ clock: () => NOW });
+    const activity = new own.ActivityRegister({ clock: () => NOW });
+    const training = new own.TrainingRegister({ clock: () => NOW });
+    const exercises = new own.ExerciseRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        for (const person of [own.OWNERSHIP[s][role], own.deputyOf(own.OWNERSHIP[s][role])]) {
+          activity.recordAct({ person, act: 'review', subsystem: s, at: NOW - 10 * DAY });
+          for (const c of own.REQUIRED_TRAINING[role]) training.recordCompletion({ person, course: c, at: NOW - 30 * DAY, by: 'Registrar' });
+          for (const [id, k] of Object.entries(own.EXERCISE_KINDS)) if (k.relevantTo.includes(role)) exercises.recordParticipation({ person, exercise: id, at: NOW - 60 * DAY, by: 'ORB', role });
+        }
+      }
+    }
+    const continuity = own.knowledgeContinuity({ availability, activity, training, exercises, now: NOW });
+    const covered = twin().simulate({ scenario: 'owner-absence', change: { absent: [chair], continuity } });
+    if (!covered.safe) v.push('an absent primary with a fully assessed deputy was still reported uncovered: ' + covered.blocking.map((f) => f.finding).slice(0, 2).join('; '));
+
+    // Concurrent incidents exhaust the available approving authorities.
+    const overload = twin().simulate({ scenario: 'operational-overload', change: { concurrentIncidents: 99 } });
+    if (overload.safe) v.push('99 concurrent incidents left enough approving authorities');
+    if (!overload.blocking.some((f) => /nobody to authorise/.test(f.finding))) v.push('exhausted approval capacity was not reported');
+    const manageable = twin().simulate({ scenario: 'operational-overload', change: { concurrentIncidents: 1 } });
+    if (!manageable.safe) v.push('a single incident exhausted the approving authorities');
+    // Nobody absent, nothing concurrent: the scenario must be able to come out clean.
+    const quiet = twin().simulate({ scenario: 'owner-absence', change: { absent: [] } });
+    if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

@@ -193,6 +193,11 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/assurance/readiness-dependencies') { requireRole('admin'); return json(200, app.assurance.readiness().dependencyAnalysis); }
   if (method === 'GET' && p === '/api/assurance/engineering-intelligence') { requireRole('admin'); return json(200, app.assurance.engineeringIntelligence()); }
   // --- Phase 12: digital twin of operations, predictive mission impact ---
+  // --- Phase 13: rehearsals, decision memory ---
+  if (method === 'GET' && p === '/api/governance/rehearsals') { requireRole('admin'); return json(200, app.rehearsals.report({ now: Date.now() })); }
+  if (method === 'POST' && p === '/api/governance/rehearsals') { const u = requireRole('admin'); return json(201, app.rehearsals.schedule({ ...(body || {}), facilitator: (body && body.facilitator) || u.principal })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/rehearsals\/([^/]+)\/close$/))) { const u = requireRole('admin'); return json(200, app.rehearsals.close(dec(m[1]), { by: (body && body.by) || u.principal })); }
+  if (method === 'GET' && p === '/api/architecture/decision-memory') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); return json(200, app.decisionMemory.report({ controls: f })); }
   // --- Phase 13: knowledge continuity, training assurance, institutional resilience ---
   if (method === 'GET' && p === '/api/governance/knowledge-continuity') { requireRole('oversight-board'); const o = require('./governance/ownership'); return json(200, o.knowledgeContinuity({ availability: o.availabilityRegister, activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() })); }
   if (method === 'GET' && p === '/api/governance/training') { requireRole('admin'); const o = require('./governance/ownership'); return json(200, o.trainingAssurance({ activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() })); }

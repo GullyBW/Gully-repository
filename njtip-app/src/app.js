@@ -40,6 +40,8 @@ const { AssumptionRegistry, seedPlatformAssumptions } = require('./architecture/
 const ownership = require('./governance/ownership');
 const raci = require('./governance/raci');
 const institutionalResilience = require('./governance/institutional-resilience');
+const { RehearsalRegister } = require('./governance/rehearsals');
+const { DecisionMemory } = require('./architecture/decision-memory');
 const { ContractRegistry } = require('./contracts/integration-contracts');
 const { ConsumerContracts } = require('./contracts/consumer-contracts');
 const evidenceConfidence = require('./assurance/evidence-confidence');
@@ -447,6 +449,10 @@ function createApp(overrides = {}) {
   // Phase 13, Part 13: acceptances of a single point of failure. Also empty — nothing has been
   // accepted, so every single dependency currently blocks institutional readiness.
   ownership.resilienceAcceptances = new institutionalResilience.ResilienceAcceptance({ clock: () => Date.now() });
+  // Phase 13, Parts 9 & 12. Both empty: nothing has been rehearsed and no decision has been
+  // evaluated, so the reports say so rather than the platform congratulating itself.
+  const rehearsals = new RehearsalRegister({ clock: () => Date.now(), exercises: ownership.exercises });
+  const decisionMemory = new DecisionMemory({ clock: () => Date.now() });
   // Stable integration contracts (Part 3) + the component migration roadmap (Part 4). The
   // contract registry is the published interface surface; a boundary crossing without a
   // contract, or a migration item without a rollback, refuses composition.
@@ -664,7 +670,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, ownership, institutionalResilience, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, ownership, institutionalResilience, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

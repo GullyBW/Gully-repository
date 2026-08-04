@@ -79,6 +79,28 @@ const SCENARIOS = {
     limitations: ['Data migration cost and duration are not modelled — this answers what must move, not how long it takes.'],
     owner: 'Architecture Review Board', reviewCadenceDays: 180,
   },
+  // --- Organizational scenarios (Phase 13, Part 10) -------------------------------------------
+  // The twin modelled infrastructure and forgot that every one of those controls is exercised by a
+  // person. An institution loses people far more often than it loses regions, and it has never
+  // rehearsed that.
+  'owner-absence': {
+    perturbs: 'governance-control', question: 'If these people are unavailable, which governance objects stop being owned?',
+    assumptions: ['ASM-0006'],
+    limitations: ['Models declared ownership and the derived deputy chain; informal knowledge held by somebody not in the record is invisible here.', 'Absence is binary — partial availability and divided attention are not modelled.'],
+    owner: 'Oversight Board', reviewCadenceDays: 90,
+  },
+  'leadership-turnover': {
+    perturbs: 'governance-control', question: 'If these offices change hands at once, what loses its accountable authority and its deputy together?',
+    assumptions: ['ASM-0006'],
+    limitations: ['A successor is assumed to arrive with no operational history, which is the pessimistic case and not always the real one.', 'Handover quality is not modelled; the twin cannot see what was written down.'],
+    owner: 'Oversight Board', reviewCadenceDays: 180,
+  },
+  'operational-overload': {
+    perturbs: 'governance-control', question: 'If several incidents run at once, is there anybody left to authorise the next one?',
+    assumptions: ['ASM-0006'],
+    limitations: ['Capacity is modelled as one concurrent incident per available authority, which is a modelling choice rather than a measurement.', 'Does not model fatigue, only availability.'],
+    owner: 'Operations Review Board', reviewCadenceDays: 90,
+  },
   'dr-exercise': {
     perturbs: 'regional-deployment', question: 'With these regions lost, what still serves, what degrades, and what refuses?',
     assumptions: ['ASM-0005', 'ASM-0007'],
@@ -454,6 +476,54 @@ class OperationsTwin {
         }
       }
       radius = this.blastRadius(moving.filter((id) => this.entity(id)));
+    } else if (scenario === 'owner-absence' || scenario === 'leadership-turnover' || scenario === 'operational-overload') {
+      // Organizational simulation. `continuity` is supplied by the caller because the twin models
+      // the ORG CHART, not the people's readiness — that evidence lives in the ownership registers,
+      // and duplicating it here would be a second copy that drifts.
+      const absent = new Set(change.absent || change.vacated || []);
+      const concurrent = Number(change.concurrentIncidents || 0);
+      const continuity = change.continuity || null;
+      const affected = [];
+      for (const sub of ownership.subsystems()) {
+        const o = ownership.OWNERSHIP[sub];
+        for (const role of ownership.DEPUTY_ROLES) {
+          const primary = o[role];
+          const deputy = ownership.deputyOf(primary);
+          const primaryOut = absent.has(primary);
+          // Turnover takes the office AND its deputy: a new chair arrives with a new vice-chair.
+          const deputyOut = absent.has(deputy) || (scenario === 'leadership-turnover' && primaryOut);
+          if (!primaryOut && !deputyOut) continue;
+          const deputyReady = continuity
+            ? ((continuity.roles.find((r) => r.subsystem === sub && r.role === role) || {}).deputyReadiness || null)
+            : null;
+          // Covered means: the primary is still there, OR the deputy is there AND assessed ready.
+          const covered = !primaryOut || (!deputyOut && deputyReady !== null && deputyReady.ready === true);
+          affected.push({ subsystem: sub, role, primary, deputy, primaryOut, deputyOut, covered });
+          if (!covered) {
+            findings.push({
+              entity: `gov:${sub}`, kind: 'governance-control', blocking: true,
+              finding: primaryOut && deputyOut
+                ? `'${sub}/${role}' loses both ${primary} and ${deputy} — no accountable authority remains`
+                : `'${sub}/${role}': ${primary} is unavailable and ${deputy} is not assessed as ready to take over`,
+            });
+          }
+        }
+      }
+      if (scenario === 'operational-overload') {
+        const authorities = new Set();
+        for (const sub of ownership.subsystems()) {
+          const a = ownership.OWNERSHIP[sub].approvingAuthority;
+          if (!absent.has(a)) authorities.add(a);
+        }
+        if (concurrent > authorities.size) {
+          findings.push({ entity: 'governance-capacity', kind: 'governance-control', blocking: true, finding: `${concurrent} concurrent incidents against ${authorities.size} available approving authorities — at least one incident has nobody to authorise a decision` });
+        } else {
+          findings.push({ entity: 'governance-capacity', kind: 'governance-control', finding: `${authorities.size} approving authorities remain available for ${concurrent} concurrent incident(s)` });
+        }
+      }
+      const uncovered = affected.filter((a) => !a.covered);
+      if (uncovered.length) findings.push({ entity: 'organizational-spof', kind: 'governance-control', blocking: true, finding: `${uncovered.length} governance object(s) have no covered authority under this scenario: ${uncovered.slice(0, 5).map((a) => `${a.subsystem}/${a.role}`).join(', ')}` });
+      radius = this.blastRadius([]);
     } else if (scenario === 'dr-exercise') {
       const failed = change.failedRegions || [];
       withdraw((e) => e.kind === 'regional-deployment' && failed.includes(e.region), 'region lost in the exercise');
