@@ -36,6 +36,7 @@ const { InfrastructureRegistry } = require('./infra/infra-governance');
 const { InfrastructureAssurance } = require('./infra/infrastructure-assurance');
 const architecture = require('./architecture/context-map');
 const adrGovernance = require('./architecture/adr-governance');
+const { AssumptionRegistry, seedPlatformAssumptions } = require('./architecture/assumptions');
 const ownership = require('./governance/ownership');
 const raci = require('./governance/raci');
 const { ContractRegistry } = require('./contracts/integration-contracts');
@@ -287,7 +288,10 @@ function createApp(overrides = {}) {
   // Digital Twin of Operations (Phase 12, Part 17). Built fresh on each call from the registries
   // rather than held as state: a twin that is constructed once and kept is a twin that drifts the
   // moment anything it models changes, and drift is the failure this design exists to prevent.
-  const operationsTwin = () => new OperationsTwin({ evidenceIds: safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => r.id), []) });
+  const operationsTwin = () => new OperationsTwin({
+    evidenceIds: safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => r.id), []),
+    assumptions, clock: () => Date.now(),
+  });
   // Human-governed autonomous recovery (Phase 54): recommends; never executes without approval.
   const recovery = seedPlaybooks(new RecoveryPlatform());
   // Recovery strategy evaluation (Part 8): multiple strategies compared on RTO/RPO, disruption,
@@ -418,6 +422,12 @@ function createApp(overrides = {}) {
   // validated by fitness — a startup gate refuses to compose an invalid architecture-of-record.
   const architectureValidation = architecture.validate();
   if (!architectureValidation.valid) throw new Error('context map invalid: ' + architectureValidation.violations.join('; '));
+  // Executable assumption registry (Phase 13, Part 2). Seeded with the assumptions this codebase
+  // actually makes — each previously a comment with no owner, cadence or expiry. Nothing is
+  // pre-verified: an assumption nobody has checked reads as unverified, which is the truth.
+  const assumptions = seedPlatformAssumptions(new AssumptionRegistry({ clock: () => Date.now() }), { at: Date.now() });
+  const assumptionValidation = assumptions.validate();
+  if (!assumptionValidation.valid) throw new Error('assumption registry invalid: ' + assumptionValidation.violations.join('; '));
   const ownershipValidation = ownership.validate();
   if (!ownershipValidation.valid) throw new Error('governance ownership model invalid: ' + ownershipValidation.violations.join('; '));
   // Phase 12, Part 13: the registers behind active ownership. They start EMPTY on purpose. An
@@ -645,7 +655,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, ownership, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, ownership, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

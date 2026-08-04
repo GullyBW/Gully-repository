@@ -3920,6 +3920,214 @@ module.exports = [
     if (!resolves('/api/resilience/consistency')) v.push('the route resolver rejected a route that plainly exists');
   }),
 
+  fit('APP-FIT-ASSUMPTION-REGISTRY', 'Every assumption has an owner, an expiry and evidence — and an owner may not claim more confidence than the evidence supports', (v) => {
+    const asm = require('../src/architecture/assumptions');
+    const contextMap = require('../src/architecture/context-map');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const fresh = () => new asm.AssumptionRegistry({ clock: () => 0 });
+    const base = { statement: 's'.repeat(10), rationale: 'r'.repeat(10), owner: 'ARB', reviewCadenceDays: 90, expiresAt: 365 * 24 * 3600_000, verificationMethod: 'executable-check' };
+
+    // --- The registry refuses what makes an assumption register decorative -------------------
+    let unowned = false;
+    try { fresh().register('A', { ...base, owner: undefined }); } catch (e) { unowned = !!e.failClosed; }
+    if (!unowned) v.push('an assumption was registered with no owner — an unowned assumption is one nobody will revisit');
+    let immortal = false;
+    try { fresh().register('A', { ...base, expiresAt: undefined }); } catch (e) { immortal = !!e.failClosed; }
+    if (!immortal) v.push('an assumption was registered with no expiry — an assumption that never expires is a belief');
+    for (const [field, patch] of [['statement', { statement: undefined }], ['rationale', { rationale: undefined }], ['cadence', { reviewCadenceDays: 0 }], ['method', { verificationMethod: 'vibes' }]]) {
+      let threw = false;
+      try { fresh().register('A', { ...base, ...patch }); } catch (_) { threw = true; }
+      if (!threw) v.push(`an assumption was registered with no valid ${field}`);
+    }
+    let redeclared = false;
+    const r0 = fresh(); r0.register('A', base);
+    try { r0.register('A', base); } catch (_) { redeclared = true; }
+    if (!redeclared) v.push('an assumption was silently re-registered rather than amended');
+
+    // --- Declared confidence may not exceed what the evidence supports -----------------------
+    const over = fresh();
+    over.register('OVER', { ...base, evidence: ['APP-FIT-CONTEXT-MAP'], contexts: ['assurance'], confidence: 'high' });
+    const overclaims = over.overclaims({ now: 0, controls });
+    if (!overclaims.length) v.push('an assumption claiming high confidence that nothing has ever verified was not reported as an overclaim');
+    if (overclaims[0] && overclaims[0].assessed !== 'low') v.push('a never-verified assumption did not cap at low confidence');
+    // Verifying it lifts the assessment, so the check can pass as well as fail.
+    over.recordVerification('OVER', { holds: true, by: 'Assurance', at: 0 });
+    const lifted = over.assessConfidence('OVER', { now: 0, controls });
+    if (lifted.assessed !== 'high') v.push('a verified, evidenced, executable-check assumption did not reach high confidence: ' + lifted.reasons.join('; '));
+    if (over.overclaims({ now: 0, controls }).length) v.push('a fully supported declaration was still reported as an overclaim');
+    // A verification that found it did NOT hold takes it to unknown, not merely down a notch.
+    over.recordVerification('OVER', { holds: false, by: 'Assurance', at: 1 });
+    if (over.assessConfidence('OVER', { now: 0, controls }).assessed !== 'unknown') v.push('an assumption whose latest verification failed still supported a confidence level');
+    let unattributedVerification = false;
+    try { over.recordVerification('OVER', { holds: true }); } catch (e) { unattributedVerification = !!e.failClosed; }
+    if (!unattributedVerification) v.push('a verification was recorded with nothing named as having performed it');
+
+    // --- Detection: stale, contradictory, orphaned, unevidenced ------------------------------
+    const YEAR = 365 * 24 * 3600_000;
+    const d = fresh();
+    d.register('STALE', { ...base, evidence: ['APP-FIT-CONTEXT-MAP'], contexts: ['assurance'], expiresAt: 10 });
+    if (!d.stale({ now: 20 }).some((s) => s.assumption === 'STALE' && s.expired)) v.push('an expired assumption was not reported as expired');
+    if (d.stale({ now: 5 }).some((s) => s.assumption === 'STALE' && s.expired)) v.push('an unexpired assumption was reported as expired');
+    if (!d.stale({ now: 100 * 24 * 3600_000 }).some((s) => s.neverReviewed)) v.push('an assumption past its first cadence with no review was not reported');
+    if (d.assessConfidence('STALE', { now: 20, controls }).assessed !== 'unknown') v.push('an expired assumption still supported a confidence level');
+
+    const c = fresh();
+    c.register('LO', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'], claim: { subject: 'replica-lag', predicate: 'at-most', value: 100 } });
+    c.register('HI', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'], claim: { subject: 'replica-lag', predicate: 'at-least', value: 500 } });
+    c.register('YES', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'], claim: { subject: 'session-affinity', predicate: 'holds' } });
+    c.register('NO', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'], claim: { subject: 'session-affinity', predicate: 'does-not-hold' } });
+    c.register('OTHER', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'], claim: { subject: 'something-else', predicate: 'holds' } });
+    const found = c.contradictions();
+    if (!found.some((x) => x.subject === 'replica-lag')) v.push('at-most 100 alongside at-least 500 was not reported as a contradiction');
+    if (!found.some((x) => x.subject === 'session-affinity')) v.push('holds alongside does-not-hold was not reported as a contradiction');
+    if (found.some((x) => x.subject === 'something-else')) v.push('an assumption with no counterpart was reported as contradicting something');
+    if (found.length !== 2) v.push(`expected exactly two contradictions, found ${found.length} — a false positive trains people to ignore the report`);
+    if (c.validate().valid) v.push('a registry containing a contradiction validated successfully');
+
+    const o = fresh();
+    o.register('NOWHERE', { ...base, contexts: [], evidence: ['APP-FIT-CONTEXT-MAP'] });
+    o.register('GHOST', { ...base, contexts: ['ministry-of-typos'], evidence: ['APP-FIT-CONTEXT-MAP'] });
+    o.register('REAL', { ...base, contexts: [contextMap.ids()[0]], evidence: ['APP-FIT-CONTEXT-MAP'] });
+    const orphans = o.orphaned().map((x) => x.assumption).sort();
+    if (JSON.stringify(orphans) !== JSON.stringify(['GHOST', 'NOWHERE'])) v.push(`orphan detection is wrong: ${orphans.join(', ')}`);
+
+    const u = fresh();
+    u.register('BARE', { ...base, contexts: ['assurance'] });
+    u.register('IMAGINARY', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-NEVER-WRITTEN'] });
+    u.register('CITED', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'] });
+    const bare = u.unevidenced({ controls }).map((x) => x.assumption).sort();
+    if (JSON.stringify(bare) !== JSON.stringify(['BARE', 'IMAGINARY'])) v.push(`unevidenced detection is wrong: ${bare.join(', ')}`);
+
+    // --- Health aggregates to the weakest, and an undeclared assumption is not an absent one ---
+    const h = fresh();
+    h.register('GOOD', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'] });
+    h.recordVerification('GOOD', { holds: true, by: 'Assurance', at: 0 });
+    h.register('EXPIRED', { ...base, contexts: ['assurance'], evidence: ['APP-FIT-CONTEXT-MAP'], expiresAt: 10 });
+    if (h.health(['GOOD'], { now: 0, controls }).confidence !== 'high') v.push('a sound assumption set was not reported as high confidence');
+    if (h.health(['GOOD', 'EXPIRED'], { now: 20, controls }).confidence !== 'unknown') v.push('a set containing an expired assumption did not aggregate to the weakest');
+    const none = h.health([], { now: 0, controls });
+    if (none.sound) v.push('an empty assumption set was reported sound');
+    if (!/unexamined/.test(none.reason)) v.push('an empty assumption set does not say that undeclared is not absent');
+    const missing = h.health(['DOES-NOT-EXIST'], { now: 0, controls });
+    if (missing.sound || !missing.missing.includes('DOES-NOT-EXIST')) v.push('citing an unregistered assumption was not reported');
+
+    // --- The platform's own assumptions are registered and internally consistent --------------
+    const platform = asm.seedPlatformAssumptions(fresh());
+    const report = platform.report({ now: 0, controls });
+    if (report.count < 8) v.push(`only ${report.count} platform assumptions are registered — the ones this codebase actually makes are not recorded`);
+    if (report.contradictions.length) v.push('the platform\'s own assumptions contradict each other: ' + JSON.stringify(report.contradictions));
+    if (report.orphaned.length) v.push('a platform assumption names no real bounded context: ' + report.orphaned.map((x) => x.assumption).join(', '));
+    if (report.unevidenced.length) v.push('a platform assumption cites evidence that does not resolve: ' + report.unevidenced.map((x) => `${x.assumption} (${x.unresolved.join(', ')})`).join('; '));
+    if (!report.validation.valid) v.push('the platform assumption registry is invalid: ' + report.validation.violations.join('; '));
+    if (report.authorizes !== false) v.push('the assumption report claims authority');
+    for (const a of report.assumptions) {
+      if (!a.statement || !a.rationale || !a.owner) v.push(`${a.id}: incomplete record`);
+      if (a.expiresAt <= a.registeredAt) v.push(`${a.id}: expires before it was registered`);
+    }
+    // Every platform assumption is honestly overclaimed until somebody verifies it — and that is
+    // reported rather than smoothed over. If this ever becomes empty without verifications being
+    // recorded, the assessment has been weakened.
+    if (!report.overclaims.length) v.push('no platform assumption is reported as an overclaim, yet none has been verified — the assessment has stopped being strict');
+  }),
+
+  fit('APP-FIT-TWIN-CONFIDENCE', 'No simulation runs without declared assumptions, and an unchecked simulation cannot claim high confidence', (v) => {
+    const twinMod = require('../src/twin2/operations-twin');
+    const asm = require('../src/architecture/assumptions');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Every declared scenario carries the metadata that makes it arguable ------------------
+    for (const [id, spec] of Object.entries(twinMod.SCENARIOS)) {
+      try { twinMod.assertDeclaredMetadata(id, spec); } catch (e) { v.push(`scenario '${id}': ${e.message}`); }
+      for (const l of spec.limitations || []) if (l.length < 20) v.push(`scenario '${id}': a limitation stated in ${l.length} characters is not a limitation`);
+    }
+    // …and the guard genuinely rejects a scenario that does not. Fed crafted specs, so the check
+    // never has to mutate the real scenario table to prove it works.
+    const good = { assumptions: ['ASM-0001'], limitations: ['something the model cannot see, stated at length'], owner: 'ARB', reviewCadenceDays: 90 };
+    for (const [what, spec] of [
+      ['no assumptions', { ...good, assumptions: [] }],
+      ['no limitations', { ...good, limitations: [] }],
+      ['no owner', { ...good, owner: null }],
+      ['no cadence', { ...good, reviewCadenceDays: 0 }],
+    ]) {
+      let rejected = false;
+      try { twinMod.assertDeclaredMetadata('probe', spec); } catch (e) { rejected = !!e.failClosed; }
+      if (!rejected) v.push(`a scenario with ${what} was accepted for simulation`);
+    }
+    if (twinMod.assertDeclaredMetadata('probe', good) !== true) v.push('a fully declared scenario was rejected — the guard rejects everything and proves nothing');
+
+    // --- Calibration: never seeded, and it caps confidence ------------------------------------
+    const registry = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+    const twin = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), assumptions: registry, clock: () => 0 });
+    for (const s of Object.keys(twinMod.SCENARIOS)) {
+      if (twin.validationHistory(s).length) v.push(`scenario '${s}' has a validation history on a freshly built twin — historical evidence must never be fabricated`);
+      if (twin.calibration(s).state !== 'uncalibrated') v.push(`scenario '${s}' is calibrated with no comparisons recorded`);
+    }
+    let unattributed = false;
+    try { twin.recordValidation('dr-exercise', { predicted: true, observed: true }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a simulation validation was recorded with nobody named as having made the comparison');
+    let notBoolean = false;
+    try { twin.recordValidation('dr-exercise', { predicted: 'probably', observed: true, by: 'ORB' }); } catch (_) { notBoolean = true; }
+    if (!notBoolean) v.push('a validation accepted a non-boolean prediction');
+
+    // Three agreeing comparisons calibrate it; the state must actually change, or the mechanism is
+    // decoration.
+    for (let i = 0; i < twinMod.CALIBRATION_MIN_OBSERVATIONS; i++) twin.recordValidation('dr-exercise', { predicted: true, observed: true, by: 'Operations Review Board', at: i });
+    if (twin.calibration('dr-exercise').state !== 'calibrated') v.push('three agreeing comparisons did not calibrate the scenario');
+    // Disagreement takes it to diverging, and diverging caps confidence at unknown.
+    const drift = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), assumptions: registry, clock: () => 0 });
+    for (let i = 0; i < 5; i++) drift.recordValidation('dr-exercise', { predicted: true, observed: i < 1, by: 'ORB', at: i });
+    if (drift.calibration('dr-exercise').state !== 'diverging') v.push('a simulation that disagreed with reality four times out of five was not reported as diverging');
+    if (drift.confidence('dr-exercise', { now: 0, controls }).confidence !== 'unknown') v.push('a diverging simulation still supported a confidence level');
+    if (!drift.confidenceTrend('dr-exercise').warning) v.push('a degrading agreement trend produced no warning');
+    if (drift.confidenceTrend('operational-failure').direction !== 'insufficient-data') v.push('a trend was reported for a scenario with no comparisons');
+
+    // --- Confidence is capped by the weakest factor, and can reach high ----------------------
+    const noRegistry = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), clock: () => 0 });
+    const blind = noRegistry.confidence('dr-exercise', { now: 0, controls });
+    if (blind.confidence !== 'unknown') v.push('a twin with no assumption registry still reported a confidence level');
+    if (!blind.limitedBy.includes('assumptions')) v.push('a missing assumption registry was not named as the limiting factor');
+
+    // A crafted registry where every factor is sound must reach 'high' — otherwise this is a gate
+    // that can only fail, which proves nothing about the platform.
+    const sound = new asm.AssumptionRegistry({ clock: () => 0 });
+    for (const id of twinMod.SCENARIOS['dr-exercise'].assumptions) {
+      sound.register(id, {
+        statement: 'a sound assumption for the confidence probe', rationale: 'exercises the success path of the confidence calculation',
+        evidence: ['APP-FIT-CONTEXT-MAP'], contexts: ['resilience'], owner: 'ORB',
+        reviewCadenceDays: 3650, expiresAt: 3650 * 24 * 3600_000, verificationMethod: 'executable-check', confidence: 'high',
+      });
+      sound.recordVerification(id, { holds: true, by: 'Assurance', at: 0 });
+    }
+    const calibrated = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), assumptions: sound, clock: () => 0 });
+    for (let i = 0; i < 4; i++) calibrated.recordValidation('dr-exercise', { predicted: true, observed: true, by: 'ORB', at: i });
+    const best = calibrated.confidence('dr-exercise', { now: 0, controls });
+    if (best.confidence !== 'high') v.push('a calibrated simulation on verified assumptions did not reach high confidence: ' + JSON.stringify(best.factors));
+
+    // --- Every simulation carries its confidence metadata ------------------------------------
+    const run = calibrated.simulate({ scenario: 'dr-exercise', change: { failedRegions: ['bw-south', 'bw-north'] }, now: 0, controls });
+    for (const field of ['confidence', 'assumptions', 'limitations', 'owner', 'reviewDueAt', 'calibration', 'validationHistory', 'confidenceDetail']) {
+      if (run[field] === undefined || run[field] === null) v.push(`a simulation result omits '${field}'`);
+    }
+    if (!run.confidenceDetail.evidenceBasis) v.push('a simulation result states no evidence basis');
+    if (run.authorizes !== false) v.push('a simulation with high confidence claims authority');
+    if (run.isolation.unchanged !== true) v.push('the confidence framework broke simulation isolation');
+
+    // The report aggregates to the weakest scenario, not the average.
+    const report = calibrated.confidenceReport({ now: 0, controls });
+    const weakest = report.scenarios.slice().sort((a, b) => ['high', 'moderate', 'low', 'unknown'].indexOf(b.confidence) - ['high', 'moderate', 'low', 'unknown'].indexOf(a.confidence))[0];
+    if (report.confidence !== weakest.confidence) v.push('the confidence report does not aggregate to the weakest scenario');
+    if (!report.uncalibrated.length) v.push('scenarios that have never been compared against reality were not named as uncalibrated');
+    if (report.authorizes !== false) v.push('the confidence report claims authority');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

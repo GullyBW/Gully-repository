@@ -45,14 +45,82 @@ const ENTITY_KINDS = {
 
 // The scenarios the twin can simulate. Each declares what it perturbs and what question it answers,
 // because a scenario nobody can state the question for is a scenario nobody can read the result of.
+// Every scenario must also declare the ASSUMPTIONS it rests on, what the model CANNOT see, an
+// owner and a review cadence (Phase 13, Part 1). A simulation with undeclared assumptions is the
+// dangerous kind: it produces a confident answer and gives the reader nothing to disagree with.
 const SCENARIOS = {
-  'infrastructure-change': { perturbs: 'infrastructure', question: 'If this zone changes or is withdrawn, what stops working and who owns it?' },
-  'policy-update': { perturbs: 'policy', question: 'If this operating rule changes, which contexts are governed differently and what did they rely on?' },
-  'governance-change': { perturbs: 'governance-control', question: 'If this accountable authority changes, what becomes unowned?' },
-  'operational-failure': { perturbs: 'service', question: 'If these services fail, what is the blast radius through declared dependencies?' },
-  'migration-plan': { perturbs: 'bounded-context', question: 'If this context moves or is replaced, what has to move with it?' },
-  'dr-exercise': { perturbs: 'regional-deployment', question: 'With these regions lost, what still serves, what degrades, and what refuses?' },
+  'infrastructure-change': {
+    perturbs: 'infrastructure', question: 'If this zone changes or is withdrawn, what stops working and who owns it?',
+    assumptions: ['ASM-0001', 'ASM-0005'],
+    limitations: ['Zone membership comes from the declared topology; a service deployed somewhere the topology does not record is invisible here.', 'Withdrawal is modelled as total loss, not as a phased drain.'],
+    owner: 'Operations Review Board', reviewCadenceDays: 180,
+  },
+  'policy-update': {
+    perturbs: 'policy', question: 'If this operating rule changes, which contexts are governed differently and what did they rely on?',
+    assumptions: ['ASM-0001'],
+    limitations: ['Only consistency stances are modelled as policy; authorization and retention policy changes are not simulated here.', 'Readers relying on the previous guarantee are not enumerated — the model knows the stance, not who depends on it.'],
+    owner: 'Architecture Review Board', reviewCadenceDays: 180,
+  },
+  'governance-change': {
+    perturbs: 'governance-control', question: 'If this accountable authority changes, what becomes unowned?',
+    assumptions: ['ASM-0006'],
+    limitations: ['Models the ownership record, not the people. A post that is formally filled but effectively vacant looks owned here.'],
+    owner: 'Oversight Board', reviewCadenceDays: 90,
+  },
+  'operational-failure': {
+    perturbs: 'service', question: 'If these services fail, what is the blast radius through declared dependencies?',
+    assumptions: ['ASM-0001', 'ASM-0005'],
+    limitations: ['Propagation follows declared dependencies only, so the radius is a lower bound.', 'Failure is binary; partial degradation and retry storms are not modelled.'],
+    owner: 'Operations Review Board', reviewCadenceDays: 90,
+  },
+  'migration-plan': {
+    perturbs: 'bounded-context', question: 'If this context moves or is replaced, what has to move with it?',
+    assumptions: ['ASM-0001'],
+    limitations: ['Data migration cost and duration are not modelled — this answers what must move, not how long it takes.'],
+    owner: 'Architecture Review Board', reviewCadenceDays: 180,
+  },
+  'dr-exercise': {
+    perturbs: 'regional-deployment', question: 'With these regions lost, what still serves, what degrades, and what refuses?',
+    assumptions: ['ASM-0005', 'ASM-0007'],
+    limitations: ['Quorum is computed from region count; it does not model a partition where regions are up but cannot see each other.', 'Recovery time is not modelled — this answers what holds, not how long restoration takes.'],
+    owner: 'Operations Review Board', reviewCadenceDays: 90,
+  },
 };
+
+// A simulation's confidence is capped by the weakest of three things, never averaged across them:
+// how sound its assumptions are, whether the model is complete, and whether anyone has ever checked
+// this scenario's output against what actually happened.
+const CALIBRATION_STATES = {
+  uncalibrated: { description: 'No simulation of this scenario has ever been compared against a real outcome.', ceiling: 'low' },
+  diverging: { description: 'The most recent comparisons found the simulation disagreed with reality.', ceiling: 'unknown' },
+  calibrated: { description: 'Recent comparisons found the simulation matched the observed outcome.', ceiling: 'high' },
+};
+const CALIBRATION_MIN_OBSERVATIONS = 3;
+
+// Confidence ranking, shared with the assumption registry so the two cannot drift apart.
+const { CONFIDENCE_LEVELS } = require('../architecture/assumptions');
+function confidenceRankOf(level) { const i = CONFIDENCE_LEVELS.indexOf(level); return i === -1 ? CONFIDENCE_LEVELS.length : i; }
+function weakerConfidence(a, b) { return confidenceRankOf(a) >= confidenceRankOf(b) ? a : b; }
+
+// PHASE 13, PART 1: a scenario with no declared assumptions, limitations, owner or cadence may not
+// be simulated. The output of such a run is a confident answer with nothing for the reader to
+// disagree with, which is worse than no answer at all.
+//
+// Extracted and exported so the guard can be fed a crafted scenario spec directly. A check that can
+// only be exercised by mutating the real scenario table is a check nobody dares exercise.
+function assertDeclaredMetadata(scenario, spec) {
+  const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
+  if (!spec) fail(`unknown scenario '${scenario}'`);
+  if (!Array.isArray(spec.assumptions) || !spec.assumptions.length) {
+    fail(`scenario '${scenario}' declares no assumptions — a simulation whose assumptions are unstated cannot be argued with, and must not be run`);
+  }
+  if (!Array.isArray(spec.limitations) || !spec.limitations.length) {
+    fail(`scenario '${scenario}' declares no model limitations — every model has them, and one that lists none is claiming to be the system`);
+  }
+  if (!spec.owner) fail(`scenario '${scenario}' has no owner — a model nobody owns is one nobody can correct`);
+  if (!Number.isFinite(spec.reviewCadenceDays) || spec.reviewCadenceDays <= 0) fail(`scenario '${scenario}' has no review cadence — a model nobody re-reads goes stale silently`);
+  return true;
+}
 
 function deepFreeze(o) {
   if (o && typeof o === 'object' && !Object.isFrozen(o)) {
@@ -122,18 +190,154 @@ function buildModel({ evidenceIds = [], regions = ['bw-central', 'bw-south', 'bw
 }
 
 class OperationsTwin {
-  constructor({ evidenceIds = [], regions = ['bw-central', 'bw-south', 'bw-north'] } = {}) {
+  constructor({ evidenceIds = [], regions = ['bw-central', 'bw-south', 'bw-north'], assumptions = null, clock = () => 0 } = {}) {
     // Frozen at construction. Not "treated as read-only by convention" — frozen, so an attempt to
     // write to it fails rather than silently succeeding in a way a test would have to notice.
     this._model = deepFreeze(buildModel({ evidenceIds, regions }));
     this._baselineDigest = this._model.digest;
     this._simulations = [];
+    this._assumptions = assumptions;      // the registry, if the caller supplied one
+    this._clock = clock;
+    this._validations = new Map();        // scenario → observed-vs-predicted history, never seeded
+    this._evidenceIds = [...evidenceIds];
   }
 
   model() { return clone(this._model); }
   digest() { return this._baselineDigest; }
   entityKinds() { return Object.entries(ENTITY_KINDS).map(([id, s]) => ({ kind: id, ...s })); }
   scenarios() { return Object.entries(SCENARIOS).map(([id, s]) => ({ scenario: id, ...s })); }
+
+  // --- Confidence framework (Phase 13, Part 1) --------------------------------------------------
+
+  // Record what a simulation predicted against what was actually observed. Append-only, attributed
+  // and NEVER seeded: fabricating a calibration history would make every confidence figure below a
+  // lie, and it is the single cheapest way to make this whole framework worthless.
+  recordValidation(scenario, { predicted, observed, by, at = null, note = null } = {}) {
+    if (!SCENARIOS[scenario]) throw new Error(`unknown scenario '${scenario}'`);
+    if (typeof predicted !== 'boolean' || typeof observed !== 'boolean') throw new Error('a validation must record what was predicted and what was observed, as booleans');
+    if (!by) { const e = new Error('a simulation validation must name who compared it against reality'); e.failClosed = true; throw e; }
+    if (!this._validations.has(scenario)) this._validations.set(scenario, []);
+    const rec = { scenario, predicted, observed, agreed: predicted === observed, by, at: at ?? this._clock(), note };
+    this._validations.get(scenario).push(rec);
+    return { ...rec };
+  }
+  validationHistory(scenario) { return (this._validations.get(scenario) || []).map((v) => ({ ...v })); }
+
+  // Has anyone checked this scenario against reality, and did it agree?
+  calibration(scenario, { window = 5 } = {}) {
+    const history = this.validationHistory(scenario);
+    if (history.length < CALIBRATION_MIN_OBSERVATIONS) {
+      return {
+        scenario, state: 'uncalibrated', observations: history.length, required: CALIBRATION_MIN_OBSERVATIONS,
+        ...CALIBRATION_STATES.uncalibrated,
+        reason: `${history.length} of ${CALIBRATION_MIN_OBSERVATIONS} comparisons against a real outcome — a simulation nobody has checked is not a simulation anyone should rely on`,
+      };
+    }
+    const recent = history.slice(-window);
+    const agreed = recent.filter((v) => v.agreed).length;
+    const rate = +(agreed / recent.length).toFixed(3);
+    const state = rate >= 0.8 ? 'calibrated' : 'diverging';
+    return {
+      scenario, state, observations: history.length, window: recent.length, agreementRate: rate,
+      ...CALIBRATION_STATES[state],
+      reason: `${agreed} of the last ${recent.length} comparisons agreed with the observed outcome`,
+    };
+  }
+
+  // How much of the model rests on evidence that actually ran, rather than on declared configuration.
+  evidenceBasis() {
+    const byKind = this._model.byKind;
+    const derived = ['bounded-context', 'service', 'infrastructure', 'governance-control', 'policy', 'risk', 'data-flow', 'workflow', 'regional-deployment']
+      .reduce((a, k) => a + (byKind[k] || 0), 0);
+    return {
+      entities: this._model.entities.length,
+      derivedFromRegistries: derived,
+      executableChecks: byKind.evidence || 0,
+      sources: this._model.builtFrom,
+      // Stated rather than implied: most of the model is DECLARED configuration, which is a weaker
+      // thing than an executed check, and a confidence figure that hid that would be flattering.
+      note: 'The model is read from registries the platform validates. Most entities are declared configuration; only the evidence nodes represent checks that actually ran.',
+    };
+  }
+
+  // THE PART 1 FIGURE. Capped by the weakest of assumption health, model completeness and
+  // calibration — never averaged, because a simulation resting on an expired assumption rests on an
+  // expired assumption whatever else is true of it.
+  confidence(scenario, { now = null, controls = [] } = {}) {
+    const spec = SCENARIOS[scenario];
+    if (!spec) throw new Error(`unknown scenario '${scenario}'`);
+    const t = now ?? this._clock();
+    const caps = [];
+
+    const calibration = this.calibration(scenario);
+    caps.push({ factor: 'calibration', level: CALIBRATION_STATES[calibration.state].ceiling, why: calibration.reason });
+
+    let assumptionHealth = null;
+    if (!this._assumptions) {
+      caps.push({ factor: 'assumptions', level: 'unknown', why: 'no assumption registry was supplied — whether this scenario\'s assumptions still hold is unknown, and unknown is not sound' });
+    } else {
+      assumptionHealth = this._assumptions.health(spec.assumptions, { now: t, controls });
+      caps.push({ factor: 'assumptions', level: assumptionHealth.confidence, why: assumptionHealth.reason });
+    }
+
+    const validation = this.validate();
+    caps.push({
+      factor: 'model-completeness',
+      level: validation.valid ? 'high' : 'unknown',
+      why: validation.valid ? 'the model matches the architecture-of-record in both directions' : `the model has drifted: ${validation.violations.join('; ')}`,
+    });
+
+    const level = caps.reduce((w, c) => weakerConfidence(w, c.level), 'high');
+    const limiting = caps.filter((c) => c.level === level).map((c) => c.factor);
+    return {
+      scenario, confidence: level, limitedBy: limiting, factors: caps,
+      calibration, assumptions: assumptionHealth, evidenceBasis: this.evidenceBasis(),
+      owner: spec.owner, reviewCadenceDays: spec.reviewCadenceDays,
+      method: 'the weakest of assumption health, model completeness and calibration — never their average',
+      note: level === 'high' ? 'Every factor supports this level.' : `Capped at '${level}' by ${limiting.join(', ')}. Raising it means fixing that, not re-reading the model.`,
+    };
+  }
+
+  // Reliability across every scenario, and which way each is moving.
+  confidenceReport({ now = null, controls = [] } = {}) {
+    const rows = Object.keys(SCENARIOS).sort().map((s) => {
+      const c = this.confidence(s, { now, controls });
+      return {
+        scenario: s, confidence: c.confidence, limitedBy: c.limitedBy,
+        calibration: c.calibration.state, observations: c.calibration.observations,
+        assumptions: SCENARIOS[s].assumptions, limitations: SCENARIOS[s].limitations,
+        owner: SCENARIOS[s].owner, trend: this.confidenceTrend(s).direction,
+      };
+    });
+    const weakest = rows.slice().sort((a, b) => confidenceRankOf(b.confidence) - confidenceRankOf(a.confidence))[0];
+    return {
+      scenarios: rows, count: rows.length,
+      // Weakest link again: the twin is as reliable as its least reliable scenario.
+      confidence: rows.reduce((w, r) => weakerConfidence(w, r.confidence), 'high'),
+      weakestScenario: weakest ? weakest.scenario : null,
+      uncalibrated: rows.filter((r) => r.calibration === 'uncalibrated').map((r) => r.scenario),
+      diverging: rows.filter((r) => r.calibration === 'diverging').map((r) => r.scenario),
+      informationalOnly: true, authorizes: false,
+      note: 'A simulation nobody has compared against a real outcome is uncalibrated, and an uncalibrated simulation cannot report high confidence however complete the model is.',
+    };
+  }
+
+  // Is this scenario's agreement with reality improving or decaying? Two comparisons minimum —
+  // one observation is a result, not a direction.
+  confidenceTrend(scenario, { half = null } = {}) {
+    const history = this.validationHistory(scenario);
+    if (history.length < 2) return { scenario, observations: history.length, direction: 'insufficient-data', reason: 'a trend needs at least two comparisons against reality' };
+    const mid = half ?? Math.floor(history.length / 2);
+    const rate = (rows) => (rows.length ? rows.filter((v) => v.agreed).length / rows.length : 0);
+    const earlier = rate(history.slice(0, mid));
+    const later = rate(history.slice(mid));
+    const delta = +(later - earlier).toFixed(3);
+    return {
+      scenario, observations: history.length, earlier: +earlier.toFixed(3), later: +later.toFixed(3), delta,
+      direction: Math.abs(delta) < 1e-9 ? 'flat' : delta > 0 ? 'improving' : 'degrading',
+      warning: delta < 0 ? `agreement with reality has fallen for '${scenario}' — the model is drifting away from the system it describes` : null,
+    };
+  }
   entities(kind = null) { return this._model.entities.filter((e) => !kind || e.kind === kind).map((e) => ({ ...e })); }
   entity(id) { const e = this._model.entities.find((x) => x.id === id); return e ? { ...e } : null; }
 
@@ -183,9 +387,10 @@ class OperationsTwin {
 
   // Run a scenario. The model is NEVER touched: the proposal is applied to a clone, and the
   // baseline digest is re-derived afterwards and compared.
-  simulate({ scenario, change = {}, label = null } = {}) {
+  simulate({ scenario, change = {}, label = null, now = null, controls = [] } = {}) {
     const spec = SCENARIOS[scenario];
     if (!spec) throw new Error(`unknown scenario '${scenario}' — one of ${Object.keys(SCENARIOS).join(', ')}`);
+    assertDeclaredMetadata(scenario, spec);
     const working = clone(this._model);              // the simulation's own universe
     const findings = [];
     const removed = [];
@@ -263,8 +468,16 @@ class OperationsTwin {
     // ISOLATION CHECK. Not a comment saying the model is untouched — a re-derived digest.
     const isolation = this.verifyIsolation();
     const blocking = findings.filter((f) => f.blocking);
+    const confidence = this.confidence(scenario, { now, controls });
     const result = {
       scenario, question: spec.question, perturbs: spec.perturbs, label: label || scenario,
+      // Part 1: the metadata that makes the answer arguable, carried with every result.
+      confidence: confidence.confidence, confidenceDetail: confidence,
+      assumptions: [...spec.assumptions], limitations: [...spec.limitations],
+      owner: spec.owner, reviewCadenceDays: spec.reviewCadenceDays,
+      reviewDueAt: (now ?? this._clock()) + spec.reviewCadenceDays * 24 * 3600_000,
+      calibration: confidence.calibration.state,
+      validationHistory: this.validationHistory(scenario),
       change: clone(change),
       findings, blocking, safe: blocking.length === 0,
       removedEntities: removed.sort(),
@@ -304,6 +517,7 @@ class OperationsTwin {
       entityKinds: this.entityKinds(), scenarios: this.scenarios(),
       validation: this.validate(),
       simulations: runs,
+      confidence: this.confidenceReport({}),
       isolation: this.verifyIsolation(),
       authorizes: false, informationalOnly: true,
       note: 'The twin is built from the architecture-of-record on every construction, never maintained beside it. A hand-maintained twin diverges and then answers confidently and wrongly.',
@@ -311,4 +525,4 @@ class OperationsTwin {
   }
 }
 
-module.exports = { OperationsTwin, ENTITY_KINDS, SCENARIOS, buildModel };
+module.exports = { OperationsTwin, ENTITY_KINDS, SCENARIOS, CALIBRATION_STATES, CALIBRATION_MIN_OBSERVATIONS, buildModel, assertDeclaredMetadata };
