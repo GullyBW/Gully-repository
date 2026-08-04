@@ -39,6 +39,7 @@ const adrGovernance = require('./architecture/adr-governance');
 const { AssumptionRegistry, seedPlatformAssumptions } = require('./architecture/assumptions');
 const ownership = require('./governance/ownership');
 const raci = require('./governance/raci');
+const institutionalResilience = require('./governance/institutional-resilience');
 const { ContractRegistry } = require('./contracts/integration-contracts');
 const { ConsumerContracts } = require('./contracts/consumer-contracts');
 const evidenceConfidence = require('./assurance/evidence-confidence');
@@ -438,6 +439,14 @@ function createApp(overrides = {}) {
   ownership.activity = new ownership.ActivityRegister({ clock: () => Date.now() });
   ownership.training = new ownership.TrainingRegister({ clock: () => Date.now() });
   ownership.escalations = new ownership.EscalationWorkflow({ clock: () => Date.now() });
+  // Phase 13, Part 11: rehearsal participation. Empty for the same reason the activity and training
+  // registers are: a fresh platform has rehearsed nothing, and recording that it has would be the
+  // fabrication the global requirements forbid.
+  ownership.exercises = new ownership.ExerciseRegister({ clock: () => Date.now() });
+  ownership.availabilityRegister = new ownership.AvailabilityRegister({ clock: () => Date.now() });
+  // Phase 13, Part 13: acceptances of a single point of failure. Also empty — nothing has been
+  // accepted, so every single dependency currently blocks institutional readiness.
+  ownership.resilienceAcceptances = new institutionalResilience.ResilienceAcceptance({ clock: () => Date.now() });
   // Stable integration contracts (Part 3) + the component migration roadmap (Part 4). The
   // contract registry is the published interface surface; a boundary crossing without a
   // contract, or a migration item without a rollback, refuses composition.
@@ -655,7 +664,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, ownership, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, ownership, institutionalResilience, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

@@ -496,6 +496,183 @@ function continuityDashboard({ availability = null, activity = null, training = 
   };
 }
 
+// --- Training assurance & knowledge continuity (Phase 13, Parts 8 & 11) --------------------------
+//
+// Phase 12 asked whether an owner was available, active and certified. That is enough to say a role
+// is filled. It is not enough to say the institution could survive losing the person filling it,
+// which is a different and harder question:
+//
+//   IS THERE SOMEBODY ELSE WHO COULD ACTUALLY DO THIS?
+//
+// The trap here is that this platform DERIVES a deputy for every role by rule, so a naive check
+// finds two names everywhere and reports perfect continuity. A derived deputy who has never acted
+// and holds no current training is a name, not an alternative. So deputy readiness is assessed on
+// the same evidence as the primary's, and a role whose only alternative is nominal is reported as
+// depending on one person.
+
+// Rehearsals somebody has taken part in. Distinct from training: training says you were taught,
+// participation says you have done it under conditions resembling the real thing.
+const EXERCISE_KINDS = {
+  'disaster-recovery': { relevantTo: ['operationalOwner', 'responsibleAuthority'], why: 'Restoring service is not something to attempt for the first time during an outage.' },
+  'incident-escalation': { relevantTo: ['responsibleAuthority', 'approvingAuthority'], why: 'Knowing who to wake, and being willing to, is learned by doing it.' },
+  'evidence-custody': { relevantTo: ['dataSteward', 'responsibleAuthority'], why: 'A custody error is unrecoverable; the rehearsal is the only safe place to make one.' },
+  'emergency-authorization': { relevantTo: ['approvingAuthority'], why: 'Break-glass authority is exercised rarely and under pressure.' },
+};
+const EXERCISE_VALIDITY_DAYS = 365;
+// How recently somebody must have acted for their experience to count as current.
+const EXPERIENCE_WINDOW_DAYS = 180;
+
+class ExerciseRegister {
+  constructor({ clock = () => 0, validityDays = EXERCISE_VALIDITY_DAYS } = {}) { this._clock = clock; this._validity = validityDays; this._records = []; }
+  recordParticipation({ person, exercise, at = null, role = null, by, outcome = 'completed' } = {}) {
+    if (!person || !exercise) throw new Error('participation needs a person and an exercise');
+    if (!EXERCISE_KINDS[exercise]) throw new Error(`unknown exercise '${exercise}' — one of ${Object.keys(EXERCISE_KINDS).join(', ')}`);
+    if (!by) { const e = new Error('participation must be attested by a named human — self-reported attendance attests nothing'); e.failClosed = true; throw e; }
+    const t = at ?? this._clock();
+    if (!Number.isFinite(t)) throw new Error('participation must be timestamped');
+    const rec = { person, exercise, role, at: t, by, outcome, expiresAt: t + this._validity * 24 * 3600_000 };
+    this._records.push(rec);
+    return { ...rec };
+  }
+  participation(person = null) { return this._records.filter((r) => !person || r.person === person).map((r) => ({ ...r })); }
+  // Which exercises relevant to a role this person currently holds. Lapsed participation is
+  // reported separately from never having taken part: the remedies differ.
+  status(person, role, { now = null } = {}) {
+    const t = now ?? this._clock();
+    const required = Object.entries(EXERCISE_KINDS).filter(([, k]) => k.relevantTo.includes(role)).map(([id]) => id);
+    const rows = required.map((exercise) => {
+      const mine = this._records.filter((r) => r.person === person && r.exercise === exercise && r.outcome === 'completed');
+      const latest = mine.length ? mine.reduce((m, r) => (r.at > m.at ? r : m)) : null;
+      return {
+        exercise, participated: !!latest, current: !!latest && t < latest.expiresAt,
+        lastAt: latest ? latest.at : null, expiresAt: latest ? latest.expiresAt : null,
+        state: !latest ? 'never-participated' : t < latest.expiresAt ? 'current' : 'lapsed',
+      };
+    });
+    return {
+      person, role, required, exercises: rows,
+      never: rows.filter((r) => r.state === 'never-participated').map((r) => r.exercise),
+      lapsed: rows.filter((r) => r.state === 'lapsed').map((r) => r.exercise),
+      current: rows.every((r) => r.state === 'current'),
+      reason: rows.length === 0 ? 'no rehearsal is relevant to this role'
+        : rows.every((r) => r.state === 'current') ? 'all relevant rehearsals are current'
+          : `never participated: ${rows.filter((r) => r.state === 'never-participated').map((r) => r.exercise).join(', ') || 'none'}; lapsed: ${rows.filter((r) => r.state === 'lapsed').map((r) => r.exercise).join(', ') || 'none'}`,
+    };
+  }
+}
+
+// Whether one person could actually discharge one role today. Four independent facts, aggregated to
+// the weakest — a person who is available, active and trained but has never rehearsed is not ready
+// for the thing rehearsals exist to prepare for.
+function roleReadiness(person, role, { availability = null, activity = null, training = null, exercises = null, now = 0 } = {}) {
+  const checks = [];
+  const avail = availability ? availability.isAvailable(person, now) : null;
+  checks.push({ factor: 'availability', held: avail, why: avail === null ? 'no availability register supplied' : avail ? 'available' : 'recorded as absent' });
+  const act = activity ? activity.status(person, { now }) : null;
+  checks.push({ factor: 'activity', held: act ? act.acceptable : null, why: act ? act.reason : 'no activity register supplied' });
+  const trn = training ? training.status(person, role, { now }) : null;
+  checks.push({ factor: 'training', held: trn ? trn.current : null, why: trn ? trn.reason : 'no training register supplied' });
+  const exr = exercises ? exercises.status(person, role, { now }) : null;
+  checks.push({ factor: 'rehearsal', held: exr ? exr.current : null, why: exr ? exr.reason : 'no exercise register supplied' });
+
+  const unknown = checks.filter((c) => c.held === null);
+  const failed = checks.filter((c) => c.held === false);
+  return {
+    person, role, checks,
+    ready: failed.length === 0 && unknown.length === 0,
+    // Unknown and failed are different states with different remedies, and neither is ready.
+    unknownFactors: unknown.map((c) => c.factor), failedFactors: failed.map((c) => c.factor),
+    reason: failed.length ? `not ready: ${failed.map((c) => `${c.factor} (${c.why})`).join('; ')}`
+      : unknown.length ? `readiness unknown: no evidence for ${unknown.map((c) => c.factor).join(', ')}`
+        : 'available, active, trained and rehearsed',
+  };
+}
+
+// THE PART 8 SCORECARD. Per (subsystem, role): is the primary ready, is the deputy ready, and how
+// many people could actually do this? A bus factor of one is the finding.
+function knowledgeContinuity({ availability = null, activity = null, training = null, exercises = null, now = 0 } = {}) {
+  const rows = [];
+  for (const id of subsystems()) {
+    const o = OWNERSHIP[id];
+    for (const role of DEPUTY_ROLES) {
+      const primary = o[role];
+      const deputy = deputyOf(primary);
+      const p = roleReadiness(primary, role, { availability, activity, training, exercises, now });
+      const d = roleReadiness(deputy, role, { availability, activity, training, exercises, now });
+      const qualified = [p.ready ? primary : null, d.ready ? deputy : null].filter(Boolean);
+      rows.push({
+        subsystem: id, role, primary, deputy,
+        primaryReadiness: p, deputyReadiness: d,
+        qualified, busFactor: qualified.length,
+        // The rule Part 8 states, checked rather than assumed.
+        singlePersonDependency: qualified.length <= 1,
+        reason: qualified.length === 0 ? 'nobody is currently ready to discharge this role'
+          : qualified.length === 1 ? `only ${qualified[0]} is ready — a derived deputy who has never acted and holds no current training is a name, not an alternative`
+            : 'primary and deputy are both ready',
+      });
+    }
+  }
+  const single = rows.filter((r) => r.singlePersonDependency);
+  return {
+    roles: rows, count: rows.length,
+    singlePersonDependencies: single.map((r) => `${r.subsystem}/${r.role}`),
+    unstaffed: rows.filter((r) => r.busFactor === 0).map((r) => `${r.subsystem}/${r.role}`),
+    // Weakest link: the estate is as continuous as its least covered role.
+    minimumBusFactor: rows.length ? Math.min(...rows.map((r) => r.busFactor)) : null,
+    sound: single.length === 0,
+    informationalOnly: true, authorizes: false,
+    note: 'Deputy readiness is assessed on the same evidence as the primary\'s. This platform derives a deputy for every role, so counting names would report perfect continuity everywhere; only a deputy who is available, active, trained and rehearsed counts as an alternative.',
+  };
+}
+
+// THE PART 11 REPORT. Training and rehearsal status across the estate, and what it costs readiness.
+function trainingAssurance({ activity = null, training = null, exercises = null, now = 0 } = {}) {
+  const people = new Map();
+  for (const id of subsystems()) {
+    for (const role of DEPUTY_ROLES) {
+      for (const person of [OWNERSHIP[id][role], deputyOf(OWNERSHIP[id][role])]) {
+        const key = `${person}|${role}`;
+        if (!people.has(key)) people.set(key, { person, role, subsystems: [] });
+        people.get(key).subsystems.push(id);
+      }
+    }
+  }
+  const rows = [...people.values()].map((p) => {
+    const trn = training ? training.status(p.person, p.role, { now }) : null;
+    const exr = exercises ? exercises.status(p.person, p.role, { now }) : null;
+    return {
+      ...p,
+      training: trn ? { current: trn.current, missing: trn.missing, expired: trn.expired } : null,
+      rehearsal: exr ? { current: exr.current, never: exr.never, lapsed: exr.lapsed } : null,
+      certified: !!(trn && trn.current), rehearsed: !!(exr && exr.current),
+      // Unknown is not certified. A register nobody supplied does not certify anybody.
+      unknown: !trn || !exr,
+    };
+  }).sort((a, b) => a.person.localeCompare(b.person) || a.role.localeCompare(b.role));
+
+  const certified = rows.filter((r) => r.certified);
+  const expired = rows.filter((r) => r.training && r.training.expired.length);
+  const neverTrained = rows.filter((r) => r.training && r.training.missing.length);
+  const lapsedRehearsal = rows.filter((r) => r.rehearsal && r.rehearsal.lapsed.length);
+  return {
+    people: rows, count: rows.length,
+    certified: certified.length,
+    certificationRate: rows.length ? +(certified.length / rows.length).toFixed(4) : null,
+    expiredQualifications: expired.map((r) => `${r.person} (${r.role})`),
+    neverTrained: neverTrained.map((r) => `${r.person} (${r.role})`),
+    lapsedRehearsals: lapsedRehearsal.map((r) => `${r.person} (${r.role})`),
+    unknown: rows.filter((r) => r.unknown).map((r) => `${r.person} (${r.role})`),
+    exerciseKinds: Object.entries(EXERCISE_KINDS).map(([id, k]) => ({ exercise: id, ...k })),
+    requiredTraining: JSON.parse(JSON.stringify(REQUIRED_TRAINING)),
+    // Part 11: expired qualifications reduce governance readiness automatically. This is the number
+    // the readiness model consumes, and it falls when a certification lapses without anyone acting.
+    readinessContribution: rows.length ? +(certified.length / rows.length).toFixed(4) : 0,
+    sound: rows.length > 0 && expired.length === 0 && neverTrained.length === 0 && rows.every((r) => !r.unknown),
+    informationalOnly: true, authorizes: false,
+    note: 'An expired qualification lowers the readiness contribution on its own, with nobody deciding to lower it. Unknown is counted as not certified: a register nobody supplied certifies nobody.',
+  };
+}
+
 // The full ownership model as served to the API and rendered into docs/governance-ownership.md.
 function model() {
   return {
@@ -514,4 +691,6 @@ module.exports = {
   coverageScore, ownershipGaps, continuityReport,
   ACTIVITY_BANDS, GOVERNANCE_ACTS, REQUIRED_TRAINING, TRAINING_VALIDITY_DAYS, ESCALATION_STATES,
   ActivityRegister, TrainingRegister, EscalationWorkflow, activeCoverage, continuityDashboard,
+  EXERCISE_KINDS, EXERCISE_VALIDITY_DAYS, EXPERIENCE_WINDOW_DAYS,
+  ExerciseRegister, roleReadiness, knowledgeContinuity, trainingAssurance,
 };

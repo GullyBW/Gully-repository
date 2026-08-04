@@ -4420,6 +4420,197 @@ module.exports = [
     if (emptyProbe.length) v.push('a document containing nothing operational satisfied procedure requirements: ' + emptyProbe.join(', '));
   }),
 
+  fit('APP-FIT-KNOWLEDGE-CONTINUITY', 'A derived deputy is a name, not an alternative — continuity counts only people who could actually take over', (v) => {
+    const own = require('../src/governance/ownership');
+    const DAY = 24 * 3600_000, NOW = 400 * DAY;
+
+    // --- Rehearsal participation is attested, typed and expires --------------------------------
+    for (const [id, k] of Object.entries(own.EXERCISE_KINDS)) {
+      if (!k.why || !k.relevantTo || !k.relevantTo.length) v.push(`exercise '${id}' does not say why it matters or which roles it applies to`);
+      for (const role of k.relevantTo) if (!own.DEPUTY_ROLES.includes(role)) v.push(`exercise '${id}' names unknown role '${role}'`);
+    }
+    const ex = new own.ExerciseRegister({ clock: () => NOW });
+    let unattested = false;
+    try { ex.recordParticipation({ person: 'X', exercise: 'disaster-recovery', at: NOW }); } catch (e) { unattested = !!e.failClosed; }
+    if (!unattested) v.push('rehearsal participation was recorded with nobody attesting it — self-reported attendance attests nothing');
+    let unknownExercise = false;
+    try { ex.recordParticipation({ person: 'X', exercise: 'a-chat-about-it', at: NOW, by: 'ORB' }); } catch (_) { unknownExercise = true; }
+    if (!unknownExercise) v.push('an undeclared exercise kind was accepted');
+    ex.recordParticipation({ person: 'X', exercise: 'disaster-recovery', at: NOW - 400 * DAY, by: 'ORB' });
+    const lapsed = ex.status('X', 'operationalOwner', { now: NOW });
+    if (!lapsed.lapsed.includes('disaster-recovery')) v.push('a rehearsal older than its validity was not reported as lapsed');
+    if (lapsed.current) v.push('a lapsed rehearsal was reported current');
+    // Never-participated and lapsed are different states with different remedies.
+    if (!ex.status('Y', 'operationalOwner', { now: NOW }).never.includes('disaster-recovery')) v.push('never having rehearsed was not distinguished from a lapsed rehearsal');
+
+    // --- Role readiness is the weakest of four facts, and unknown is not ready -----------------
+    const blind = own.roleReadiness('X', 'dataSteward', { now: NOW });
+    if (blind.ready) v.push('a role was reported ready with no evidence of anything');
+    if (blind.unknownFactors.length !== 4) v.push('unsupplied registers were not all reported as unknown factors');
+    if (!/readiness unknown/.test(blind.reason)) v.push('unknown readiness was not distinguished from failed readiness');
+
+    // A fully evidenced estate must reach bus factor 2, or this control can only ever fail.
+    const availability = new own.AvailabilityRegister({ clock: () => NOW });
+    const activity = new own.ActivityRegister({ clock: () => NOW });
+    const training = new own.TrainingRegister({ clock: () => NOW });
+    const exercises = new own.ExerciseRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        for (const person of [own.OWNERSHIP[s][role], own.deputyOf(own.OWNERSHIP[s][role])]) {
+          activity.recordAct({ person, act: 'review', subsystem: s, at: NOW - 10 * DAY });
+          for (const c of own.REQUIRED_TRAINING[role]) training.recordCompletion({ person, course: c, at: NOW - 30 * DAY, by: 'Registrar of Governance' });
+          for (const [id, k] of Object.entries(own.EXERCISE_KINDS)) if (k.relevantTo.includes(role)) exercises.recordParticipation({ person, exercise: id, at: NOW - 60 * DAY, by: 'ORB', role });
+        }
+      }
+    }
+    const full = { availability, activity, training, exercises, now: NOW };
+    const sound = own.knowledgeContinuity(full);
+    if (!sound.sound) v.push('a fully evidenced estate still reported single-person dependencies: ' + sound.singlePersonDependencies.slice(0, 3).join(', '));
+    if (sound.minimumBusFactor < 2) v.push('a fully evidenced estate did not reach a bus factor of two');
+
+    // THE TRAP THIS CONTROL EXISTS FOR: with the deputies' evidence removed, every role must fall
+    // back to a single person — because a derived deputy who has never acted is a name, not an
+    // alternative. If this ever passes, continuity has started counting names.
+    const primariesOnly = new own.ActivityRegister({ clock: () => NOW });
+    const primaryTraining = new own.TrainingRegister({ clock: () => NOW });
+    const primaryExercises = new own.ExerciseRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        const person = own.OWNERSHIP[s][role];
+        primariesOnly.recordAct({ person, act: 'review', subsystem: s, at: NOW - 10 * DAY });
+        for (const c of own.REQUIRED_TRAINING[role]) primaryTraining.recordCompletion({ person, course: c, at: NOW - 30 * DAY, by: 'Registrar' });
+        for (const [id, k] of Object.entries(own.EXERCISE_KINDS)) if (k.relevantTo.includes(role)) primaryExercises.recordParticipation({ person, exercise: id, at: NOW - 60 * DAY, by: 'ORB', role });
+      }
+    }
+    const namesOnly = own.knowledgeContinuity({ availability, activity: primariesOnly, training: primaryTraining, exercises: primaryExercises, now: NOW });
+    if (namesOnly.sound) v.push('an estate whose deputies have never acted and hold no training reported sound continuity — a derived deputy is being counted as an alternative');
+    if (namesOnly.minimumBusFactor !== 1) v.push('an estate covered only by primaries did not report a bus factor of one');
+
+    // --- Part 11: training assurance, and its effect on readiness ------------------------------
+    const assurance = own.trainingAssurance(full);
+    if (!assurance.sound) v.push('a fully trained and rehearsed estate was not reported sound: ' + JSON.stringify(assurance.expiredQualifications.slice(0, 3)));
+    if (assurance.readinessContribution !== 1) v.push('a fully certified estate did not contribute full readiness');
+    const nothing = own.trainingAssurance({ now: NOW });
+    if (nothing.readinessContribution !== 0) v.push('an estate with no training evidence contributed readiness anyway');
+    if (!nothing.unknown.length) v.push('unknown certification was not reported as unknown');
+    // An expired qualification lowers readiness on its own, with nobody deciding to lower it.
+    const stale = new own.TrainingRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        for (const person of [own.OWNERSHIP[s][role], own.deputyOf(own.OWNERSHIP[s][role])]) {
+          for (const c of own.REQUIRED_TRAINING[role]) stale.recordCompletion({ person, course: c, at: NOW - 400 * DAY, by: 'Registrar' });
+        }
+      }
+    }
+    const lapsedEstate = own.trainingAssurance({ activity, training: stale, exercises, now: NOW });
+    if (lapsedEstate.readinessContribution >= assurance.readinessContribution) v.push('expired qualifications did not reduce the readiness contribution');
+    if (!lapsedEstate.expiredQualifications.length) v.push('expired qualifications were not named');
+  }),
+
+  fit('APP-FIT-INSTITUTIONAL-RESILIENCE', 'No critical capability depends on a single person, process, document or system — and an alternative counts only if validated', (v) => {
+    const ir = require('../src/governance/institutional-resilience');
+    const own = require('../src/governance/ownership');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const DAY = 24 * 3600_000, NOW = 400 * DAY;
+
+    // --- The invariant is stated, and every dimension says how an alternative is validated -----
+    for (const required of ['person', 'team', 'document', 'process', 'service', 'region', 'supplier', 'communication-channel']) {
+      if (!ir.DEPENDENCY_KINDS[required]) v.push(`dependency kind '${required}' is not assessed`);
+    }
+    for (const [kind, spec] of Object.entries(ir.DEPENDENCY_KINDS)) {
+      if (!spec.question || !spec.validatedBy) v.push(`dependency kind '${kind}' does not say what it asks or how an alternative is validated`);
+    }
+    // Every critical capability states what its loss costs — the sentence that makes narrowing the
+    // definition visible.
+    for (const [id, spec] of Object.entries(ir.CRITICAL_CAPABILITIES)) {
+      if (!spec.lossMeans || spec.lossMeans.length < 30) v.push(`critical capability '${id}' does not say what its loss costs`);
+      if (!spec.services.length || !spec.subsystems.length) v.push(`critical capability '${id}' names no services or subsystems`);
+    }
+    if (Object.values(ir.CRITICAL_CAPABILITIES).filter((c) => c.constitutional).length < 3) v.push('fewer than three capabilities are marked constitutional — the definition has been narrowed');
+
+    // --- With no continuity evidence, the person dimension is unknown, and unknown is not resilient
+    const blind = ir.evaluate({ controls });
+    if (blind.holds) v.push('the invariant held with no evidence that anybody could take over anything');
+    if (!blind.capabilities.every((c) => c.singleDependencies.includes('person'))) v.push('unknown personal continuity was not treated as a single-person dependency');
+    if (!blind.blocksInstitutionalReadiness) v.push('an unheld invariant did not block institutional readiness');
+    if (blind.authorizes !== false) v.push('the institutional resilience report claims authority');
+
+    // --- With a fully evidenced estate, the person dimension clears ----------------------------
+    const availability = new own.AvailabilityRegister({ clock: () => NOW });
+    const activity = new own.ActivityRegister({ clock: () => NOW });
+    const training = new own.TrainingRegister({ clock: () => NOW });
+    const exercises = new own.ExerciseRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        for (const person of [own.OWNERSHIP[s][role], own.deputyOf(own.OWNERSHIP[s][role])]) {
+          activity.recordAct({ person, act: 'review', subsystem: s, at: NOW - 10 * DAY });
+          for (const c of own.REQUIRED_TRAINING[role]) training.recordCompletion({ person, course: c, at: NOW - 30 * DAY, by: 'Registrar' });
+          for (const [id, k] of Object.entries(own.EXERCISE_KINDS)) if (k.relevantTo.includes(role)) exercises.recordParticipation({ person, exercise: id, at: NOW - 60 * DAY, by: 'ORB', role });
+        }
+      }
+    }
+    const continuity = own.knowledgeContinuity({ availability, activity, training, exercises, now: NOW });
+    const evaluated = ir.evaluate({ continuity, controls });
+    if (evaluated.capabilities.some((c) => c.singleDependencies.includes('person'))) v.push('a fully evidenced estate still reported a single-person dependency');
+    if (evaluated.capabilities.some((c) => c.singleDependencies.includes('document'))) v.push('a governed operational procedure was not accepted as a followable document');
+    if (evaluated.capabilities.some((c) => c.singleDependencies.includes('region'))) v.push('losing one of three regions stopped a capability');
+    // At least one capability must come out fully resilient, or this control can only ever fail.
+    if (!evaluated.capabilities.some((c) => c.resilient)) v.push('no capability is resilient on every dimension, so the check has no success path');
+
+    // --- THE RATCHET. The known architectural single point of failure is the per-zone persistence
+    // store: each zone has exactly one, so losing it stops the capabilities in that zone. That is
+    // recorded here so it cannot be forgotten — and so any NEW kind of single dependency, or a new
+    // capability acquiring one, fails the build rather than joining a growing list.
+    const known = new Set(['anonymous-reporting|service', 'case-investigation|service', 'governance-decision-recording|service']);
+    for (const violation of evaluated.violations) {
+      for (const kind of violation.singleDependencies) {
+        const key = `${violation.capability}|${kind}`;
+        if (!known.has(key)) v.push(`NEW single dependency: '${violation.capability}' now depends on a single ${kind}. Either close it or record it as accepted by the appropriate authority.`);
+      }
+    }
+    for (const key of known) {
+      const [capability, kind] = key.split('|');
+      const found = evaluated.violations.find((x) => x.capability === capability);
+      if (!found || !found.singleDependencies.includes(kind)) v.push(`'${key}' was recorded as a known single dependency but is no longer reported — remove it from the baseline rather than leaving a stale exception`);
+    }
+    // The known ones are real: the store whose loss is fatal is named, not guessed.
+    const intake = ir.serviceResilience('anonymous-reporting');
+    if (!intake.fatalSingleServices.includes('persistence-ind')) v.push('the intake store was not identified as the fatal single service for anonymous reporting');
+
+    // --- Acceptance is attributed, time-bound and constitutionally restricted ------------------
+    const acceptances = new ir.ResilienceAcceptance({ clock: () => NOW });
+    for (const [what, args] of [
+      ['no authority', { capability: 'anonymous-reporting', kind: 'service', rationale: 'r', expiresAt: NOW + DAY }],
+      ['no rationale', { capability: 'anonymous-reporting', kind: 'service', by: 'Oversight Board', expiresAt: NOW + DAY }],
+      ['no expiry', { capability: 'anonymous-reporting', kind: 'service', by: 'Oversight Board', rationale: 'r' }],
+    ]) {
+      let rejected = false;
+      try { acceptances.accept(args); } catch (e) { rejected = !!e.failClosed; }
+      if (!rejected) v.push(`a single point of failure was accepted with ${what}`);
+    }
+    let wrongAuthority = false;
+    try { acceptances.accept({ capability: 'anonymous-reporting', kind: 'service', by: 'Platform Engineering', rationale: 'known limitation', expiresAt: NOW + DAY }); } catch (e) { wrongAuthority = !!e.failClosed; }
+    if (!wrongAuthority) v.push('a constitutional single point of failure was accepted by somebody other than the Oversight Board');
+    acceptances.accept({ capability: 'anonymous-reporting', kind: 'service', by: 'Oversight Board', rationale: 'one store per zone is the current architecture; redundancy is planned', expiresAt: NOW + 30 * DAY });
+    const withAcceptance = ir.report({ continuity, controls, acceptances, now: NOW });
+    if (withAcceptance.unaccepted.some((u) => u.capability === 'anonymous-reporting' && u.kind === 'service')) v.push('an accepted single point of failure was still reported as unaccepted');
+    // An expired acceptance stops covering it, with nobody deciding to withdraw it.
+    const later = ir.report({ continuity, controls, acceptances, now: NOW + 60 * DAY });
+    if (!later.unaccepted.some((u) => u.capability === 'anonymous-reporting' && u.kind === 'service')) v.push('an expired acceptance still covered a single point of failure');
+    if (!later.blocksInstitutionalReadiness) v.push('an expired acceptance left institutional readiness unblocked');
+
+    // --- Recommendations name what would actually close each dependency ------------------------
+    const recs = ir.recommendations(evaluated);
+    if (!recs.count) v.push('open single dependencies produced no recommendation');
+    for (const r of recs.recommendations) if (!r.recommendedAction || !r.finding) v.push(`recommendation for ${r.capability}/${r.kind} is incomplete`);
+    if (recs.recommendationsOnly !== true || recs.authorizes !== false) v.push('resilience recommendations claim to be more than recommendations');
+    if (recs.recommendations.length && recs.recommendations[0].priority !== 'constitutional') v.push('recommendations are not ranked with constitutional capabilities first');
+  }),
+
   fit('APP-FIT-CONSISTENCY-GOVERNANCE', 'Every stateful context declares its consistency stance, and a stale read is refused rather than served', (v) => {
     const mr = require('../src/twin2/multi-region');
     const ctxMap = require('../src/architecture/context-map');

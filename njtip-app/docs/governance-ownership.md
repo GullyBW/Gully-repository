@@ -225,3 +225,15 @@ one would report a past that never happened.
 **weakest** of them, and names the dormant and uncertified owners rather than reporting a percentage.
 
 Live: `GET /api/governance/continuity/dashboard` (oversight-board).
+
+---
+
+# Knowledge Continuity (Phase 13, Part 8)
+
+See [`institutional-resilience.md`](./institutional-resilience.md) for the full treatment. In short:
+`knowledgeContinuity()` reports, per (subsystem, role), whether the primary is ready, whether the
+deputy is ready, and the **bus factor** — how many people could actually take over.
+
+`roleReadiness()` is the weakest of availability, activity, training and rehearsal. Because this
+model derives a deputy for every role, a deputy counts only when assessed on the same evidence as the
+primary; otherwise every role would report a bus factor of two and mean nothing.
