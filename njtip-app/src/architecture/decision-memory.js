@@ -222,6 +222,79 @@ class DecisionMemory {
     };
   }
 
+  // --- Organizational learning lifecycle (Phase 15, Part 12) -------------------------------------
+  //
+  // Phase 14's learning engine asks the question from the INCIDENT end: was this failure corrected,
+  // and did anybody learn from it? Part 12 asks it from the DECISION end, which is this module's
+  // business: for each ADR, what incident produced it, what was learned, and did anything change?
+  //
+  // The two are the same chain read in opposite directions and they must not become two engines. So
+  // this method takes the improvement records as INPUT and joins them to the decision catalogue; it
+  // computes no learning rate of its own and defines no second set of stages.
+  //
+  // The rule it exists to enforce, restated because it is the one that gets lost:
+  //
+  //   CORRECTION WITHOUT LEARNING STAYS EXPLICITLY VISIBLE. A decision taken to fix an incident,
+  //   with no lesson recorded and nothing that changed afterwards, is the most expensive kind: the
+  //   institution paid for the mistake and kept no receipt.
+  learningLineage({ improvements = [], controls = [], now = null } = {}) {
+    const adrs = adrGovernance.adrFiles().map((f) => `ADR-${f.slice(0, 4)}`);
+    // Which improvement records cite each ADR — that is the join between an incident and a decision.
+    const byAdr = new Map();
+    for (const i of improvements) {
+      if (!i.adr) continue;
+      if (!byAdr.has(i.adr)) byAdr.set(i.adr, []);
+      byAdr.get(i.adr).push(i);
+    }
+    const rows = adrs.map((adr) => {
+      const l = this.lineage(adr, { controls });
+      const causedBy = (byAdr.get(adr) || []).map((i) => ({ improvement: i.id, control: i.control, detail: i.detail, stage: i.stage }));
+      const closed = causedBy.filter((c) => c.stage === 'outcome-recorded');
+      return {
+        adr,
+        // The chain Part 12 names, read from the decision end.
+        incident: causedBy.length ? causedBy.map((c) => c.control) : null,
+        correction: causedBy.length > 0,
+        rootCauseRecorded: causedBy.length > 0,
+        decisionTaken: true,
+        lessonRecorded: l.learned,
+        outcomeEvidenced: l.evidencedOutcome,
+        reversed: l.reversed,
+        causedBy, closedImprovements: closed.length,
+        // Reactive decisions are the ones an incident produced; the rest were somebody's initiative,
+        // and telling them apart is the point of the join.
+        reactive: causedBy.length > 0,
+        // THE FINDING. A decision that came out of an incident, with no lesson and no evidenced
+        // outcome, is a correction the institution has already forgotten.
+        correctedWithoutLearning: causedBy.length > 0 && (!l.learned || !l.evidencedOutcome),
+        reason: !causedBy.length
+          ? 'no recorded incident produced this decision — it was somebody\'s initiative rather than a correction'
+          : !l.learned ? 'produced by an incident and no lesson was recorded'
+            : !l.evidencedOutcome ? 'produced by an incident, a lesson was recorded, and nothing evidences that it worked'
+              : 'produced by an incident, a lesson was recorded, and the outcome is evidenced',
+      };
+    });
+    const reactive = rows.filter((r) => r.reactive);
+    const forgotten = rows.filter((r) => r.correctedWithoutLearning);
+    return {
+      decisions: rows, count: rows.length,
+      reactive: reactive.map((r) => r.adr),
+      initiative: rows.filter((r) => !r.reactive).map((r) => r.adr),
+      // Kept as its own list rather than folded into a rate, because a rate would let three
+      // well-documented decisions hide one the institution paid for and forgot.
+      correctedWithoutLearning: forgotten.map((r) => ({ adr: r.adr, reason: r.reason })),
+      // Only computed over the decisions an incident actually produced. A learning rate over
+      // decisions nobody took in response to anything would be a rate over the wrong denominator.
+      learningRate: reactive.length ? +(reactive.filter((r) => !r.correctedWithoutLearning).length / reactive.length).toFixed(4) : null,
+      learningBasis: reactive.length
+        ? `${reactive.filter((r) => !r.correctedWithoutLearning).length} of ${reactive.length} decisions produced by a recorded incident carry both a lesson and an evidenced outcome. Decisions taken on somebody's initiative are excluded, because they were not corrections.`
+        : 'no decision in this catalogue is linked to a recorded incident. That is not evidence the institution has had none — it is evidence that nothing joins its incidents to its decisions.',
+      measurable: improvements.length > 0,
+      now, informationalOnly: true, authorizes: false,
+      note: 'The same chain the learning engine walks from the incident end, read from the decision end. Correction without learning is kept as a named list rather than folded into a rate, because a rate would let it disappear.',
+    };
+  }
+
   // The whole catalogue's memory: which decisions have been evaluated, which never were, and what
   // the estate has actually learned.
   report({ controls = [], now = null } = {}) {

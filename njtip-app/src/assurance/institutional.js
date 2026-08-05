@@ -285,9 +285,12 @@ const LEARNING_STAGES = {
   adr: { from: 'improvement loop', evidencedBy: 'the ADR cited when the corrective action was decided', meansIfAbsent: 'An architectural change nobody decided.' },
   training: { from: 'the training register', evidencedBy: 'a completion recorded AFTER the incident', meansIfAbsent: 'The system knows something the people operating it do not.' },
   'future-readiness': { from: 'the exercise register', evidencedBy: 'a rehearsal AFTER the training', meansIfAbsent: 'People were told, and nobody has seen them do it.' },
+  // Phase 15, Part 12. The last link, and the only one that says the institution is measurably
+  // better than it was. Everything above can be true while readiness sits exactly where it started.
+  'readiness-improvement': { from: 'a readiness assessment supplied by the caller', evidencedBy: 'a readiness figure recorded AFTER the rehearsal that is higher than the one recorded before the incident', meansIfAbsent: 'Everything was done and nothing improved. The institution went round the loop and came out where it went in.' },
 };
 
-function institutionalLearning({ loop = null, training = null, exercises = null, controls = [], now = 0 } = {}) {
+function institutionalLearning({ loop = null, training = null, exercises = null, controls = [], readiness = null, now = 0 } = {}) {
   if (!loop) {
     return {
       incidents: [], count: 0, stages: Object.entries(LEARNING_STAGES).map(([id, s]) => ({ stage: id, ...s })),
@@ -322,33 +325,60 @@ function institutionalLearning({ loop = null, training = null, exercises = null,
       adr: { reached: !!i.adr, detail: i.adr || LEARNING_STAGES.adr.meansIfAbsent },
       training: { reached: trainedAfter.length > 0, detail: trainedAfter.length ? `${trainedAfter.length} completion(s) recorded after the incident` : LEARNING_STAGES.training.meansIfAbsent },
       'future-readiness': { reached: rehearsedAfter.length > 0, detail: rehearsedAfter.length ? `${rehearsedAfter.length} rehearsal(s) completed after the training` : LEARNING_STAGES['future-readiness'].meansIfAbsent },
+      // Part 12: did anything actually get better? `readiness` is a series of {at, score} the caller
+      // measures; with none supplied this is UNKNOWN rather than absent, and unknown does not count.
+      'readiness-improvement': (() => {
+        if (!Array.isArray(readiness) || readiness.length < 2) {
+          return { reached: false, unknown: true, detail: 'no readiness series was supplied, so whether anything improved is unknown — which is not the same as it having improved' };
+        }
+        const before = readiness.filter((r) => r.at <= i.at).slice(-1)[0] || null;
+        const after = readiness.filter((r) => r.at > i.at).slice(-1)[0] || null;
+        if (!before || !after) return { reached: false, unknown: true, detail: 'the readiness series does not straddle this incident, so no change can be attributed to it' };
+        return {
+          reached: after.score > before.score, unknown: false,
+          detail: after.score > before.score
+            ? `readiness moved from ${before.score} to ${after.score} after this incident`
+            : `readiness was ${before.score} before and ${after.score} after — ${LEARNING_STAGES['readiness-improvement'].meansIfAbsent}`,
+        };
+      })(),
     };
     const missing = Object.entries(stages).filter(([, s]) => !s.reached).map(([id]) => id);
     // Corrected: the system was changed and the change was verified.
     const corrected = stages.verification.reached;
     // Learned: and the people can do something different next time, demonstrated rather than told.
     const learned = corrected && stages.training.reached && stages['future-readiness'].reached;
+    // Part 12: improved is strictly stronger than learned. The institution can learn and still be
+    // exactly as ready as it was, and that distinction is the one a board actually needs.
+    const improved = learned && stages['readiness-improvement'].reached;
     return {
       id: i.id, control: i.control, openedAt: i.at, verifiedAt,
       stages, missing,
-      corrected, learned,
+      corrected, learned, improved,
       // The row that matters. Everything else is a percentage.
-      state: learned ? 'learned' : corrected ? 'corrected-not-learned' : 'open',
-      why: learned ? 'the system changed, people were trained afterwards, and the training was demonstrated in a rehearsal'
-        : corrected ? `the system was fixed and nothing shows the institution can do better next time — missing: ${missing.join(', ')}`
-          : `not yet corrected — missing: ${missing.join(', ')}`,
+      state: improved ? 'improved' : learned ? 'learned-not-improved' : corrected ? 'corrected-not-learned' : 'open',
+      why: improved ? 'the system changed, people were trained and demonstrated it, and readiness measurably improved'
+        : learned ? 'the system changed and people demonstrated the training, and readiness did not measurably move'
+          : corrected ? `the system was fixed and nothing shows the institution can do better next time — missing: ${missing.join(', ')}`
+            : `not yet corrected — missing: ${missing.join(', ')}`,
     };
   });
 
   const corrected = rows.filter((r) => r.corrected);
   const learned = rows.filter((r) => r.learned);
+  const improved = rows.filter((r) => r.improved);
   const correctedNotLearned = rows.filter((r) => r.corrected && !r.learned);
+  const learnedNotImproved = rows.filter((r) => r.learned && !r.improved);
   return {
     incidents: rows, count: rows.length,
     stages: Object.entries(LEARNING_STAGES).map(([id, s]) => ({ stage: id, ...s })),
     chain: Object.keys(LEARNING_STAGES),
     corrected: corrected.map((r) => r.id), learned: learned.map((r) => r.id),
+    improved: improved.map((r) => r.id),
     correctedNotLearned: correctedNotLearned.map((r) => r.id),
+    // Part 12: kept as its own list. An institution can learn from every incident and be no readier
+    // than it was, and folding that into the learning rate would hide it.
+    learnedNotImproved: learnedNotImproved.map((r) => r.id),
+    improvementRate: rows.length ? +(improved.length / rows.length).toFixed(4) : null,
     correctionRate: rows.length ? +(corrected.length / rows.length).toFixed(4) : null,
     // The number a normal improvement dashboard does not have, and the only one that distinguishes
     // an institution that improves from one that repeatedly repairs.

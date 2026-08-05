@@ -197,8 +197,10 @@ function closedLoop() {
 const COURSE = Object.values(own.REQUIRED_TRAINING)[0][0];
 const EXERCISE = Object.keys(own.EXERCISE_KINDS)[0];
 
-test('the nine-stage learning chain is declared, each stage saying what its absence means', () => {
-  assert.strictEqual(Object.keys(inst.LEARNING_STAGES).length, 9);
+test('the learning chain is declared, each stage saying what its absence means', () => {
+  // Phase 15, Part 12 added the tenth stage: readiness-improvement.
+  assert.strictEqual(Object.keys(inst.LEARNING_STAGES).length, 10);
+  assert.ok(inst.LEARNING_STAGES['readiness-improvement']);
   for (const required of ['incident', 'investigation', 'root-cause', 'corrective-action', 'verification', 'governance-update', 'adr', 'training', 'future-readiness']) {
     assert.ok(inst.LEARNING_STAGES[required], required);
   }
@@ -258,9 +260,17 @@ test('fixed, taught, then demonstrated reaches learned — so the bar is satisfi
   const r = inst.institutionalLearning({ loop, training, exercises, controls: [{ id: 'APP-FIT-X', pass: true }], now: 100 * DAY });
   assert.strictEqual(r.learningRate, 1);
   assert.deepStrictEqual(r.learned, [id]);
-  assert.deepStrictEqual(r.incidents[0].missing, []);
   assert.strictEqual(r.measurable, true);
-  assert.strictEqual(r.weakestStage, null);
+  // Phase 15, Part 12: learned is not improved. With no readiness series the last stage is unknown.
+  assert.strictEqual(r.improvementRate, 0);
+  assert.deepStrictEqual(r.learnedNotImproved, [id]);
+  const measured = inst.institutionalLearning({
+    loop, training, exercises, controls: [{ id: 'APP-FIT-X', pass: true }],
+    readiness: [{ at: 5 * DAY, score: 0.6 }, { at: 60 * DAY, score: 0.8 }], now: 100 * DAY,
+  });
+  assert.strictEqual(measured.improvementRate, 1);
+  assert.deepStrictEqual(measured.incidents[0].missing, []);
+  assert.strictEqual(measured.weakestStage, null);
 });
 
 test('an open incident is neither corrected nor learned, and the chain names where it breaks', () => {

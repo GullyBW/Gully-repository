@@ -6722,7 +6722,10 @@ module.exports = [
     for (const required of ['incident', 'investigation', 'root-cause', 'corrective-action', 'verification', 'governance-update', 'adr', 'training', 'future-readiness']) {
       if (!inst.LEARNING_STAGES[required]) v.push(`learning stage '${required}' is not modelled`);
     }
-    if (Object.keys(inst.LEARNING_STAGES).length !== 9) v.push('the learning chain does not have exactly nine stages');
+    // Phase 15, Part 12 added the tenth: readiness-improvement, the only stage that says the
+    // institution is measurably better than it was.
+    if (!inst.LEARNING_STAGES['readiness-improvement']) v.push('the learning chain does not end at a measurable readiness improvement');
+    if (Object.keys(inst.LEARNING_STAGES).length !== 10) v.push('the learning chain does not have exactly ten stages');
     for (const [id, s] of Object.entries(inst.LEARNING_STAGES)) {
       if (!s.evidencedBy) v.push(`learning stage '${id}' says nothing about what evidences it`);
       if (!s.meansIfAbsent) v.push(`learning stage '${id}' does not say what its absence means`);
@@ -6770,9 +6773,25 @@ module.exports = [
     const full = inst.institutionalLearning({ loop, training: taught, exercises: rehearsed, controls: [{ id: 'APP-FIT-X', pass: true }], now: 100 * DAY });
     if (full.learningRate !== 1) v.push('a fully evidenced chain — fixed, taught, then demonstrated — was not counted as learned');
     if (!full.learned.includes(imp.id)) v.push('the learned incident was not named');
-    if (full.incidents[0].missing.length) v.push(`a fully learned incident still reports missing stages: ${full.incidents[0].missing.join(', ')}`);
     if (!full.measurable) v.push('a fully evidenced estate did not report itself measurable');
-    if (full.weakestStage !== null) v.push('a complete chain still named a weakest stage');
+    // Part 12: learned is not improved. With no readiness series, the last stage is unknown and the
+    // incident sits at learned-not-improved rather than being counted as a success.
+    if (full.improvementRate !== 0) v.push('an incident with no readiness evidence was counted as an improvement');
+    if (!full.learnedNotImproved.includes(imp.id)) v.push('an incident that was learned from and changed nothing was not named as one');
+    const measured = inst.institutionalLearning({
+      loop, training: taught, exercises: rehearsed, controls: [{ id: 'APP-FIT-X', pass: true }],
+      readiness: [{ at: 5 * DAY, score: 0.6 }, { at: 60 * DAY, score: 0.8 }], now: 100 * DAY,
+    });
+    if (measured.improvementRate !== 1) v.push('a chain ending in a measured readiness rise was not counted as an improvement');
+    if (measured.incidents[0].missing.length) v.push(`a fully improved incident still reports missing stages: ${measured.incidents[0].missing.join(', ')}`);
+    if (measured.weakestStage !== null) v.push('a complete chain still named a weakest stage');
+    // Readiness that did not move is reported as not moving, rather than as absent.
+    const flat = inst.institutionalLearning({
+      loop, training: taught, exercises: rehearsed, controls: [{ id: 'APP-FIT-X', pass: true }],
+      readiness: [{ at: 5 * DAY, score: 0.6 }, { at: 60 * DAY, score: 0.6 }], now: 100 * DAY,
+    });
+    if (flat.improvementRate !== 0) v.push('flat readiness was counted as an improvement');
+    if (flat.incidents[0].state !== 'learned-not-improved') v.push('an incident where readiness did not move was not reported as learned-not-improved');
 
     // --- A rehearsal BEFORE the training does not count -------------------------------------
     const early = new own.ExerciseRegister({ clock: () => 0 });
@@ -7865,6 +7884,169 @@ module.exports = [
     if (JSON.stringify(viaAssurance.interval) !== JSON.stringify(viaForecast.interval)) v.push('the governance forecast and the evidence estimate compute different intervals for the same data');
     if (viaAssurance.method !== viaForecast.method) v.push('the two interval callers state different methods');
     if (dp.forecastInterval(0.5, 25).constrained !== true) v.push('the forecast wrapper lost its constrained flag');
+  }),
+
+  fit('APP-FIT-DECLARATION-HISTORY', 'A capability declaration cannot be amended without an ADR, and its history is never backfilled', (v) => {
+    const cap = require('../src/capability/model');
+
+    for (const required of ['creation', 'modification', 'approval', 'retirement']) {
+      if (!cap.CHANGE_KINDS[required]) v.push(`declaration change kind '${required}' is not supported`);
+    }
+    for (const [id, k] of Object.entries(cap.CHANGE_KINDS)) {
+      if (!k.requires || !k.requires.length) v.push(`change kind '${id}' requires nothing, so anything counts as one`);
+      if (!k.means) v.push(`change kind '${id}' has no description`);
+    }
+    // A modification records BOTH sides. "It was changed" is not a record of what changed.
+    for (const field of ['was', 'now']) {
+      if (!cap.CHANGE_KINDS.modification.requires.includes(field)) v.push(`a modification does not require '${field}'`);
+    }
+
+    const history = new cap.CapabilityDeclarationHistory({ clock: () => 0 });
+    // --- Attribution and completeness -------------------------------------------------------
+    for (const [what, args] of [
+      ['no author', ['x', 'creation', { rationale: 'r' }]],
+      ['no rationale', ['x', 'creation', { by: 'A' }]],
+      ['an unknown kind', ['x', 'invented', { by: 'A', rationale: 'r' }]],
+      ['no before state', ['x', 'modification', { by: 'A', rationale: 'r', now: 'b', adr: 'ADR-0009' }]],
+      ['no after state', ['x', 'modification', { by: 'A', rationale: 'r', was: 'a', adr: 'ADR-0009' }]],
+      ['no approver', ['x', 'approval', { by: 'A' }]],
+    ]) {
+      let rejected = false;
+      try { history.record(...args); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`a declaration change with ${what} was accepted`);
+    }
+    // --- THE RULE: amending a load-bearing declaration requires an ADR ----------------------
+    let noAdr = false;
+    try { history.record('x', 'modification', { by: 'A', rationale: 'r', was: 'a', now: 'b' }); } catch (e) { noAdr = !!e.failClosed; }
+    if (!noAdr) v.push('a capability declaration was amended with no ADR — an architecture that changed without a recorded decision');
+    // …and creation may predate ADR governance, so it is not held to the same rule.
+    if (!history.record('x', 'creation', { by: 'A', rationale: 'declared at baseline' })) v.push('a creation entry with no ADR was refused');
+
+    // --- The seeded history contains only changes this repository actually made -------------
+    const seeded = cap.seedDeclarationHistory(new cap.CapabilityDeclarationHistory({ clock: () => 0 }));
+    const entries = seeded.entries();
+    if (!entries.length) v.push('no declaration history was seeded, though this repository amended two declarations in Phase 14');
+    for (const e of entries) {
+      if (e.kind === 'modification' && !e.adr) v.push(`seeded modification of '${e.capability}' cites no ADR`);
+      if (!e.rationale || e.rationale.length < 40) v.push(`seeded change to '${e.capability}' states no usable rationale`);
+      if (e.kind === 'modification' && (!e.was || !e.now)) v.push(`seeded modification of '${e.capability}' does not record both sides`);
+    }
+    // The two amendments this repository actually made, and no others invented alongside them.
+    const amended = [...new Set(entries.filter((e) => e.kind === 'modification').map((e) => e.capability))].sort();
+    if (amended.join(',') !== 'case-investigation,service-recovery') {
+      v.push(`the seeded history records amendments to '${amended.join(', ')}'; this repository amended case-investigation and service-recovery`);
+    }
+    if (entries.some((e) => e.kind === 'approval')) v.push('the seeded history contains an approval that nobody performed — historical governance must not be fabricated');
+
+    // --- The report says how much is unrecorded rather than implying completeness -----------
+    const report = seeded.report();
+    if (!report.unrecorded.length) v.push('every capability declaration has a recorded history on a platform where the register was introduced this phase');
+    if (report.coverage === 1) v.push('the declaration history reports full coverage, which would mean it was backfilled');
+    if (!/not backfilled/.test(report.coverageBasis)) v.push('the coverage figure does not say that the register is not backfilled');
+    if (!report.neverApproved.length) v.push('capabilities amended and never approved were not named');
+    if (!report.byAdr.length) v.push('the report does not group changes by the decision that made them');
+    if (report.authorizes !== false) v.push('the declaration history report claims authority');
+
+    // --- Amended-since-approval is the finding worth having ---------------------------------
+    const e1 = seeded.evolution('case-investigation');
+    if (!e1.amendedSinceApproval) v.push('a declaration amended and never approved was not flagged');
+    seeded.record('case-investigation', 'approval', { by: 'ARB', approvedBy: 'Architecture Review Board', at: 100 });
+    if (seeded.evolution('case-investigation').amendedSinceApproval) v.push('approving a declaration did not clear the amended-since-approval flag, so the flag means nothing');
+    if (!seeded.evolution('nothing-declared').unrecorded) v.push('a capability with no history was not reported as unrecorded');
+  }),
+
+  fit('APP-FIT-RECOMMENDATION-CLASSIFICATION', 'Every optimization recommendation is classified, and a simplification may never remove a mandatory control', (v) => {
+    const opt = require('../src/governance/optimization');
+    const { DecisionMemory } = require('../src/architecture/decision-memory');
+    const inst = require('../src/assurance/institutional');
+    const DAY = 24 * 3600_000;
+
+    // --- Five classes, and exactly one of them removes ---------------------------------------
+    for (const required of ['strengthen', 'simplify', 'automate', 'clarify', 'monitor']) {
+      if (!opt.RECOMMENDATION_CLASSES[required]) v.push(`recommendation class '${required}' is not supported`);
+    }
+    if (Object.keys(opt.RECOMMENDATION_CLASSES).length !== 5) v.push('there are not exactly five recommendation classes');
+    for (const [id, c] of Object.entries(opt.RECOMMENDATION_CLASSES)) {
+      if (typeof c.removes !== 'boolean' || typeof c.adds !== 'boolean') v.push(`class '${id}' does not declare whether it adds or removes`);
+      if (!c.means || !c.watchFor) v.push(`class '${id}' does not say what it means or what to watch for`);
+      if (!c.scrutiny) v.push(`class '${id}' does not say how much scrutiny it deserves`);
+    }
+    const removing = Object.entries(opt.RECOMMENDATION_CLASSES).filter(([, c]) => c.removes).map(([id]) => id);
+    if (removing.join(',') !== 'simplify') v.push(`the removing classes are '${removing.join(', ')}' — only 'simplify' may remove`);
+    if (opt.RECOMMENDATION_CLASSES.simplify.scrutiny !== 'high') v.push('the only class that removes a control does not carry the highest scrutiny');
+
+    // --- Mandatory controls each name the failure they prevent -------------------------------
+    for (const required of ['separation-of-duties', 'human-authorization', 'named-accountability', 'zone-isolation', 'attribution', 'independent-verification', 'fail-closed']) {
+      if (!opt.MANDATORY_CONTROLS[required]) v.push(`'${required}' is not recorded as a mandatory control`);
+    }
+    for (const [id, c] of Object.entries(opt.MANDATORY_CONTROLS)) {
+      if (!c.prevents || !c.basis) v.push(`mandatory control '${id}' does not say what it prevents or where it comes from`);
+    }
+
+    // --- THE RULE: a simplification may never touch a mandatory control ----------------------
+    if (opt.assertNoMandatoryRemoval({ class: 'strengthen' }) !== true) v.push('a sound recommendation was refused');
+    if (opt.assertNoMandatoryRemoval({ class: 'simplify', touchesMandatory: [] }) !== true) v.push('a simplification touching nothing mandatory was refused');
+    for (const [what, rec] of [
+      ['no classification', {}],
+      ['an unknown class', { class: 'streamline' }],
+      ['an unknown mandatory control', { class: 'strengthen', touchesMandatory: ['vibes'] }],
+      ['a simplification removing separation of duties', { class: 'simplify', touchesMandatory: ['separation-of-duties'] }],
+      ['a simplification removing human authorization', { class: 'simplify', touchesMandatory: ['human-authorization'] }],
+    ]) {
+      let refused = false;
+      try { opt.assertNoMandatoryRemoval(rec); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(`a recommendation with ${what} was accepted`);
+    }
+    // Nothing can be emitted without passing the guard.
+    let emitted = false;
+    try { opt.recommend({ recommendation: 'drop the second approver', preserves: ['separationOfDuties'], class: 'simplify', touchesMandatory: ['separation-of-duties'] }); emitted = true; } catch (_) { /* refused */ }
+    if (emitted) v.push('a recommendation that would simplify away a mandatory control was emitted');
+    let unclassified = false;
+    try { opt.recommend({ recommendation: 'x', preserves: ['separationOfDuties'] }); unclassified = true; } catch (_) { /* refused */ }
+    if (unclassified) v.push('an unclassified recommendation was emitted');
+
+    // --- Every real recommendation is classified, and the breakdown is published -------------
+    const r = opt.governanceOptimization({ now: 0 });
+    if (!r.everyRecommendationClassified) v.push('not every optimization recommendation carries a class');
+    for (const rec of r.recommendations) {
+      if (!rec.classification || !rec.classification.class) v.push(`a recommendation for '${rec.target}' carries no classification detail`);
+    }
+    if (r.byClass.length !== 5) v.push('the report does not break recommendations down by all five classes');
+    if (!r.byClass.some((c) => c.count > 0)) v.push('no recommendation was classified into any class');
+    if (r.simplifications.length) v.push(`the optimizer proposed ${r.simplifications.length} simplification(s) on an estate with open governance gaps — it should be proposing rigour, not removal`);
+    if (!r.mandatoryControls.length) v.push('the report does not publish which controls may never be simplified away');
+
+    // --- Part 12: the learning lifecycle read from the decision end --------------------------
+    const mem = new DecisionMemory({ clock: () => 0 });
+    const loop = new inst.ImprovementLoop({ clock: () => 0 });
+    const imp = loop.observe({ control: 'APP-FIT-X', detail: 'failed', observedBy: 'CI', at: 10 * DAY });
+    loop.advance(imp.id, 'root-caused', { by: 'Eng', detail: 'cause', at: 11 * DAY });
+    loop.advance(imp.id, 'action-agreed', { by: 'ARB', detail: 'plan', at: 12 * DAY });
+    loop.advance(imp.id, 'decided', { by: 'ARB', detail: 'agreed', adr: 'ADR-0005', at: 13 * DAY });
+
+    const blind = mem.learningLineage({ improvements: [] });
+    if (blind.learningRate !== null) v.push('a learning rate was computed with no improvement records');
+    if (blind.measurable) v.push('the lineage reported itself measurable with nothing joining incidents to decisions');
+    if (!/nothing joins its incidents to its decisions/.test(blind.learningBasis)) v.push('an empty lineage does not say what is actually missing');
+
+    const joined = mem.learningLineage({ improvements: loop.items(), controls: [{ id: 'APP-FIT-X', pass: true }] });
+    const adr5 = joined.decisions.find((d) => d.adr === 'ADR-0005');
+    if (!adr5.reactive) v.push('a decision produced by a recorded incident was not identified as reactive');
+    if (!adr5.correctedWithoutLearning) v.push('a decision produced by an incident with no lesson recorded was not flagged');
+    if (!joined.correctedWithoutLearning.some((x) => x.adr === 'ADR-0005')) v.push('correction without learning was not kept as a named list');
+    if (joined.learningRate !== 0) v.push('a decision with no lesson and no evidenced outcome counted as learning');
+    // Decisions nobody took in response to anything are excluded rather than counted as failures.
+    if (!joined.initiative.length) v.push('decisions taken on somebody\'s initiative were not separated from corrections');
+    if (!/excluded, because they were not corrections/.test(joined.learningBasis)) v.push('the rate does not say what it excluded');
+
+    // …and the success path: a lesson and an evidenced outcome clear it.
+    mem.record('ADR-0005', 'implementation', { by: 'Eng', at: 14 * DAY, modules: ['src/authz.js'] });
+    mem.record('ADR-0005', 'outcome', { by: 'Assurance', at: 15 * DAY, verdict: 'as-predicted', evidence: ['APP-FIT-X'] });
+    mem.record('ADR-0005', 'lesson', { by: 'ARB', at: 16 * DAY, statement: 'measure before caching' });
+    const learned = mem.learningLineage({ improvements: loop.items(), controls: [{ id: 'APP-FIT-X', pass: true }] });
+    if (learned.learningRate !== 1) v.push('a decision with a lesson and an evidenced outcome was not counted as learned');
+    if (learned.correctedWithoutLearning.length) v.push('a fully documented correction was still reported as forgotten');
+    if (learned.authorizes !== false) v.push('the learning lineage claims authority');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

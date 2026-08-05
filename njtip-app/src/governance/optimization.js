@@ -82,6 +82,49 @@ const GOVERNANCE_INTEGRITY = {
   evidencePerSubject: 'Evidence attests to work actually done for the subject it names.',
 };
 
+// --- Recommendation classification (Phase 15, Part 11) --------------------------------------------
+//
+// Phase 14 refused any recommendation that would remove a control. Part 11 asks for the positive
+// half: what KIND of change is being proposed, so a reader can tell at a glance whether they are
+// being asked to add rigour or take it away.
+//
+// The five classes are deliberately ordered by how much scrutiny each deserves. `strengthen` and
+// `monitor` add; `automate` and `clarify` change the form without changing the substance; `simplify`
+// is the one that removes, and it is the one every governance optimizer eventually reaches for.
+const RECOMMENDATION_CLASSES = {
+  strengthen: { adds: true, removes: false, scrutiny: 'low', means: 'Add rigour: another authority, another check, a shorter cadence.', watchFor: 'Governance that grows without ever being pruned becomes theatre by accumulation.' },
+  monitor: { adds: true, removes: false, scrutiny: 'low', means: 'Measure something that is currently unmeasured. Adds visibility rather than obligation.', watchFor: 'Measuring instead of acting.' },
+  automate: { adds: false, removes: false, scrutiny: 'medium', means: 'Do the same thing mechanically. The obligation is unchanged; the effort falls.', watchFor: 'Automating a judgement. A decision a machine makes is a decision nobody is accountable for.' },
+  clarify: { adds: false, removes: false, scrutiny: 'medium', means: 'Say the same thing better: a rationale, a named authority, an explicit scope.', watchFor: 'Rewording a gap until it reads like a control.' },
+  simplify: { adds: false, removes: true, scrutiny: 'high', means: 'Do less of something. The only class that removes, and therefore the only one that can weaken governance.', watchFor: 'Every finding this optimizer makes has a simplification that would close it by removing the control that found it.' },
+};
+
+// The controls that may never be simplified away, whatever the efficiency argument. Each names the
+// failure it prevents, because "mandatory" with no reason attached is an assertion.
+const MANDATORY_CONTROLS = {
+  'separation-of-duties': { prevents: 'A decision taken by the party it affects.', basis: 'Structural in the ownership model since Stabilization Part 14.' },
+  'human-authorization': { prevents: 'A governance, legal or operational decision taken by a machine.', basis: 'The invariant every phase of this platform has preserved.' },
+  'named-accountability': { prevents: 'A decision nobody can be asked about, and therefore one that cannot be challenged.', basis: 'No governance object may be left unowned.' },
+  'zone-isolation': { prevents: 'One constitutional zone observing another.', basis: 'The platform\'s oldest invariant, and the reason anonymous reporting is credible.' },
+  'attribution': { prevents: 'An act with no recorded actor, which is indistinguishable from one that did not happen.', basis: 'Every register in this platform refuses an unattributed record.' },
+  'independent-verification': { prevents: 'Self-assessment being recorded as assurance.', basis: 'The distinction between `compliant` and `verified`, and between A2 and A3.' },
+  'fail-closed': { prevents: 'An unknown being served as a pass.', basis: 'Continuous assurance has been fail-closed since Phase 10.' },
+};
+
+// A `simplify` recommendation that touches a mandatory control is REFUSED. Exported so the guard can
+// be fed a crafted recommendation that tries it.
+function assertNoMandatoryRemoval(recommendation) {
+  const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
+  if (!recommendation || !recommendation.class) fail('a recommendation must be classified — an unclassified proposal hides whether it adds rigour or removes it');
+  if (!RECOMMENDATION_CLASSES[recommendation.class]) fail(`unknown recommendation class '${recommendation.class}' — one of ${Object.keys(RECOMMENDATION_CLASSES).join(', ')}`);
+  const touched = recommendation.touchesMandatory || [];
+  for (const c of touched) if (!MANDATORY_CONTROLS[c]) fail(`unknown mandatory control '${c}'`);
+  if (RECOMMENDATION_CLASSES[recommendation.class].removes && touched.length) {
+    fail(`this recommendation would simplify away mandatory control(s): ${touched.join(', ')} — ${MANDATORY_CONTROLS[touched[0]].prevents} No efficiency argument removes a mandatory control automatically; that is a decision a named human takes with an ADR.`);
+  }
+  return true;
+}
+
 // A recommendation is refused unless it names a property it preserves and does none of the things
 // that would break one. Exported so the guard can be fed a crafted recommendation.
 function assertPreservesIntegrity(recommendation) {
@@ -104,10 +147,15 @@ function assertPreservesIntegrity(recommendation) {
 function recommend(spec) {
   const rec = {
     reducesDistinctAuthorities: false, removesApproval: false, mergesResponsibleAndApprover: false,
+    touchesMandatory: [],
     ...spec,
     recommendationOnly: true, authorizes: false,
   };
   assertPreservesIntegrity(rec);
+  // Phase 15, Part 11: and it must be classified, and a simplification may not touch a mandatory
+  // control. Both guards run before anything is emitted.
+  assertNoMandatoryRemoval(rec);
+  rec.classification = { class: rec.class, ...RECOMMENDATION_CLASSES[rec.class] };
   return rec;
 }
 
@@ -203,7 +251,7 @@ function governanceOptimization({ now = 0, lastReviewed = {}, threshold = 4 } = 
   for (const b of bottlenecks) {
     findings.push({ target: 'approval-bottleneck', subject: b.authority, detail: `approves ${b.approves} of ${load.subsystems} subsystems (${Math.round(b.share * 100)}%)` });
     recommendations.push(recommend({
-      target: 'approval-bottleneck', subject: b.authority,
+      target: 'approval-bottleneck', class: 'strengthen', subject: b.authority,
       recommendation: `Delegate approval for part of ${b.authority}'s portfolio to a second authority of equal standing, or split the portfolio between two. Do not let the responsible authority approve its own work.`,
       preserves: ['separationOfDuties', 'namedAccountability', 'humanAuthorization'],
       wouldNotFix: 'This does not reduce the number of decisions; it changes who makes which. If the total exceeds what the institution can decide, that is a resourcing question, not a governance one.',
@@ -212,7 +260,7 @@ function governanceOptimization({ now = 0, lastReviewed = {}, threshold = 4 } = 
   for (const a of load.approvalLoad.filter((x) => x.overCapacity)) {
     findings.push({ target: 'review-workload', subject: a.authority, detail: `owes ${a.reviewsPerYear} reviews a year against a declared capacity of ${a.capacityPerYear}` });
     recommendations.push(recommend({
-      target: 'review-workload', subject: a.authority,
+      target: 'review-workload', class: 'clarify', subject: a.authority,
       recommendation: `Either lengthen the review cadence for part of ${a.authority}'s portfolio — recorded as a decision, with the risk stated — or add reviewing capacity. Do not quietly stop reviewing the subsystems that are usually fine.`,
       preserves: ['namedAccountability', 'humanAuthorization', 'evidencePerSubject'],
       wouldNotFix: 'The declared capacity of twelve reviews a year is a stated assumption about how a board works, not a measurement of this one.',
@@ -223,7 +271,7 @@ function governanceOptimization({ now = 0, lastReviewed = {}, threshold = 4 } = 
   for (const b of [...overloadedBoards, ...idleBoards]) {
     findings.push({ target: 'committee-utilisation', subject: b.board, detail: `governs ${b.governs} of ${load.subsystems} subsystems` });
     recommendations.push(recommend({
-      target: 'committee-utilisation', subject: b.board,
+      target: 'committee-utilisation', class: 'clarify', subject: b.board,
       recommendation: b.governs <= 1
         ? `${b.name} governs ${b.governs} subsystem(s). Consider whether its mandate is right rather than whether it should exist — a board with a narrow mandate may be the only one able to scrutinise what it governs.`
         : `${b.name} governs ${Math.round(b.share * 100)}% of the estate. Rebalance which board governs what, keeping every subsystem governed by exactly one.`,
@@ -236,7 +284,7 @@ function governanceOptimization({ now = 0, lastReviewed = {}, threshold = 4 } = 
   }
   if (load.overdue.length) {
     recommendations.push(recommend({
-      target: 'governance-delay', subject: `${load.overdue.length} subsystem(s)`,
+      target: 'governance-delay', class: 'monitor', subject: `${load.overdue.length} subsystem(s)`,
       recommendation: `Complete the ${load.overdue.length} overdue review(s), or record a decision that the cadence is wrong. An overdue review is a control nobody has confirmed still works.`,
       preserves: ['humanAuthorization', 'evidencePerSubject'],
       wouldNotFix: 'Nothing here can complete a review; only a named human can.',
@@ -245,7 +293,7 @@ function governanceOptimization({ now = 0, lastReviewed = {}, threshold = 4 } = 
   for (const c of conflicts) {
     findings.push({ target: 'policy-conflict', subject: `${c.from} → ${c.to}`, detail: c.detail });
     recommendations.push(recommend({
-      target: 'policy-conflict', subject: `${c.from} → ${c.to}`,
+      target: 'policy-conflict', class: 'strengthen', subject: `${c.from} → ${c.to}`,
       recommendation: `Strengthen '${c.to}' to at least '${c.declares}', or record in an ADR that '${c.from}' accepts the weaker guarantee it actually receives. Do not weaken '${c.from}' to match.`,
       preserves: ['humanAuthorization', 'namedAccountability'],
       wouldNotFix: 'This is a correctness conflict, not a cost one. Resolving it will make something slower or make a guarantee honest; there is no version that is free.',
@@ -254,7 +302,7 @@ function governanceOptimization({ now = 0, lastReviewed = {}, threshold = 4 } = 
   for (const d of duplicated) {
     findings.push({ target: 'duplicated-activity', subject: `${d.activity}/${d.accountable}`, detail: `performed identically across ${d.count} subsystems` });
     recommendations.push(recommend({
-      target: 'duplicated-activity', subject: `${d.activity}/${d.accountable}`,
+      target: 'duplicated-activity', class: 'automate', subject: `${d.activity}/${d.accountable}`,
       recommendation: `Run '${d.activity}' once across ${d.accountable}'s portfolio, producing the evidence for each of the ${d.count} subsystems it covers. Do not record one act against all of them.`,
       preserves: ['evidencePerSubject', 'namedAccountability', 'humanAuthorization'],
       wouldNotFix: 'Batching the meeting does not batch the work. Each subsystem still needs its own evidence.',
@@ -272,6 +320,17 @@ function governanceOptimization({ now = 0, lastReviewed = {}, threshold = 4 } = 
     // Every recommendation passed `assertPreservesIntegrity` before it was emitted; a recommendation
     // that could not name a property it preserves was refused rather than warned about.
     everyRecommendationPreservesIntegrity: recommendations.every((r) => r.preserves && r.preserves.length),
+    // Part 11: what KIND of change is being proposed, so a reader can see at a glance whether they
+    // are being asked to add rigour or take it away.
+    classes: Object.entries(RECOMMENDATION_CLASSES).map(([id, c]) => ({ class: id, ...c })),
+    mandatoryControls: Object.entries(MANDATORY_CONTROLS).map(([id, c]) => ({ control: id, ...c })),
+    byClass: Object.keys(RECOMMENDATION_CLASSES).map((id) => ({
+      class: id, ...RECOMMENDATION_CLASSES[id],
+      count: recommendations.filter((r) => r.class === id).length,
+      targets: [...new Set(recommendations.filter((r) => r.class === id).map((r) => r.target))].sort(),
+    })),
+    everyRecommendationClassified: recommendations.every((r) => !!RECOMMENDATION_CLASSES[r.class]),
+    simplifications: recommendations.filter((r) => RECOMMENDATION_CLASSES[r.class] && RECOMMENDATION_CLASSES[r.class].removes).map((r) => r.target),
     recommendationsOnly: true, informationalOnly: true, authorizes: false,
     note: 'An optimizer for governance is an automated argument for removing controls. Every recommendation here names the integrity properties it preserves, and one that reduces the number of distinct authorities in a decision is refused rather than emitted.',
   };
@@ -419,6 +478,7 @@ function report({ now = 0, training = null, caseload = null, investigators = nul
 
 module.exports = {
   OPTIMIZATION_TARGETS, GOVERNANCE_INTEGRITY, CAPACITY_DIMENSIONS,
+  RECOMMENDATION_CLASSES, MANDATORY_CONTROLS, assertNoMandatoryRemoval,
   assertPreservesIntegrity, recommend,
   governanceLoad, policyConflicts, duplicatedActivities, governanceOptimization,
   capacityPlan, report,
