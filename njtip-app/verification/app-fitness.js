@@ -6771,6 +6771,258 @@ module.exports = [
     if (open.authorizes !== false) v.push('the institutional learning report claims authority');
   }),
 
+  fit('APP-FIT-GOVERNANCE-OPTIMIZATION', 'No optimization may remove an approval or let an authority approve its own work, and no capacity figure may be invented', (v) => {
+    const opt = require('../src/governance/optimization');
+    const own = require('../src/governance/ownership');
+
+    // --- Every target names the WRONG remedy as well as the right one -------------------------
+    for (const required of ['approval-bottleneck', 'review-workload', 'committee-utilisation', 'governance-delay', 'policy-conflict', 'duplicated-activity']) {
+      if (!opt.OPTIMIZATION_TARGETS[required]) v.push(`optimization target '${required}' is not analysed`);
+    }
+    for (const [id, t] of Object.entries(opt.OPTIMIZATION_TARGETS)) {
+      if (!t.signal || !t.rightRemedy) v.push(`optimization target '${id}' does not say what it looks for or what to do`);
+      if (!t.wrongRemedy || t.wrongRemedy.length < 40) v.push(`optimization target '${id}' does not name the wrong remedy — for every one of these the obvious fix removes a control`);
+    }
+    for (const [id, means] of Object.entries(opt.GOVERNANCE_INTEGRITY)) if (!means) v.push(`integrity property '${id}' is not explained`);
+
+    // --- THE RULE: a recommendation that damages integrity is REFUSED, not warned about -------
+    const sound = { recommendation: 'delegate approval to a second authority of equal standing', preserves: ['separationOfDuties'] };
+    if (opt.assertPreservesIntegrity(sound) !== true) v.push('a sound recommendation was refused — the guard refuses everything and proves nothing');
+    for (const [what, rec] of [
+      ['no stated action', { preserves: ['separationOfDuties'] }],
+      ['no preserved property', { recommendation: 'streamline approvals' }],
+      ['an unknown property', { recommendation: 'x', preserves: ['efficiency'] }],
+      ['reducing distinct authorities', { recommendation: 'x', preserves: ['separationOfDuties'], reducesDistinctAuthorities: true }],
+      ['removing an approval', { recommendation: 'x', preserves: ['separationOfDuties'], removesApproval: true }],
+      ['letting an authority approve its own work', { recommendation: 'x', preserves: ['separationOfDuties'], mergesResponsibleAndApprover: true }],
+    ]) {
+      let refused = false;
+      try { opt.assertPreservesIntegrity(rec); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(`an optimization recommendation ${what} was accepted`);
+    }
+    // `recommend` runs the guard, so nothing can be emitted without passing it.
+    let emitted = false;
+    try { opt.recommend({ recommendation: 'let the operational owner approve their own releases', preserves: ['separationOfDuties'], mergesResponsibleAndApprover: true }); emitted = true; } catch (_) { /* refused */ }
+    if (emitted) v.push('a recommendation that lets an authority approve its own work was emitted');
+
+    // --- The analysis finds real things, and every recommendation carries what it protects ----
+    const r = opt.governanceOptimization({ now: 0 });
+    if (!r.findingCount) v.push('the optimizer found nothing at all on an estate with overdue reviews — it has stopped looking');
+    if (!r.recommendationCount) v.push('findings produced no recommendations');
+    for (const rec of r.recommendations) {
+      if (!rec.preserves || !rec.preserves.length) v.push(`a recommendation for '${rec.target}' names no preserved property`);
+      if (!rec.wouldNotFix) v.push(`a recommendation for '${rec.target}' does not say what it would NOT fix — a recommendation with no stated limit is a promise`);
+      if (rec.authorizes !== false || rec.recommendationOnly !== true) v.push('an optimization recommendation claims to be more than a recommendation');
+    }
+    if (r.everyRecommendationPreservesIntegrity !== true) v.push('not every recommendation names an integrity property');
+    // Each analysis actually runs against real data.
+    if (!r.load.approvalLoad.length) v.push('no approval load was computed');
+    if (!r.load.boards.length) v.push('no committee utilisation was computed');
+    if (!r.duplicatedActivities.length) v.push('no duplicated governance activity was found across thirty subsystems sharing ten activities — the detector has stopped working');
+    // Policy conflicts are real and detected in the right direction.
+    for (const c of r.policyConflicts) {
+      if (!c.detail || !c.from || !c.to) v.push('a policy conflict is incompletely described');
+      if (!/cannot be honoured/.test(c.detail)) v.push('a policy conflict does not say what actually breaks');
+    }
+    // …and the conflict detector can be silent: a context depending on an equal-or-stronger stance
+    // produces nothing, which is what stops this being a permanent alarm.
+    if (r.policyConflicts.some((c) => c.from === c.to)) v.push('a context was reported as conflicting with itself');
+
+    // --- Part 14: no capacity figure is invented ---------------------------------------------
+    const blind = opt.capacityPlan({ now: 0 });
+    for (const required of ['staffing', 'infrastructure', 'operationalWorkload', 'training', 'governanceWorkload', 'investigationCapacity']) {
+      if (!blind.dimensions.some((d) => d.dimension === required)) v.push(`capacity dimension '${required}' is not forecast`);
+    }
+    if (blind.everyFigureDerived !== true) v.push('a capacity figure is not marked as derived');
+    for (const d of blind.dimensions) {
+      if (!d.basis) v.push(`capacity dimension '${d.dimension}' states no basis`);
+      if (d.value === null && !/UNKNOWN/.test(d.basis)) v.push(`capacity dimension '${d.dimension}' has no value and does not say it is unknown`);
+    }
+    // The three that depend on caller measurements are unknown on a platform that measures none.
+    for (const dim of ['operationalWorkload', 'training', 'investigationCapacity']) {
+      if (blind.dimensions.find((d) => d.dimension === dim).value !== null) v.push(`'${dim}' produced a figure with nothing supplied to derive it from`);
+    }
+    // The three derived from registries are real.
+    for (const dim of ['staffing', 'infrastructure', 'governanceWorkload']) {
+      const d = blind.dimensions.find((x) => x.dimension === dim);
+      if (d.value === null || d.value <= 0) v.push(`'${dim}' is derivable from a registry and produced nothing`);
+    }
+    if (blind.complete) v.push('a plan with three unmeasurable dimensions reported itself complete');
+
+    // …and supplying measurements produces figures, so the check is not permanently unknown.
+    const DAY = 24 * 3600_000, NOW = 400 * DAY;
+    const training = new own.TrainingRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        for (const person of [own.OWNERSHIP[s][role], own.deputyOf(own.OWNERSHIP[s][role])]) {
+          for (const c of own.REQUIRED_TRAINING[role]) training.recordCompletion({ person, course: c, at: NOW - 30 * DAY, by: 'Registrar' });
+        }
+      }
+    }
+    const measured = opt.capacityPlan({ now: NOW, training, caseload: { openCases: 40, periods: 3 }, investigators: { available: 4, concurrentPerInvestigator: 5 } });
+    if (measured.dimensions.find((d) => d.dimension === 'training').value !== 0) v.push('a fully trained estate still reported outstanding training');
+    if (measured.dimensions.find((d) => d.dimension === 'investigationCapacity').value !== 20) v.push('investigation capacity was not derived from the supplied measurements');
+    if (!measured.complete) v.push('a fully measured capacity plan was not reported complete');
+    // A shortfall is only computed where both sides are measured.
+    const shortfall = measured.shortfalls.find((s) => s.dimension === 'investigationCapacity');
+    if (!shortfall || shortfall.shortfall !== 20) v.push('a caseload exceeding capacity produced no shortfall');
+    if (blind.shortfalls.some((s) => s.dimension === 'investigationCapacity')) v.push('a shortfall was computed against an unmeasured capacity — a number with a sign and no meaning');
+    if (measured.authorizes !== false) v.push('the capacity plan claims authority');
+  }),
+
+  fit('APP-FIT-CROSS-AGENCY', 'Institutions are derived from who is accountable, and a declared relationship is never reported as a working one', (v) => {
+    const ca = require('../src/governance/cross-agency');
+    const own = require('../src/governance/ownership');
+
+    // --- Five coordination dimensions, each saying what evidences it -------------------------
+    for (const required of ['governanceOwnership', 'communicationPath', 'approvalDependency', 'informationSharing', 'demonstratedCoordination']) {
+      if (!ca.COORDINATION_DIMENSIONS[required]) v.push(`coordination dimension '${required}' is not assessed`);
+    }
+    for (const [id, d] of Object.entries(ca.COORDINATION_DIMENSIONS)) {
+      if (!d.evidencedBy || !d.ifAbsent) v.push(`coordination dimension '${id}' does not say how it is evidenced or what its absence costs`);
+    }
+    // Only 'demonstrated' is a ready state. If 'declared' counted, every org chart would pass.
+    const ready = Object.entries(ca.READINESS_BANDS).filter(([, b]) => b.ready).map(([id]) => id);
+    if (ready.join(',') !== 'demonstrated') v.push(`readiness bands counting as ready are '${ready.join(', ')}' — only 'demonstrated' may`);
+    if (ca.READINESS_BANDS.declared.ready) v.push('a merely declared relationship counts as ready — that is every relationship in an org chart');
+
+    // --- The institutions are DERIVED, and match the ownership record ------------------------
+    const agencies = ca.agencies();
+    const fromOwnership = new Set(own.subsystems().flatMap((s) => [own.OWNERSHIP[s].responsibleAuthority, own.OWNERSHIP[s].approvingAuthority]));
+    if (agencies.length !== fromOwnership.size) v.push(`the derived agency list (${agencies.length}) does not match the accountable authorities in the ownership record (${fromOwnership.size})`);
+    for (const a of agencies) if (!fromOwnership.has(a.agency)) v.push(`'${a.agency}' is reported as an institution and is accountable for nothing`);
+    if (agencies.length < 10) v.push('fewer than ten institutions were derived — the derivation has stopped working');
+
+    // --- Information sharing is read from the architecture, and crosses institutions ---------
+    const sharing = ca.informationSharing();
+    if (!sharing.length) v.push('no cross-institutional data flow was found on a platform with thirty contexts held by twenty-seven institutions');
+    for (const f of sharing) {
+      if (f.fromAgency === f.toAgency) v.push(`'${f.fromContext} → ${f.toContext}' was reported as cross-institutional and both sides are held by the same institution`);
+      if (ca.agencyOf(f.fromContext) !== f.fromAgency) v.push('a sharing flow names an institution that does not hold the context');
+    }
+    const approvals = ca.approvalDependencies();
+    if (!approvals.length) v.push('no approval dependency was found, though separation of duties guarantees one per subsystem');
+    for (const d of approvals) if (d.needs === d.held) v.push(`'${d.subsystem}' reports an approval dependency on itself`);
+
+    // --- A relationship nobody has exercised is never 'ready' --------------------------------
+    const cold = ca.collaborationReadiness({});
+    if (cold.readinessRate !== 0) v.push('a platform with no joint-act register reported some relationships as ready — historical evidence must not be fabricated');
+    if (!cold.untestedPairs.length) v.push('pairs that share data and have never coordinated were not named');
+    if (cold.measurable) v.push('collaboration readiness reported itself measurable with no register supplied');
+    for (const p of cold.pairs) {
+      if (p.ready) v.push(`pair ${p.agencies.join(' ↔ ')} is ready with no recorded joint act`);
+      if (!p.means) v.push('a readiness band carries no explanation');
+      if (p.coordination.unknown !== true) v.push('coordination was reported as known with no register supplied');
+    }
+
+    // --- …and a recorded joint act DOES make it ready, or the bar is unreachable -------------
+    const DAY = 24 * 3600_000, NOW = 400 * DAY;
+    const exercises = new own.ExerciseRegister({ clock: () => NOW });
+    const pair = cold.pairs[0];
+    const peopleFor = (agency) => own.subsystems()
+      .filter((s) => [own.OWNERSHIP[s].responsibleAuthority, own.OWNERSHIP[s].approvingAuthority].includes(agency))
+      .flatMap((s) => own.DEPUTY_ROLES.map((r) => own.OWNERSHIP[s][r]));
+    const exercise = Object.keys(own.EXERCISE_KINDS)[0];
+    for (const agency of pair.agencies) {
+      const person = peopleFor(agency)[0];
+      if (person) exercises.recordParticipation({ person, exercise, at: NOW - 10 * DAY, by: 'ORB', role: 'operationalOwner' });
+    }
+    const warm = ca.pairReadiness(pair.agencies[0], pair.agencies[1], { exercises, now: NOW });
+    if (warm.readiness !== 'demonstrated') v.push(`a pair with a recorded joint rehearsal did not reach 'demonstrated': ${warm.readiness} — ${warm.coordination.reason}`);
+    if (!warm.ready) v.push('a demonstrated relationship was not reported as ready');
+    if (!warm.coordination.evidence.length) v.push('a demonstrated relationship names no evidence');
+    if (ca.collaborationReadiness({ exercises, now: NOW }).measurable !== true) v.push('supplying a register did not make collaboration readiness measurable');
+
+    // --- Inter-agency risks are derived and each says where it would fail --------------------
+    const risks = cold.risks;
+    if (!risks.length) v.push('no inter-agency risk was found on an estate with no recorded coordination at all');
+    for (const risk of risks) {
+      if (!risk.detail || !risk.wouldFailAt) v.push(`inter-agency risk '${risk.risk}' does not say what it is or where it would fail`);
+      if (!risk.agencies || !risk.agencies.length) v.push(`inter-agency risk '${risk.risk}' names no institution`);
+    }
+    if (!risks.some((r) => r.risk === 'untested-sharing')) v.push('data crossing institutions that have never coordinated was not raised as a risk');
+    if (!risks.some((r) => r.risk === 'cross-agency-approval-bottleneck')) v.push('an institution approving a quarter of the estate for other institutions was not raised as a cross-agency risk');
+
+    // --- A communication path is real or it is not, and both answers occur -------------------
+    const reachable = cold.pairs.filter((p) => p.communicationPath.reachable);
+    if (!reachable.length) v.push('no pair of institutions can reach each other — the path derivation has stopped working');
+    if (ca.communicationPath('Nobody At All', 'Also Nobody').reachable) v.push('two institutions that hold nothing were reported as able to reach each other');
+    if (cold.authorizes !== false) v.push('the collaboration readiness report claims authority');
+  }),
+
+  fit('APP-FIT-ADAPTIVE-ANALYTICS', 'Every governance forecast carries an interval derived from its observation count, and no observations means the interval constrains nothing', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const ir = require('../src/governance/institutional-resilience');
+    const inst = require('../src/assurance/institutional');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Six forecast dimensions, each with a question and a unit ----------------------------
+    for (const required of ['governanceMaturity', 'auditReadiness', 'institutionalResilience', 'organizationalLearning', 'policyEffectiveness', 'operationalStability']) {
+      if (!dp.FORECAST_DIMENSIONS[required]) v.push(`forecast dimension '${required}' is not predicted`);
+    }
+    for (const [id, d] of Object.entries(dp.FORECAST_DIMENSIONS)) {
+      if (!d.question || !d.question.endsWith('?')) v.push(`forecast dimension '${id}' states no question`);
+      if (!d.unit) v.push(`forecast dimension '${id}' states no unit`);
+    }
+
+    // --- THE INTERVAL RULE, checked directly on the function ---------------------------------
+    const zero = dp.forecastInterval(0.9, 0);
+    if (!zero.interval || zero.interval[0] !== 0 || zero.interval[1] !== 1) v.push('a forecast with no observations did not report an interval of [0,1]');
+    if (zero.constrained) v.push('a forecast with no observations reported itself constrained');
+    const four = dp.forecastInterval(0.5, 4);
+    const hundred = dp.forecastInterval(0.5, 100);
+    if (!(hundred.interval[1] - hundred.interval[0] < four.interval[1] - four.interval[0])) v.push('the interval does not narrow as observations accumulate — an interval that ignores evidence is decoration');
+    if (four.constrained) v.push('four observations produced a constrained interval');
+    if (!hundred.constrained) v.push('a hundred observations did not produce a constrained interval, so nothing could ever be constrained');
+    if (dp.forecastInterval(null, 50).interval !== null) v.push('an interval was offered around a null point estimate');
+    for (const [p, n] of [[0.02, 4], [0.98, 4]]) {
+      const i = dp.forecastInterval(p, n);
+      if (i.interval[0] < 0 || i.interval[1] > 1) v.push(`an interval escaped [0,1]: ${JSON.stringify(i.interval)}`);
+    }
+    if (!/NOT a statistical confidence interval/.test(dp.forecastInterval(0.5, 9).method)) v.push('the interval does not disclaim being a statistical confidence interval');
+
+    // --- With nothing supplied, most forecasts are unforecastable rather than optimistic -----
+    const blind = dp.adaptiveGovernanceAnalytics({ now: 0 });
+    if (blind.forecasts.length !== 6) v.push('not all six forecasts were produced');
+    for (const f of blind.forecasts) {
+      if (!f.basis) v.push(`forecast '${f.forecast}' states no basis`);
+      if (f.derived !== true) v.push(`forecast '${f.forecast}' is not marked as derived`);
+      if (f.point === null && f.interval !== null) v.push(`forecast '${f.forecast}' offers an interval around nothing`);
+    }
+    if (!blind.unforecastable.length) v.push('every forecast produced a figure with nothing supplied — something is being invented');
+    if (blind.everyForecastDerived !== true) v.push('a forecast is not derived');
+
+    // --- With evidence supplied, forecasts appear and some become constrained ----------------
+    const learning = inst.institutionalLearning({});
+    const full = dp.adaptiveGovernanceAnalytics({
+      controls, governanceMaturity: { level: 4, name: 'Evidenced' },
+      resilience: ir.evaluate({ controls }), learning,
+      stabilityHistory: [0.95, 0.97, 0.96, 0.98, 0.97, 0.99, 0.98, 0.97, 0.96, 0.98],
+      now: 0,
+    });
+    const byId = Object.fromEntries(full.forecasts.map((f) => [f.forecast, f]));
+    if (byId.auditReadiness.point === null) v.push('audit readiness was not derived from the supplied control results');
+    if (!byId.auditReadiness.constrained) v.push(`audit readiness over ${byId.auditReadiness.observations} controls is still unconstrained`);
+    if (byId.institutionalResilience.point === null) v.push('institutional resilience was not derived from the supplied evaluation');
+    if (byId.policyEffectiveness.point === null) v.push('policy effectiveness was not derived from the declared stances');
+    if (byId.operationalStability.point === null) v.push('operational stability was not derived from the supplied history');
+    // Five capabilities is too few for the interval to constrain anything, and it says so.
+    if (byId.institutionalResilience.constrained) v.push('a forecast over five observations reported itself constrained');
+    // Learning is unknown because no register was supplied — unknown, not zero.
+    if (byId.organizationalLearning.point !== null) v.push('organizational learning produced a figure with no learning register');
+    if (!full.unconstrained.length) v.push('every forecast on this estate is constrained, which the evidence does not support');
+    if (!/rest on too few observations/.test(full.note)) v.push('the report does not warn that some forecasts are unconstrained');
+    if (full.authorizes !== false) v.push('the adaptive analytics report claims authority');
+
+    // --- And it is wired into the governance analytics the platform already ran --------------
+    const analytics = dp.governanceAnalytics({ controls, now: 0 });
+    if (!analytics.adaptive || analytics.adaptive.forecasts.length !== 6) v.push('the adaptive forecasts are not carried by the governance analytics report');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

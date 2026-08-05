@@ -350,6 +350,8 @@ function governanceAnalytics({ ownershipModel = ownership, activity = null, trai
     ownershipLoad: loadRows, overloadedAuthorities: overloaded.map((o) => o.authority),
     reviewSchedule: schedule, overdueReviews: overdue.map((r) => r.subsystem),
     auditReadiness,
+    // Phase 14, Part 17: the same estate, forecast forward, with an interval on every figure.
+    adaptive: adaptiveGovernanceAnalytics({ controls, now }),
     bottlenecks, bottleneckCount: bottlenecks.length,
     // Forecast, not prophecy: it says where pressure is building from what is recorded now.
     forecast: bottlenecks.length
@@ -360,7 +362,119 @@ function governanceAnalytics({ ownershipModel = ownership, activity = null, trai
   };
 }
 
+// --- Adaptive governance analytics (Phase 14, Part 17) --------------------------------------------
+//
+// Part 17 asks for forecasts WITH CONFIDENCE INTERVALS, and that is where most governance analytics
+// quietly become fiction. An interval is a claim about how much the evidence constrains the answer.
+// Printed beside a figure derived from four observations, a ±0.05 interval says "we are nearly
+// certain" when the truth is "we have almost no data", and it is more misleading than the bare
+// number would have been.
+//
+// So the method is stated, it is coarse, and it is honest about being coarse:
+//
+//   THE INTERVAL IS A FUNCTION OF THE OBSERVATION COUNT, AND WITH NO OBSERVATIONS IT IS [0, 1].
+//
+// An interval that does not narrow as evidence accumulates is decoration. An interval that narrows
+// faster than the evidence justifies is worse. Half-width is 1/√n, capped at 1 — a coarse standard-
+// error analogue, explicitly NOT a statistical confidence interval, and every row says so.
+const FORECAST_DIMENSIONS = {
+  governanceMaturity: { question: 'How far has governance moved from declared to continuously assured?', unit: 'fraction of the maturity scale' },
+  auditReadiness: { question: 'Could the estate evidence what it claims, today?', unit: 'fraction of controls holding' },
+  institutionalResilience: { question: 'How much of the estate has a validated alternative for everything it rests on?', unit: 'fraction of critical capabilities' },
+  organizationalLearning: { question: 'How often does a corrected failure change what people can do next time?', unit: 'fraction of incidents learned from' },
+  policyEffectiveness: { question: 'How much of the operating policy rests on a recorded decision?', unit: 'fraction of declared stances with an ADR' },
+  operationalStability: { question: 'How steady is the estate\'s control performance over time?', unit: 'fraction of controls holding, averaged over the window' },
+};
+
+// The interval. Deliberately simple and deliberately wide.
+function forecastInterval(point, observations) {
+  if (point === null || point === undefined) {
+    return { point: null, interval: null, observations, constrained: false, method: 'no point estimate could be derived, so no interval is offered — an interval around nothing is a picture of nothing' };
+  }
+  if (!observations) {
+    return { point, interval: [0, 1], observations: 0, constrained: false, method: 'no observations: the evidence does not constrain this figure at all, and the interval says so rather than flattering the estimate' };
+  }
+  const half = Math.min(1, 1 / Math.sqrt(observations));
+  // 'Constrained' means the interval is narrow enough to be worth reading — a half-width under a
+  // quarter of the scale, which needs more than sixteen observations. Five observations give ±0.45,
+  // which spans almost the whole range and constrains nothing; calling that constrained would be the
+  // exact failure this method exists to avoid.
+  return {
+    point: +point.toFixed(4),
+    interval: [+Math.max(0, point - half).toFixed(4), +Math.min(1, point + half).toFixed(4)],
+    observations, constrained: half < 0.25,
+    method: `half-width 1/√${observations} = ${half.toFixed(4)}. A coarse standard-error analogue over the observation count, NOT a statistical confidence interval — this platform has too few observations for one and says so rather than printing a narrow band it cannot support.`,
+  };
+}
+
+function adaptiveGovernanceAnalytics({
+  controls = [], governanceMaturity = null, resilience = null, learning = null,
+  stabilityHistory = [], now = 0,
+} = {}) {
+  const multiRegion = require('../twin2/multi-region');
+  const forecast = (dimension, point, observations, basis) => ({
+    forecast: dimension, ...FORECAST_DIMENSIONS[dimension],
+    ...forecastInterval(point, observations),
+    basis, derived: true,
+  });
+
+  // Governance maturity: level over the scale, one observation per assessed level criterion.
+  const maturity = governanceMaturity && Number.isFinite(governanceMaturity.level)
+    ? forecast('governanceMaturity', governanceMaturity.level / 5, governanceMaturity.level, `level ${governanceMaturity.level} of 5${governanceMaturity.name ? ` (${governanceMaturity.name})` : ''}`)
+    : forecast('governanceMaturity', null, 0, 'no governance maturity assessment was supplied');
+
+  // Audit readiness: controls holding over controls that ran.
+  const ran = controls.filter((c) => typeof c === 'object');
+  const held = ran.filter((c) => c.pass === true).length;
+  const audit = ran.length
+    ? forecast('auditReadiness', held / ran.length, ran.length, `${held} of ${ran.length} controls that ran are holding`)
+    : forecast('auditReadiness', null, 0, 'no control results were supplied');
+
+  // Institutional resilience: capabilities with a validated alternative on every dimension.
+  const resilient = resilience && Array.isArray(resilience.capabilities)
+    ? forecast('institutionalResilience', resilience.capabilities.filter((c) => c.resilient).length / resilience.capabilities.length, resilience.capabilities.length,
+      `${resilience.capabilities.filter((c) => c.resilient).length} of ${resilience.capabilities.length} critical capabilities have a validated alternative on every dimension`)
+    : forecast('institutionalResilience', null, 0, 'no institutional resilience evaluation was supplied');
+
+  // Organizational learning: the rate the learning framework computes.
+  const learned = learning && learning.learningRate !== null && learning.learningRate !== undefined
+    ? forecast('organizationalLearning', learning.learningRate, learning.count || 0, `${learning.learned ? learning.learned.length : 0} of ${learning.count} incidents produced a demonstrated change in what people can do`)
+    : forecast('organizationalLearning', null, 0, 'no institutional learning assessment was supplied, so whether the estate learns is unknown');
+
+  // Policy effectiveness: declared stances resting on a recorded decision.
+  const stances = multiRegion.contextConsistency().filter((s) => s.declared);
+  const withAdr = stances.filter((s) => s.adr).length;
+  const policy = stances.length
+    ? forecast('policyEffectiveness', withAdr / stances.length, stances.length, `${withAdr} of ${stances.length} declared consistency stances cite a recorded decision`)
+    : forecast('policyEffectiveness', null, 0, 'no consistency stance is declared');
+
+  // Operational stability: the mean pass rate across a supplied window, which the caller measures.
+  const stability = stabilityHistory.length
+    ? forecast('operationalStability', stabilityHistory.reduce((a, b) => a + b, 0) / stabilityHistory.length, stabilityHistory.length,
+      `mean control pass rate over ${stabilityHistory.length} recorded period(s)`)
+    : forecast('operationalStability', null, 0, 'no history was supplied — a stability figure over one observation is a reading, not a trend');
+
+  const forecasts = [maturity, audit, resilient, learned, policy, stability];
+  const unconstrained = forecasts.filter((f) => !f.constrained);
+  return {
+    forecasts, count: forecasts.length,
+    dimensions: Object.entries(FORECAST_DIMENSIONS).map(([dimension, d]) => ({ dimension, ...d })),
+    // Named separately, because a dashboard of six figures with five unconstrained intervals is a
+    // dashboard of one figure and five guesses.
+    unconstrained: unconstrained.map((f) => f.forecast),
+    constrained: forecasts.filter((f) => f.constrained).map((f) => f.forecast),
+    unforecastable: forecasts.filter((f) => f.point === null).map((f) => f.forecast),
+    everyForecastDerived: forecasts.every((f) => f.derived === true),
+    intervalMethod: 'Half-width 1/√n over the observation count, capped at [0,1]. Coarse by design, and never presented as a statistical confidence interval — a narrow band this platform cannot support would be worse than the bare figure.',
+    now, informationalOnly: true, authorizes: false,
+    note: unconstrained.length
+      ? `${unconstrained.length} of ${forecasts.length} forecasts rest on too few observations for the interval to constrain anything. Read those as directions, not as numbers.`
+      : 'Every forecast rests on enough observations for its interval to say something.',
+  };
+}
+
 module.exports = {
   DRIFT_KINDS, DRIFT_CLASSES, classOfKind, assertDistinctResponses,
+  FORECAST_DIMENSIONS, forecastInterval, adaptiveGovernanceAnalytics,
   sourceFiles, moduleOwner, actualDependencies, detect, governanceAnalytics,
 };
