@@ -74,3 +74,9 @@ Forecasts where governance will jam, from what the registers already hold:
 
 An unmeasurable figure reports `null` rather than a plausible number, and *"no bottleneck visible"*
 is stated as a limit of what was recorded rather than as a clean bill of health.
+
+## Drift classification (Phase 14, Part 8)
+
+Eight classifications, each routing to a named authority on its own timescale, with the structural rule
+that **no two may produce the same governance response**. Three new detectors — documentation, security
+and policy drift. See [adaptive-governance.md](./adaptive-governance.md).

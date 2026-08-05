@@ -139,3 +139,27 @@ Obligations never assessed are counted and named separately rather than diluting
 
 Live: `GET /api/compliance/lifecycle` · `POST /api/compliance/obligations/:id/state` ·
 `GET /api/compliance/obligations/:id/timeline`.
+
+## Transition governance and regulatory forecasting (Phase 14, Parts 4 & 15)
+
+Verified by `APP-FIT-COMPLIANCE-TRANSITIONS` and `APP-FIT-REGULATORY-FORECAST`.
+
+Phase 13 refused `unknown → verified`. A machine with no escape hatch does not stop that jump — it
+moves it outside the system, where somebody edits a state by hand and no audit trail records that
+anything unusual happened. So exceptions exist, and everything about them is designed to make using one
+expensive:
+
+- **An exception is a decision, not a bypass.** One board, one obligation, one transition, with an
+  expiry. It never widens the machine for anybody else.
+- **An exception is permanent in the audit trail.** The state can be moved on from; the record that it
+  was reached by exception never goes away.
+- **One rule no exception can lift:** `verified` requires independent confirmation. An exception that
+  waived it would make `verified` mean `compliant` with extra steps.
+
+Refused transitions are **recorded** — an attempt the machine turned down is exactly what an auditor
+wants to see, and throwing it away leaves only the successes. `exceptionRate` above one in ten means the
+state machine no longer describes practice, and the remedy is an ADR amending it rather than more
+exceptions.
+
+Regulatory forecasts live in a separate register, are labelled `hypothetical: true`, and can never move
+an obligation into a compliance state — see [strategic-planning.md](./strategic-planning.md).

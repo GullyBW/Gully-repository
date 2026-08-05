@@ -34,27 +34,32 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.13 — institutional resilience, documentation assurance & organizational continuity.** The
+> **v1.14 — adaptive governance, strategic decision support & advanced institutional resilience.** The
 > architecture stays **frozen** at [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md)
-> ([ADR-0008](./docs/adr/0008-institutional-assurance-and-the-single-dependency-invariant.md)).
-> Phase 13 asks what nothing had asked — *could the institution running this survive losing one of
-> anything?* — and adopts a new global invariant: **no critical capability may depend on a single
-> person, process, document or system**. It does not currently hold, which is the point of adopting
-> it: three constitutional capabilities rest on a single per-zone persistence store, recorded as a
-> ratchet so no new single dependency can join them.
-> Also: an [executable assumption registry](./docs/assumptions.md) where declared and assessed
-> confidence are separate and the gap is named an overclaim;
-> [twin confidence](./docs/assumptions.md) capped by calibration, so a simulation nobody has checked
-> against reality cannot claim to be trusted;
-> [documentation assurance](./docs/documentation-assurance.md) across the whole corpus, with the
-> extractor guarding its own yield; [governance rehearsals](./docs/rehearsals-and-memory.md) scored
-> against what the runbook promised rather than against effort;
-> [decision memory](./docs/rehearsals-and-memory.md) where a decision nobody checked is unevaluated
-> rather than successful; [evidence quality](./docs/drift-and-quality.md) in which corroboration
-> from the same source kind is not corroboration; and an
-> [institutional assurance framework](./docs/institutional-assurance.md) over thirteen domains that
-> proves readiness and still prints `NOT AUTHORIZED`.
-> Combined gate: **143 invariants**, 742 tests. Full summary: [`docs/institutional-assurance.md`](./docs/institutional-assurance.md) ·
+> ([ADR-0009](./docs/adr/0009-adaptive-governance-and-the-four-clause-invariant.md)).
+> Phase 13 asked whether the institution could survive losing one of anything. Phase 14 asks the
+> harder question — *a capability can pass that test and still be fragile* — and widens the invariant
+> to four clauses: **no critical institutional capability may depend upon an unvalidated assumption,
+> an unverified dependency, an undocumented governance relationship, or a single point of
+> organizational failure**. It does not hold, which is again the point; `evidence-custody` satisfies
+> all four under evidenced conditions, so the bar is reachable rather than decorative.
+> Also: an [assumption dependency graph](./docs/assumptions.md) where invalidating one belief cascades
+> to everything necessarily resting on it — and where ASM-0006 turns out to carry seven of the nine;
+> [six-dimension twin confidence](./docs/operations-twin.md) derived rather than assigned;
+> [temporal mission impact](./docs/business-observability.md) across five horizons, where unknown
+> impact never becomes no impact; [diagram assurance](./docs/documentation-assurance.md) in which
+> every node and arrow must resolve against the implementation;
+> [strategic scenario planning](./docs/strategic-planning.md) for funding cuts, restructures,
+> legislation and emergencies; [governance optimization](./docs/adaptive-governance.md) that may never
+> reduce the distinct authorities in a decision; [capacity planning](./docs/adaptive-governance.md)
+> that returns `null` rather than a plausible number; [cross-agency coordination](./docs/adaptive-governance.md)
+> across 27 derived institutions where a declared relationship is never a working one;
+> [institutional learning](./docs/strategic-planning.md) that distinguishes correcting from learning;
+> and [public trust indicators](./docs/business-observability.md) that state on every row that they do
+> **not** measure trust — because the people whose trust matters most are the ones who considered
+> reporting and decided not to, and nothing here can reach them.
+> Combined gate: **161 invariants**, 874 tests. Full summary: [`docs/strategic-planning.md`](./docs/strategic-planning.md) ·
+> v1.13: [`docs/institutional-assurance.md`](./docs/institutional-assurance.md) ·
 > v1.12: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·
 > v1.11: [`docs/adaptive-assurance.md`](./docs/adaptive-assurance.md) ·
 > v1.10: [`docs/high-assurance.md`](./docs/high-assurance.md) ·

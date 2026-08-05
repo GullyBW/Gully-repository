@@ -110,9 +110,10 @@ test('an ADR with no review schedule is unscheduled, and one with no date is und
   const seven = review.adrs.find((r) => r.adr === 7);
   assert.strictEqual(seven.scheduled, true);
   assert.strictEqual(seven.nextReview, '2027-02-03');
-  // Move the clock past the review date: overdue is reported, not inferred away. ADR-0008 joined
-  // the catalogue in Phase 13 with a 2027-02-04 review date, so it is overdue at this instant too.
-  assert.deepStrictEqual(adr.dueForReview({ now: '2027-06-01' }).overdue, [7, 8]);
+  // Move the clock past the review date: overdue is reported, not inferred away. ADR-0008 joined in
+  // Phase 13 with a 2027-02-04 review date and ADR-0009 in Phase 14 with 2027-02-05 — deliberately
+  // adjacent, because the two invariants are one question — so both are overdue at this instant too.
+  assert.deepStrictEqual(adr.dueForReview({ now: '2027-06-01' }).overdue, [7, 8, 9]);
 });
 
 test('an interval with no anchoring date reports undated rather than not-due', () => {

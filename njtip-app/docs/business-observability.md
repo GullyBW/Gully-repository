@@ -253,3 +253,56 @@ isolated nodes.
 > **The unknown-vs-none distinction survives the extension.** Part 3 is exactly the kind of change
 > that could quietly lose it, so the fitness function re-checks it: an unmapped affected component
 > still reports `safeToDeploy: false` and *"the citizen impact is unknown, not nil."*
+
+## Temporal mission impact (Phase 14, Part 3)
+
+Verified by `APP-FIT-TEMPORAL-MISSION-IMPACT`.
+
+The Phase 13 forecast answers "what does this change cost?" as though the whole cost arrived at once.
+It does not. An intake outage stops filings within minutes; the reports that were never filed are
+missing from the caseload for months; the erosion of the belief that reporting is worth doing shows up
+years later, if anybody is still measuring. A board given one figure acts on the minutes and discounts
+the years, because the years were never in the number.
+
+| Horizon | Within | What changes there |
+|---|---|---|
+| `immediate` | minutes to hours | Services stop responding and work stops moving. |
+| `short-term` | hours to days | A justice service stops being delivered and a person experiences that. |
+| `medium-term` | weeks to months | The institution accumulates backlog or loses the ability to answer for itself. |
+| `long-term` | months to years | The objectives the platform exists for stop being achieved. |
+| `strategic-institutional` | years, not fully recoverable | Public confidence that reporting is worth the risk. |
+
+Each mission-chain layer is assigned to exactly one horizon, checked by `validateMissionChain()` — a
+layer added without deciding when its consequences arrive would otherwise be reported nowhere, and a
+consequence reported nowhere is one nobody plans for.
+
+> **Unknown impact must never become "no impact".**
+
+A horizon the chain cannot be traversed to reports `unknown`, and so does a horizon where impact stops
+with no declared link forward — an undeclared path is a gap in the model, not evidence of safety.
+`no-declared-impact` is reserved for the case where nothing was affected at all, and even then it is
+stated as a limit of what is declared.
+
+## Public trust indicators (Phase 14, Part 9)
+
+Verified by `APP-FIT-PUBLIC-TRUST`.
+
+The operational correlation now runs eight layers to public trust. `governance-performance` moved out
+of the chain into `CROSS_CUTTING_LAYERS`, because it is not downstream of public trust — it bears on
+every layer, and modelling it as a link put it in an order that was simply false. It is still required
+for the correlation to be complete.
+
+**This platform cannot measure public trust.** It has no survey, no polling, no channel through which a
+citizen tells it whether they believe reporting corruption is worth the risk. Anything here calling
+itself a trust score would be an invention, and the most consequential one in the platform — a
+government told its trust score is 0.87 stops asking.
+
+What it derives is five leading indicators of whether trust would be **warranted**: can a citizen file
+a report, do cases progress, is evidence intact, is every decision attributable, can the institutions
+deliver. Every row carries `measuresTrust: false`, the composite is a word (`warranted`,
+`not-warranted`, `unknown`) rather than a score, and an unmeasured indicator makes the whole thing
+`unknown` — a partial picture of whether trust is warranted is not a favourable one.
+
+The report states what *would* measure it: a survey of citizens who considered reporting, **including
+those who decided not to**. Nothing in this platform can reach them, and they are the ones whose trust
+matters most.

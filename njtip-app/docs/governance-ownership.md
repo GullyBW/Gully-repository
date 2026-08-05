@@ -237,3 +237,11 @@ deputy is ready, and the **bus factor** — how many people could actually take 
 `roleReadiness()` is the weakest of availability, activity, training and rehearsal. Because this
 model derives a deputy for every role, a deputy counts only when assessed on the same evidence as the
 primary; otherwise every role would report a bus factor of two and mean nothing.
+
+## Phase 14: optimization, capacity and cross-agency coordination
+
+The ownership record now feeds three further analyses, all described in
+[adaptive-governance.md](./adaptive-governance.md): governance optimization (which may never reduce the
+distinct authorities in a decision), evidence-based capacity planning (which returns `null` rather than
+a plausible number), and cross-agency coordination — where the 27 institutions are **derived** from who
+is accountable rather than listed, and a declared relationship is never reported as a working one.

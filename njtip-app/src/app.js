@@ -458,6 +458,18 @@ function createApp(overrides = {}) {
   // Phase 13, Part 19: the improvement loop. Empty — no fitness function has failed and been
   // corrected on this build, and recording one that had not would be fabricated history.
   const improvements = new institutional.ImprovementLoop({ clock: () => Date.now() });
+  // Phase 14: governance optimization and capacity planning (Parts 13 & 14), cross-agency
+  // coordination (Part 16). All three are pure functions over registries the platform already
+  // holds, so there is nothing to seed and nothing that could be seeded wrongly.
+  const optimization = require('./governance/optimization');
+  const crossAgency = require('./governance/cross-agency');
+  // Phase 14, Part 4: compliance transition exceptions. Empty — no board has granted one, and a
+  // pre-granted exception would be a governance decision nobody took.
+  legislation.transitionExceptions = new (require('./legislation/compliance-intelligence').TransitionExceptions)({ clock: () => Date.now() });
+  legislation.intelligence.useExceptions(legislation.transitionExceptions);
+  // Phase 14: acceptances of a failing clause of the global invariant. Also empty, for the same
+  // reason: an acceptance nobody recorded is not an acceptance.
+  institutionalResilience.acceptances = new institutionalResilience.ResilienceAcceptance({ clock: () => Date.now() });
   // Stable integration contracts (Part 3) + the component migration roadmap (Part 4). The
   // contract registry is the published interface surface; a boundary crossing without a
   // contract, or a migration item without a rollback, refuses composition.
@@ -675,7 +687,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, optimization, crossAgency, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

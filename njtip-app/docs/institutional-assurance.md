@@ -89,3 +89,28 @@ downstream a lie — which is the one failure this entire phase exists to preven
 **v1.13.0** — additive and backward compatible at every published surface. Two internal behaviours
 were tightened, with call sites updated in the same commit: `simulate()` now refuses a scenario with
 undeclared assumptions, and the mission chain gained two layers.
+
+## Phase 14
+
+Fifteen executive panels and eighteen assurance domains, and the four-clause global invariant. The five
+new domains — dependency resilience, strategic readiness, learning maturity, governance adaptability
+and public trust indicators — are described in [strategic-planning.md](./strategic-planning.md); the
+governance-facing half in [adaptive-governance.md](./adaptive-governance.md).
+
+Seven governance states now replace the three-state model, and they are never merged:
+
+| State | Counts as assured | Needs action |
+|---|---|---|
+| `verified` | yes | no |
+| `accepted-risk` | yes (governed, **not** safe) | no |
+| `failed` | no | yes |
+| `missing` | no | yes |
+| `pending-review` | no | yes |
+| `not-applicable` | no | no |
+| `unknown` | no | yes |
+
+`not-applicable` cannot be asserted without a named person and a recorded reason, because it removes an
+obligation from every denominator and nobody can otherwise tell it apart from an unknown. An expired
+`accepted-risk` lapses back to `failed` rather than to nothing: the risk was never closed.
+
+**Eighteen verified domains still print NOT AUTHORIZED.**

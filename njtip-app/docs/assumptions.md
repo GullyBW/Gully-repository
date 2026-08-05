@@ -114,3 +114,43 @@ of a platform that has never run a real DR exercise against its own predictions.
 `confidenceTrend()` compares agreement in the earlier half of the history against the later half and
 warns when it decays: *"the model is drifting away from the system it describes."* Two comparisons
 minimum — one observation is a result, not a direction.
+
+## The dependency graph (Phase 14, Part 1)
+
+Verified by `APP-FIT-ASSUMPTION-GRAPH`.
+
+A registry of independent assumptions gets one thing badly wrong: assumptions are not independent.
+ASM-0001 ("every cross-context dependency is declared") rests on ASM-0006 ("a fitness identifier names
+exactly one control"), because the evidence cited for the first is a fitness function identified by
+name. If identifiers ever drifted from what they check, the evidence for ASM-0001 would prove nothing —
+and nothing in the Phase 13 registry would have said so.
+
+Every edge declares a **strength**, a **type** and a **rationale**:
+
+| Strength | Propagation | If the upstream fails |
+|---|---|---|
+| `necessary` | inherits the upstream level in full | The dependent does not hold either. Not "less certain" — not holding. |
+| `supporting` | caps one level better than the upstream | The dependent is weakened and reported as such. |
+| `contextual` | none | The dependent is listed as affected so a human can judge it. |
+
+Types are `logical`, `evidential`, `operational` and `temporal`, because the remedy differs: a logical
+dependency is closed by re-reasoning, an evidential one by finding better evidence.
+
+Three rules make the graph a control rather than a diagram:
+
+1. **Confidence flows downstream and only downward.** An assumption is never made more confident by
+   what it rests on. Inheritance is a *ceiling*, applied after the intrinsic assessment.
+2. **A cascading failure is not a reduced confidence.** An invalid `necessary` upstream invalidates the
+   dependent transitively — a different fact from being less sure of it.
+3. **A cycle is refused at declaration.** Two assumptions that justify each other are two assumptions
+   nobody has checked.
+
+**What the seeded graph shows.** ASM-0006 carries seven of the nine platform assumptions. It is the
+single most load-bearing belief in the registry, and nobody had noticed it was load-bearing. Invalidating
+it stops ASM-0001, ASM-0008 and ASM-0005 holding, weakens ASM-0002, ASM-0004 and ASM-0007, and leaves
+ASM-0003 for a human to judge.
+
+`assumptionImpact(id)` reports that closure with the distance and the strength chain for each hop, so
+a reader can disagree with any of them. `propagateConfidence()` reports intrinsic against effective
+confidence, and names which upstream capped each one — "weakened by ASM-0006" is actionable where a
+bare `low` is not.

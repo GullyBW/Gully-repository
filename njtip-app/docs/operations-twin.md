@@ -77,3 +77,37 @@ the declared model, and the verdict says so in as many words —
 
 > *"The simulated change produced no blocking finding against the declared model. It has not been
 > approved, and an undeclared dependency would not have appeared here."*
+
+## Six confidence dimensions (Phase 14, Part 2)
+
+Verified by `APP-FIT-TWIN-CONFIDENCE-DIMENSIONS`.
+
+Phase 13 capped a single confidence figure by the weakest of three factors. That was better than a
+number nobody could argue with, and it still hid something: a reader told "low" could not tell whether
+the model was wrong, the assumptions were stale, or nobody had ever checked the output — and those
+three need work from three different people.
+
+| Dimension | Asks | Derived from |
+|---|---|---|
+| `model` | Does the model still describe the architecture-of-record? | `validate()` |
+| `evidence` | Do the assumptions hold, including what *they* rest on? | the propagated assumption health |
+| `data` | Is the thing this scenario perturbs actually in the model? | the modelled entities of `perturbs` |
+| `simulation` | Was the baseline left untouched and deep-frozen? | `verifyIsolation()` |
+| `forecast` | Is agreement with reality holding, or decaying? | `confidenceTrend()` |
+| `calibration` | Has anybody ever compared the output against reality? | `calibration()` |
+
+Overall confidence is **derived** — the weakest of the six, never their average — and there is no
+parameter anywhere that sets it. `assertCompleteConfidence` refuses to run a simulation whose dimension
+set is incomplete: a dimension reporting `unknown` is a perfectly good answer and often the true one,
+but a *missing* dimension is a question nobody asked, and an overall figure derived from five of six is
+wrong in an unknown direction.
+
+The three original factor names survive as aliases, so anything reading `limitedBy` for `calibration`,
+`assumptions` or `model-completeness` keeps working.
+
+## Strategic scenarios (Phase 14, Part 12)
+
+Seven scenarios that rehearse institutional change rather than infrastructure failure: `policy-reform`,
+`legislative-change`, `funding-reduction`, `organizational-restructuring`, `staffing-growth`,
+`cross-government-collaboration` and `emergency-operations`. Each can block and each can pass — see
+[strategic-planning.md](./strategic-planning.md).

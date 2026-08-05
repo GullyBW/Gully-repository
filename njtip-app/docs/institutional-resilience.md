@@ -82,3 +82,22 @@ therefore does not hold, and institutional readiness is blocked with eight unacc
 That is the true state of a platform that has never rehearsed anything and whose deputies have never
 acted — and seeding those registers to make it green would report an institutional history that
 never happened.
+
+## Phase 14: the taxonomy, the risk ranking, and the four-clause invariant
+
+The eight dimensions became thirteen kinds across eleven categories; every kind now names the control
+that would fail if it broke; open dependencies are ranked on six factors with constitutional
+capabilities always first; and the invariant grew three clauses.
+
+All of it is described in [strategic-planning.md](./strategic-planning.md) and decided in
+[ADR-0009](./adr/0009-adaptive-governance-and-the-four-clause-invariant.md).
+
+Two findings from this phase are worth carrying here, because they are the platform's own and are
+still open:
+
+1. **Nothing records what legally authorises case investigation or service recovery.** The legislative
+   registry holds one instrument and it maps to neither. Both report UNKNOWN on the legal-authority
+   dimension, and unknown is not resilient. They are in the `APP-FIT-INSTITUTIONAL-RESILIENCE` ratchet.
+2. **Two dependency kinds had no detecting control at all.** Communication channels and facilities
+   would have failed with nothing noticing. Both now resolve to a control, and the facility assessment
+   states on every row that it watches the region behind a site rather than the building.

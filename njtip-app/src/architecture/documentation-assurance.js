@@ -80,6 +80,10 @@ const GOVERNED_DOCUMENTS = {
   'operations-twin.md': { role: 'operational-reference', audience: 'reviewer' },
   'enterprise-graph.md': { role: 'architecture-documentation', audience: 'reviewer' },
   'evidence-confidence.md': { role: 'governance-documentation', audience: 'reviewer' },
+  // Phase 14. Governed from the day they were written, so neither can quietly stop describing the
+  // implementation the way an unregistered document would.
+  'adaptive-governance.md': { role: 'governance-documentation', audience: 'reviewer' },
+  'strategic-planning.md': { role: 'governance-documentation', audience: 'reviewer' },
 };
 
 // Below this, the extractor has broken rather than the corpus being clean.
