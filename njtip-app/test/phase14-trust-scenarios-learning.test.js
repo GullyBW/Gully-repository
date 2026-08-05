@@ -145,18 +145,19 @@ test('headcount does not close a single-person dependency', () => {
   assert.match(blind.findings.find((f) => f.entity === 'single-person-dependencies').finding, /UNKNOWN/);
 });
 
-test('a collaboration that crosses a zone boundary is refused, and an undeclared zone is not a pass', () => {
+test('a collaboration that crosses a zone boundary is refused, and the record answers the zone question', () => {
   const twin = strategicTwin();
   const run = (change) => twin.simulate({ scenario: 'cross-government-collaboration', change, now: 0, controls: controlsAll() });
 
-  // The platform does not record a context's zone, so the proposal must state it.
-  assert.ok(run({ partners: ['AG'], sharing: ['investigation'] }).blocking.some((f) => /UNKNOWN/.test(f.finding)));
-  assert.ok(run({ partners: ['AG'], sharing: ['intake'], zones: { intake: 'atlantis' } }).blocking.some((f) => /not a deployment zone/.test(f.finding)));
-  assert.ok(run({
-    partners: ['AG'], sharing: ['investigation', 'intake'], zones: { investigation: 'executive', intake: 'independent' },
-  }).blocking.some((f) => /constitutional invariant/.test(f.finding)));
-  // Within one zone it passes, so the check is satisfiable.
-  const ok = run({ partners: ['AG'], sharing: ['investigation'], zones: { investigation: 'executive' } });
+  // Phase 15, Part 6 closed the ADR-0009 debt: the context map now declares zone governance, so the
+  // proposal no longer supplies it and cannot answer the question for itself.
+  assert.ok(run({ partners: ['AG'], sharing: ['custody', 'investigation'] }).blocking.some((f) => /constitutional invariant/.test(f.finding)));
+  // A context whose declared constraint is 'no-sharing' cannot be shared by agreement.
+  assert.ok(run({ partners: ['AG'], sharing: ['intake'] }).blocking.some((f) => /no-sharing/.test(f.finding)));
+  // A proposal that disagrees with the architecture-of-record blocks rather than overriding it.
+  assert.ok(run({ partners: ['AG'], sharing: ['custody'], zones: { custody: 'executive' } }).blocking.some((f) => /working from the wrong picture/.test(f.finding)));
+  // Within one zone, under a governed-sharing constraint, it passes — so the check is satisfiable.
+  const ok = run({ partners: ['AG'], sharing: ['custody'] });
   assert.strictEqual(ok.safe, true);
   assert.ok(ok.findings.some((f) => /does not cross a zone boundary/.test(f.finding)));
 });

@@ -20,6 +20,99 @@ const MECHANISMS = new Set(['in-process-port', 'domain-event', 'http-api', 'read
 
 const KINDS = new Set(['core-domain', 'supporting', 'generic', 'composition-root']);
 
+// --- Zone governance (Phase 15, Part 6) -----------------------------------------------------------
+//
+// ADR-0009 recorded a debt: this platform did not record which deployment zone a bounded context sits
+// in. The topology knew the zone of every service and nothing connected a service back to a context,
+// so the zone-isolation check on a cross-government collaboration proposal had nothing to check
+// against and the proposal had to declare it. That debt is closed here.
+//
+// Six governance properties per context, and the rule that makes the closure real:
+//
+//   NO INFERRED VALUES. An undeclared property fails validation, which refuses composition.
+//
+// It would have been much less work to derive the zone from the governance board, or the residency
+// policy from the domain. Both would have been guesses that looked like records, and the failure mode
+// of a guess that looks like a record is that nobody ever checks it.
+const ZONES = new Set(['independent', 'executive', 'judiciary', 'cross-zone']);
+const TRUST_BOUNDARIES = new Set(['citizen-facing', 'inter-zone', 'intra-zone', 'external-institution', 'platform-internal']);
+const RESIDENCY_POLICIES = new Set(['sovereign-only', 'sovereign-preferred', 'unrestricted']);
+const CLASSIFICATIONS = new Set(['constitutional', 'restricted', 'official', 'public']);
+const FAILOVER_POLICIES = new Set(['no-failover', 'read-only-failover', 'full-failover', 'manual-failover']);
+const COLLABORATION_CONSTRAINTS = new Set(['no-sharing', 'aggregate-only', 'governed-sharing', 'open-sharing']);
+
+// The declarations. Each is an architectural decision somebody has to be able to disagree with, so
+// each carries a `zoneRationale` saying why the zone is what it is.
+const ZONE_GOVERNANCE = {
+  'identity-access': { zone: 'cross-zone', trustBoundary: 'inter-zone', residency: 'sovereign-only', classification: 'constitutional', failover: 'full-failover', collaboration: 'no-sharing', zoneRationale: 'Every zone conforms to its decisions, so it cannot sit inside one of them. Identity is never shared outward.' },
+  'policy-governance': { zone: 'cross-zone', trustBoundary: 'inter-zone', residency: 'sovereign-only', classification: 'constitutional', failover: 'read-only-failover', collaboration: 'no-sharing', zoneRationale: 'Policy is authored once and enforced in all three zones; a per-zone policy set would let the zones diverge.' },
+  persistence: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'constitutional', failover: 'read-only-failover', collaboration: 'no-sharing', zoneRationale: 'The store abstraction spans zones; each concrete store is zone-bound and may never be read across one.' },
+  'crypto-agility': { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'constitutional', failover: 'read-only-failover', collaboration: 'no-sharing', zoneRationale: '🔒 Key state that differed between zones would make ciphertext unreadable across a failover.' },
+  'platform-events': { zone: 'cross-zone', trustBoundary: 'intra-zone', residency: 'sovereign-only', classification: 'restricted', failover: 'full-failover', collaboration: 'no-sharing', zoneRationale: 'The published language is shared; the brokers carrying it are per-zone and do not bridge.' },
+  privacy: { zone: 'cross-zone', trustBoundary: 'citizen-facing', residency: 'sovereign-only', classification: 'constitutional', failover: 'no-failover', collaboration: 'no-sharing', zoneRationale: 'Identity minimisation is enforced wherever data enters, which is all three zones. It has no degraded mode: a privacy control that fails open is not a privacy control.' },
+  intake: { zone: 'independent', trustBoundary: 'citizen-facing', residency: 'sovereign-only', classification: 'constitutional', failover: 'read-only-failover', collaboration: 'no-sharing', zoneRationale: 'Anonymous reporting sits in the independent zone precisely so the executive cannot reach it. Nothing about a report is ever shared.' },
+  custody: { zone: 'independent', trustBoundary: 'intra-zone', residency: 'sovereign-only', classification: 'constitutional', failover: 'read-only-failover', collaboration: 'governed-sharing', zoneRationale: 'Evidence integrity must be provable independently of the body being investigated. Sharing is possible under a governed agreement, for a court.' },
+  investigation: { zone: 'executive', trustBoundary: 'intra-zone', residency: 'sovereign-only', classification: 'restricted', failover: 'read-only-failover', collaboration: 'governed-sharing', zoneRationale: 'Investigation is an executive function; it reads from intake across a boundary rather than sharing a store with it.' },
+  orchestration: { zone: 'executive', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'official', failover: 'full-failover', collaboration: 'no-sharing', zoneRationale: 'Workflow state belongs to the body running the process.' },
+  'data-fabric': { zone: 'cross-zone', trustBoundary: 'inter-zone', residency: 'sovereign-only', classification: 'restricted', failover: 'full-failover', collaboration: 'governed-sharing', zoneRationale: 'The canonical model is shared vocabulary, not shared data; the vocabulary crosses zones and the data does not.' },
+  'data-exchange': { zone: 'cross-zone', trustBoundary: 'external-institution', residency: 'sovereign-preferred', classification: 'official', failover: 'full-failover', collaboration: 'governed-sharing', zoneRationale: 'This context exists to cross an institutional boundary; that is its whole purpose, and every crossing is purpose-limited and approved.' },
+  analytics: { zone: 'executive', trustBoundary: 'intra-zone', residency: 'sovereign-only', classification: 'official', failover: 'full-failover', collaboration: 'aggregate-only', zoneRationale: 'Analytics reads from the executive zone and publishes only non-attributable aggregates.' },
+  'ai-advisory': { zone: 'executive', trustBoundary: 'intra-zone', residency: 'sovereign-only', classification: 'restricted', failover: 'no-failover', collaboration: 'no-sharing', zoneRationale: 'A recommendation engine that keeps running while its governance is degraded is worse than one that stops.' },
+  security: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'restricted', failover: 'full-failover', collaboration: 'governed-sharing', zoneRationale: 'Threat intelligence is only useful across the whole estate, and is shared with the national CIRT under agreement.' },
+  'tenancy-federation': { zone: 'cross-zone', trustBoundary: 'external-institution', residency: 'sovereign-preferred', classification: 'official', failover: 'full-failover', collaboration: 'governed-sharing', zoneRationale: 'Federation is the boundary at which another institution appears; isolation between tenants is enforced here.' },
+  infrastructure: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'restricted', failover: 'full-failover', collaboration: 'no-sharing', zoneRationale: 'Infrastructure realises all three zones and must never let one observe another.' },
+  'supply-chain': { zone: 'cross-zone', trustBoundary: 'external-institution', residency: 'unrestricted', classification: 'official', failover: 'full-failover', collaboration: 'open-sharing', zoneRationale: 'Provenance and SBOM data is deliberately open: the auditability of the supply chain is worth more than its confidentiality.' },
+  observability: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'restricted', failover: 'full-failover', collaboration: 'aggregate-only', zoneRationale: 'Telemetry spans zones by necessity and carries no identity, so it can be aggregated outward.' },
+  resilience: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'restricted', failover: 'full-failover', collaboration: 'no-sharing', zoneRationale: 'Recovery must work when a zone is gone, so it cannot live in one.' },
+  assurance: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'official', failover: 'full-failover', collaboration: 'governed-sharing', zoneRationale: 'Evidence about the whole estate; shared with an independent auditor under a governed agreement.' },
+  legislation: { zone: 'judiciary', trustBoundary: 'inter-zone', residency: 'sovereign-only', classification: 'constitutional', failover: 'read-only-failover', collaboration: 'open-sharing', zoneRationale: 'The law is public and its interpretation is not an executive function. Legal instruments are open by nature.' },
+  'api-governance': { zone: 'cross-zone', trustBoundary: 'external-institution', residency: 'unrestricted', classification: 'public', failover: 'full-failover', collaboration: 'open-sharing', zoneRationale: 'The published contract surface is public; an integrator cannot build against something they cannot read.' },
+  'developer-platform': { zone: 'cross-zone', trustBoundary: 'external-institution', residency: 'unrestricted', classification: 'public', failover: 'full-failover', collaboration: 'open-sharing', zoneRationale: 'SDKs and templates carry no data and are more useful shared than withheld.' },
+  knowledge: { zone: 'judiciary', trustBoundary: 'inter-zone', residency: 'sovereign-only', classification: 'official', failover: 'read-only-failover', collaboration: 'governed-sharing', zoneRationale: 'The archival record must outlive the executive that produced it, which is why it does not sit with it.' },
+  portfolio: { zone: 'executive', trustBoundary: 'citizen-facing', residency: 'sovereign-only', classification: 'public', failover: 'full-failover', collaboration: 'open-sharing', zoneRationale: 'What services exist and how they are performing is information citizens are owed.' },
+  'governance-oversight': { zone: 'judiciary', trustBoundary: 'inter-zone', residency: 'sovereign-only', classification: 'constitutional', failover: 'read-only-failover', collaboration: 'governed-sharing', zoneRationale: 'Oversight of the executive cannot be hosted by the executive. The decision ledger is the record that makes a decision challengeable.' },
+  intelligence: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'restricted', failover: 'full-failover', collaboration: 'aggregate-only', zoneRationale: 'Correlation across the estate is the point; it publishes only what carries no attribution.' },
+  geo: { zone: 'executive', trustBoundary: 'intra-zone', residency: 'sovereign-only', classification: 'official', failover: 'full-failover', collaboration: 'aggregate-only', zoneRationale: 'Location is re-identifying at fine granularity, so it stays inside the executive zone and leaves only aggregated.' },
+  composition: { zone: 'cross-zone', trustBoundary: 'platform-internal', residency: 'sovereign-only', classification: 'constitutional', failover: 'no-failover', collaboration: 'no-sharing', zoneRationale: 'The composition root wires every zone. If it is unavailable nothing composes, and a partially composed platform is more dangerous than none.' },
+};
+
+const ZONE_PROPERTIES = [
+  { field: 'zone', set: ZONES, why: 'Which constitutional zone this context is deployed into. Zone isolation is the platform\'s oldest invariant and it cannot be enforced against an unrecorded value.' },
+  { field: 'trustBoundary', set: TRUST_BOUNDARIES, why: 'What kind of boundary this context sits on, which decides what an interaction with it has to prove.' },
+  { field: 'residency', set: RESIDENCY_POLICIES, why: 'Where this context\'s data may physically be held.' },
+  { field: 'classification', set: CLASSIFICATIONS, why: 'The security classification of what it holds, which decides who may see it and where it may go.' },
+  { field: 'failover', set: FAILOVER_POLICIES, why: 'What this context does when its region is lost. `no-failover` is a deliberate answer, not a missing one.' },
+  { field: 'collaboration', set: COLLABORATION_CONSTRAINTS, why: 'What may be shared with another institution, and under what governance.' },
+];
+
+// The declared governance of one context. Throws rather than returning a default: a caller that asks
+// for an undeclared context needs to know, not to receive a plausible shape.
+function zoneGovernance(id) {
+  const g = ZONE_GOVERNANCE[id];
+  if (!g) throw new Error(`no zone governance is declared for bounded context '${id}' — undeclared is not a value`);
+  return { context: id, ...g };
+}
+function zoneGovernanceAll() { return ids().map((id) => zoneGovernance(id)); }
+
+// Contexts in a given zone, and whether two contexts may share. The question the Phase 14
+// collaboration scenario had to ask the proposal is now answerable from the architecture-of-record.
+function contextsInZone(zone) { return ids().filter((id) => ZONE_GOVERNANCE[id] && ZONE_GOVERNANCE[id].zone === zone).sort(); }
+function crossesZoneBoundary(contexts = []) {
+  const zones = [...new Set(contexts.map((c) => (ZONE_GOVERNANCE[c] ? ZONE_GOVERNANCE[c].zone : null)))];
+  const unknown = contexts.filter((c) => !ZONE_GOVERNANCE[c]);
+  // `cross-zone` contexts are deployed into every zone, so they do not themselves cause a crossing.
+  const bound = zones.filter((z) => z && z !== 'cross-zone');
+  return {
+    contexts: [...contexts].sort(), zones: zones.filter(Boolean).sort(), unknown,
+    crosses: bound.length > 1,
+    boundZones: bound.sort(),
+    reason: unknown.length ? `zone governance is not declared for: ${unknown.join(', ')}`
+      : bound.length > 1 ? `spans ${bound.length} constitutional zones: ${bound.sort().join(', ')}`
+        : bound.length === 1 ? `every zone-bound context sits in '${bound[0]}'`
+          : 'every context is cross-zone, so no constitutional boundary is crossed',
+  };
+}
+
 // d(context, mechanism, relationship) — compact dependency declaration.
 const d = (context, relationship, mechanism) => ({ context, relationship, mechanism });
 
@@ -422,6 +515,20 @@ function validate() {
     for (const k of c.sharedKernel) if (!SHARED_KERNELS[k]) violations.push(`${id}: unknown shared kernel '${k}'`);
     if (c.status !== 'stable' && !c.consolidateInto) violations.push(`${id}: status '${c.status}' without a consolidation target`);
   }
+  // Phase 15, Part 6: zone governance is declared, never inferred. An undeclared property refuses
+  // composition, which is what makes "no inferred values" a rule rather than a preference.
+  for (const id of ids()) {
+    const g = ZONE_GOVERNANCE[id];
+    if (!g) { violations.push(`${id}: no zone governance declared — an undeclared constitutional zone cannot be enforced against`); continue; }
+    for (const { field, set } of ZONE_PROPERTIES) {
+      if (g[field] === undefined || g[field] === null) violations.push(`${id}: zone governance declares no '${field}'`);
+      else if (!set.has(g[field])) violations.push(`${id}: zone governance declares unknown ${field} '${g[field]}'`);
+    }
+    if (!g.zoneRationale) violations.push(`${id}: zone governance states no rationale for its zone — a placement nobody can disagree with is one nobody reviewed`);
+  }
+  for (const id of Object.keys(ZONE_GOVERNANCE)) {
+    if (!CONTEXTS[id]) violations.push(`zone governance is declared for '${id}', which is not a bounded context`);
+  }
   for (const cyc of cycles()) violations.push('dependency cycle: ' + cyc.join(' → '));
   for (const o of overlaps()) {
     const accepted = ACCEPTED_OVERLAPS.some((a) => a.contexts.slice().sort().join() === o.contexts.slice().sort().join());
@@ -431,7 +538,7 @@ function validate() {
   const mo = moduleOwnership();
   for (const m of mo.unmapped) violations.push(`module not owned by any bounded context: ${m}`);
   for (const m of mo.multiple) violations.push(`module claimed by multiple contexts: ${m.module} (${m.contexts.join(', ')})`);
-  return { valid: violations.length === 0, violations, contexts: ids().length, modules: mo.modules };
+  return { valid: violations.length === 0, violations, contexts: ids().length, modules: mo.modules, zoneGovernanceDeclared: ids().filter((id) => ZONE_GOVERNANCE[id]).length };
 }
 
 // The full map, as served to the API and rendered into docs/context-map.md.
@@ -454,4 +561,7 @@ module.exports = {
   ids, describe, contexts, dependencyGraph, communicationPaths, antiCorruptionLayers,
   sharedKernels, upstreamDownstream, cycles, coupling, cohesion, overlaps,
   consolidationCandidates, moduleOwnership, sourceModules, validate, contextMap,
+  ZONES, TRUST_BOUNDARIES, RESIDENCY_POLICIES, CLASSIFICATIONS, FAILOVER_POLICIES,
+  COLLABORATION_CONSTRAINTS, ZONE_GOVERNANCE, ZONE_PROPERTIES,
+  zoneGovernance, zoneGovernanceAll, contextsInZone, crossesZoneBoundary,
 };

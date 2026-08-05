@@ -824,26 +824,36 @@ class OperationsTwin {
       const partners = [...(change.partners || [])].sort();
       const sharing = [...(change.sharing || [])].sort();
       if (!partners.length) findings.push({ entity: 'collaboration', kind: 'bounded-context', blocking: true, finding: 'no partner institution is named — a collaboration with nobody is not a collaboration' });
-      // THE ZONE QUESTION, and the honest answer to it. This platform does NOT record which
-      // deployment zone a bounded context sits in — the topology knows the zone of every service and
-      // nothing connects a service back to a context. So the proposal must state it, the twin checks
-      // the stated zones are real, and a context whose zone the proposal does not state BLOCKS.
-      // Reading it as "probably fine" would be reading an unknown as a pass on a constitutional
-      // invariant, which is the one place this platform never does that.
+      // THE ZONE QUESTION. Phase 14 had to make the proposal declare each context's zone, because the
+      // platform did not record it — a debt written into ADR-0009. Phase 15, Part 6 closed it: the
+      // context map now declares zone governance for every bounded context, so the architecture-of-
+      // record answers the question and a proposal cannot answer it for itself.
+      //
+      // A proposal MAY still state its understanding, and if it disagrees with the record that is a
+      // blocking finding rather than an override — somebody has been working from the wrong picture,
+      // and that is worth knowing before the agreement is signed.
       const declaredZones = change.zones || {};
-      const realZoneNames = new Set(this._model.entities.filter((e) => e.kind === 'infrastructure').map((e) => e.zone));
       const zones = new Set();
       for (const ctx of sharing) {
         if (!this.entity(ctx)) { findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: 'the proposal shares a bounded context the architecture does not contain' }); continue; }
-        const zone = declaredZones[ctx];
-        if (!zone) {
-          findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: `the proposal does not state which deployment zone '${ctx}' sits in, and the platform does not record it — whether this sharing crosses a zone boundary is UNKNOWN, and unknown is not a pass on a constitutional invariant` });
-        } else if (!realZoneNames.has(zone)) {
-          findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: `the proposal places '${ctx}' in zone '${zone}', which is not a deployment zone this platform has` });
-        } else {
-          zones.add(zone);
+        let governed = null;
+        try { governed = contextMap.zoneGovernance(ctx); } catch (_) { governed = null; }
+        if (!governed) {
+          findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: `no zone governance is declared for '${ctx}', so whether this sharing crosses a constitutional boundary is UNKNOWN — and unknown is not a pass on a constitutional invariant` });
+          continue;
         }
-        findings.push({ entity: ctx, kind: 'bounded-context', finding: `would be shared with ${partners.join(', ') || 'unnamed partners'}` });
+        if (declaredZones[ctx] && declaredZones[ctx] !== governed.zone) {
+          findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: `the proposal places '${ctx}' in zone '${declaredZones[ctx]}'; the architecture-of-record declares '${governed.zone}'. Somebody is working from the wrong picture.` });
+        }
+        // A cross-zone context is deployed into every zone and so causes no crossing by itself.
+        if (governed.zone !== 'cross-zone') zones.add(governed.zone);
+        // Collaboration constraints are declared per context and are not negotiable by proposal.
+        if (governed.collaboration === 'no-sharing') {
+          findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: `'${ctx}' declares collaboration constraint 'no-sharing' — ${governed.zoneRationale}` });
+        } else if (governed.collaboration === 'aggregate-only') {
+          findings.push({ entity: ctx, kind: 'bounded-context', finding: `'${ctx}' may share aggregates only; a record-level agreement would breach its declared constraint` });
+        }
+        findings.push({ entity: ctx, kind: 'bounded-context', finding: `would be shared with ${partners.join(', ') || 'unnamed partners'} (${governed.zone} zone, ${governed.classification}, ${governed.collaboration})` });
         // Everything that flows INTO a shared context is shared with it, whether the proposal says
         // so or not — that is what a declared data flow means.
         for (const r of this._model.relations.filter((x) => x.to === ctx && x.kind === 'data-flow')) {

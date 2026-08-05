@@ -6651,9 +6651,12 @@ module.exports = [
       ['legislative-change', { affects: ['ministry-of-magic'] }, /does not contain/],
       ['funding-reduction', { reduceBy: 0.5 }, /not assessed as ready/],
       ['organizational-restructuring', { merge: [['Oversight Board', 'Oversight Board Secretariat']] }, /separation of duties is lost/],
-      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['investigation'] }, /UNKNOWN/],
-      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['investigation', 'intake'], zones: { investigation: 'executive', intake: 'independent' } }, /zone isolation is a constitutional invariant/],
-      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['intake'], zones: { intake: 'atlantis' } }, /not a deployment zone/],
+      // Phase 15, Part 6 closed the ADR-0009 debt: zones are declared in the context map, so the
+      // proposal no longer supplies them. A proposal that disagrees with the record blocks, and a
+      // context declaring 'no-sharing' cannot be shared by agreement.
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['intake'] }, /declares collaboration constraint 'no-sharing'/],
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['custody', 'investigation'] }, /zone isolation is a constitutional invariant/],
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['custody'], zones: { custody: 'executive' } }, /working from the wrong picture/],
       ['cross-government-collaboration', { sharing: [] }, /not a collaboration/],
       ['emergency-operations', { failed: ['intake-api'], surgeMultiplier: 50 }, /wait for a person rather than for a system/],
       ['emergency-operations', { failed: ['intake-api'], surgeMultiplier: 1 }, /constitutional service/],
@@ -6671,7 +6674,7 @@ module.exports = [
       ['funding-reduction', { reduceBy: 0 }],
       ['organizational-restructuring', { merge: [] }],
       ['staffing-growth', { additionalAuthorities: 5 }],
-      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['investigation'], zones: { investigation: 'executive' } }],
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['custody'] }],
       ['emergency-operations', { failed: ['analytics'], surgeMultiplier: 1 }],
     ];
     for (const [scenario, change] of passingCases) {
@@ -7294,6 +7297,208 @@ module.exports = [
     if (verified.authorizationStatus !== 'NOT AUTHORIZED') v.push('eighteen verified domains produced an authorization');
     if (verified.authorizes !== false || verified.derivedFromReadiness !== false) v.push('institutional readiness was allowed to imply authorization');
     if (!/does not replace human authority/.test(verified.note)) v.push('the framework no longer states that it does not replace human authority');
+  }),
+
+  // ===== PHASE 15 =================================================================================
+
+  fit('APP-FIT-ASSUMPTION-MATURITY', 'Maturity is derived and never declared, verification frequency scales with criticality, and a regression is named rather than netted off', (v) => {
+    const asm = require('../src/architecture/assumptions');
+    const DAY = 24 * 3600_000, YEAR = 365 * DAY;
+    const controls = require('./app-fitness').map((f) => ({ id: f.id, pass: true }));
+
+    // --- Six levels and four criticalities, each saying what it means and what comes next ------
+    for (const required of ['A0', 'A1', 'A2', 'A3', 'A4', 'A5']) {
+      if (!asm.MATURITY_LEVELS[required]) v.push(`maturity level '${required}' is not modelled`);
+    }
+    if (asm.MATURITY_ORDER.length !== 6) v.push('the maturity model does not have exactly six levels');
+    for (const [id, m] of Object.entries(asm.MATURITY_LEVELS)) {
+      if (!m.means || m.means.length < 25) v.push(`maturity level '${id}' does not say what it means`);
+      if (!m.next) v.push(`maturity level '${id}' does not say what the next step is — a level with no next step is a score`);
+      if (typeof m.level !== 'number') v.push(`maturity level '${id}' has no ordinal`);
+    }
+    for (const required of ['informational', 'important', 'critical', 'foundational']) {
+      if (!asm.CRITICALITY_LEVELS[required]) v.push(`criticality '${required}' is not modelled`);
+    }
+    for (const [id, c] of Object.entries(asm.CRITICALITY_LEVELS)) {
+      if (!Number.isFinite(c.verifyEveryDays) || c.verifyEveryDays <= 0) v.push(`criticality '${id}' implies no verification frequency`);
+      if (!asm.MATURITY_LEVELS[c.minimumMaturity]) v.push(`criticality '${id}' requires an unknown minimum maturity`);
+      if (!c.means || c.means.length < 25) v.push(`criticality '${id}' does not say what its consequence is`);
+    }
+    // Frequency must actually scale, or "scales with criticality" is a sentence rather than a rule.
+    if (!(asm.CRITICALITY_LEVELS.foundational.verifyEveryDays < asm.CRITICALITY_LEVELS.informational.verifyEveryDays)) {
+      v.push('a foundational assumption is not verified more often than an informational one');
+    }
+
+    // --- There is NO path that sets maturity by hand -------------------------------------------
+    const probe = new asm.AssumptionRegistry({ clock: () => 0 });
+    const base = {
+      statement: 's', rationale: 'r', evidence: ['APP-FIT-CONTEXT-MAP'], contexts: ['assurance'],
+      owner: 'ARB', reviewCadenceDays: 3650, expiresAt: 10 * YEAR, verificationMethod: 'executable-check',
+    };
+    probe.register('CLAIMED', { ...base, maturity: 'A5', criticality: 'foundational' });
+    if (probe.maturity('CLAIMED', { now: 0, controls }).maturity === 'A5') v.push('a hand-declared maturity was accepted');
+    let unknownCriticality = false;
+    try { probe.register('BAD', { ...base, criticality: 'quite-important' }); } catch (_) { unknownCriticality = true; }
+    if (!unknownCriticality) v.push('an undeclared criticality level was accepted');
+
+    // --- Every level is reachable, and each is reached by doing the thing it names -------------
+    const at = (id) => probe.maturity(id, { now: 0, controls }).maturity;
+    probe.register('A1x', { ...base, evidence: [] });
+    if (at('A1x') !== 'A1') v.push(`a registered assumption with no evidence is '${at('A1x')}', expected A1`);
+    probe.register('A2x', { ...base });
+    if (at('A2x') !== 'A2') v.push(`a registered assumption citing a holding control is '${at('A2x')}', expected A2`);
+    probe.register('A3x', { ...base });
+    probe.recordVerification('A3x', { holds: true, by: 'Independent Assurance', at: 0 });
+    if (at('A3x') !== 'A3') v.push(`one independent verification gives '${at('A3x')}', expected A3`);
+    probe.register('A4x', { ...base });
+    probe.recordVerification('A4x', { holds: true, by: 'Independent Assurance', at: 0 });
+    probe.recordVerification('A4x', { holds: true, by: 'Independent Assurance', at: 1 });
+    if (at('A4x') !== 'A5') v.push(`two independent verifications behind an executable check give '${at('A4x')}', expected A5`);
+    // A4 without an executable check behind it stops at A4 — the ceiling is the method, as everywhere.
+    probe.register('A4y', { ...base, verificationMethod: 'human-attestation' });
+    probe.recordVerification('A4y', { holds: true, by: 'Independent Assurance', at: 0 });
+    probe.recordVerification('A4y', { holds: true, by: 'Independent Assurance', at: 1 });
+    if (at('A4y') !== 'A4') v.push(`human attestation reached '${at('A4y')}' — only an executable check may reach A5`);
+
+    // --- A self-check is not independent verification -----------------------------------------
+    probe.register('SELFX', { ...base });
+    probe.recordVerification('SELFX', { holds: true, by: 'ARB', at: 0 });   // ARB is the owner
+    if (at('SELFX') !== 'A2') v.push('an owner verifying their own assumption reached A3 — a self-check is not independent verification');
+    if (!probe.maturity('SELFX', { now: 0, controls }).blockers.some((b) => /self-check/.test(b))) v.push('the self-check blocker was not named');
+
+    // --- Failing or unresolvable evidence pulls it back to A1 ---------------------------------
+    if (probe.maturity('A2x', { now: 0, controls: [{ id: 'APP-FIT-CONTEXT-MAP', pass: false }] }).maturity !== 'A1') {
+      v.push('an assumption whose cited evidence is FAILING still counted as evidence-attached');
+    }
+    if (probe.maturity('A2x', { now: 0, controls: [] }).maturity !== 'A1') v.push('an assumption whose evidence did not run still counted as evidence-attached');
+
+    // --- Expiry and cadence pull a monitored assumption back ----------------------------------
+    const ageing = new asm.AssumptionRegistry({ clock: () => 0 });
+    ageing.register('OLD', { ...base, reviewCadenceDays: 30, expiresAt: 100 * DAY });
+    ageing.recordVerification('OLD', { holds: true, by: 'Assurance', at: 0 });
+    ageing.recordVerification('OLD', { holds: true, by: 'Assurance', at: 1 });
+    if (ageing.maturity('OLD', { now: 0, controls }).maturity !== 'A5') v.push('a fresh, twice-verified, executable-checked assumption did not reach A5');
+    const lapsed = ageing.maturity('OLD', { now: 200 * DAY, controls }).maturity;
+    if (lapsed !== 'A3') v.push(`an expired assumption reported '${lapsed}' — expiry must pull it back below continuous monitoring`);
+
+    // --- THE REGRESSION RULE ------------------------------------------------------------------
+    const trend = ageing.maturityTrend([{ OLD: 'A5' }, { OLD: 'A3' }]);
+    if (trend.direction !== 'regressed') v.push('a maturity regression was not reported as one');
+    if (!trend.regressions.length || trend.regressions[0].assumption !== 'OLD') v.push('the regressing assumption was not named');
+    // And a regression is never netted off against improvements.
+    const mixed = ageing.maturityTrend([{ A: 'A5', B: 'A1', C: 'A1' }, { A: 'A2', B: 'A4', C: 'A4' }]);
+    if (mixed.direction !== 'regressed') v.push('three improvements were allowed to hide one regression — a net figure is exactly what must not happen here');
+    if (!/Reported separately/.test(mixed.reason)) v.push('the trend does not say that regressions are reported separately');
+    if (ageing.maturityTrend([{ A: 'A1' }]).direction !== 'insufficient-data') v.push('a trend was reported from one snapshot');
+    if (ageing.maturityTrend([{ A: 'A1' }, { A: 'A3' }]).direction !== 'improving') v.push('an improvement was not reported as one');
+
+    // --- Verification frequency scales with criticality automatically -------------------------
+    const sched = new asm.AssumptionRegistry({ clock: () => 0 });
+    sched.register('FOUND', { ...base, criticality: 'foundational', reviewCadenceDays: 3650 });
+    sched.register('INFO', { ...base, criticality: 'informational', reviewCadenceDays: 3650 });
+    const f = sched.verificationSchedule('FOUND', { now: 0 });
+    const i = sched.verificationSchedule('INFO', { now: 0 });
+    if (!(f.requiredCadenceDays < i.requiredCadenceDays)) v.push('the required verification cadence does not scale with criticality');
+    if (f.declaredCadenceDays === f.requiredCadenceDays) v.push('the declared and required cadences are the same field — an owner cannot then be shown to have declared one that is too slow');
+    if (!f.cadenceTooSlow) v.push('a 3650-day cadence on a foundational assumption was not reported as too slow');
+    if (!/slower than/.test(f.reason)) v.push('the schedule does not explain why the cadence is too slow');
+    if (sched.verificationSchedule('FOUND', { now: 200 * DAY }).overdue !== true) v.push('a never-verified foundational assumption was not overdue after 200 days');
+
+    // --- The estate report is a work queue, not a scoreboard -----------------------------------
+    const registry = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+    const report = registry.maturityReport({ now: 0, controls });
+    if (report.assumptions.length !== registry.ids().length) v.push('not every assumption was assessed for maturity');
+    for (const r of report.assumptions) if (!r.nextStep) v.push(`'${r.assumption}' states no next step`);
+    // Aggregated to the WEAKEST, as everywhere else.
+    const weakestLevel = report.assumptions.reduce((w, r) => (asm.MATURITY_ORDER.indexOf(r.maturity) < asm.MATURITY_ORDER.indexOf(w) ? r.maturity : w), 'A5');
+    if (report.organizationalMaturity !== weakestLevel) v.push('organizational maturity is not the weakest assumption — it has been averaged');
+    if (!/least mature/.test(report.maturityBasis)) v.push('the maturity figure travels without saying it is the weakest rather than the mean');
+    if (!report.verificationBacklog.length) v.push('a registry where nothing has been verified produced an empty verification backlog');
+    // The backlog is ordered by criticality first.
+    for (let n = 1; n < report.verificationBacklog.length; n++) {
+      const prev = asm.CRITICALITY_LEVELS[report.verificationBacklog[n - 1].criticality].rank;
+      const cur = asm.CRITICALITY_LEVELS[report.verificationBacklog[n].criticality].rank;
+      if (cur > prev) v.push('the verification backlog is not ordered with the most critical assumptions first');
+    }
+    if (!report.belowMinimum.length) v.push('no assumption is below the maturity its criticality requires, on a registry where none has been verified');
+    if (!report.criticalityLevels.length || !report.levels.length) v.push('the report does not publish its own vocabulary');
+    if (report.authorizes !== false) v.push('the maturity report claims authority');
+    // The platform's own foundational assumptions are declared as such rather than left at default.
+    const foundational = registry.all().filter((a) => a.criticality === 'foundational').map((a) => a.id);
+    if (!foundational.includes('ASM-0006')) v.push('ASM-0006 carries seven of nine assumptions and is not declared foundational');
+    if (!foundational.includes('ASM-0001')) v.push('ASM-0001 is not declared foundational though three assumptions rest on it');
+  }),
+
+  fit('APP-FIT-ZONE-GOVERNANCE', 'Every bounded context declares its zone governance, nothing is inferred, and an undeclared value refuses composition', (v) => {
+    const contextMap = require('../src/architecture/context-map');
+
+    // --- Six properties, each with a declared vocabulary and a stated reason -------------------
+    for (const required of ['zone', 'trustBoundary', 'residency', 'classification', 'failover', 'collaboration']) {
+      if (!contextMap.ZONE_PROPERTIES.some((p) => p.field === required)) v.push(`zone governance property '${required}' is not declared`);
+    }
+    if (contextMap.ZONE_PROPERTIES.length !== 6) v.push('zone governance does not declare exactly six properties');
+    for (const p of contextMap.ZONE_PROPERTIES) {
+      if (!p.set || !p.set.size) v.push(`property '${p.field}' has no declared vocabulary, so any string would be accepted`);
+      if (!p.why || p.why.length < 30) v.push(`property '${p.field}' does not say why it matters`);
+    }
+    // The three constitutional zones exist, plus `cross-zone` for what is deployed into all of them.
+    for (const z of ['independent', 'executive', 'judiciary']) if (!contextMap.ZONES.has(z)) v.push(`constitutional zone '${z}' is not a declared zone`);
+
+    // --- EVERY context declares all six, with a rationale for its zone ------------------------
+    if (contextMap.ids().length !== 30) v.push(`the platform has ${contextMap.ids().length} bounded contexts; Baseline v1.7 declares 30`);
+    for (const id of contextMap.ids()) {
+      let g = null;
+      try { g = contextMap.zoneGovernance(id); } catch (e) { v.push(`'${id}': ${e.message}`); continue; }
+      for (const p of contextMap.ZONE_PROPERTIES) {
+        if (g[p.field] === undefined || g[p.field] === null) v.push(`'${id}': declares no ${p.field}`);
+        else if (!p.set.has(g[p.field])) v.push(`'${id}': declares unknown ${p.field} '${g[p.field]}'`);
+      }
+      if (!g.zoneRationale || g.zoneRationale.length < 30) v.push(`'${id}': states no rationale for its zone placement`);
+    }
+    if (contextMap.validate().zoneGovernanceDeclared !== contextMap.ids().length) v.push('not every bounded context has zone governance declared');
+
+    // --- An undeclared or invalid value REFUSES composition -----------------------------------
+    // Fed a crafted table, so the guard is exercised without mutating the real one.
+    const crafted = (patch) => {
+      const original = { ...contextMap.ZONE_GOVERNANCE.intake };
+      Object.assign(contextMap.ZONE_GOVERNANCE.intake, patch);
+      const result = contextMap.validate();
+      Object.assign(contextMap.ZONE_GOVERNANCE.intake, original);
+      for (const k of Object.keys(patch)) if (!(k in original)) delete contextMap.ZONE_GOVERNANCE.intake[k];
+      return result;
+    };
+    if (crafted({ zone: undefined }).valid) v.push('a context with no declared zone passed validation');
+    if (crafted({ zone: 'atlantis' }).valid) v.push('a context declaring an unknown zone passed validation');
+    if (crafted({ classification: 'quite-sensitive' }).valid) v.push('a context declaring an unknown classification passed validation');
+    if (crafted({ zoneRationale: null }).valid) v.push('a zone placement with no rationale passed validation — a placement nobody can disagree with is one nobody reviewed');
+    if (!contextMap.validate().valid) v.push('restoring the declaration did not restore validity, so the probe is destructive');
+
+    // --- The debt ADR-0009 recorded is closed: the record answers the zone question ------------
+    const constitutionalZones = ['independent', 'executive', 'judiciary'];
+    for (const z of constitutionalZones) {
+      if (!contextMap.contextsInZone(z).length) v.push(`no bounded context is declared in the '${z}' zone`);
+    }
+    // Anonymous reporting is in the independent zone. This is the platform's oldest constitutional
+    // claim and it is now recorded rather than implied.
+    if (contextMap.zoneGovernance('intake').zone !== 'independent') v.push('anonymous intake is not declared in the independent zone');
+    if (contextMap.zoneGovernance('governance-oversight').zone !== 'judiciary') v.push('governance oversight is not declared in the judiciary zone');
+    if (contextMap.zoneGovernance('investigation').zone !== 'executive') v.push('investigation is not declared in the executive zone');
+    // Crossing detection works in both directions, and a cross-zone context causes no crossing.
+    if (!contextMap.crossesZoneBoundary(['intake', 'investigation']).crosses) v.push('sharing across the independent and executive zones was not reported as crossing a boundary');
+    if (contextMap.crossesZoneBoundary(['intake', 'custody']).crosses) v.push('two contexts in the same zone were reported as crossing a boundary');
+    if (contextMap.crossesZoneBoundary(['assurance', 'resilience']).crosses) v.push('two cross-zone contexts were reported as crossing a boundary');
+    if (!contextMap.crossesZoneBoundary(['intake', 'nowhere']).unknown.includes('nowhere')) v.push('an undeclared context was not reported as unknown by the crossing check');
+
+    // --- The constitutional contexts carry the strongest constraints --------------------------
+    for (const id of ['intake', 'custody', 'governance-oversight', 'identity-access', 'policy-governance', 'privacy']) {
+      const g = contextMap.zoneGovernance(id);
+      if (g.classification !== 'constitutional') v.push(`'${id}' is a constitutional context classified '${g.classification}'`);
+      if (g.residency !== 'sovereign-only') v.push(`'${id}' permits non-sovereign residency`);
+    }
+    if (contextMap.zoneGovernance('intake').collaboration !== 'no-sharing') v.push('anonymous intake permits sharing — nothing about a report may leave the platform');
+    // …and at least one context is genuinely open, or the vocabulary has one usable value.
+    if (!contextMap.zoneGovernanceAll().some((g) => g.collaboration === 'open-sharing')) v.push('no context permits open sharing, so the constraint has one setting and is not a decision');
+    if (!contextMap.zoneGovernanceAll().some((g) => g.failover === 'no-failover')) v.push('every context claims a failover, which is not true of a privacy control that must fail closed');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

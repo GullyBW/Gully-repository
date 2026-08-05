@@ -99,6 +99,48 @@ const DEPENDENCY_TYPES = {
   temporal: { description: 'The dependent holds only while a condition recorded by the upstream persists.' },
 };
 
+// --- Assumption maturity (Phase 15, Part 1) -------------------------------------------------------
+//
+// Confidence answers "how much may we rely on this?". Maturity answers a different and more
+// actionable question: "how far has this assumption been taken through the process, and what is the
+// next thing somebody has to do?" A registry can be full of low-confidence assumptions because the
+// evidence genuinely does not support more, or because nobody has done the work. Those need opposite
+// responses and confidence alone cannot tell them apart.
+//
+// Maturity is DERIVED from what is recorded, never declared. There is no `maturity` parameter on
+// `register()`, because a level somebody types in is a claim about their own diligence.
+//
+// The rule that makes it a control:
+//
+//   MATURITY MAY NOT REGRESS SILENTLY. An assumption that reaches A3 and falls back to A1 has had
+//   something taken away from it — an expiry passed, a verification failed, a control stopped
+//   running — and the registry names the regression rather than reporting the new level as though it
+//   had always been that.
+const MATURITY_LEVELS = {
+  A0: { level: 0, name: 'Undocumented', means: 'The platform relies on it and nothing records it. The state every assumption starts in before somebody writes it down.', next: 'Register it, with an owner, a rationale and an expiry.' },
+  A1: { level: 1, name: 'Documented', means: 'Registered with an owner, a rationale and an expiry. Nothing supports it yet.', next: 'Cite evidence that resolves to a control that actually runs.' },
+  A2: { level: 2, name: 'Evidence attached', means: 'Cites evidence, and the evidence resolves to a control that ran.', next: 'Have somebody independent check it and record the verification.' },
+  A3: { level: 3, name: 'Independently verified', means: 'Somebody other than the owner has checked it and recorded that it held.', next: 'Put it under a review cadence that is actually being met.' },
+  A4: { level: 4, name: 'Continuously monitored', means: 'Verified, within its review cadence, and re-checked more than once — so a change would be noticed rather than discovered.', next: 'Back it with an executable check that fails the build.' },
+  A5: { level: 5, name: 'Automatically validated', means: 'An executable check re-runs on every build and would fail if the assumption stopped holding. The only level that survives everybody leaving.', next: 'Nothing. Keep the control running.' },
+};
+const MATURITY_ORDER = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5'];
+
+// --- Assumption criticality (Phase 15, Part 7) ----------------------------------------------------
+//
+// Not every assumption deserves the same attention, and treating them alike is how the important ones
+// get lost among the trivial. Criticality is DECLARED — it is a judgement about consequence, and a
+// judgement is exactly the thing that should be arguable rather than computed — but the verification
+// frequency it implies is derived from it, so declaring something foundational commits you to
+// checking it four times a year whether or not anybody wanted to.
+const CRITICALITY_LEVELS = {
+  informational: { rank: 0, verifyEveryDays: 365, minimumMaturity: 'A1', means: 'Useful to have written down. If it turned out false, something would be slightly less accurate.' },
+  important: { rank: 1, verifyEveryDays: 180, minimumMaturity: 'A2', means: 'A capability would be degraded. Work would have to be redone.' },
+  critical: { rank: 2, verifyEveryDays: 90, minimumMaturity: 'A3', means: 'A capability would stop, or a control would be enforcing something that is no longer true.' },
+  foundational: { rank: 3, verifyEveryDays: 90, minimumMaturity: 'A4', means: 'Other assumptions rest on it. If it fails, so does everything downstream, and the failure is invisible until something else breaks.' },
+};
+const CRITICALITY_ORDER = ['informational', 'important', 'critical', 'foundational'];
+
 function confidenceRank(level) { return CONFIDENCE_LEVELS.indexOf(level); }
 // Lower rank is stronger (high = 0). "Weaker of the two" therefore takes the higher rank.
 function weaker(a, b) { return confidenceRank(a) >= confidenceRank(b) ? a : b; }
@@ -112,7 +154,7 @@ class AssumptionRegistry {
   register(id, {
     statement, rationale, evidence = [], contexts = [], owner,
     reviewCadenceDays, expiresAt, verificationMethod, confidence = 'unknown', claim = null, at = null,
-    dependsOn = [],
+    dependsOn = [], criticality = null,
   } = {}) {
     if (!id) throw new Error('an assumption needs an identifier');
     if (this._items.has(id)) throw new Error(`assumption '${id}' is already registered — amend it rather than re-registering`);
@@ -121,6 +163,11 @@ class AssumptionRegistry {
     if (!owner) { const e = new Error('an assumption must name an owner — an unowned assumption is one nobody will revisit'); e.failClosed = true; throw e; }
     if (!VERIFICATION_METHODS[verificationMethod]) throw new Error(`unknown verification method '${verificationMethod}' — one of ${Object.keys(VERIFICATION_METHODS).join(', ')}`);
     if (!CONFIDENCE_LEVELS.includes(confidence)) throw new Error(`unknown confidence level '${confidence}'`);
+    // Phase 15, Part 7. Declared, because it is a judgement about consequence — but only from the
+    // declared set, so "quite important" cannot become a criticality level by being typed.
+    // `null` means nobody has judged it, which is a different state from somebody choosing the
+    // middle — and the one that belongs in a review queue.
+    if (criticality !== null && !CRITICALITY_LEVELS[criticality]) throw new Error(`unknown criticality '${criticality}' — one of ${Object.keys(CRITICALITY_LEVELS).join(', ')}`);
     if (!Number.isFinite(reviewCadenceDays) || reviewCadenceDays <= 0) throw new Error('an assumption needs a positive review cadence in days');
     // The rule that makes the registry a control rather than a list.
     if (!Number.isFinite(expiresAt)) { const e = new Error('an assumption must have an expiry — an assumption that never expires is a belief'); e.failClosed = true; throw e; }
@@ -136,11 +183,175 @@ class AssumptionRegistry {
       evidence: [...evidence], contexts: [...contexts], owner,
       reviewCadenceDays, expiresAt, verificationMethod,
       declaredConfidence: confidence, claim: claim ? { ...claim } : null,
+      criticality,
       registeredAt, lastReviewedAt: null, lastReviewedBy: null,
       dependsOn: [],
     });
     for (const edge of dependsOn) this.declareDependency(id, edge);
     return this.describe(id);
+  }
+
+  // --- Maturity and criticality (Phase 15, Parts 1 & 7) -------------------------------------------
+
+  // Maturity, derived from what is recorded. Every level states why it was reached and what the next
+  // step is, so a maturity dashboard is a work queue rather than a score.
+  maturity(id, { now = null, controls = [] } = {}) {
+    const a = this.describe(id);
+    const t = now ?? this._clock();
+    const known = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+    const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+    const checks = this.verifications(id);
+
+    // A1: registered with the things `register()` already refuses to be without.
+    const documented = !!(a.statement && a.rationale && a.owner && Number.isFinite(a.expiresAt));
+    // A2: cites evidence that resolves to a control that actually ran and is not failing.
+    const resolved = a.evidence.filter((e) => known.has(e));
+    const failing = resolved.filter((e) => holding.get(e) === false);
+    const evidenced = documented && resolved.length > 0 && failing.length === 0;
+    // A3: somebody OTHER than the owner recorded a verification that held. The independence rule is
+    // the same one the compliance lifecycle uses for `verified`: a self-check is not verification.
+    const independent = checks.filter((c) => c.holds && c.by && c.by !== a.owner);
+    const verified = evidenced && independent.length > 0;
+    // A4: more than one check, inside the review cadence. One check is a result; two is monitoring.
+    const dueAt = (a.lastReviewedAt ?? a.registeredAt) + a.reviewCadenceDays * DAY;
+    const withinCadence = t <= dueAt && t < a.expiresAt;
+    const monitored = verified && independent.length >= 2 && withinCadence;
+    // A5: an executable check stands behind it and is currently holding.
+    const executable = monitored && a.verificationMethod === 'executable-check' && resolved.some((e) => holding.get(e) === true);
+
+    const level = executable ? 'A5' : monitored ? 'A4' : verified ? 'A3' : evidenced ? 'A2' : documented ? 'A1' : 'A0';
+    const blockers = [
+      ...(documented ? [] : ['not registered with an owner, a rationale and an expiry']),
+      ...(documented && !resolved.length ? [`cites no evidence that resolves to a control that ran${a.evidence.length ? `: ${a.evidence.join(', ')}` : ''}`] : []),
+      ...(failing.length ? [`cited evidence is failing: ${failing.join(', ')}`] : []),
+      ...(evidenced && !independent.length ? [checks.length ? 'every recorded verification was performed by the owner — a self-check is not independent verification' : 'never independently verified'] : []),
+      ...(verified && independent.length < 2 ? ['verified once; one check is a result, not monitoring'] : []),
+      ...(verified && !withinCadence ? [t >= a.expiresAt ? 'expired' : 'past its review cadence'] : []),
+      ...(monitored && a.verificationMethod !== 'executable-check' ? [`verification method '${a.verificationMethod}' cannot reach A5 — only an executable check re-runs on every build`] : []),
+    ];
+    return {
+      assumption: id, owner: a.owner, maturity: level, ...MATURITY_LEVELS[level],
+      verifications: checks.length, independentVerifications: independent.length,
+      resolvedEvidence: resolved, failingEvidence: failing,
+      withinCadence, blockers,
+      // The next concrete thing somebody has to do. A dashboard without this is a scoreboard.
+      nextStep: level === 'A5' ? MATURITY_LEVELS.A5.next : (blockers[0] || MATURITY_LEVELS[level].next),
+    };
+  }
+
+  // Criticality is declared on the assumption; anything undeclared is `important`, which is the
+  // middle and therefore the choice that flatters nobody.
+  criticality(id) {
+    const a = this.describe(id);
+    const declared = a.criticality !== null && a.criticality !== undefined;
+    // Undeclared resolves to `important` for scheduling purposes — the middle, which flatters nobody —
+    // and is reported as undeclared, because nobody having judged the consequence is itself a finding.
+    const level = declared ? a.criticality : 'important';
+    return {
+      assumption: id, criticality: level, declared,
+      ...CRITICALITY_LEVELS[level],
+      note: declared ? null : 'nobody has judged this assumption\'s consequence; `important` is the scheduling default, not an assessment',
+    };
+  }
+
+  // THE PART 7 RULE: verification frequency scales with criticality automatically. The cadence the
+  // owner declared and the cadence the criticality requires are reported separately, because an owner
+  // who declared a 365-day cadence on a foundational assumption has made a decision somebody should
+  // see rather than one the platform should silently override.
+  verificationSchedule(id, { now = null } = {}) {
+    const a = this.describe(id);
+    const t = now ?? this._clock();
+    const c = this.criticality(id);
+    const requiredDays = c.verifyEveryDays;
+    const checks = this.verifications(id);
+    const lastVerifiedAt = checks.length ? checks[checks.length - 1].at : null;
+    const dueAt = (lastVerifiedAt ?? a.registeredAt) + requiredDays * DAY;
+    return {
+      assumption: id, criticality: c.criticality, owner: a.owner,
+      declaredCadenceDays: a.reviewCadenceDays, requiredCadenceDays: requiredDays,
+      cadenceTooSlow: a.reviewCadenceDays > requiredDays,
+      lastVerifiedAt, neverVerified: lastVerifiedAt === null,
+      dueAt, overdue: t > dueAt,
+      daysOverdue: t > dueAt ? Math.floor((t - dueAt) / DAY) : 0,
+      reason: a.reviewCadenceDays > requiredDays
+        ? `declared cadence of ${a.reviewCadenceDays} days is slower than the ${requiredDays} days '${c.criticality}' requires`
+        : lastVerifiedAt === null ? `never verified; ${c.criticality} requires verification every ${requiredDays} days`
+          : t > dueAt ? `verification overdue by ${Math.floor((t - dueAt) / DAY)} days` : 'within the required verification frequency',
+    };
+  }
+
+  // The estate-wide maturity picture: distribution, the backlog, and what to do next.
+  maturityReport({ now = null, controls = [] } = {}) {
+    const t = now ?? this._clock();
+    const rows = this.ids().map((id) => ({
+      ...this.maturity(id, { now: t, controls }),
+      ...this.criticality(id),
+      schedule: this.verificationSchedule(id, { now: t }),
+    }));
+    const distribution = Object.fromEntries(MATURITY_ORDER.map((l) => [l, rows.filter((r) => r.maturity === l).length]));
+    // Aggregate to the WEAKEST, as everywhere else: an estate is as mature as its least mature
+    // foundational assumption, not as its average.
+    const foundational = rows.filter((r) => r.criticality === 'foundational');
+    const critical = rows.filter((r) => ['critical', 'foundational'].includes(r.criticality));
+    const weakest = rows.slice().sort((a, b) => MATURITY_ORDER.indexOf(a.maturity) - MATURITY_ORDER.indexOf(b.maturity) || a.assumption.localeCompare(b.assumption))[0] || null;
+    // Below the minimum its criticality demands.
+    const belowMinimum = rows.filter((r) => MATURITY_ORDER.indexOf(r.maturity) < MATURITY_ORDER.indexOf(CRITICALITY_LEVELS[r.criticality].minimumMaturity));
+    return {
+      assumptions: rows, count: rows.length,
+      levels: MATURITY_ORDER.map((l) => ({ level: l, ...MATURITY_LEVELS[l] })),
+      criticalityLevels: CRITICALITY_ORDER.map((c) => ({ criticality: c, ...CRITICALITY_LEVELS[c] })),
+      distribution,
+      // A single figure, and the sentence that has to travel with it.
+      organizationalMaturity: rows.length ? MATURITY_ORDER[Math.min(...rows.map((r) => MATURITY_ORDER.indexOf(r.maturity)))] : null,
+      maturityBasis: rows.length
+        ? `The estate is as mature as its least mature assumption, not as its average: ${weakest ? `${weakest.assumption} at ${weakest.maturity}` : 'n/a'}. ${Object.entries(distribution).filter(([, n]) => n).map(([l, n]) => `${n}×${l}`).join(', ')}.`
+        : 'no assumption is registered, which is A0 for everything the platform relies on',
+      belowMinimum: belowMinimum.map((r) => ({ assumption: r.assumption, criticality: r.criticality, maturity: r.maturity, requires: CRITICALITY_LEVELS[r.criticality].minimumMaturity, nextStep: r.nextStep })),
+      // The verification backlog, ordered by criticality then by how overdue it is. This is the
+      // Part 1 deliverable that is actually usable: a queue, not a score.
+      verificationBacklog: rows
+        .filter((r) => r.schedule.overdue || r.schedule.neverVerified)
+        .sort((a, b) => CRITICALITY_LEVELS[b.criticality].rank - CRITICALITY_LEVELS[a.criticality].rank
+          || b.schedule.daysOverdue - a.schedule.daysOverdue
+          || a.assumption.localeCompare(b.assumption))
+        .map((r) => ({ assumption: r.assumption, owner: r.owner, criticality: r.criticality, maturity: r.maturity, daysOverdue: r.schedule.daysOverdue, neverVerified: r.schedule.neverVerified, nextStep: r.nextStep })),
+      reviewPriorities: rows
+        .filter((r) => MATURITY_ORDER.indexOf(r.maturity) < MATURITY_ORDER.indexOf('A3'))
+        .sort((a, b) => CRITICALITY_LEVELS[b.criticality].rank - CRITICALITY_LEVELS[a.criticality].rank || a.assumption.localeCompare(b.assumption))
+        .map((r) => ({ assumption: r.assumption, criticality: r.criticality, maturity: r.maturity, nextStep: r.nextStep })),
+      cadenceTooSlow: rows.filter((r) => r.schedule.cadenceTooSlow).map((r) => ({ assumption: r.assumption, declared: r.schedule.declaredCadenceDays, required: r.schedule.requiredCadenceDays })),
+      foundationalCount: foundational.length, criticalCount: critical.length,
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'Maturity is derived from what is recorded; there is no parameter that sets it. Criticality is declared, because it is a judgement about consequence — but the verification frequency it implies is not negotiable, and an owner whose declared cadence is slower than their criticality requires is named rather than silently overridden.',
+    };
+  }
+
+  // Maturity over time, from snapshots the caller has kept. Regression is reported per assumption,
+  // never netted off: three improving and one regressing is not "stable".
+  maturityTrend(snapshots = []) {
+    if (snapshots.length < 2) {
+      return { snapshots: snapshots.length, direction: 'insufficient-data', regressions: [], improvements: [], reason: 'a trend needs at least two snapshots; one is a reading' };
+    }
+    const first = snapshots[0], last = snapshots[snapshots.length - 1];
+    const idx = (m) => MATURITY_ORDER.indexOf(m);
+    const ids = [...new Set([...Object.keys(first), ...Object.keys(last)])].sort();
+    const moves = ids.map((id) => ({
+      assumption: id, from: first[id] || 'A0', to: last[id] || 'A0',
+      delta: idx(last[id] || 'A0') - idx(first[id] || 'A0'),
+    }));
+    const regressions = moves.filter((m) => m.delta < 0);
+    const improvements = moves.filter((m) => m.delta > 0);
+    return {
+      snapshots: snapshots.length, moves,
+      regressions, improvements,
+      // Regression is reported on its own terms. A net figure would let one assumption falling out of
+      // continuous monitoring disappear behind three being written down.
+      direction: regressions.length ? 'regressed' : improvements.length ? 'improving' : 'flat',
+      reason: regressions.length
+        ? `${regressions.length} assumption(s) regressed: ${regressions.map((r) => `${r.assumption} ${r.from}→${r.to}`).join(', ')}. Reported separately from the ${improvements.length} that improved, because a net figure would hide it.`
+        : improvements.length ? `${improvements.length} assumption(s) improved and none regressed` : 'no assumption changed maturity level',
+      informationalOnly: true, authorizes: false,
+    };
   }
 
   // --- Part 1: the dependency graph ---------------------------------------------------------------
@@ -616,6 +827,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Office of the Chief Architect', reviewCadenceDays: 180, expiresAt: at + 2 * YEAR,
     verificationMethod: 'executable-check', confidence: 'moderate',
     claim: { subject: 'declared-dependencies-complete', predicate: 'holds' },
+    criticality: 'foundational',
   });
   add('ASM-0002', {
     statement: 'An investigator\'s session remains pinned for the duration of a case edit.',
@@ -624,6 +836,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Directorate on Corruption and Economic Crime', reviewCadenceDays: 180, expiresAt: at + YEAR,
     verificationMethod: 'operational-observation', confidence: 'moderate',
     claim: { subject: 'investigator-session-affinity', predicate: 'holds' },
+    criticality: 'important',
   });
   add('ASM-0003', {
     statement: 'Analytics dashboards are read within a session rather than by anonymous polling.',
@@ -632,6 +845,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Data Governance Board', reviewCadenceDays: 180, expiresAt: at + YEAR,
     verificationMethod: 'operational-observation', confidence: 'low',
     claim: { subject: 'analytics-session-scoped-reads', predicate: 'holds' },
+    criticality: 'informational',
   });
   add('ASM-0004', {
     statement: 'Case throughput is a usable proxy for whether citizens can file reports.',
@@ -640,6 +854,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Service Delivery Board', reviewCadenceDays: 90, expiresAt: at + YEAR,
     verificationMethod: 'operational-observation', confidence: 'low',
     claim: { subject: 'throughput-proxies-reporting-availability', predicate: 'holds' },
+    criticality: 'critical',
   });
   add('ASM-0005', {
     statement: 'The synthetic service topology reflects the shape of the production deployment.',
@@ -648,6 +863,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Operations Review Board', reviewCadenceDays: 90, expiresAt: at + YEAR,
     verificationMethod: 'human-attestation', confidence: 'low',
     claim: { subject: 'topology-matches-production', predicate: 'holds' },
+    criticality: 'critical',
   });
   add('ASM-0006', {
     statement: 'A fitness identifier names exactly one control, and the control it names is the one it checks.',
@@ -656,6 +872,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Architecture Review Board', reviewCadenceDays: 180, expiresAt: at + 2 * YEAR,
     verificationMethod: 'executable-check', confidence: 'moderate',
     claim: { subject: 'fitness-identifier-names-one-control', predicate: 'holds' },
+    criticality: 'foundational',
   });
   add('ASM-0007', {
     statement: 'Replica staleness is proportional to sequence lag at roughly one second per sequence.',
@@ -664,6 +881,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Operations Review Board', reviewCadenceDays: 180, expiresAt: at + YEAR,
     verificationMethod: 'unverifiable', confidence: 'low',
     claim: { subject: 'lag-to-staleness-ratio', predicate: 'equals', value: 1000 },
+    criticality: 'important',
   });
   add('ASM-0009', {
     statement: 'A custody hand-over is always witnessed by a second person, and the witness is recorded.',
@@ -672,6 +890,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Directorate of Forensic Services', reviewCadenceDays: 90, expiresAt: at + YEAR,
     verificationMethod: 'human-attestation', confidence: 'low',
     claim: { subject: 'custody-handover-witnessed', predicate: 'holds' },
+    criticality: 'critical',
   });
   add('ASM-0008', {
     statement: 'The platform can continue to meet its requirements with zero runtime dependencies.',
@@ -680,6 +899,7 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     owner: 'Architecture Review Board', reviewCadenceDays: 365, expiresAt: at + 2 * YEAR,
     verificationMethod: 'executable-check', confidence: 'moderate',
     claim: { subject: 'zero-runtime-dependencies-sufficient', predicate: 'holds' },
+    criticality: 'important',
   });
 
   // PHASE 14, PART 1: the dependencies between these assumptions, declared after every one exists
@@ -714,5 +934,6 @@ module.exports = {
   AssumptionRegistry, seedPlatformAssumptions,
   CONFIDENCE_LEVELS, VERIFICATION_METHODS, PREDICATES,
   DEPENDENCY_STRENGTHS, DEPENDENCY_TYPES,
+  MATURITY_LEVELS, MATURITY_ORDER, CRITICALITY_LEVELS, CRITICALITY_ORDER,
   confidenceRank, weaker, softened, contradicts,
 };
