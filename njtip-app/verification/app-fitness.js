@@ -5061,10 +5061,15 @@ module.exports = [
 
     // --- Part 18: an unmeasured layer breaks the correlation ----------------------------------
     const noLayers = bus.operationalIntelligence({});
-    if (noLayers.correlationValid) v.push('a correlation was carried across six unmeasured layers');
-    if (noLayers.unmeasured.length !== bus.OPERATIONAL_LAYERS.length) v.push('unmeasured operational layers were not all reported');
+    if (noLayers.correlationValid) v.push('a correlation was carried across unmeasured layers');
+    // Phase 14, Part 9 extended the chain to eight layers plus a cross-cutting one.
+    if (noLayers.unmeasured.length !== bus.OPERATIONAL_LAYERS.length + bus.CROSS_CUTTING_LAYERS.length) v.push('unmeasured operational layers were not all reported');
     if (!/correlation between one thing and an assumption/.test(noLayers.note)) v.push('the operational chain does not say what a gap costs');
-    const full = bus.operationalIntelligence({ infrastructure: { degraded: ['kms'] }, applicationBehaviour: {}, businessMetrics: { backlog: 12 }, missionOutcomes: {}, governance: { overdueReviews: ['intake'] } });
+    const full = bus.operationalIntelligence({
+      infrastructure: { degraded: ['kms'] }, applicationBehaviour: {}, businessMetrics: { backlog: 12 },
+      missionOutcomes: { custodyIntact: true }, governance: { overdueReviews: ['intake'], unattributedDecisions: [] },
+      institutionalOutcomes: { mandatesDeliverable: true },
+    });
     if (!full.chainComplete) v.push('a fully measured operational chain was reported incomplete');
     if (!full.recommendations.length) v.push('a degraded estate produced no operational recommendation');
     for (const r of full.recommendations) if (!r.falsifiedBy || !r.from) v.push('an operational recommendation states nothing that would falsify it');
@@ -6529,6 +6534,241 @@ module.exports = [
     if (!drift.clean) for (const f of drift.structural) v.push(`architecture drift (${f.classification}/${f.direction}): ${f.subject} — ${f.detail}`);
     if (drift.blockingCount !== drift.findings.filter((f) => dp.DRIFT_CLASSES[f.classification].blocksBuild).length) v.push('the blocking count does not agree with the classifications');
     if (drift.authorizes !== false) v.push('the classified drift report claims authority');
+  }),
+
+  fit('APP-FIT-PUBLIC-TRUST', 'The trust chain reaches public trust, and a derived indicator never presents itself as a measurement of what people believe', (v) => {
+    const bus = require('../src/observability/business');
+
+    // --- Eight chain layers, plus governance-performance as cross-cutting ---------------------
+    for (const required of ['infrastructure', 'application-behaviour', 'business-process', 'mission-outcome', 'citizen-experience', 'institutional-outcome', 'government-objective', 'public-trust']) {
+      if (!bus.OPERATIONAL_LAYERS.includes(required)) v.push(`operational layer '${required}' is not in the correlation chain`);
+    }
+    if (bus.OPERATIONAL_LAYERS.length !== 8) v.push('the operational correlation chain does not have exactly eight layers');
+    if (!bus.CROSS_CUTTING_LAYERS.includes('governance-performance')) v.push('governance-performance was dropped rather than being kept as a cross-cutting layer');
+    if (bus.OPERATIONAL_LAYERS.includes('governance-performance')) v.push('governance-performance is modelled as a link in the chain, which puts it in an order that is not true');
+
+    // --- Every indicator states what it is and what it is not ---------------------------------
+    for (const [id, i] of Object.entries(bus.TRUST_INDICATORS)) {
+      if (!i.question || !i.question.endsWith('?')) v.push(`trust indicator '${id}' states no question`);
+      if (!i.derivedFrom) v.push(`trust indicator '${id}' does not say where it comes from`);
+      if (!i.whyItBearsOnTrust || i.whyItBearsOnTrust.length < 30) v.push(`trust indicator '${id}' does not say why it bears on trust`);
+      if (!i.ifAbsent) v.push(`trust indicator '${id}' does not say what its absence would mean`);
+    }
+    if (Object.keys(bus.TRUST_INDICATORS).length < 4) v.push('fewer than four leading indicators — the composite would rest on almost nothing');
+
+    // --- THE RULE THIS EXISTS FOR: never a measurement of trust -------------------------------
+    const green = {
+      infrastructure: { degraded: [] }, applicationBehaviour: {}, businessMetrics: { backlog: 0 },
+      missionOutcomes: { custodyIntact: true }, governance: { overdueReviews: [], unattributedDecisions: [] },
+      institutionalOutcomes: { mandatesDeliverable: true },
+    };
+    const best = bus.publicTrustIndicators(green);
+    if (best.measuresTrust !== false) v.push('the trust report claims to measure trust');
+    for (const i of best.indicators) if (i.measuresTrust !== false || i.derived !== true) v.push(`indicator '${i.indicator}' does not declare that it is derived and does not measure trust`);
+    if (!best.whatWouldMeasureIt || !/decided not to/.test(best.whatWouldMeasureIt)) v.push('the report does not say what would actually measure trust, including the people it cannot reach');
+    if (typeof best.composite !== 'string') v.push('the composite is a number — a trust score is the most consequential invention this platform could make');
+    if (best.composite !== 'warranted') v.push('a fully favourable estate did not report trust as warranted, so the indicator can only ever be bad');
+    if (!/may still not trust/.test(best.basis)) v.push('a favourable reading does not acknowledge that citizens may still not trust the institution');
+
+    // --- Unknown is never favourable ----------------------------------------------------------
+    const partial = bus.publicTrustIndicators({ infrastructure: { degraded: [] }, businessMetrics: { backlog: 0 } });
+    if (partial.composite !== 'unknown') v.push('a partially measured trust picture was reported as something other than unknown');
+    if (partial.assessable) v.push('a partial picture reported itself assessable');
+    if (!partial.unmeasured.length) v.push('unmeasured indicators were not named');
+    if (bus.publicTrustIndicators({}).composite !== 'unknown') v.push('an entirely unmeasured estate did not report unknown');
+
+    // --- And an unfavourable estate says so, without softening --------------------------------
+    const bad = bus.publicTrustIndicators({
+      infrastructure: { degraded: ['intake-api'] }, businessMetrics: { backlog: 40 },
+      missionOutcomes: { custodyIntact: false }, governance: { unattributedDecisions: ['d1'] },
+      institutionalOutcomes: { mandatesDeliverable: false },
+    });
+    if (bad.composite !== 'not-warranted') v.push('an estate where a citizen cannot report and evidence is not intact still reported trust as warranted');
+    if (bad.declining.length !== Object.keys(bus.TRUST_INDICATORS).length) v.push('not every failing indicator was named as declining');
+    if (!/conditions, not about opinion/.test(bad.basis)) v.push('an unfavourable reading does not distinguish conditions from opinion');
+
+    // --- The chain carries it, and an unmeasured layer still breaks the correlation ------------
+    const full = bus.operationalIntelligence(green);
+    if (!full.chainComplete || !full.correlationValid) v.push('a fully measured estate did not produce a valid correlation');
+    if (full.publicTrust.composite !== 'warranted') v.push('the chain did not carry the derived trust indicator');
+    const none = bus.operationalIntelligence({});
+    if (none.correlationValid) v.push('an entirely unmeasured chain reported a valid correlation');
+    if (none.unmeasured.length !== bus.OPERATIONAL_LAYERS.length + bus.CROSS_CUTTING_LAYERS.length) v.push('not every unmeasured layer was reported');
+    // A declining indicator produces a recommendation, and it names what would falsify it.
+    const declining = bus.operationalIntelligence({ ...green, missionOutcomes: { custodyIntact: false } });
+    const rec = declining.recommendations.find((r) => r.from === 'public-trust');
+    if (!rec) v.push('a declining trust indicator produced no recommendation');
+    else if (!rec.falsifiedBy) v.push('the public-trust recommendation cannot be argued with, which makes it an instruction');
+    if (full.authorizes !== false) v.push('the operational intelligence report claims authority');
+  }),
+
+  fit('APP-FIT-STRATEGIC-SCENARIOS', 'The twin rehearses institutional change, and every strategic scenario can produce a blocking finding without touching the baseline', (v) => {
+    const twinMod = require('../src/twin2/operations-twin');
+    const asm = require('../src/architecture/assumptions');
+    const own = require('../src/governance/ownership');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const STRATEGIC = ['policy-reform', 'legislative-change', 'funding-reduction', 'organizational-restructuring', 'staffing-growth', 'cross-government-collaboration', 'emergency-operations'];
+    for (const s of STRATEGIC) if (!twinMod.SCENARIOS[s]) v.push(`strategic scenario '${s}' is not modelled`);
+    // Every one carries the same metadata every other scenario must.
+    for (const s of STRATEGIC) {
+      const spec = twinMod.SCENARIOS[s];
+      if (!spec) continue;
+      try { twinMod.assertDeclaredMetadata(s, spec); } catch (e) { v.push(`scenario '${s}': ${e.message}`); }
+      if (!twinMod.ENTITY_KINDS[spec.perturbs]) v.push(`scenario '${s}' perturbs '${spec.perturbs}', which is not a modelled entity kind`);
+    }
+
+    const registry = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+    const twin = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), assumptions: registry, clock: () => 0 });
+    const run = (scenario, change) => twin.simulate({ scenario, change, now: 0, controls });
+
+    // --- Each scenario must be able to BLOCK, or it is a rehearsal that always passes ----------
+    const blockingCases = [
+      ['policy-reform', { reforms: { analytics: 'eventual' } }, /cites no ADR/],
+      ['policy-reform', { reforms: { analytics: 'eventual' }, adr: 'ADR-0007' }, /inherit a weaker guarantee/],
+      ['legislative-change', { affects: ['investigation'], requiresControls: ['APP-FIT-DOES-NOT-EXIST'] }, /does not exist/],
+      ['legislative-change', { affects: [] }, /names no bounded context/],
+      ['legislative-change', { affects: ['ministry-of-magic'] }, /does not contain/],
+      ['funding-reduction', { reduceBy: 0.5 }, /not assessed as ready/],
+      ['organizational-restructuring', { merge: [['Oversight Board', 'Oversight Board Secretariat']] }, /separation of duties is lost/],
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['investigation'] }, /UNKNOWN/],
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['investigation', 'intake'], zones: { investigation: 'executive', intake: 'independent' } }, /zone isolation is a constitutional invariant/],
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['intake'], zones: { intake: 'atlantis' } }, /not a deployment zone/],
+      ['cross-government-collaboration', { sharing: [] }, /not a collaboration/],
+      ['emergency-operations', { failed: ['intake-api'], surgeMultiplier: 50 }, /wait for a person rather than for a system/],
+      ['emergency-operations', { failed: ['intake-api'], surgeMultiplier: 1 }, /constitutional service/],
+    ];
+    for (const [scenario, change, expected] of blockingCases) {
+      const r = run(scenario, change);
+      if (!r.blocking.length) { v.push(`'${scenario}' produced no blocking finding for a change that should be refused: ${JSON.stringify(change)}`); continue; }
+      if (!r.blocking.some((f) => expected.test(f.finding))) v.push(`'${scenario}' blocked for the wrong reason: ${r.blocking.map((f) => f.finding).join(' | ').slice(0, 200)}`);
+    }
+
+    // --- …and each must be able to PASS, or it is a check nobody can satisfy -------------------
+    const passingCases = [
+      ['policy-reform', { reforms: {}, adr: 'ADR-0007' }],
+      ['legislative-change', { affects: ['investigation'], requiresControls: ['APP-FIT-CONTEXT-MAP'] }],
+      ['funding-reduction', { reduceBy: 0 }],
+      ['organizational-restructuring', { merge: [] }],
+      ['staffing-growth', { additionalAuthorities: 5 }],
+      ['cross-government-collaboration', { partners: ['Auditor General'], sharing: ['investigation'], zones: { investigation: 'executive' } }],
+      ['emergency-operations', { failed: ['analytics'], surgeMultiplier: 1 }],
+    ];
+    for (const [scenario, change] of passingCases) {
+      const r = run(scenario, change);
+      if (r.blocking.length) v.push(`'${scenario}' blocked an acceptable change: ${r.blocking.map((f) => f.finding).join(' | ').slice(0, 200)}`);
+      if (!r.safe) v.push(`'${scenario}' did not report an acceptable change as safe`);
+    }
+
+    // --- Growth does not close a single-person dependency -------------------------------------
+    const DAY = 24 * 3600_000, NOW = 400 * DAY;
+    const availability = new own.AvailabilityRegister({ clock: () => NOW });
+    const activity = new own.ActivityRegister({ clock: () => NOW });
+    const trainingReg = new own.TrainingRegister({ clock: () => NOW });
+    const exercises = new own.ExerciseRegister({ clock: () => NOW });
+    const continuity = own.knowledgeContinuity({ availability, activity, training: trainingReg, exercises, now: NOW });
+    const growth = run('staffing-growth', { additionalAuthorities: 20, continuity });
+    const spof = growth.findings.find((f) => f.entity === 'single-person-dependencies');
+    if (!spof) v.push('the staffing-growth scenario says nothing about single-person dependencies, which is the thing headcount is assumed to fix');
+    else if (!/before growth, and \d+ after it/.test(spof.finding)) v.push('growth was allowed to appear to close a single-person dependency');
+    // With no continuity assessment, it says unknown rather than nothing.
+    if (!/UNKNOWN/.test(run('staffing-growth', { additionalAuthorities: 20 }).findings.find((f) => f.entity === 'single-person-dependencies').finding)) {
+      v.push('with no continuity evidence the growth scenario did not report the number as unknown');
+    }
+
+    // --- Isolation, confidence and authority hold for every strategic scenario -----------------
+    for (const s of STRATEGIC) {
+      const r = run(s, {});
+      if (r.isolation.unchanged !== true) v.push(`scenario '${s}' mutated the baseline model`);
+      if (r.authorizes !== false) v.push(`scenario '${s}' claims authority`);
+      if (!r.confidenceDimensions || Object.keys(r.confidenceDimensions).length !== 6) v.push(`scenario '${s}' does not carry its six confidence dimensions`);
+      if (!r.limitations.length || !r.assumptions.length) v.push(`scenario '${s}' ran without declared assumptions or limitations`);
+    }
+    // Determinism: the same strategic change simulated twice gives the same findings.
+    const a = run('funding-reduction', { reduceBy: 0.4 });
+    const b = run('funding-reduction', { reduceBy: 0.4 });
+    if (JSON.stringify(a.findings) !== JSON.stringify(b.findings)) v.push('a strategic simulation is not deterministic');
+  }),
+
+  fit('APP-FIT-INSTITUTIONAL-LEARNING', 'A corrected incident is not a learned one, and learning is only claimed when training was demonstrated afterwards', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const own = require('../src/governance/ownership');
+    const DAY = 24 * 3600_000;
+
+    // --- The nine-stage chain, each stage saying what evidences it and what its absence means --
+    for (const required of ['incident', 'investigation', 'root-cause', 'corrective-action', 'verification', 'governance-update', 'adr', 'training', 'future-readiness']) {
+      if (!inst.LEARNING_STAGES[required]) v.push(`learning stage '${required}' is not modelled`);
+    }
+    if (Object.keys(inst.LEARNING_STAGES).length !== 9) v.push('the learning chain does not have exactly nine stages');
+    for (const [id, s] of Object.entries(inst.LEARNING_STAGES)) {
+      if (!s.evidencedBy) v.push(`learning stage '${id}' says nothing about what evidences it`);
+      if (!s.meansIfAbsent) v.push(`learning stage '${id}' does not say what its absence means`);
+    }
+
+    // --- With no register at all, learning is UNKNOWN, not zero and not fine -------------------
+    const blind = inst.institutionalLearning({});
+    if (blind.learningRate !== null) v.push('a learning rate was computed with no improvement register');
+    if (blind.measurable) v.push('learning reported itself measurable with nothing to measure');
+    if (!/UNKNOWN/.test(blind.note)) v.push('an unmeasurable estate did not say the answer is unknown');
+
+    // --- A corrected incident with nobody trained is CORRECTED-NOT-LEARNED --------------------
+    const loop = new inst.ImprovementLoop({ clock: () => 0 });
+    const imp = loop.observe({ control: 'APP-FIT-X', detail: 'a control failed', observedBy: 'CI', at: 10 * DAY });
+    loop.advance(imp.id, 'root-caused', { by: 'Eng', detail: 'the cause, not the symptom', at: 11 * DAY });
+    loop.advance(imp.id, 'action-agreed', { by: 'ARB', detail: 'the plan', at: 12 * DAY });
+    loop.advance(imp.id, 'decided', { by: 'ARB', detail: 'agreed', adr: 'ADR-0005', at: 13 * DAY });
+    loop.advance(imp.id, 'verified', { by: 'CI', detail: 'holds', controls: [{ id: 'APP-FIT-X', pass: true }], at: 14 * DAY });
+
+    const training = new own.TrainingRegister({ clock: () => 0 });
+    const exercises = new own.ExerciseRegister({ clock: () => 0 });
+    const correctedOnly = inst.institutionalLearning({ loop, training, exercises, controls: [{ id: 'APP-FIT-X', pass: true }], now: 100 * DAY });
+    if (correctedOnly.correctionRate !== 1) v.push('a verified fix was not counted as a correction');
+    if (correctedOnly.learningRate !== 0) v.push('an incident with nobody trained afterwards was counted as learned');
+    if (!correctedOnly.correctedNotLearned.includes(imp.id)) v.push('a corrected-but-not-learned incident was not named as one');
+    if (correctedOnly.incidents[0].state !== 'corrected-not-learned') v.push('the incident state does not distinguish correction from learning');
+    if (!/repairs the same class of failure repeatedly/.test(correctedOnly.note)) v.push('the report does not say why correction without learning is the failure worth catching');
+
+    // --- Training BEFORE the incident is not a response to it ---------------------------------
+    const stale = new own.TrainingRegister({ clock: () => 0 });
+    stale.recordCompletion({ person: 'Somebody', course: Object.values(own.REQUIRED_TRAINING)[0][0], at: 1 * DAY, by: 'Registrar' });
+    const beforeOnly = inst.institutionalLearning({ loop, training: stale, exercises, controls: [{ id: 'APP-FIT-X', pass: true }], now: 100 * DAY });
+    if (beforeOnly.learningRate !== 0) v.push('training completed BEFORE the incident was counted as a response to it');
+
+    // --- Training with no rehearsal behind it is a certificate --------------------------------
+    const taught = new own.TrainingRegister({ clock: () => 0 });
+    taught.recordCompletion({ person: 'Somebody', course: Object.values(own.REQUIRED_TRAINING)[0][0], at: 20 * DAY, by: 'Registrar' });
+    const untested = inst.institutionalLearning({ loop, training: taught, exercises, controls: [{ id: 'APP-FIT-X', pass: true }], now: 100 * DAY });
+    if (untested.learningRate !== 0) v.push('training with no rehearsal behind it was counted as learning');
+    if (untested.incidents[0].stages['future-readiness'].reached) v.push('future readiness was reached with no rehearsal recorded');
+
+    // --- And the full chain DOES reach 'learned', or nothing could ever satisfy this ----------
+    const rehearsed = new own.ExerciseRegister({ clock: () => 0 });
+    rehearsed.recordParticipation({ person: 'Somebody', exercise: Object.keys(own.EXERCISE_KINDS)[0], at: 30 * DAY, by: 'ORB', role: 'operationalOwner' });
+    const full = inst.institutionalLearning({ loop, training: taught, exercises: rehearsed, controls: [{ id: 'APP-FIT-X', pass: true }], now: 100 * DAY });
+    if (full.learningRate !== 1) v.push('a fully evidenced chain — fixed, taught, then demonstrated — was not counted as learned');
+    if (!full.learned.includes(imp.id)) v.push('the learned incident was not named');
+    if (full.incidents[0].missing.length) v.push(`a fully learned incident still reports missing stages: ${full.incidents[0].missing.join(', ')}`);
+    if (!full.measurable) v.push('a fully evidenced estate did not report itself measurable');
+    if (full.weakestStage !== null) v.push('a complete chain still named a weakest stage');
+
+    // --- A rehearsal BEFORE the training does not count -------------------------------------
+    const early = new own.ExerciseRegister({ clock: () => 0 });
+    early.recordParticipation({ person: 'Somebody', exercise: Object.keys(own.EXERCISE_KINDS)[0], at: 15 * DAY, by: 'ORB', role: 'operationalOwner' });
+    if (inst.institutionalLearning({ loop, training: taught, exercises: early, controls: [{ id: 'APP-FIT-X', pass: true }], now: 100 * DAY }).learningRate !== 0) {
+      v.push('a rehearsal that happened before the training was counted as demonstrating it');
+    }
+
+    // --- An open incident is neither corrected nor learned, and the weakest stage is named ----
+    const openLoop = new inst.ImprovementLoop({ clock: () => 0 });
+    openLoop.observe({ control: 'APP-FIT-Y', detail: 'failed', observedBy: 'CI', at: 1 * DAY });
+    const open = inst.institutionalLearning({ loop: openLoop, training, exercises, controls: [], now: 100 * DAY });
+    if (open.correctionRate !== 0 || open.learningRate !== 0) v.push('an unfixed incident was counted as corrected or learned');
+    if (open.incidents[0].state !== 'open') v.push('an unfixed incident was not reported as open');
+    if (!open.weakestStage) v.push('an estate with a broken learning chain did not name where it breaks');
+    if (open.authorizes !== false) v.push('the institutional learning report claims authority');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

@@ -245,6 +245,120 @@ class ImprovementLoop {
   }
 }
 
+// --- Institutional learning (Phase 14, Part 18) ---------------------------------------------------
+//
+//   Incident → Investigation → Root Cause → Corrective Action → Verification →
+//   Governance Update → ADR → Training → Future Readiness
+//
+// The improvement loop already closes the first six links, and closing them is a CORRECTION. It is
+// not learning. An institution that fixes the same class of problem three times has corrected three
+// times and learned nothing, and every metric in a normal improvement dashboard would show it doing
+// well — closure rate 100%, mean time to close falling.
+//
+// The distinction this module insists on:
+//
+//   A CORRECTION CHANGES THE SYSTEM. LEARNING CHANGES WHAT THE PEOPLE CAN DO NEXT TIME.
+//
+// So the chain does not end at verification. It ends at future readiness, and readiness only counts
+// when somebody was trained AFTER the incident and then demonstrated it in a rehearsal. Training
+// booked before the incident is not a response to it, and training with no rehearsal behind it is a
+// certificate.
+const LEARNING_STAGES = {
+  incident: { from: 'improvement loop', evidencedBy: 'a control that ran and failed', meansIfAbsent: 'Nothing to learn from — or nothing anybody recorded.' },
+  investigation: { from: 'improvement loop', evidencedBy: 'the root-caused stage, with a named investigator', meansIfAbsent: 'The failure was noticed and not looked into.' },
+  'root-cause': { from: 'improvement loop', evidencedBy: 'the recorded cause, distinct from the symptom', meansIfAbsent: 'The symptom was treated.' },
+  'corrective-action': { from: 'improvement loop', evidencedBy: 'the action-agreed stage', meansIfAbsent: 'A cause was found and nothing was decided about it.' },
+  verification: { from: 'improvement loop', evidencedBy: 'the control that originally failed, now passing', meansIfAbsent: 'A fix nobody checked.' },
+  'governance-update': { from: 'improvement loop', evidencedBy: 'a decision recorded at the decided stage', meansIfAbsent: 'The system changed and the rules governing it did not.' },
+  adr: { from: 'improvement loop', evidencedBy: 'the ADR cited when the corrective action was decided', meansIfAbsent: 'An architectural change nobody decided.' },
+  training: { from: 'the training register', evidencedBy: 'a completion recorded AFTER the incident', meansIfAbsent: 'The system knows something the people operating it do not.' },
+  'future-readiness': { from: 'the exercise register', evidencedBy: 'a rehearsal AFTER the training', meansIfAbsent: 'People were told, and nobody has seen them do it.' },
+};
+
+function institutionalLearning({ loop = null, training = null, exercises = null, controls = [], now = 0 } = {}) {
+  if (!loop) {
+    return {
+      incidents: [], count: 0, stages: Object.entries(LEARNING_STAGES).map(([id, s]) => ({ stage: id, ...s })),
+      learningRate: null, correctionRate: null, measurable: false,
+      corrected: [], learned: [], correctedNotLearned: [],
+      note: 'No improvement register was supplied, so whether this institution learns anything is UNKNOWN. That is not the same as it learning nothing, and it is certainly not the same as it learning.',
+      informationalOnly: true, authorizes: false,
+    };
+  }
+  const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+  const completions = training ? training.completions() : [];
+  const participation = exercises ? exercises.participation() : [];
+
+  const rows = loop.items().map((i) => {
+    const at = (stage) => { const h = i.history.find((x) => x.stage === stage); return h ? h.at : null; };
+    const reached = (stage) => at(stage) !== null;
+    const verifiedAt = at('verified');
+
+    // Training must come AFTER the incident, or it was not a response to it.
+    const trainedAfter = completions.filter((c) => c.at > i.at);
+    // Readiness must come after the training, or nobody has seen it done.
+    const earliestTraining = trainedAfter.length ? Math.min(...trainedAfter.map((c) => c.at)) : null;
+    const rehearsedAfter = earliestTraining === null ? [] : participation.filter((p) => p.at > earliestTraining && p.outcome === 'completed');
+
+    const stages = {
+      incident: { reached: true, detail: `${i.control} failed: ${i.detail}` },
+      investigation: { reached: reached('root-caused'), detail: reached('root-caused') ? `investigated by ${i.history.find((x) => x.stage === 'root-caused').by}` : LEARNING_STAGES.investigation.meansIfAbsent },
+      'root-cause': { reached: reached('root-caused'), detail: reached('root-caused') ? i.history.find((x) => x.stage === 'root-caused').detail : LEARNING_STAGES['root-cause'].meansIfAbsent },
+      'corrective-action': { reached: reached('action-agreed'), detail: reached('action-agreed') ? i.history.find((x) => x.stage === 'action-agreed').detail : LEARNING_STAGES['corrective-action'].meansIfAbsent },
+      verification: { reached: reached('verified') && holding.get(i.control) !== false, detail: reached('verified') ? `${i.control} is passing` : LEARNING_STAGES.verification.meansIfAbsent },
+      'governance-update': { reached: reached('decided'), detail: reached('decided') ? `decided by ${i.history.find((x) => x.stage === 'decided').by}` : LEARNING_STAGES['governance-update'].meansIfAbsent },
+      adr: { reached: !!i.adr, detail: i.adr || LEARNING_STAGES.adr.meansIfAbsent },
+      training: { reached: trainedAfter.length > 0, detail: trainedAfter.length ? `${trainedAfter.length} completion(s) recorded after the incident` : LEARNING_STAGES.training.meansIfAbsent },
+      'future-readiness': { reached: rehearsedAfter.length > 0, detail: rehearsedAfter.length ? `${rehearsedAfter.length} rehearsal(s) completed after the training` : LEARNING_STAGES['future-readiness'].meansIfAbsent },
+    };
+    const missing = Object.entries(stages).filter(([, s]) => !s.reached).map(([id]) => id);
+    // Corrected: the system was changed and the change was verified.
+    const corrected = stages.verification.reached;
+    // Learned: and the people can do something different next time, demonstrated rather than told.
+    const learned = corrected && stages.training.reached && stages['future-readiness'].reached;
+    return {
+      id: i.id, control: i.control, openedAt: i.at, verifiedAt,
+      stages, missing,
+      corrected, learned,
+      // The row that matters. Everything else is a percentage.
+      state: learned ? 'learned' : corrected ? 'corrected-not-learned' : 'open',
+      why: learned ? 'the system changed, people were trained afterwards, and the training was demonstrated in a rehearsal'
+        : corrected ? `the system was fixed and nothing shows the institution can do better next time — missing: ${missing.join(', ')}`
+          : `not yet corrected — missing: ${missing.join(', ')}`,
+    };
+  });
+
+  const corrected = rows.filter((r) => r.corrected);
+  const learned = rows.filter((r) => r.learned);
+  const correctedNotLearned = rows.filter((r) => r.corrected && !r.learned);
+  return {
+    incidents: rows, count: rows.length,
+    stages: Object.entries(LEARNING_STAGES).map(([id, s]) => ({ stage: id, ...s })),
+    chain: Object.keys(LEARNING_STAGES),
+    corrected: corrected.map((r) => r.id), learned: learned.map((r) => r.id),
+    correctedNotLearned: correctedNotLearned.map((r) => r.id),
+    correctionRate: rows.length ? +(corrected.length / rows.length).toFixed(4) : null,
+    // The number a normal improvement dashboard does not have, and the only one that distinguishes
+    // an institution that improves from one that repeatedly repairs.
+    learningRate: rows.length ? +(learned.length / rows.length).toFixed(4) : null,
+    measurable: rows.length > 0 && training !== null && exercises !== null,
+    unmeasurable: [
+      ...(training === null ? ['no training register was supplied — whether anybody was taught anything is unknown'] : []),
+      ...(exercises === null ? ['no exercise register was supplied — whether anybody has demonstrated it is unknown'] : []),
+      ...(rows.length === 0 ? ['no incident has been recorded, so there is nothing to have learned from'] : []),
+    ],
+    // Where the chain most often breaks, counted rather than guessed. This says what to fix about
+    // how the institution learns, rather than about any one incident.
+    weakestStage: (() => {
+      const counts = Object.keys(LEARNING_STAGES).map((s) => ({ stage: s, missing: rows.filter((r) => r.missing.includes(s)).length }));
+      const worst = counts.slice().sort((a, b) => b.missing - a.missing || a.stage.localeCompare(b.stage))[0];
+      return worst && worst.missing ? worst : null;
+    })(),
+    now, informationalOnly: true, authorizes: false,
+    note: 'A correction changes the system; learning changes what the people can do next time. An incident that was fixed, with nobody trained afterwards and nothing rehearsed, is reported as CORRECTED-NOT-LEARNED — because an institution that repairs the same class of failure repeatedly scores perfectly on every other measure.',
+  };
+}
+
 // --- Part 15: the executive dashboard ------------------------------------------------------------
 //
 // Every panel is derived. There is no path here that accepts a figure.
@@ -333,4 +447,5 @@ module.exports = {
   EXECUTIVE_PANELS, ASSURANCE_DOMAINS, IMPROVEMENT_STAGES,
   ImprovementLoop, executiveGovernanceIntelligence, institutionalAssurance,
   GOVERNANCE_STATES, governanceState, governanceCompleteness,
+  LEARNING_STAGES, institutionalLearning,
 };

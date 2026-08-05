@@ -1019,19 +1019,126 @@ function temporalMissionImpact({ change = 'unnamed change', failed = [], degrade
 // The rule that keeps this from being a dashboard of green ticks: A LAYER WITH NO MEASUREMENT IS
 // REPORTED AS UNMEASURED, and an unmeasured layer breaks the chain rather than being skipped over.
 // A correlation drawn across a gap is a correlation between one thing and an assumption.
-const OPERATIONAL_LAYERS = ['infrastructure', 'application-behaviour', 'business-process', 'mission-outcome', 'citizen-experience', 'governance-performance'];
+// Phase 14, Part 9 extends the chain past the citizen to the institution, the government objective
+// and public trust. `governance-performance` is deliberately NOT a link in that chain: governance
+// performance is not downstream of public trust, it runs across all of it. Modelling it as a chain
+// link would have put it in an order that is simply false, so it is reported as a cross-cutting
+// layer that must still be measured for the correlation to be complete.
+const OPERATIONAL_LAYERS = [
+  'infrastructure', 'application-behaviour', 'business-process', 'mission-outcome',
+  'citizen-experience', 'institutional-outcome', 'government-objective', 'public-trust',
+];
+const CROSS_CUTTING_LAYERS = ['governance-performance'];
+
+// --- Public trust indicators (Phase 14, Part 9) ---------------------------------------------------
+//
+// THIS PLATFORM CANNOT MEASURE PUBLIC TRUST. It has no survey, no polling, no channel through which
+// a citizen tells it whether they believe reporting corruption is worth the risk. Anything here that
+// called itself a trust score would be an invention, and it would be the most consequential invention
+// in the platform — because a government told its trust score is 0.87 stops asking.
+//
+// What the platform CAN do is measure the conditions under which trust would be warranted. If a
+// person cannot file a report, if their evidence cannot be shown to be intact, if nobody is
+// answerable for the decision taken about them, then trust is not warranted whatever anybody feels
+// about it. Those are LEADING INDICATORS, they are derived from evidence the platform already holds,
+// and every one of them carries `measuresTrust: false`.
+//
+// The rule: AN INDICATOR NOBODY MEASURED MAKES THE COMPOSITE UNKNOWN, never favourable. A partial
+// picture of whether trust is warranted is not a favourable one.
+const TRUST_INDICATORS = {
+  reportingAvailable: {
+    question: 'Can a citizen file a report at all?',
+    derivedFrom: 'the infrastructure layer and the constitutional intake path',
+    ifAbsent: 'The one thing the platform exists for may be unavailable and nothing here would say so.',
+    whyItBearsOnTrust: 'A person who tries to report and cannot does not try again. This is the condition all the others rest on.',
+  },
+  casesProgress: {
+    question: 'Do reports that were filed actually move?',
+    derivedFrom: 'the business-process layer (backlog and throughput)',
+    ifAbsent: 'Reports may be accumulating unread.',
+    whyItBearsOnTrust: 'A report that goes nowhere teaches everybody who hears about it that reporting goes nowhere.',
+  },
+  evidenceIntact: {
+    question: 'Can the platform still show that evidence has not been tampered with?',
+    derivedFrom: 'the mission-outcome layer (custody integrity)',
+    ifAbsent: 'Evidence somebody took a risk to provide may be unusable.',
+    whyItBearsOnTrust: 'If the chain of custody cannot be demonstrated, the risk the reporter took bought nothing.',
+  },
+  decisionsAttributable: {
+    question: 'Is every decision about a person answerable to a named human?',
+    derivedFrom: 'the governance layer (attribution and review cadence)',
+    ifAbsent: 'Decisions may exist with nobody accountable for them.',
+    whyItBearsOnTrust: 'A decision nobody is answerable for cannot be challenged, and a process that cannot be challenged is not trusted for long.',
+  },
+  institutionsDelivering: {
+    question: 'Can the institutions involved discharge their mandates?',
+    derivedFrom: 'the institutional-outcome layer',
+    ifAbsent: 'An institution may be failing quietly while its systems report green.',
+    whyItBearsOnTrust: 'Trust attaches to institutions, not to platforms. A working platform inside a failing institution earns nothing.',
+  },
+};
+
+function publicTrustIndicators({ infrastructure = null, businessMetrics = null, missionOutcomes = null, governance = null, institutionalOutcomes = null } = {}) {
+  const assess = (id, source, favourable, detail) => ({
+    indicator: id, ...TRUST_INDICATORS[id],
+    measured: source !== null && source !== undefined,
+    favourable: source === null || source === undefined ? null : favourable,
+    detail: source === null || source === undefined ? 'not measured' : detail,
+    // Carried on every single row. This is the field that stops a reader taking the composite for a
+    // measurement of what people actually believe.
+    measuresTrust: false, derived: true,
+  });
+
+  const degraded = infrastructure && Array.isArray(infrastructure.degraded) ? infrastructure.degraded : [];
+  const backlog = businessMetrics && typeof businessMetrics.backlog === 'number' ? businessMetrics.backlog : null;
+  const indicators = [
+    assess('reportingAvailable', infrastructure, degraded.length === 0, degraded.length ? `${degraded.length} service(s) degraded: ${degraded.join(', ')}` : 'no declared degradation on the intake path'),
+    assess('casesProgress', businessMetrics, backlog === null ? false : backlog === 0, backlog === null ? 'backlog not reported' : `${backlog} report(s) waiting`),
+    assess('evidenceIntact', missionOutcomes, missionOutcomes ? missionOutcomes.custodyIntact !== false : false, missionOutcomes ? (missionOutcomes.custodyIntact === false ? 'a custody chain could not be demonstrated' : 'custody integrity holds') : ''),
+    assess('decisionsAttributable', governance, governance ? (Array.isArray(governance.unattributedDecisions) ? governance.unattributedDecisions.length === 0 : true) : false, governance ? `${(governance.unattributedDecisions || []).length} unattributed decision(s), ${(governance.overdueReviews || []).length} overdue review(s)` : ''),
+    assess('institutionsDelivering', institutionalOutcomes, institutionalOutcomes ? institutionalOutcomes.mandatesDeliverable !== false : false, institutionalOutcomes ? (institutionalOutcomes.mandatesDeliverable === false ? 'at least one mandate is not currently deliverable' : 'declared mandates are deliverable') : ''),
+  ];
+
+  const unmeasured = indicators.filter((i) => !i.measured).map((i) => i.indicator);
+  const unfavourable = indicators.filter((i) => i.favourable === false).map((i) => i.indicator);
+  const assessable = unmeasured.length === 0;
+  return {
+    indicators, count: indicators.length,
+    unmeasured, declining: unfavourable,
+    assessable,
+    // Never a score. Three words, and one of them is 'unknown'.
+    composite: !assessable ? 'unknown' : unfavourable.length ? 'not-warranted' : 'warranted',
+    // The disclaimer travels with the data structure, not in a comment somebody will not read.
+    measuresTrust: false,
+    whatThisIs: 'A derived statement about whether the CONDITIONS for public trust currently hold. It is not a measurement of what anybody believes, and this platform has no way to measure that.',
+    whatWouldMeasureIt: 'A survey of citizens who considered reporting, including those who decided not to. Nothing in this platform can reach the people who decided not to, and they are the ones whose trust matters most.',
+    basis: assessable
+      ? (unfavourable.length
+        ? `Trust is NOT currently warranted: ${unfavourable.join(', ')}. That is a statement about conditions, not about opinion.`
+        : 'Every measured condition under which trust would be warranted currently holds. Citizens may still not trust the institution, and that would not be irrational.')
+      : `UNKNOWN: ${unmeasured.join(', ')} are not measured. A partial picture of whether trust is warranted is not a favourable one.`,
+    informationalOnly: true, authorizes: false,
+  };
+}
 
 function operationalIntelligence({
   infrastructure = null, applicationBehaviour = null, businessMetrics = null,
-  missionOutcomes = null, governance = null, now = 0,
+  missionOutcomes = null, governance = null, institutionalOutcomes = null, now = 0,
 } = {}) {
+  // Public trust is DERIVED, never supplied. There is no parameter for it anywhere in this module,
+  // because nothing here can measure it — see `publicTrustIndicators` below.
+  const trust = publicTrustIndicators({ infrastructure, businessMetrics, missionOutcomes, governance, institutionalOutcomes });
   const layers = [
     { layer: 'infrastructure', measured: infrastructure !== null, state: infrastructure, means: 'Whether the services and stores are healthy.' },
     { layer: 'application-behaviour', measured: applicationBehaviour !== null, state: applicationBehaviour, means: 'Whether the services are doing what they are for, not merely running.' },
     { layer: 'business-process', measured: businessMetrics !== null, state: businessMetrics, means: 'Whether justice is moving: throughput, latency, backlog.' },
     { layer: 'mission-outcome', measured: missionOutcomes !== null, state: missionOutcomes, means: 'Whether the outcomes the platform exists for are being achieved.' },
     { layer: 'citizen-experience', measured: businessMetrics !== null, state: businessMetrics ? { derivedFrom: 'business-process' } : null, means: 'What a person filing a report actually experiences.' },
-    { layer: 'governance-performance', measured: governance !== null, state: governance, means: 'Whether the people accountable are acting within their cadences.' },
+    { layer: 'institutional-outcome', measured: institutionalOutcomes !== null, state: institutionalOutcomes, means: 'Whether the institutions the platform serves can discharge their mandates.' },
+    { layer: 'government-objective', measured: missionOutcomes !== null && institutionalOutcomes !== null, state: missionOutcomes && institutionalOutcomes ? { derivedFrom: 'mission-outcome + institutional-outcome' } : null, means: 'Whether the government objectives those mandates serve are being met.' },
+    // Never supplied, always derived, and never presented as a measurement of trust.
+    { layer: 'public-trust', measured: trust.assessable, state: trust.assessable ? { derivedFrom: 'leading indicators', indicator: trust.composite } : null, means: 'Whether the conditions under which trust would be warranted currently hold. NOT a measurement of trust.' },
+    { layer: 'governance-performance', measured: governance !== null, state: governance, crossCutting: true, means: 'Whether the people accountable are acting within their cadences. Cross-cutting: it bears on every layer rather than sitting between two of them.' },
   ];
   const unmeasured = layers.filter((l) => !l.measured).map((l) => l.layer);
 
@@ -1067,13 +1174,22 @@ function operationalIntelligence({
     });
   }
 
+  if (trust.assessable && trust.declining.length) {
+    recommendations.push({
+      from: 'public-trust', urgency: 'this-quarter',
+      recommendation: `${trust.declining.length} leading indicator(s) of public trust are moving the wrong way: ${trust.declining.join(', ')}. These are the conditions under which reporting corruption is worth the risk; they are rebuilt far more slowly than they are lost.`,
+      falsifiedBy: 'Those indicators recovering, or evidence that citizens\' willingness to report is unaffected by them.',
+    });
+  }
+
   return {
-    layers, chain: OPERATIONAL_LAYERS,
+    layers, chain: OPERATIONAL_LAYERS, crossCutting: CROSS_CUTTING_LAYERS,
     measuredLayers: layers.filter((l) => l.measured).length,
     unmeasured,
     // The chain carries a conclusion only if every layer between the ends is measured.
     chainComplete: unmeasured.length === 0,
     correlationValid: unmeasured.length === 0,
+    publicTrust: trust,
     recommendations, recommendationCount: recommendations.length,
     informationalOnly: true, authorizes: false,
     note: unmeasured.length
@@ -1083,7 +1199,8 @@ function operationalIntelligence({
 }
 
 module.exports = {
-  OPERATIONAL_LAYERS, operationalIntelligence,
+  OPERATIONAL_LAYERS, CROSS_CUTTING_LAYERS, operationalIntelligence,
+  TRUST_INDICATORS, publicTrustIndicators,
   missionDependencyGraph,
   BUSINESS_METRICS, DWELL_METRICS, EVENT_ALIASES, catalogue,
   CHAIN_LAYERS, CHAIN_LINKS, MISSION_OUTCOMES, INFRASTRUCTURE_COMPONENTS, chainLinks, missionOutcomes,

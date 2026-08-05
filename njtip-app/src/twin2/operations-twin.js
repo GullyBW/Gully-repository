@@ -107,6 +107,53 @@ const SCENARIOS = {
     limitations: ['Quorum is computed from region count; it does not model a partition where regions are up but cannot see each other.', 'Recovery time is not modelled — this answers what holds, not how long restoration takes.'],
     owner: 'Operations Review Board', reviewCadenceDays: 90,
   },
+  // --- Strategic scenarios (Phase 14, Part 12) -------------------------------------------------
+  // The twin could rehearse losing a region and losing a person. It could not rehearse the things
+  // that actually reshape an institution: a budget cut, a restructure, a new statute, a partner
+  // agency. Those arrive with more warning than an outage and are planned for far less carefully,
+  // because nothing existed to plan against.
+  'policy-reform': {
+    perturbs: 'policy', question: 'If several operating rules change together, which contexts are governed differently and what depended on the old guarantee?',
+    assumptions: ['ASM-0001', 'ASM-0003'],
+    limitations: ['Only consistency stances are modelled as policy; authorization, retention and disclosure policy are not simulated here.', 'The model knows which contexts hold a stance, not which readers currently rely on it.'],
+    owner: 'Architecture Review Board', reviewCadenceDays: 180,
+  },
+  'legislative-change': {
+    perturbs: 'bounded-context', question: 'If this statute changes, which bounded contexts, decisions and controls have to move with it?',
+    assumptions: ['ASM-0001', 'ASM-0006'],
+    limitations: ['Reach is computed over declared dependencies, so it is a lower bound.', 'Legal interpretation is not modelled: this answers what would be touched, never what the law requires.'],
+    owner: 'Attorney General Chambers', reviewCadenceDays: 180,
+  },
+  'funding-reduction': {
+    perturbs: 'governance-control', question: 'If the estate has to be run by fewer people, which governance objects lose an accountable authority first?',
+    assumptions: ['ASM-0006'],
+    limitations: ['Reduction is modelled as whole roles becoming unavailable, not as partial time. A half-funded post looks fully staffed here.', 'Says nothing about which cuts are politically or legally possible.'],
+    owner: 'Oversight Board', reviewCadenceDays: 90,
+  },
+  'organizational-restructuring': {
+    perturbs: 'governance-control', question: 'If these authorities merge or these subsystems move, does separation of duties survive?',
+    assumptions: ['ASM-0006'],
+    limitations: ['Models the accountability record, not the people or the politics of a merger.', 'A merger that is announced and not executed looks identical here to one that is complete.'],
+    owner: 'Oversight Board', reviewCadenceDays: 180,
+  },
+  'staffing-growth': {
+    perturbs: 'governance-control', question: 'If more people arrive, what actually improves — and what does not improve until they are trained and have rehearsed?',
+    assumptions: ['ASM-0006'],
+    limitations: ['New arrivals are modelled as untrained and unrehearsed, which is the pessimistic and usually correct case.', 'Does not model the cost of onboarding to the people already here.'],
+    owner: 'Oversight Board', reviewCadenceDays: 180,
+  },
+  'cross-government-collaboration': {
+    perturbs: 'bounded-context', question: 'If another institution joins, what would be shared, and does any of it cross a zone boundary?',
+    assumptions: ['ASM-0001'],
+    limitations: ['Models declared data flows between contexts; an informal exchange by email is invisible here.', 'Says nothing about whether a partner institution\'s own controls are adequate.'],
+    owner: 'Data Governance Board', reviewCadenceDays: 90,
+  },
+  'emergency-operations': {
+    perturbs: 'service', question: 'Under a surge with services already lost, is there anybody left to authorise the decisions the surge requires?',
+    assumptions: ['ASM-0001', 'ASM-0005', 'ASM-0006'],
+    limitations: ['Surge is modelled as a multiple of concurrent decisions, not as a queue with a service rate.', 'Assumes everybody not named as absent is available and able to work, which an emergency rarely permits.'],
+    owner: 'Operations Review Board', reviewCadenceDays: 90,
+  },
 };
 
 // A simulation's confidence is capped by the weakest of three things, never averaged across them:
@@ -670,6 +717,168 @@ class OperationsTwin {
       const uncovered = affected.filter((a) => !a.covered);
       if (uncovered.length) findings.push({ entity: 'organizational-spof', kind: 'governance-control', blocking: true, finding: `${uncovered.length} governance object(s) have no covered authority under this scenario: ${uncovered.slice(0, 5).map((a) => `${a.subsystem}/${a.role}`).join(', ')}` });
       radius = this.blastRadius([]);
+    } else if (scenario === 'policy-reform') {
+      // A reform is several stance changes at once, and the thing a single-stance simulation misses
+      // is the contexts that DEPEND on a changed one and were never consulted.
+      const reforms = change.reforms || {};
+      const changing = new Set(Object.keys(reforms));
+      for (const [context, model] of Object.entries(reforms).sort(([a], [b]) => a.localeCompare(b))) {
+        const existing = this._model.entities.find((e) => e.id === `policy:consistency:${context}`);
+        if (!existing) { findings.push({ entity: context, kind: 'policy', finding: 'no consistency stance is declared for this context — it cannot be reformed, only declared', blocking: true }); continue; }
+        if (!multiRegion.CONSISTENCY_MODELS[model]) { findings.push({ entity: context, kind: 'policy', finding: `'${model}' is not a declared consistency model`, blocking: true }); continue; }
+        const weakening = multiRegion.CONSISTENCY_MODELS[existing.model].maxStalenessMs < multiRegion.CONSISTENCY_MODELS[model].maxStalenessMs;
+        findings.push({ entity: `policy:consistency:${context}`, kind: 'policy', finding: `${existing.model} → ${model}${weakening ? ' — WEAKENING' : ''}`, weakening, previousAdr: existing.adr });
+        // Everything that depends on a context whose guarantee weakened, and is not itself in the
+        // reform, inherited a weaker guarantee without anybody deciding that.
+        if (weakening) {
+          for (const r of this._model.relations.filter((x) => x.to === context && x.kind === 'data-flow')) {
+            if (!changing.has(r.from)) {
+              findings.push({ entity: r.from, kind: 'bounded-context', blocking: true, finding: `depends on '${context}', whose guarantee this reform weakens, and is not part of the reform — it would inherit a weaker guarantee nobody chose for it` });
+            }
+          }
+        }
+      }
+      if (Object.keys(reforms).length && !change.adr) {
+        findings.push({ entity: 'policy-reform', kind: 'policy', blocking: true, finding: 'the reform cites no ADR — a set of operating rules changed without a recorded decision is a default nobody chose' });
+      }
+      radius = this.blastRadius(Object.keys(reforms).filter((c) => this.entity(c)));
+    } else if (scenario === 'legislative-change') {
+      const affects = [...(change.affects || [])].sort();
+      const requiresControls = [...(change.requiresControls || [])].sort();
+      const known = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+      for (const ctx of affects) {
+        if (!this.entity(ctx)) { findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: 'the change names a bounded context the architecture does not contain' }); continue; }
+        findings.push({ entity: ctx, kind: 'bounded-context', finding: 'directly named by the legislative change' });
+        for (const r of this._model.relations.filter((x) => x.to === ctx && x.kind === 'data-flow')) {
+          if (!affects.includes(r.from)) findings.push({ entity: r.from, kind: 'bounded-context', finding: `depends on '${ctx}' and is not named in the change — reach is wider than the instrument states` });
+        }
+        // A context with no accountable authority cannot respond to a statute at all.
+        try { ownership.describe(ctx); } catch (_) { findings.push({ entity: ctx, kind: 'governance-control', blocking: true, finding: 'no accountable authority is recorded, so nobody would answer for implementing this change' }); }
+      }
+      for (const c of requiresControls) {
+        if (!known.has(c)) findings.push({ entity: c, kind: 'evidence', blocking: true, finding: 'the change requires a control that does not exist — this is work, not compliance' });
+        else findings.push({ entity: c, kind: 'evidence', finding: 'the required control already runs' });
+      }
+      if (!affects.length) findings.push({ entity: 'legislative-change', kind: 'bounded-context', blocking: true, finding: 'the change names no bounded context — a statute that touches nothing needs no simulation, and one that touches something unnamed is unassessed' });
+      radius = this.blastRadius(affects.filter((c) => this.entity(c)));
+    } else if (scenario === 'funding-reduction' || scenario === 'organizational-restructuring' || scenario === 'staffing-growth') {
+      const subsystems = ownership.subsystems().slice().sort();
+      const absent = new Set(change.absent || []);
+      if (scenario === 'funding-reduction') {
+        // Deterministic: sort the distinct approving authorities and withdraw the first N.
+        const authorities = [...new Set(subsystems.map((s) => ownership.OWNERSHIP[s].approvingAuthority))].sort();
+        const reduceBy = Number(change.reduceBy || 0);
+        const cut = Math.floor(authorities.length * Math.max(0, Math.min(1, reduceBy)));
+        for (const a of authorities.slice(0, cut)) absent.add(a);
+        findings.push({ entity: 'funding', kind: 'governance-control', finding: `a ${Math.round(reduceBy * 100)}% reduction withdraws ${cut} of ${authorities.length} approving authorities: ${authorities.slice(0, cut).join(', ') || 'none'}` });
+      }
+      if (scenario === 'organizational-restructuring') {
+        // A merge makes two authorities one. The failure it creates is structural: an authority that
+        // now both holds and approves the same subsystem has no separation of duties left.
+        for (const [from, to] of (change.merge || []).map((p) => [...p].sort())) {
+          findings.push({ entity: `${from}+${to}`, kind: 'governance-control', finding: `'${from}' merges into '${to}'` });
+          for (const s of subsystems) {
+            const o = ownership.OWNERSHIP[s];
+            const responsible = o.responsibleAuthority === from ? to : o.responsibleAuthority;
+            const approving = o.approvingAuthority === from ? to : o.approvingAuthority;
+            if (responsible === approving) {
+              findings.push({ entity: `gov:${s}`, kind: 'governance-control', blocking: true, finding: `after the merge '${responsible}' would both hold and approve '${s}' — separation of duties is lost, and it is the control that stops a decision being taken by the party it affects` });
+            }
+          }
+        }
+      }
+      if (scenario === 'staffing-growth') {
+        const added = Number(change.additionalAuthorities || 0);
+        findings.push({ entity: 'staffing', kind: 'governance-control', finding: `${added} additional authority(ies) would join` });
+        // THE FINDING THAT MATTERS. Headcount does not close a single-person dependency; a trained,
+        // rehearsed person does, and a new arrival is neither on the day they start.
+        const continuity = change.continuity || null;
+        const single = continuity ? continuity.roles.filter((r) => r.singlePersonDependency).length : null;
+        findings.push({
+          entity: 'single-person-dependencies', kind: 'governance-control',
+          finding: single === null
+            ? `growth does not change any single-person dependency until the arrivals are trained and have rehearsed; with no continuity assessment supplied, how many exist is UNKNOWN`
+            : `${single} role(s) rest on one person before growth, and ${single} after it — an untrained arrival is a name, not an alternative`,
+        });
+      }
+      // Common: who loses an accountable authority under the resulting absence set?
+      const continuity = change.continuity || null;
+      const uncovered = [];
+      for (const s of subsystems) {
+        const o = ownership.OWNERSHIP[s];
+        for (const role of ownership.DEPUTY_ROLES) {
+          const primary = o[role];
+          const deputy = ownership.deputyOf(primary);
+          if (!absent.has(primary)) continue;
+          const deputyReady = continuity ? ((continuity.roles.find((r) => r.subsystem === s && r.role === role) || {}).deputyReadiness || null) : null;
+          const covered = !absent.has(deputy) && deputyReady !== null && deputyReady.ready === true;
+          if (!covered) {
+            uncovered.push(`${s}/${role}`);
+            findings.push({ entity: `gov:${s}`, kind: 'governance-control', blocking: true, finding: `'${s}/${role}': ${primary} is unavailable and ${deputy} is not assessed as ready to take over` });
+          }
+        }
+      }
+      if (uncovered.length) findings.push({ entity: 'organizational-spof', kind: 'governance-control', blocking: true, finding: `${uncovered.length} governance object(s) would have no covered authority: ${uncovered.slice(0, 5).join(', ')}` });
+      radius = this.blastRadius([]);
+    } else if (scenario === 'cross-government-collaboration') {
+      const partners = [...(change.partners || [])].sort();
+      const sharing = [...(change.sharing || [])].sort();
+      if (!partners.length) findings.push({ entity: 'collaboration', kind: 'bounded-context', blocking: true, finding: 'no partner institution is named — a collaboration with nobody is not a collaboration' });
+      // THE ZONE QUESTION, and the honest answer to it. This platform does NOT record which
+      // deployment zone a bounded context sits in — the topology knows the zone of every service and
+      // nothing connects a service back to a context. So the proposal must state it, the twin checks
+      // the stated zones are real, and a context whose zone the proposal does not state BLOCKS.
+      // Reading it as "probably fine" would be reading an unknown as a pass on a constitutional
+      // invariant, which is the one place this platform never does that.
+      const declaredZones = change.zones || {};
+      const realZoneNames = new Set(this._model.entities.filter((e) => e.kind === 'infrastructure').map((e) => e.zone));
+      const zones = new Set();
+      for (const ctx of sharing) {
+        if (!this.entity(ctx)) { findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: 'the proposal shares a bounded context the architecture does not contain' }); continue; }
+        const zone = declaredZones[ctx];
+        if (!zone) {
+          findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: `the proposal does not state which deployment zone '${ctx}' sits in, and the platform does not record it — whether this sharing crosses a zone boundary is UNKNOWN, and unknown is not a pass on a constitutional invariant` });
+        } else if (!realZoneNames.has(zone)) {
+          findings.push({ entity: ctx, kind: 'bounded-context', blocking: true, finding: `the proposal places '${ctx}' in zone '${zone}', which is not a deployment zone this platform has` });
+        } else {
+          zones.add(zone);
+        }
+        findings.push({ entity: ctx, kind: 'bounded-context', finding: `would be shared with ${partners.join(', ') || 'unnamed partners'}` });
+        // Everything that flows INTO a shared context is shared with it, whether the proposal says
+        // so or not — that is what a declared data flow means.
+        for (const r of this._model.relations.filter((x) => x.to === ctx && x.kind === 'data-flow')) {
+          if (!sharing.includes(r.from)) findings.push({ entity: r.from, kind: 'data-flow', finding: `flows into shared context '${ctx}' and is not named in the proposal — sharing a context shares what reaches it` });
+        }
+      }
+      // THE CONSTITUTIONAL RULE. Zone isolation is not negotiable for a collaboration agreement.
+      const crossed = [...zones].sort();
+      if (crossed.length > 1) {
+        findings.push({ entity: 'zone-isolation', kind: 'infrastructure', blocking: true, finding: `the proposal shares contexts across ${crossed.length} zones (${crossed.join(', ')}) — zone isolation is a constitutional invariant and no collaboration agreement may cross it` });
+      } else if (crossed.length === 1) {
+        findings.push({ entity: 'zone-isolation', kind: 'infrastructure', finding: `every shared context sits in the '${crossed[0]}' zone, so this sharing does not cross a zone boundary` });
+      }
+      radius = this.blastRadius(sharing.filter((c) => this.entity(c)));
+    } else if (scenario === 'emergency-operations') {
+      const failed = change.failed || [];
+      const surge = Number(change.surgeMultiplier || 1);
+      const absent = new Set(change.absent || []);
+      radius = this.blastRadius(failed);
+      for (const id of failed) if (!this.entity(id)) findings.push({ entity: id, kind: 'unknown', finding: 'this entity is not modelled — its failure cannot be reasoned about, which is itself the finding' });
+      for (const id of radius.impacted) findings.push({ entity: id, kind: (this.entity(id) || {}).kind || 'unknown', finding: 'impaired through a declared dependency' });
+      const available = new Set();
+      for (const s of ownership.subsystems()) {
+        const a = ownership.OWNERSHIP[s].approvingAuthority;
+        if (!absent.has(a)) available.add(a);
+      }
+      // Emergency decisions scale with the incident, and approving authorities do not.
+      const required = Math.ceil(surge * Math.max(1, failed.length));
+      if (required > available.size) {
+        findings.push({ entity: 'governance-capacity', kind: 'governance-control', blocking: true, finding: `an emergency of this size needs about ${required} concurrent authorisations against ${available.size} available approving authorities — at least one decision would wait for a person rather than for a system` });
+      } else {
+        findings.push({ entity: 'governance-capacity', kind: 'governance-control', finding: `${available.size} approving authorities remain available for roughly ${required} concurrent authorisation(s)` });
+      }
+      const constitutional = failed.filter((id) => { const e = this.entity(id); return e && e.criticality === 'constitutional'; });
+      if (constitutional.length) findings.push({ entity: 'constitutional-services', kind: 'service', blocking: true, finding: `the emergency takes out constitutional service(s): ${constitutional.sort().join(', ')} — a citizen cannot report while these are down` });
     } else if (scenario === 'dr-exercise') {
       const failed = change.failedRegions || [];
       withdraw((e) => e.kind === 'regional-deployment' && failed.includes(e.region), 'region lost in the exercise');

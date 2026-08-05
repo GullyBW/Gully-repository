@@ -119,7 +119,8 @@ test('an unmeasured layer breaks the correlation rather than being skipped', () 
   const none = bus.operationalIntelligence({});
   assert.strictEqual(none.correlationValid, false);
   assert.strictEqual(none.chainComplete, false);
-  assert.strictEqual(none.unmeasured.length, bus.OPERATIONAL_LAYERS.length);
+  // Phase 14, Part 9: eight chain layers plus the cross-cutting governance-performance layer.
+  assert.strictEqual(none.unmeasured.length, bus.OPERATIONAL_LAYERS.length + bus.CROSS_CUTTING_LAYERS.length);
   assert.match(none.note, /correlation between one thing and an assumption/);
   // The gap itself produces a recommendation.
   assert.ok(none.recommendations.some((r) => r.from === 'coverage'));
@@ -128,7 +129,9 @@ test('an unmeasured layer breaks the correlation rather than being skipped', () 
 test('a fully measured chain carries a conclusion and recommends action', () => {
   const full = bus.operationalIntelligence({
     infrastructure: { degraded: ['kms'] }, applicationBehaviour: {},
-    businessMetrics: { backlog: 12 }, missionOutcomes: {}, governance: { overdueReviews: ['intake'] },
+    businessMetrics: { backlog: 12 }, missionOutcomes: { custodyIntact: true },
+    governance: { overdueReviews: ['intake'], unattributedDecisions: [] },
+    institutionalOutcomes: { mandatesDeliverable: true },
   });
   assert.strictEqual(full.chainComplete, true);
   assert.strictEqual(full.correlationValid, true);
@@ -141,11 +144,16 @@ test('a fully measured chain carries a conclusion and recommends action', () => 
   assert.strictEqual(full.authorizes, false);
 });
 
-test('the six operational layers are declared in order', () => {
+test('the operational layers are declared in order, with governance-performance cross-cutting', () => {
+  // Phase 14, Part 9 extended the correlation to public trust. `governance-performance` moved out of
+  // the chain and into `CROSS_CUTTING_LAYERS`, because it is not downstream of public trust — it
+  // bears on every layer, and modelling it as a link put it in an order that was simply false. It is
+  // still required for the correlation to be complete.
   assert.deepStrictEqual(bus.OPERATIONAL_LAYERS, [
-    'infrastructure', 'application-behaviour', 'business-process',
-    'mission-outcome', 'citizen-experience', 'governance-performance',
+    'infrastructure', 'application-behaviour', 'business-process', 'mission-outcome',
+    'citizen-experience', 'institutional-outcome', 'government-objective', 'public-trust',
   ]);
+  assert.deepStrictEqual(bus.CROSS_CUTTING_LAYERS, ['governance-performance']);
 });
 
 // --- Part 20: the institutional assurance framework ------------------------------------------------
