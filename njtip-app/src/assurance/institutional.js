@@ -401,6 +401,214 @@ function institutionalLearning({ loop = null, training = null, exercises = null,
   };
 }
 
+// --- Trust evidence (Phase 15, Part 8) -------------------------------------------------------------
+//
+// Phase 14 built leading indicators of whether public trust would be WARRANTED, and put
+// `measuresTrust: false` on every row. Part 8 asks for the other half, and the distinction between
+// the two is the whole content of this section:
+//
+//   TRUST INDICATORS are derived by this platform from its own operation. They say whether the
+//   conditions for trust hold. They are not evidence about trust and they are not opinions.
+//
+//   TRUSTWORTHINESS EVIDENCE is recorded from OUTSIDE the platform — an audit somebody performed, a
+//   complaint somebody filed, a finding an oversight body made. It is evidence about the institution
+//   rather than about the system.
+//
+//   PUBLIC TRUST is what people actually believe. This platform does not measure it, cannot measure
+//   it, and the one group whose trust matters most — people who considered reporting and decided not
+//   to — is unreachable from here by construction.
+//
+// All three appear in the same report, labelled, and never summed.
+const TRUST_EVIDENCE_KINDS = {
+  'citizen-feedback': { external: true, aboutTrust: false, means: 'What people who used the service said about it.', limitation: 'Only reaches people who used it. The ones who did not are the ones whose trust matters most.' },
+  'complaint-trend': { external: true, aboutTrust: false, means: 'The volume and direction of complaints about the institution.', limitation: 'Rising complaints can mean falling trust or rising willingness to complain, and the two are opposite.' },
+  'transparency-indicator': { external: false, aboutTrust: false, means: 'What the institution publishes, and how promptly.', limitation: 'Publishing is a behaviour of the institution, not a belief of anybody.' },
+  'independent-audit': { external: true, aboutTrust: false, means: 'A finding by an auditor who does not report to the institution.', limitation: 'Audits sample; a clean audit is evidence about what was sampled.' },
+  'survey-evidence': { external: true, aboutTrust: true, means: 'The only kind here that is directly about what people believe.', limitation: 'Sampling and response bias. People who distrust an institution are less likely to answer its survey.' },
+  'oversight-finding': { external: true, aboutTrust: false, means: 'A determination by a body with a statutory oversight mandate.', limitation: 'Reflects what was investigated, which is driven by what was reported.' },
+};
+
+class TrustEvidenceRegister {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._records = []; }
+
+  record({ kind, source, finding, at = null, period = null, independent = null, recordedBy } = {}) {
+    if (!TRUST_EVIDENCE_KINDS[kind]) throw new Error(`unknown trust evidence kind '${kind}' — one of ${Object.keys(TRUST_EVIDENCE_KINDS).join(', ')}`);
+    if (!source) { const e = new Error('trust evidence must name its source — evidence about an institution from nowhere in particular is a rumour'); e.failClosed = true; throw e; }
+    if (!finding) throw new Error('trust evidence must record what was actually found');
+    if (!recordedBy) { const e = new Error('trust evidence must name who recorded it'); e.failClosed = true; throw e; }
+    // Independence is the property that makes external evidence worth more than self-assessment, so
+    // it is recorded explicitly rather than inferred from the kind.
+    if (TRUST_EVIDENCE_KINDS[kind].external && independent === null) {
+      const e = new Error(`'${kind}' is external evidence, so it must state whether its source is independent of the institution — that is the property that makes it worth more than a self-assessment`);
+      e.failClosed = true; throw e;
+    }
+    const rec = { kind, source, finding, period, independent, recordedBy, at: at ?? this._clock() };
+    this._records.push(rec);
+    return { ...rec };
+  }
+  records(kind = null) { return this._records.filter((r) => !kind || r.kind === kind).map((r) => ({ ...r })); }
+}
+
+// The Part 8 report. Three sections, labelled, never summed.
+function trustEvidence({ register = null, indicators = null, now = 0 } = {}) {
+  const records = register ? register.records() : [];
+  const byKind = Object.keys(TRUST_EVIDENCE_KINDS).map((kind) => {
+    const rows = records.filter((r) => r.kind === kind);
+    return {
+      kind, ...TRUST_EVIDENCE_KINDS[kind],
+      count: rows.length,
+      independentCount: rows.filter((r) => r.independent === true).length,
+      recorded: rows.length > 0,
+      reason: rows.length ? `${rows.length} record(s)` : 'nothing recorded — the absence of evidence about trustworthiness is not evidence of it',
+    };
+  });
+  const independent = records.filter((r) => r.independent === true);
+  const surveys = records.filter((r) => TRUST_EVIDENCE_KINDS[r.kind].aboutTrust);
+  return {
+    // Section 1: what this platform derives about its own operation.
+    trustIndicators: indicators
+      ? { composite: indicators.composite, measuresTrust: false, whatThisIs: indicators.whatThisIs, basis: indicators.basis }
+      : { composite: 'unknown', measuresTrust: false, whatThisIs: 'no indicator assessment was supplied', basis: 'unknown' },
+    // Section 2: what somebody outside recorded about the institution.
+    trustworthinessEvidence: {
+      records, count: records.length, byKind,
+      independentCount: independent.length,
+      kindsWithNothing: byKind.filter((k) => !k.recorded).map((k) => k.kind),
+      // Independence is what makes this worth more than the platform's own opinion of itself.
+      basis: records.length
+        ? `${records.length} record(s), ${independent.length} from a source independent of the institution. Every kind states its own limitation; none of them is a measurement of belief except survey evidence, which has its own sampling problem.`
+        : 'No evidence about the institution\'s trustworthiness has been recorded. That is not evidence of trustworthiness, and it is not evidence against it.',
+    },
+    // Section 3: the thing that is never measured here, stated so nobody has to infer it.
+    publicTrust: {
+      measured: false, value: null,
+      whyNot: 'This platform has no channel to the public. It can derive whether the conditions for trust hold and it can record what others found about the institution; it cannot observe what anybody believes.',
+      whoIsMissing: 'People who considered reporting corruption and decided not to. They are unreachable from inside a reporting platform by construction, and they are the population whose trust matters most.',
+      whatWouldMeasureIt: 'A survey designed and run by a body independent of the institution, sampling the general population rather than service users.',
+    },
+    // The structural guarantee: the three sections are never combined into one figure.
+    combined: false,
+    separationNote: 'Trust indicators, trustworthiness evidence and public trust are three different things and are never summed. A composite of them would be a number describing nothing, and it would be quoted.',
+    surveyEvidenceCount: surveys.length,
+    now, informationalOnly: true, authorizes: false,
+  };
+}
+
+// --- Governance evidence onboarding (Phase 15, Part 13) --------------------------------------------
+//
+// Every register this platform has built since Phase 13 ships empty, and every report says so: no
+// training after an incident, no joint governance act, no assumption verification, no rehearsal. That
+// honesty has been the right answer and it has left an obvious question unanswered — how does
+// anything ever get INTO them, in a way that is auditable afterwards?
+//
+// This is that workflow, and its single rule is what stops it becoming a back door:
+//
+//   ONBOARDING NEVER BYPASSES THE TARGET REGISTER'S OWN RULES. It carries a submission to the
+//   register and the register decides. A workflow that could write a training completion the
+//   TrainingRegister would have refused is a workflow for laundering evidence.
+//
+// Everything is attributed twice — who submitted, who accepted — because the whole point of an
+// onboarding record is to be answerable later for how a fact got into the system.
+const EVIDENCE_TYPES = {
+  training: { targetRegister: 'ownership.TrainingRegister', acceptedBy: 'the registrar for the role', means: 'Somebody completed a required course.' },
+  rehearsal: { targetRegister: 'ownership.ExerciseRegister', acceptedBy: 'the exercise owner', means: 'Somebody took part in a governance rehearsal.' },
+  regulatory: { targetRegister: 'legislation.ComplianceIntelligence', acceptedBy: 'the approving governance board', means: 'A regulatory change was observed or an obligation reassessed.' },
+  'cross-agency': { targetRegister: 'ownership.ActivityRegister', acceptedBy: 'the accountable authority of both institutions', means: 'Two institutions performed a joint governance act.' },
+  'assumption-verification': { targetRegister: 'assumptions.AssumptionRegistry', acceptedBy: 'somebody other than the assumption owner', means: 'An assumption was checked and found to hold, or not to.' },
+  acceptance: { targetRegister: 'institutional-resilience.ResilienceAcceptance', acceptedBy: 'the Oversight Board for constitutional capabilities', means: 'A named authority accepted a gap, with a rationale and an expiry.' },
+};
+
+const ONBOARDING_STATES = ['submitted', 'accepted', 'rejected', 'landed'];
+
+class EvidenceOnboarding {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._items = new Map(); this._seq = 0; }
+
+  submit({ type, payload = {}, submittedBy, rationale, at = null } = {}) {
+    if (!EVIDENCE_TYPES[type]) throw new Error(`unknown evidence type '${type}' — one of ${Object.keys(EVIDENCE_TYPES).join(', ')}`);
+    if (!submittedBy) { const e = new Error('an evidence submission must name who submitted it'); e.failClosed = true; throw e; }
+    if (!rationale) { const e = new Error('an evidence submission must say why this record is being added — a fact with no stated reason for being here is one nobody can question later'); e.failClosed = true; throw e; }
+    const id = `EVD-${String(++this._seq).padStart(4, '0')}`;
+    const rec = {
+      id, type, payload: JSON.parse(JSON.stringify(payload)), submittedBy, rationale,
+      state: 'submitted', at: at ?? this._clock(),
+      history: [{ state: 'submitted', by: submittedBy, at: at ?? this._clock(), detail: rationale }],
+    };
+    this._items.set(id, rec);
+    return { ...rec };
+  }
+
+  // Acceptance is a separate human act by somebody OTHER than the submitter. A submission that
+  // accepts itself is a submission that was never reviewed.
+  accept(id, { by, at = null, note = null } = {}) {
+    const item = this._items.get(id);
+    if (!item) throw new Error('unknown evidence submission: ' + id);
+    if (item.state !== 'submitted') { const e = new Error(`'${id}' is '${item.state}', not 'submitted'`); e.failClosed = true; throw e; }
+    if (!by) { const e = new Error('accepting evidence requires a named human'); e.failClosed = true; throw e; }
+    if (by === item.submittedBy) { const e = new Error(`'${by}' submitted this evidence and cannot also accept it — a submission that accepts itself was never reviewed`); e.failClosed = true; throw e; }
+    item.state = 'accepted'; item.acceptedBy = by;
+    item.history.push({ state: 'accepted', by, at: at ?? this._clock(), detail: note });
+    return { ...item };
+  }
+
+  reject(id, { by, reason, at = null } = {}) {
+    const item = this._items.get(id);
+    if (!item) throw new Error('unknown evidence submission: ' + id);
+    if (!by || !reason) { const e = new Error('rejecting evidence requires a named human and a reason — a rejection nobody explained cannot be appealed'); e.failClosed = true; throw e; }
+    item.state = 'rejected';
+    item.history.push({ state: 'rejected', by, at: at ?? this._clock(), detail: reason });
+    return { ...item };
+  }
+
+  // Land the accepted evidence in its target register, by calling that register's own API. If the
+  // register refuses, the submission is marked rejected WITH THE REGISTER'S REASON — the workflow
+  // never overrides it, and the refusal is recorded rather than swallowed.
+  land(id, { register, apply, by, at = null } = {}) {
+    const item = this._items.get(id);
+    if (!item) throw new Error('unknown evidence submission: ' + id);
+    if (item.state !== 'accepted') { const e = new Error(`'${id}' is '${item.state}' — only accepted evidence may be landed`); e.failClosed = true; throw e; }
+    if (typeof apply !== 'function') throw new Error('landing evidence requires the target register\'s own function — this workflow never writes to a register directly');
+    if (!by) { const e = new Error('landing evidence requires a named human'); e.failClosed = true; throw e; }
+    try {
+      const result = apply(register, item.payload);
+      item.state = 'landed'; item.landedBy = by; item.landedAt = at ?? this._clock();
+      item.history.push({ state: 'landed', by, at: item.landedAt, detail: `accepted by ${item.acceptedBy} and written to ${EVIDENCE_TYPES[item.type].targetRegister}` });
+      return { ...item, result };
+    } catch (err) {
+      // The register refused. That is the register's decision and it stands.
+      item.state = 'rejected';
+      item.history.push({ state: 'rejected', by, at: at ?? this._clock(), detail: `the target register refused it: ${err.message}` });
+      const e = new Error(`the target register refused this evidence: ${err.message}`);
+      e.failClosed = true; e.registerRefusal = true; throw e;
+    }
+  }
+
+  item(id) { const i = this._items.get(id); return i ? JSON.parse(JSON.stringify(i)) : null; }
+  items() { return [...this._items.values()].map((i) => JSON.parse(JSON.stringify(i))); }
+
+  // The audit trail. Every submission, whatever became of it, with both attributions.
+  auditTrail({ now = null } = {}) {
+    const rows = this.items();
+    const landed = rows.filter((r) => r.state === 'landed');
+    const rejected = rows.filter((r) => r.state === 'rejected');
+    return {
+      submissions: rows, count: rows.length,
+      types: Object.entries(EVIDENCE_TYPES).map(([type, t]) => ({ type, ...t })),
+      states: [...ONBOARDING_STATES],
+      landed: landed.length, rejected: rejected.length,
+      pending: rows.filter((r) => r.state === 'submitted').length,
+      accepted: rows.filter((r) => r.state === 'accepted').length,
+      // Every landed record is answerable to two named humans and a reason.
+      fullyAttributed: landed.every((r) => r.submittedBy && r.acceptedBy && r.landedBy && r.rationale),
+      // Rejections are kept, because a register that only records what was accepted tells you what
+      // people believed rather than what they tried.
+      rejections: rejected.map((r) => ({ id: r.id, type: r.type, reason: (r.history[r.history.length - 1] || {}).detail })),
+      byType: Object.keys(EVIDENCE_TYPES).map((type) => ({ type, submitted: rows.filter((r) => r.type === type).length, landed: rows.filter((r) => r.type === type && r.state === 'landed').length })),
+      now, informationalOnly: true, authorizes: false,
+      note: 'Onboarding never bypasses a target register\'s own rules: it carries a submission and the register decides. A refusal is recorded with the register\'s reason rather than overridden, and every landed record names who submitted it, who accepted it, and why it is here.',
+    };
+  }
+}
+
 // --- Part 15: the executive dashboard ------------------------------------------------------------
 //
 // Every panel is derived. There is no path here that accepts a figure.
@@ -507,4 +715,6 @@ module.exports = {
   ImprovementLoop, executiveGovernanceIntelligence, institutionalAssurance,
   GOVERNANCE_STATES, governanceState, governanceCompleteness,
   LEARNING_STAGES, institutionalLearning,
+  TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,
+  EVIDENCE_TYPES, ONBOARDING_STATES, EvidenceOnboarding,
 };

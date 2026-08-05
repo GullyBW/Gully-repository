@@ -8049,6 +8049,197 @@ module.exports = [
     if (learned.authorizes !== false) v.push('the learning lineage claims authority');
   }),
 
+  fit('APP-FIT-TRUST-EVIDENCE', 'Trust indicators, trustworthiness evidence and public trust are three things and are never summed', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const bus = require('../src/observability/business');
+
+    // --- Six evidence kinds, each stating its own limitation ---------------------------------
+    for (const required of ['citizen-feedback', 'complaint-trend', 'transparency-indicator', 'independent-audit', 'survey-evidence', 'oversight-finding']) {
+      if (!inst.TRUST_EVIDENCE_KINDS[required]) v.push(`trust evidence kind '${required}' is not modelled`);
+    }
+    for (const [id, k] of Object.entries(inst.TRUST_EVIDENCE_KINDS)) {
+      if (!k.means) v.push(`trust evidence kind '${id}' says nothing about what it is`);
+      if (!k.limitation || k.limitation.length < 25) v.push(`trust evidence kind '${id}' states no limitation — every one of these has a bias worth naming`);
+      if (typeof k.external !== 'boolean' || typeof k.aboutTrust !== 'boolean') v.push(`trust evidence kind '${id}' does not declare whether it is external or about belief`);
+    }
+    // Exactly one kind is directly about what people believe, and it is the survey.
+    const aboutBelief = Object.entries(inst.TRUST_EVIDENCE_KINDS).filter(([, k]) => k.aboutTrust).map(([id]) => id);
+    if (aboutBelief.join(',') !== 'survey-evidence') v.push(`kinds claiming to be about belief: '${aboutBelief.join(', ')}' — only survey evidence is`);
+
+    // --- External evidence must state its independence ----------------------------------------
+    const reg = new inst.TrustEvidenceRegister({ clock: () => 0 });
+    for (const [what, args] of [
+      ['no source', { kind: 'independent-audit', finding: 'clean', independent: true, recordedBy: 'X' }],
+      ['no finding', { kind: 'independent-audit', source: 'AG', independent: true, recordedBy: 'X' }],
+      ['nobody recording it', { kind: 'independent-audit', source: 'AG', finding: 'clean', independent: true }],
+      ['no independence stated', { kind: 'independent-audit', source: 'AG', finding: 'clean', recordedBy: 'X' }],
+      ['an unknown kind', { kind: 'a feeling', source: 'AG', finding: 'clean', recordedBy: 'X' }],
+    ]) {
+      let rejected = false;
+      try { reg.record(args); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`trust evidence with ${what} was accepted`);
+    }
+    reg.record({ kind: 'independent-audit', source: 'Auditor General', finding: 'no material findings', independent: true, recordedBy: 'Assurance' });
+
+    // --- THE RULE: the three are labelled and never combined ---------------------------------
+    const report = inst.trustEvidence({ register: reg, indicators: bus.publicTrustIndicators({}) });
+    if (report.combined !== false) v.push('the trust report combines its three sections');
+    if (!/never summed/.test(report.separationNote)) v.push('the report does not state that the three are never summed');
+    if (report.trustIndicators.measuresTrust !== false) v.push('the derived indicators claim to measure trust');
+    if (report.publicTrust.measured !== false || report.publicTrust.value !== null) v.push('public trust was reported as measured');
+    if (!/considered reporting/.test(report.publicTrust.whoIsMissing)) v.push('the report does not name the population it cannot reach');
+    if (!report.publicTrust.whatWouldMeasureIt) v.push('the report does not say what would actually measure public trust');
+
+    // --- An empty register is not evidence of trustworthiness ---------------------------------
+    const empty = inst.trustEvidence({});
+    if (empty.trustworthinessEvidence.count !== 0) v.push('the trust evidence register ships with fabricated records');
+    if (empty.trustworthinessEvidence.kindsWithNothing.length !== Object.keys(inst.TRUST_EVIDENCE_KINDS).length) v.push('not every unrecorded evidence kind was named');
+    if (!/not evidence of trustworthiness/.test(empty.trustworthinessEvidence.basis)) v.push('an empty register does not say that absence of evidence is not evidence');
+    if (empty.trustIndicators.composite !== 'unknown') v.push('with no indicator assessment supplied the composite was not unknown');
+    if (report.trustworthinessEvidence.independentCount !== 1) v.push('independent evidence was not counted separately from self-assessment');
+    if (report.authorizes !== false) v.push('the trust evidence report claims authority');
+  }),
+
+  fit('APP-FIT-EVIDENCE-ONBOARDING', 'Onboarding never bypasses a register\'s own rules, and every landed record names two humans and a reason', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const own = require('../src/governance/ownership');
+
+    // --- Six evidence types, each naming its target register and who may accept it -------------
+    for (const required of ['training', 'rehearsal', 'regulatory', 'cross-agency', 'assumption-verification', 'acceptance']) {
+      if (!inst.EVIDENCE_TYPES[required]) v.push(`evidence type '${required}' cannot be onboarded`);
+    }
+    for (const [id, t] of Object.entries(inst.EVIDENCE_TYPES)) {
+      if (!t.targetRegister) v.push(`evidence type '${id}' names no target register`);
+      if (!t.acceptedBy) v.push(`evidence type '${id}' does not say who may accept it`);
+      if (!t.means) v.push(`evidence type '${id}' does not say what it is`);
+    }
+
+    const ob = new inst.EvidenceOnboarding({ clock: () => 0 });
+    const course = Object.values(own.REQUIRED_TRAINING)[0][0];
+
+    // --- Submission is attributed and reasoned -------------------------------------------------
+    for (const [what, args] of [
+      ['no submitter', { type: 'training', payload: {}, rationale: 'r' }],
+      ['no rationale', { type: 'training', payload: {}, submittedBy: 'P' }],
+      ['an unknown type', { type: 'a feeling', payload: {}, submittedBy: 'P', rationale: 'r' }],
+    ]) {
+      let rejected = false;
+      try { ob.submit(args); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`an evidence submission with ${what} was accepted`);
+    }
+
+    // --- A submission cannot accept itself ----------------------------------------------------
+    const s1 = ob.submit({ type: 'training', payload: { person: 'P', course, at: 1, by: 'Registrar' }, submittedBy: 'P', rationale: 'completed the course' });
+    let selfAccepted = false;
+    try { ob.accept(s1.id, { by: 'P' }); } catch (e) { selfAccepted = !e.failClosed; }
+    if (selfAccepted) v.push('a submission accepted itself — a submission that accepts itself was never reviewed');
+    let unattributed = false;
+    try { ob.accept(s1.id, {}); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('evidence was accepted by nobody');
+    ob.accept(s1.id, { by: 'Registrar' });
+    let doubleAccepted = false;
+    try { ob.accept(s1.id, { by: 'Registrar' }); } catch (e) { doubleAccepted = !!e.failClosed; }
+    if (!doubleAccepted) v.push('already-accepted evidence was accepted again');
+
+    // --- THE RULE: the target register decides, and a refusal stands --------------------------
+    const target = new own.TrainingRegister({ clock: () => 0 });
+    let wroteDirectly = false;
+    try { ob.land(s1.id, { register: target, by: 'Registrar' }); wroteDirectly = true; } catch (_) { /* refused */ }
+    if (wroteDirectly) v.push('evidence was landed without the target register\'s own function — this workflow must never write to a register directly');
+    ob.land(s1.id, { register: target, apply: (r, p) => r.recordCompletion(p), by: 'Registrar' });
+    if (ob.item(s1.id).state !== 'landed') v.push('accepted evidence that the register accepted was not marked landed');
+    if (target.completions().length !== 1) v.push('the evidence did not reach the target register');
+
+    // A payload the register would refuse is REJECTED with the register's own reason.
+    const s2 = ob.submit({ type: 'training', payload: { person: 'Q' }, submittedBy: 'Q', rationale: 'incomplete on purpose' });
+    ob.accept(s2.id, { by: 'Registrar' });
+    let refusalRecorded = false;
+    try { ob.land(s2.id, { register: target, apply: (r, p) => r.recordCompletion(p), by: 'Registrar' }); }
+    catch (e) { refusalRecorded = !!e.registerRefusal; }
+    if (!refusalRecorded) v.push('a target register\'s refusal was swallowed rather than surfaced');
+    if (ob.item(s2.id).state !== 'rejected') v.push('evidence the register refused was not marked rejected');
+    if (!ob.item(s2.id).history.some((h) => /the target register refused it/.test(h.detail || ''))) v.push('the register\'s reason for refusing was not recorded');
+    if (target.completions().length !== 1) v.push('refused evidence still reached the register');
+    // Landing something that was never accepted is refused.
+    const s3 = ob.submit({ type: 'rehearsal', payload: {}, submittedBy: 'X', rationale: 'r' });
+    let landedUnaccepted = false;
+    try { ob.land(s3.id, { register: target, apply: () => {}, by: 'Y' }); landedUnaccepted = true; } catch (_) { /* refused */ }
+    if (landedUnaccepted) v.push('evidence nobody accepted was landed');
+
+    // --- A rejection is explained, so it can be appealed --------------------------------------
+    let unexplained = false;
+    try { ob.reject(s3.id, { by: 'Registrar' }); } catch (e) { unexplained = !!e.failClosed; }
+    if (!unexplained) v.push('evidence was rejected with no reason recorded');
+    ob.reject(s3.id, { by: 'Registrar', reason: 'the exercise was not attested by its owner' });
+
+    // --- The audit trail keeps everything, including what was refused -------------------------
+    const audit = ob.auditTrail();
+    if (audit.count !== 3) v.push('the audit trail lost a submission');
+    if (audit.landed !== 1 || audit.rejected !== 2) v.push(`the audit trail reports ${audit.landed} landed and ${audit.rejected} rejected, expected 1 and 2`);
+    if (!audit.fullyAttributed) v.push('a landed record does not name who submitted it, who accepted it and why');
+    if (audit.rejections.length !== 2) v.push('rejections were not kept — a register that records only what was accepted tells you what people believed rather than what they tried');
+    for (const r of audit.rejections) if (!r.reason) v.push(`rejection '${r.id}' records no reason`);
+    if (!audit.byType.length) v.push('the audit trail does not break down by evidence type');
+    if (audit.authorizes !== false) v.push('the onboarding audit trail claims authority');
+  }),
+
+  fit('APP-FIT-LEGAL-DEPENDENCY-GRAPH', 'The chain from capability to readiness runs through legal authority, and an unknown authority breaks it at the first hop', (v) => {
+    const graph = require('../src/graph/enterprise-graph');
+    const { LegalAuthorityRegistry } = require('../src/legislation/legal-authority');
+    const ir = require('../src/governance/institutional-resilience');
+    const DAY = 24 * 3600_000;
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- The chain is the one Part 14 names, in order -----------------------------------------
+    const blind = graph.legalDependencyGraph({ controls, now: 0 });
+    if (blind.chain.join('→') !== 'capability→legal-authority→policy→adr→control→evidence→readiness') {
+      v.push(`the legal dependency chain is '${blind.chain.join(' → ')}'`);
+    }
+    // Every new node and edge kind is declared with a meaning.
+    for (const required of ['capability', 'legal-authority']) if (!graph.NODE_KINDS[required]) v.push(`node kind '${required}' is not declared`);
+    for (const required of ['authorised-by', 'enables']) if (!graph.EDGE_KINDS[required]) v.push(`edge kind '${required}' is not declared`);
+    if (!graph.EDGE_EVIDENCE['authorised-by']) v.push('the authorised-by edge names no control that would fail if it were wrong');
+    if (blind.unexplainedEdges.length) v.push(`edges with no stated meaning: ${blind.unexplainedEdges.join(', ')}`);
+
+    // --- THE RULE: an unknown legal dependency blocks readiness -------------------------------
+    if (!blind.blocksReadiness) v.push('a graph with no legal authority at all did not block readiness');
+    if (blind.unknownAuthorities.length !== Object.keys(ir.CRITICAL_CAPABILITIES).length) v.push('not every capability was reported as having an unknown authority');
+    if (blind.ready.length) v.push('a capability was reported ready with no recorded legal basis');
+    for (const b of blind.blocked) {
+      if (b.brokenAt !== 'legal-authority') v.push(`'${b.capability}' is blocked at '${b.brokenAt}', expected the first hop`);
+      if (!/broken at the first hop/.test(b.reason)) v.push(`'${b.capability}' does not say where the chain breaks`);
+    }
+    if (!/permitted to exist/.test(blind.note)) v.push('the graph does not say what an unrecorded authority actually means');
+
+    // --- …and a fully declared, reviewed estate clears it -------------------------------------
+    const reg = new LegalAuthorityRegistry({ clock: () => 0 });
+    for (const c of Object.keys(ir.CRITICAL_CAPABILITIES)) {
+      reg.declare(c, {
+        kind: 'legislation', instrument: 'an instrument recorded by the institution',
+        approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 365, expiresAt: 1000 * DAY,
+        evidence: ['APP-FIT-LEGISLATIVE-IMPACT'], scope: 'the capability as declared', declaredBy: 'Legal Informatics Team',
+      });
+      reg.review(c, { by: 'Attorney General Chambers', at: 1 });
+    }
+    const full = graph.legalDependencyGraph({ authorities: reg, controls, now: 2 });
+    if (full.blocksReadiness) v.push(`a fully authorised estate still blocked readiness: ${full.blocked.map((b) => b.reason).join('; ')}`);
+    if (full.ready.length !== Object.keys(ir.CRITICAL_CAPABILITIES).length) v.push('not every capability reached readiness with a reviewed authority and holding controls');
+    if (!full.nodeCount || !full.edgeCount) v.push('the graph produced no nodes or edges');
+
+    // --- The chain breaks at the control hop too, and says which hop --------------------------
+    const oneMissing = graph.legalDependencyGraph({ authorities: reg, controls: controls.filter((c) => c.id !== 'APP-FIT-KNOWLEDGE-CONTINUITY'), now: 2 });
+    if (!oneMissing.blocksReadiness) v.push('a missing detecting control did not block readiness');
+    if (!oneMissing.blocked.every((b) => b.brokenAt === 'control-evidence')) v.push('a break at the control hop was reported as a break somewhere else');
+    // An expired authority breaks it at the first hop again, without anybody withdrawing anything.
+    const later = graph.legalDependencyGraph({ authorities: reg, controls, now: 2000 * DAY });
+    if (!later.blocksReadiness) v.push('an expired legal authority did not block readiness');
+    if (later.authorizes !== false) v.push('the legal dependency graph claims authority');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

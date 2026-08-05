@@ -44,6 +44,9 @@ const NODE_KINDS = {
   owner: { source: 'src/governance/ownership.js', label: 'An accountable authority.' },
   'readiness-dimension': { source: 'src/assurance/evidence-confidence.js', label: 'One of the ten independent readiness dimensions.' },
   'compliance-obligation': { source: 'src/legislation/registry.js', label: 'A legal or regulatory obligation.' },
+  // Phase 15, Part 14.
+  capability: { source: 'src/governance/institutional-resilience.js', label: 'A critical institutional capability.' },
+  'legal-authority': { source: 'src/legislation/legal-authority.js', label: 'The recorded legal basis on which a capability operates.' },
 };
 
 // Edge kinds, each stating what the edge MEANS. An edge whose meaning is not written down is a line
@@ -61,11 +64,15 @@ const EDGE_KINDS = {
   'mandated-by': 'The source exists because of this obligation.',
   'threatens': 'The risk bears on the target.',
   'derived-from': 'The dataset is derived from the target.',
+  'authorised-by': 'The capability operates on the authority of the target. Without it the capability has no legal basis, whatever else is true of it.',
+  'enables': 'The source is one of the things the target needs in order to be ready.',
 };
 
 // Which executable check would fail if an edge of this kind were wrong. This is what makes an edge
 // evidenced rather than merely asserted.
 const EDGE_EVIDENCE = {
+  'authorised-by': 'APP-FIT-LEGAL-AUTHORITY',
+  enables: 'APP-FIT-GLOBAL-INVARIANT',
   decides: 'APP-FIT-ADR-GOVERNANCE',
   'depends-on': 'APP-FIT-CONTEXT-MAP',
   'runs-in': 'APP-FIT-CONTEXT-MAP',
@@ -462,4 +469,115 @@ class EnterpriseGraph {
   }
 }
 
-module.exports = { EnterpriseGraph, NODE_KINDS, EDGE_KINDS, EDGE_EVIDENCE };
+// --- Legal dependency analysis (Phase 15, Part 14) ------------------------------------------------
+//
+//   Capability → Legal Authority → Policy → ADR → Control → Evidence → Readiness
+//
+// Every other chain in this platform starts from a technical event and works outward to a citizen.
+// This one starts from a question nobody has been able to answer mechanically: *on what authority
+// does this capability operate, and what would break if that authority went away?*
+//
+// The rule the phase requires, and the reason this is a graph rather than a table:
+//
+//   AN UNKNOWN LEGAL DEPENDENCY BLOCKS READINESS. A capability whose authority is unrecorded is not
+//   a capability with a small gap in its paperwork. It is one nobody can say is permitted to exist,
+//   and the chain from it to readiness is broken at the first hop.
+//
+// Built from the registries rather than declared here, so a capability added to the resilience model
+// or an authority declared in the legal register appears in this graph without anybody remembering.
+function legalDependencyGraph({ authorities = null, controls = [], now = 0 } = {}) {
+  const ir = require('../governance/institutional-resilience');
+  const multiRegion = require('../twin2/multi-region');
+  const adrGovernance = require('../architecture/adr-governance');
+  const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+  const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+  const existingAdrs = new Set(adrGovernance.adrFiles().map((f) => `ADR-${f.slice(0, 4)}`));
+
+  const nodes = [];
+  const edges = [];
+  const add = (kind, id, attrs = {}) => { if (!nodes.some((n) => n.id === id)) nodes.push({ kind, id, ...attrs }); return id; };
+  const link = (from, to, rel, why) => edges.push({ from, to, rel, meaning: EDGE_KINDS[rel], why, evidence: EDGE_EVIDENCE[rel] || null });
+
+  const chains = Object.keys(ir.CRITICAL_CAPABILITIES).sort().map((capability) => {
+    const spec = ir.CRITICAL_CAPABILITIES[capability];
+    add('capability', capability, { title: spec.title, constitutional: spec.constitutional, contexts: spec.contexts });
+
+    // 1. Capability → Legal authority. The hop that is currently missing for most of them.
+    const authority = authorities ? authorities.state(capability, { now, controls }) : { state: 'unknown', authorized: false, declaration: null, reason: 'no legal authority registry was supplied' };
+    const authorityId = `authority:${capability}`;
+    add('legal-authority', authorityId, {
+      state: authority.state, authorized: authority.authorized,
+      instrument: authority.declaration ? authority.declaration.instrument : null,
+      approvingOrganization: authority.declaration ? authority.declaration.approvingOrganization : null,
+    });
+    link(capability, authorityId, 'authorised-by', authority.reason);
+
+    // 2. Legal authority → Policy. The operating rules governing the capability's contexts.
+    const policies = multiRegion.contextConsistency().filter((p) => p.declared && spec.contexts.includes(p.context));
+    for (const p of policies) {
+      const policyId = `policy:consistency:${p.context}`;
+      add('policy', policyId, { model: p.model, adr: p.adr || null });
+      link(authorityId, policyId, 'governs', `the authority for '${capability}' is exercised through the operating rules of '${p.context}'`);
+
+      // 3. Policy → ADR.
+      if (p.adr) {
+        add('adr', p.adr, { exists: existingAdrs.has(p.adr) });
+        link(policyId, p.adr, 'decides', existingAdrs.has(p.adr) ? 'the decision that chose this stance' : 'cites a decision that does not exist');
+      }
+    }
+
+    // 4. Capability → Control → Evidence. The controls that would fail if the capability's
+    //    dependencies broke, which is what the resilience model already knows.
+    const detecting = [...new Set(Object.values(ir.DEPENDENCY_KINDS).map((k) => k.detectedBy).filter(Boolean))].sort();
+    for (const control of detecting) {
+      add('control', control, { runs: ran.has(control) });
+      link(capability, control, 'governs', `a dependency of '${capability}' is detected by this control`);
+      if (ran.has(control)) {
+        const evidenceId = `evidence:${control}`;
+        add('evidence', evidenceId, { pass: holding.get(control) !== false });
+        link(control, evidenceId, 'verified-by', holding.get(control) === false ? 'ran and did not hold' : 'ran and held');
+      }
+    }
+
+    // 5. → Readiness. The last hop, and the one the whole chain exists to reach.
+    const readinessId = `readiness:${capability}`;
+    const controlsHold = detecting.every((c) => ran.has(c) && holding.get(c) !== false);
+    const ready = authority.authorized && controlsHold;
+    add('readiness-dimension', readinessId, { ready, blockedBy: ready ? [] : [...(authority.authorized ? [] : ['legal-authority']), ...(controlsHold ? [] : ['control-evidence'])] });
+    link(authorityId, readinessId, 'enables', authority.authorized ? 'the capability has a reviewed legal basis' : `readiness is blocked: ${authority.reason}`);
+
+    return {
+      capability, constitutional: spec.constitutional,
+      authority: { id: authorityId, state: authority.state, authorized: authority.authorized, reason: authority.reason },
+      policies: policies.map((p) => `policy:consistency:${p.context}`),
+      adrs: [...new Set(policies.map((p) => p.adr).filter(Boolean))].sort(),
+      controls: detecting,
+      controlsHold, ready,
+      // THE RULE. Every hop must exist for the chain to carry anything.
+      brokenAt: !authority.authorized ? 'legal-authority' : !controlsHold ? 'control-evidence' : null,
+      blocksReadiness: !ready,
+      reason: !authority.authorized
+        ? `the chain from '${capability}' to readiness is broken at the first hop: ${authority.reason}`
+        : !controlsHold ? `every hop resolves except control evidence: ${detecting.filter((c) => !ran.has(c) || holding.get(c) === false).join(', ')}`
+          : 'every hop from capability to readiness resolves',
+    };
+  });
+
+  const blocked = chains.filter((c) => c.blocksReadiness);
+  return {
+    chain: ['capability', 'legal-authority', 'policy', 'adr', 'control', 'evidence', 'readiness'],
+    chains, nodes, edges,
+    nodeCount: nodes.length, edgeCount: edges.length,
+    // Every edge states its meaning and the control that would fail if it were wrong; an edge with
+    // neither is a line on a diagram.
+    unexplainedEdges: edges.filter((e) => !e.meaning || !e.why).map((e) => `${e.from} → ${e.to}`),
+    blocked: blocked.map((c) => ({ capability: c.capability, brokenAt: c.brokenAt, reason: c.reason, constitutional: c.constitutional })),
+    blocksReadiness: blocked.length > 0,
+    unknownAuthorities: chains.filter((c) => c.authority.state === 'unknown').map((c) => c.capability),
+    ready: chains.filter((c) => c.ready).map((c) => c.capability),
+    now, failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'An unknown legal dependency blocks readiness. A capability whose authority is unrecorded is not one with a paperwork gap — it is one nobody can say is permitted to exist, and the chain to readiness is broken at the first hop.',
+  };
+}
+
+module.exports = { EnterpriseGraph, NODE_KINDS, EDGE_KINDS, EDGE_EVIDENCE, legalDependencyGraph };

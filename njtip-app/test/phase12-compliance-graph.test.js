@@ -165,14 +165,22 @@ const graph = (opts = {}) => new EnterpriseGraph({
   ...opts,
 });
 
-test('all thirteen node kinds are declared, sourced and populated', () => {
+test('every node kind is declared and sourced, and the enterprise graph populates its own thirteen', () => {
   const g = graph();
-  const required = ['adr', 'bounded-context', 'service', 'api', 'risk', 'control', 'evidence', 'policy', 'dataset', 'metric', 'owner', 'readiness-dimension', 'compliance-obligation'];
-  assert.deepStrictEqual(Object.keys(NODE_KINDS).sort(), [...required].sort());
-  for (const kind of required) {
+  // The thirteen the enterprise graph builds. Phase 15, Part 14 added `capability` and
+  // `legal-authority` for the legal dependency graph, which is built by `legalDependencyGraph()`
+  // from the resilience and legal-authority registries rather than by this builder.
+  const populated = ['adr', 'bounded-context', 'service', 'api', 'risk', 'control', 'evidence', 'policy', 'dataset', 'metric', 'owner', 'readiness-dimension', 'compliance-obligation'];
+  for (const kind of populated) {
     assert.ok(NODE_KINDS[kind].source, kind);
     assert.ok(g.stats().byKind[kind] > 0, `no '${kind}' nodes`);
   }
+  // Every declared kind states where it comes from, populated here or not.
+  for (const [kind, spec] of Object.entries(NODE_KINDS)) {
+    assert.ok(spec.source, kind);
+    assert.ok(spec.label, kind);
+  }
+  assert.deepStrictEqual(Object.keys(NODE_KINDS).filter((k) => !populated.includes(k)).sort(), ['capability', 'legal-authority']);
 });
 
 test('every edge kind states what it means, and an unmeant edge is refused', () => {
