@@ -387,23 +387,21 @@ const FORECAST_DIMENSIONS = {
 };
 
 // The interval. Deliberately simple and deliberately wide.
+// Phase 15, Part 10 moved the interval arithmetic into `src/assurance/evidence-confidence.js`, which
+// is where evidence about evidence belongs. This wrapper keeps the governance-forecast shape — the
+// observation count and the `constrained` flag — and delegates the maths, so the two cannot drift
+// into two slightly different definitions of the same band.
+//
+// 'Constrained' means the interval is narrow enough to be worth reading: a half-width under a quarter
+// of the scale, which needs more than sixteen observations. Five observations give ±0.45, which spans
+// almost the whole range and constrains nothing.
 function forecastInterval(point, observations) {
-  if (point === null || point === undefined) {
-    return { point: null, interval: null, observations, constrained: false, method: 'no point estimate could be derived, so no interval is offered — an interval around nothing is a picture of nothing' };
-  }
-  if (!observations) {
-    return { point, interval: [0, 1], observations: 0, constrained: false, method: 'no observations: the evidence does not constrain this figure at all, and the interval says so rather than flattering the estimate' };
-  }
-  const half = Math.min(1, 1 / Math.sqrt(observations));
-  // 'Constrained' means the interval is narrow enough to be worth reading — a half-width under a
-  // quarter of the scale, which needs more than sixteen observations. Five observations give ±0.45,
-  // which spans almost the whole range and constrains nothing; calling that constrained would be the
-  // exact failure this method exists to avoid.
+  const evidenceConfidence = require('../assurance/evidence-confidence');
+  const band = evidenceConfidence.interval(point, observations);
   return {
-    point: +point.toFixed(4),
-    interval: [+Math.max(0, point - half).toFixed(4), +Math.min(1, point + half).toFixed(4)],
-    observations, constrained: half < 0.25,
-    method: `half-width 1/√${observations} = ${half.toFixed(4)}. A coarse standard-error analogue over the observation count, NOT a statistical confidence interval — this platform has too few observations for one and says so rather than printing a narrow band it cannot support.`,
+    point: band.point, interval: band.interval, observations: observations || 0,
+    constrained: band.halfWidth !== null && band.halfWidth < 0.25,
+    method: band.method,
   };
 }
 

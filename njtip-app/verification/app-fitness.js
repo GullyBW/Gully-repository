@@ -7700,6 +7700,173 @@ module.exports = [
     if (mp.authorizes !== false) v.push('the multi-perspective ranking claims authority');
   }),
 
+  fit('APP-FIT-CONTROL-EFFECTIVENESS', 'A control with no performance evidence is unknown — never effective, never averaged into a rate', (v) => {
+    const ce = require('../src/assurance/control-effectiveness');
+    const MIN = 60_000, HOUR = 3600_000;
+
+    // --- Seven dimensions, each saying what it costs to be bad at it --------------------------
+    for (const required of ['detectionLatency', 'acknowledgementLatency', 'remediationLatency', 'falsePositiveRate', 'falseNegativeRate', 'historicalReliability', 'operationalAvailability']) {
+      if (!ce.EFFECTIVENESS_DIMENSIONS[required]) v.push(`effectiveness dimension '${required}' is not measured`);
+      if (!ce.THRESHOLDS[required]) v.push(`effectiveness dimension '${required}' has no threshold`);
+    }
+    for (const [id, d] of Object.entries(ce.EFFECTIVENESS_DIMENSIONS)) {
+      if (!d.question || !d.question.endsWith('?')) v.push(`dimension '${id}' states no question`);
+      if (!d.ifBad || d.ifBad.length < 30) v.push(`dimension '${id}' does not say what it costs to be bad at it — a latency with no consequence is a number on a dashboard`);
+      if (typeof d.lowerIsBetter !== 'boolean') v.push(`dimension '${id}' does not declare which direction is better`);
+    }
+    // Every threshold says it is declared, because none of them is a measurement.
+    for (const [id, t] of Object.entries(ce.THRESHOLDS)) if (!/declared/.test(t.basis)) v.push(`threshold '${id}' does not state that it is a declared judgement`);
+    // Four outcomes, and the one that makes false negatives measurable at all.
+    if (!ce.OUTCOMES['false-negative']) v.push('false negatives cannot be recorded, so the dimension that matters most is unmeasurable');
+    if (ce.OUTCOMES['false-negative'].fired) v.push('a false negative is recorded as the control having fired');
+
+    // --- An observation must be attributed and timestamped ------------------------------------
+    const reg = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (const [what, args] of [
+      ['no observer', { outcome: 'true-positive', occurredAt: 0, detectedAt: 1 }],
+      ['no occurrence time', { outcome: 'true-positive', detectedAt: 1, observedBy: 'CI' }],
+      ['a firing with no detection time', { outcome: 'true-positive', occurredAt: 0, observedBy: 'CI' }],
+      ['an unknown outcome', { outcome: 'probably-fine', occurredAt: 0, observedBy: 'CI' }],
+      ['detection before the condition', { outcome: 'true-positive', occurredAt: 10, detectedAt: 1, observedBy: 'CI' }],
+      ['an acknowledgement by nobody', { outcome: 'true-positive', occurredAt: 0, detectedAt: 1, acknowledgedAt: 2, observedBy: 'CI' }],
+      ['remediation with no acknowledgement', { outcome: 'true-positive', occurredAt: 0, detectedAt: 1, remediatedAt: 5, observedBy: 'CI' }],
+    ]) {
+      let rejected = false;
+      try { reg.record('APP-FIT-PROBE', args); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`an observation with ${what} was accepted`);
+    }
+
+    // --- THE RULE: no performance evidence means unknown --------------------------------------
+    const blind = ce.effectivenessDashboard({ controls: ['APP-FIT-A', 'APP-FIT-B'], now: 0 });
+    if (blind.unknown.length !== 2) v.push('controls with no observations were not reported as unknown');
+    if (blind.effectivenessRate !== null) v.push('an effectiveness rate was computed over controls nobody has observed');
+    if (blind.measurable) v.push('a dashboard with no observations reported itself measurable');
+    if (!/nothing here can say whether/.test(blind.effectivenessBasis)) v.push('the dashboard does not say that a green build is not operational evidence');
+    for (const r of blind.controls) {
+      if (r.effective !== null) v.push(`'${r.control}' with no evidence reported effective=${r.effective} rather than null`);
+      if (!/green control is not operational evidence/.test(r.reason)) v.push(`'${r.control}' does not explain what unknown means`);
+    }
+
+    // --- Every state is reachable, and each by the thing it names ------------------------------
+    const observed = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 20; i++) {
+      observed.record('APP-FIT-GOOD', { outcome: 'true-positive', occurredAt: i * HOUR, detectedAt: i * HOUR + 2 * MIN, acknowledgedAt: i * HOUR + 10 * MIN, acknowledgedBy: 'SRE', remediatedAt: i * HOUR + 30 * MIN, observedBy: 'CI' });
+    }
+    const good = ce.controlEffectiveness('APP-FIT-GOOD', { register: observed });
+    if (good.state !== 'effective') v.push(`a control observed working within every threshold reported '${good.state}' — this check would then have no success path`);
+    if (good.unknownDimensions.length) v.push(`a fully observed control still has unknown dimensions: ${good.unknownDimensions.join(', ')}`);
+    if (good.effective !== true) v.push('an effective control did not report effective=true');
+
+    // Noise: fires on nothing, so people mute it.
+    for (let i = 0; i < 10; i++) {
+      observed.record('APP-FIT-NOISY', { outcome: i < 3 ? 'true-positive' : 'false-positive', occurredAt: i * HOUR, detectedAt: i * HOUR + MIN, acknowledgedAt: i * HOUR + 2 * MIN, acknowledgedBy: 'SRE', observedBy: 'CI' });
+    }
+    const noisy = ce.controlEffectiveness('APP-FIT-NOISY', { register: observed });
+    if (noisy.state !== 'ineffective') v.push('a control firing on nothing seven times in ten was not reported as ineffective');
+    if (noisy.weakestDimension !== 'falsePositiveRate') v.push(`the noisy control's weakest dimension is '${noisy.weakestDimension}', expected falsePositiveRate`);
+
+    // Silence: the condition happened and it said nothing. The dimension nobody measures.
+    for (let i = 0; i < 10; i++) {
+      observed.record('APP-FIT-SILENT', {
+        outcome: i < 2 ? 'true-positive' : 'false-negative', occurredAt: i * HOUR,
+        detectedAt: i < 2 ? i * HOUR + MIN : null, acknowledgedAt: i < 2 ? i * HOUR + 2 * MIN : null,
+        acknowledgedBy: i < 2 ? 'SRE' : null, observedBy: 'an auditor who found it another way',
+      });
+    }
+    const silent = ce.controlEffectiveness('APP-FIT-SILENT', { register: observed });
+    if (silent.state !== 'ineffective') v.push('a control that stayed silent through eight of ten real conditions was not reported as ineffective');
+    if (silent.weakestDimension !== 'falseNegativeRate') v.push('a missed detection was not the weakest dimension');
+
+    // Slow: detects, and far too late to act on.
+    const slow = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 10; i++) slow.record('APP-FIT-SLOW', { outcome: 'true-positive', occurredAt: i * 100 * HOUR, detectedAt: i * 100 * HOUR + 30 * HOUR, acknowledgedAt: i * 100 * HOUR + 31 * HOUR, acknowledgedBy: 'SRE', observedBy: 'CI' });
+    if (ce.controlEffectiveness('APP-FIT-SLOW', { register: slow }).state !== 'ineffective') v.push('a control firing 30 hours after the condition was not reported as ineffective');
+    // Degraded sits between the two, or the middle band is unreachable.
+    const middling = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 10; i++) middling.record('APP-FIT-MID', { outcome: 'true-positive', occurredAt: i * HOUR, detectedAt: i * HOUR + 30 * MIN, acknowledgedAt: i * HOUR + 35 * MIN, acknowledgedBy: 'SRE', observedBy: 'CI' });
+    if (ce.controlEffectiveness('APP-FIT-MID', { register: middling }).state !== 'degraded') v.push('the degraded band is unreachable — a control has only two states');
+
+    // --- The rate excludes unobserved controls and says how many -------------------------------
+    const dash = ce.effectivenessDashboard({ register: observed, controls: ['APP-FIT-NEVER-WATCHED'], now: 0 });
+    if (!dash.unknown.includes('APP-FIT-NEVER-WATCHED')) v.push('an unobserved control was not carried into the dashboard as unknown');
+    if (dash.effectivenessRate === null) v.push('a dashboard with observed controls produced no rate');
+    if (!/excluded from the rate rather than counted as working/.test(dash.effectivenessBasis)) v.push('the rate does not say that unobserved controls were excluded');
+    if (dash.authorizes !== false) v.push('the effectiveness dashboard claims authority');
+    // The estimate carries its own sample size and interval.
+    if (good.reliabilityEstimate.sampleSize !== 20) v.push('the reliability estimate does not carry its sample size');
+    if (!good.reliabilityEstimate.interval) v.push('the reliability estimate carries no interval');
+  }),
+
+  fit('APP-FIT-STATISTICAL-CONFIDENCE', 'Every estimate carries its sample size, interval, quality and limitations — and unknown is never low', (v) => {
+    const ec = require('../src/assurance/evidence-confidence');
+    const dp = require('../src/architecture/drift-prevention');
+
+    // --- Four estimate states, and unknown is not a low one -----------------------------------
+    for (const required of ['unknown', 'provisional', 'indicative', 'established']) {
+      if (!ec.ESTIMATE_STATES[required]) v.push(`estimate state '${required}' is not modelled`);
+    }
+    if (ec.ESTIMATE_STATES.unknown.usable) v.push('an unknown estimate is marked usable');
+    if (ec.ESTIMATE_STATES.unknown.means === ec.ESTIMATE_STATES.provisional.means) v.push('unknown and provisional are described identically — no evidence and thin evidence need opposite responses');
+
+    // --- An estimate with no observations points nowhere ---------------------------------------
+    const none = ec.statisticalEstimate({ subject: 'nothing observed' });
+    if (none.state !== 'unknown') v.push('an estimate with no observations was not unknown');
+    if (none.point !== null) v.push('a point estimate was produced from no observations');
+    // No point estimate means NO interval, not a wide one: a band around nothing implies a value
+    // sits somewhere inside it. A point with no observations behind it is the different case, and
+    // there the interval does span [0,1].
+    if (none.interval !== null) v.push('an interval was drawn around a null point estimate');
+    const unsupported = ec.interval(0.9, 0);
+    if (!unsupported.interval || unsupported.interval[0] !== 0 || unsupported.interval[1] !== 1) v.push('a point estimate with no observations behind it did not span the whole range');
+    if (!/UNKNOWN is not a low estimate/.test(none.reason)) v.push('the estimate does not distinguish unknown from low');
+    let unnamed = false;
+    try { ec.statisticalEstimate({}); } catch (_) { unnamed = true; }
+    if (!unnamed) v.push('an estimate was produced of nothing in particular');
+
+    // --- Every estimate exposes what Part 10 requires ------------------------------------------
+    const e = ec.statisticalEstimate({ subject: 'a probe', successes: 18, observations: 20, quality: { band: 'high', weakestDimension: 'freshness', sound: true }, history: [0.88, 0.9, 0.91] });
+    for (const field of ['sampleSize', 'interval', 'evidenceQuality', 'statisticalLimitations', 'historicalStability']) {
+      if (e[field] === undefined || e[field] === null) v.push(`an estimate does not expose '${field}'`);
+    }
+    if (!e.statisticalLimitations.length) v.push('an estimate states no limitations');
+    if (!e.statisticalLimitations.some((l) => /not a statistical confidence interval/.test(l))) v.push('an estimate does not disclaim statistical significance');
+    if (e.qualityAssessed !== true) v.push('a supplied quality assessment was not recorded as assessed');
+    if (ec.statisticalEstimate({ subject: 'x', successes: 1, observations: 2 }).qualityAssessed !== false) v.push('an estimate with no quality assessment claimed one');
+    if (!ec.statisticalEstimate({ subject: 'x', successes: 1, observations: 2 }).statisticalLimitations.some((l) => /unknown/.test(l))) {
+      v.push('an estimate with no quality assessment does not say that how good the observations are is unknown');
+    }
+
+    // --- The estimate strengthens as evidence accumulates -------------------------------------
+    const weak = ec.statisticalEstimate({ subject: 'x', successes: 2, observations: 2 });
+    const strong = ec.statisticalEstimate({ subject: 'x', successes: 100, observations: 100 });
+    if (!(strong.halfWidth < weak.halfWidth)) v.push('the interval does not narrow as the sample grows');
+    if (weak.state !== 'provisional') v.push('two observations were not reported as provisional');
+    if (strong.state !== 'established') v.push('a hundred observations were not reported as established');
+    if (ec.statisticalEstimate({ subject: 'x', successes: 4, observations: 5 }).state !== 'indicative') v.push('the indicative band is unreachable');
+
+    const evolution = ec.confidenceEvolution({ subject: 'x', snapshots: [{ successes: 2, observations: 2 }, { successes: 40, observations: 50 }] });
+    if (!evolution.strengthening) v.push('a growing sample was not reported as strengthening the estimate');
+    if (evolution.direction !== 'strengthening') v.push('the direction of an accumulating estimate was not reported');
+    if (!/narrowed from/.test(evolution.reason)) v.push('the evolution does not say how the interval moved');
+    const shrunk = ec.confidenceEvolution({ subject: 'x', snapshots: [{ successes: 40, observations: 50 }, { successes: 2, observations: 2 }] });
+    if (shrunk.direction !== 'weakening') v.push('a shrinking sample was not reported as weakening the estimate — evidence can be lost as well as gained');
+    if (ec.confidenceEvolution({ subject: 'x', snapshots: [{ successes: 1, observations: 1 }] }).direction !== 'insufficient-data') v.push('an evolution was reported from one snapshot');
+
+    // --- Volatility is reported rather than smoothed ------------------------------------------
+    const steady = ec.statisticalEstimate({ subject: 'x', successes: 5, observations: 10, history: [0.5, 0.51, 0.5, 0.49] });
+    const swinging = ec.statisticalEstimate({ subject: 'x', successes: 5, observations: 10, history: [0.1, 0.9, 0.2, 0.8] });
+    if (!steady.historicalStability.stable) v.push('a steady estimate was reported as volatile');
+    if (swinging.historicalStability.stable) v.push('an estimate swinging between 0.1 and 0.9 was reported as stable — a volatile figure and a steady one at the same level are not the same evidence');
+    if (!swinging.statisticalLimitations.some((l) => /volatile/.test(l))) v.push('a volatile estimate does not warn that the current value is not settled');
+
+    // --- One definition of the interval, not two ----------------------------------------------
+    const viaAssurance = ec.interval(0.5, 25);
+    const viaForecast = dp.forecastInterval(0.5, 25);
+    if (JSON.stringify(viaAssurance.interval) !== JSON.stringify(viaForecast.interval)) v.push('the governance forecast and the evidence estimate compute different intervals for the same data');
+    if (viaAssurance.method !== viaForecast.method) v.push('the two interval callers state different methods');
+    if (dp.forecastInterval(0.5, 25).constrained !== true) v.push('the forecast wrapper lost its constrained flag');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

@@ -846,8 +846,130 @@ function report({ sources = {}, evidence = null, metrics = {} } = {}) {
   };
 }
 
+// --- Statistical confidence evolution (Phase 15, Part 10) -----------------------------------------
+//
+// Phase 14 put an interval on every governance forecast, computed from the observation count. Part 10
+// asks for the same discipline where the estimates actually live, and for one more thing: an estimate
+// should get STRONGER as evidence accumulates, and the reader should be able to see that happening.
+//
+// Two distinctions carry this module, and both are ones the platform makes everywhere else:
+//
+//   UNKNOWN IS NOT LOW. `low` means the evidence is thin and points somewhere. `unknown` means there
+//   is no evidence at all and the estimate points nowhere. A dashboard that renders them the same
+//   colour has told a board that "we looked and it is bad" and "we never looked" are the same
+//   situation, and they need opposite responses.
+//
+//   AN INTERVAL IS A CLAIM ABOUT THE EVIDENCE, NOT ABOUT THE ANSWER. It is computed only from the
+//   sample size, is deliberately coarse, and says on every row that it is not a statistical
+//   confidence interval — because this platform does not have the sample sizes for one and printing
+//   a narrow band it cannot support would be worse than printing nothing.
+const ESTIMATE_STATES = {
+  unknown: { usable: false, means: 'No observations at all. The estimate points nowhere, which is different from pointing somewhere bad.' },
+  provisional: { usable: false, means: 'Fewer than three observations. A reading, not a rate.' },
+  indicative: { usable: true, means: 'Enough observations for a direction, not enough for a number to be quoted.' },
+  established: { usable: true, means: 'Enough observations that the interval constrains the answer.' },
+};
+const ESTABLISHED_FROM = 17;   // where the 1/√n half-width first falls below a quarter of the scale
+const INDICATIVE_FROM = 3;
+
+// The canonical interval. Half-width 1/√n, capped at [0,1]. Deliberately coarse and honest about it.
+function interval(point, observations) {
+  if (point === null || point === undefined) {
+    return { point: null, interval: null, halfWidth: null, method: 'no point estimate could be derived, so no interval is offered — an interval around nothing is a picture of nothing' };
+  }
+  if (!observations) {
+    return { point, interval: [0, 1], halfWidth: 1, method: 'no observations: the evidence does not constrain this figure at all, and the interval says so rather than flattering the estimate' };
+  }
+  const half = Math.min(1, 1 / Math.sqrt(observations));
+  return {
+    point: +point.toFixed(4),
+    interval: [+Math.max(0, point - half).toFixed(4), +Math.min(1, point + half).toFixed(4)],
+    halfWidth: +half.toFixed(4),
+    method: `half-width 1/√${observations} = ${half.toFixed(4)}. A coarse standard-error analogue over the observation count, NOT a statistical confidence interval — this platform has too few observations for one and says so rather than printing a narrow band it cannot support.`,
+  };
+}
+
+// An estimate that carries everything Part 10 requires, so a reader can decide whether to use it
+// without going and finding the sample.
+function statisticalEstimate({ subject, successes = null, observations = 0, quality = null, history = [], limitations = [] } = {}) {
+  if (!subject) throw new Error('an estimate must name what it is an estimate of');
+  const n = Number(observations) || 0;
+  const point = n > 0 && successes !== null && successes !== undefined ? successes / n : null;
+  const band = interval(point, n);
+  const state = n === 0 ? 'unknown' : n < INDICATIVE_FROM ? 'provisional' : n < ESTABLISHED_FROM ? 'indicative' : 'established';
+
+  // Historical stability: how much the estimate has moved across the supplied history. Volatility is
+  // reported rather than smoothed, because a figure that swings is a different thing from one that
+  // sits still, even when their averages match.
+  let stability = null;
+  if (history.length >= 2) {
+    const deltas = history.slice(1).map((h, i) => Math.abs(h - history[i]));
+    const mean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+    stability = {
+      observations: history.length, meanAbsoluteChange: +mean.toFixed(4),
+      range: [+Math.min(...history).toFixed(4), +Math.max(...history).toFixed(4)],
+      stable: mean < 0.05,
+      reason: mean < 0.05 ? 'the estimate has moved little across the recorded history' : `the estimate has moved by ${mean.toFixed(3)} on average between periods — a volatile figure and a steady one at the same level are not the same evidence`,
+    };
+  }
+
+  return {
+    subject, ...band,
+    sampleSize: n, successes,
+    state, ...ESTIMATE_STATES[state],
+    // Evidence quality is the caller's assessment from `evidenceQuality()`; absent, it is unknown
+    // rather than assumed adequate.
+    evidenceQuality: quality ? { band: quality.band ?? null, weakest: quality.weakestDimension ?? null, sound: quality.sound ?? null } : null,
+    qualityAssessed: quality !== null && quality !== undefined,
+    historicalStability: stability,
+    // Stated on every estimate, so a reader never has to go and find out what it does not cover.
+    statisticalLimitations: [
+      'The interval is a function of the sample size alone. It says nothing about whether the sample is representative.',
+      'It is not a statistical confidence interval, and no significance is claimed or implied.',
+      ...(n === 0 ? ['There are no observations. The point estimate is null and the interval spans the whole range.'] : []),
+      ...(n > 0 && n < INDICATIVE_FROM ? [`${n} observation(s) is a reading rather than a rate.`] : []),
+      ...(stability && !stability.stable ? ['The estimate is volatile across the recorded history; the current value is not a settled one.'] : []),
+      ...(!quality ? ['Evidence quality was not assessed, so how good the observations are is unknown.'] : []),
+      ...limitations,
+    ],
+    // The sentence a reader needs when the estimate is null.
+    reason: state === 'unknown'
+      ? `no observation of '${subject}' has been recorded. UNKNOWN is not a low estimate — it is the absence of one, and the two need opposite responses.`
+      : `${successes} of ${n} observations; the interval reflects the sample size and nothing else.`,
+    informationalOnly: true, authorizes: false,
+  };
+}
+
+// How an estimate has evolved as evidence accumulated. The point of Part 10: a reader should be able
+// to see it getting stronger, or see that it is not.
+function confidenceEvolution({ subject, snapshots = [] } = {}) {
+  if (snapshots.length < 2) {
+    return { subject, snapshots: snapshots.length, direction: 'insufficient-data', reason: 'an evolution needs at least two snapshots; one is a reading' };
+  }
+  const rows = snapshots.map((s) => statisticalEstimate({ subject, successes: s.successes, observations: s.observations }));
+  const first = rows[0], last = rows[rows.length - 1];
+  const narrowed = last.halfWidth !== null && first.halfWidth !== null && last.halfWidth < first.halfWidth;
+  return {
+    subject, snapshots: rows.length, estimates: rows,
+    sampleGrowth: [first.sampleSize, last.sampleSize],
+    firstHalfWidth: first.halfWidth, lastHalfWidth: last.halfWidth,
+    // The thing Part 10 asks to be visible.
+    strengthening: narrowed,
+    stateChange: `${first.state} → ${last.state}`,
+    direction: narrowed ? 'strengthening' : last.halfWidth === first.halfWidth ? 'flat' : 'weakening',
+    reason: narrowed
+      ? `the interval narrowed from ±${first.halfWidth} to ±${last.halfWidth} as the sample grew from ${first.sampleSize} to ${last.sampleSize}`
+      : last.sampleSize < first.sampleSize
+        ? 'the sample shrank, so the estimate is weaker than it was — evidence can be lost as well as gained'
+        : 'the sample did not grow, so the estimate is no better supported than it was',
+    informationalOnly: true, authorizes: false,
+  };
+}
+
 module.exports = {
   SOURCE_KINDS, DEFAULT_MAX_AGE_MS, CONFIDENCE_BANDS, CONFIDENCE_METHOD,
+  ESTIMATE_STATES, ESTABLISHED_FROM, INDICATIVE_FROM,
+  interval, statisticalEstimate, confidenceEvolution,
   READINESS_DIMENSIONS, DORA_BANDS, MATURITY_LEVELS,
   DIMENSION_DEPENDENCIES, TEST_TYPES, GOVERNANCE_MATURITY_LEVELS, QUALITY_DIMENSIONS,
   evidenceQuality, evidenceQualityDashboard,
