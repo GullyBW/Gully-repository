@@ -91,7 +91,9 @@ function readIfPresent(file) { try { return fs.readFileSync(file, 'utf8'); } cat
 
 function serverRoutes() {
   const src = readIfPresent(path.join(ROOT, 'src', 'server.js')) || '';
-  const literals = new Set([...src.matchAll(/p === '(\/api\/[^']+)'/g)].map((m) => m[1]));
+  // Every literal path the server compares against, not only `/api/...` — the OpenAPI check below
+  // needs `/healthz`, `/readyz` and `/metrics` too, and they are routes like any other.
+  const literals = new Set([...src.matchAll(/p === '(\/[^']*)'/g)].map((m) => m[1]));
   const patterns = [...src.matchAll(/p\.match\((\/(?:\\.|\[[^\]]*\]|[^/\\])+\/)\)/g)]
     .map((m) => m[1]).filter((r) => r.includes('api')).map((r) => new RegExp(r.slice(1, -1)));
   return { literals, patterns };
@@ -270,20 +272,292 @@ function verifyProcedures({ documentsToCheck = null } = {}) {
   };
 }
 
+// --- Diagram assurance (Phase 14, Part 5) ---------------------------------------------------------
+//
+// Prose claims were the easy half. A diagram is the part of the documentation people actually trust,
+// because it is quick to read and looks authoritative — and it is the part that rots fastest, because
+// nothing in a normal build touches it. A box labelled with a bounded context that was renamed two
+// phases ago will sit in an architecture diagram indefinitely, and every reader will believe it.
+//
+// So diagrams are verified the same way prose is: every NODE must resolve to something that exists,
+// and every EDGE must correspond to a relationship the implementation actually declares. A diagram
+// that draws an arrow the architecture does not have is not a simplification — it is a claim about
+// the system, and it is false.
+//
+// Two rules, both learned from the prose checker:
+//
+//   A DIAGRAM WITH NO EXTRACTABLE NODES IS A FINDING. Silently matching nothing is how a checker
+//   reports 100% coverage of zero diagrams.
+//
+//   THE CORPUS HAS A FLOOR. `MINIMUM_DIAGRAMS` fails the build if the diagrams disappear, because a
+//   documentation set with no diagrams passes every check here trivially.
+const DIAGRAM_KINDS = {
+  architecture: {
+    description: 'Bounded contexts and the declared dependencies between them.',
+    resolvedMeans: 'Every node is a bounded context in the context map; every edge is a declared dependency.',
+    ifWrong: 'A reviewer reasons about a structure the platform does not have.',
+  },
+  sequence: {
+    description: 'An ordered interaction between named participants.',
+    resolvedMeans: 'Every participant is a modelled service, a bounded context, or a declared external actor.',
+    ifWrong: 'An engineer implements against a conversation that never happens.',
+  },
+  deployment: {
+    description: 'Regions, zones and what runs where.',
+    resolvedMeans: 'Every node is a declared region or deployment zone.',
+    ifWrong: 'A failover is planned against a topology that is not deployed.',
+  },
+  infrastructure: {
+    description: 'Services and the dependencies between them.',
+    resolvedMeans: 'Every node is a service in the operational topology; every edge is a declared dependency.',
+    ifWrong: 'Blast radius is estimated from a picture rather than from the topology, and the picture is kinder.',
+  },
+  'process-flow': {
+    description: 'A chain of consequences or steps through the platform.',
+    resolvedMeans: 'Every node is a declared mission-chain node; every edge is a declared link.',
+    ifWrong: 'A board is shown a consequence chain the forecast does not actually traverse.',
+  },
+  openapi: {
+    description: 'A documented HTTP operation.',
+    resolvedMeans: 'The path appears in the generated OpenAPI document and a route serves it.',
+    ifWrong: 'An integrator builds against an endpoint that does not exist.',
+  },
+  state: {
+    description: 'A state machine: states and the transitions between them.',
+    resolvedMeans: 'Every state and every transition exists in the implementation\'s transition table.',
+    ifWrong: 'An operator expects a transition the platform refuses, in the middle of an incident.',
+  },
+};
+
+// Below this the diagrams have been deleted rather than the corpus being clean.
+const MINIMUM_DIAGRAMS = 5;
+
+// Pull every fenced mermaid block out of a document, along with the `kind:` marker the diagram must
+// declare. An undeclared kind is a finding: a checker cannot verify a diagram it cannot classify, and
+// guessing from the mermaid header would let a renamed diagram slip into the weakest ruleset.
+function extractDiagrams(text, { document = '' } = {}) {
+  const out = [];
+  for (const m of text.matchAll(/```mermaid\n([\s\S]*?)```/g)) {
+    const body = m[1];
+    const declared = body.match(/%%\s*njtip:kind=([a-z-]+)\s*(?:source=([^\s%]+))?/);
+    out.push({
+      document, kind: declared ? declared[1] : null, source: declared ? declared[2] || null : null,
+      body, header: (body.split('\n').find((l) => l.trim() && !l.trim().startsWith('%%')) || '').trim(),
+    });
+  }
+  return out;
+}
+
+// Mermaid node identifiers and edges, read structurally. Deliberately narrow: it understands the
+// subset the platform's own diagrams use, and anything it cannot parse is reported rather than
+// skipped.
+function parseMermaid(body) {
+  const lines = body.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('%%'));
+  const header = lines[0] || '';
+  const nodes = new Set();
+  const edges = [];
+  const participants = [];
+  const states = new Set();
+  const unparsed = [];
+
+  for (const line of lines.slice(1)) {
+    if (/^(subgraph|end|direction|classDef|class |style |autonumber|Note )/.test(line)) continue;
+    // sequenceDiagram: `participant X as Label`, `A->>B: message`
+    const participant = line.match(/^participant\s+([A-Za-z0-9_-]+)(?:\s+as\s+(.+))?$/);
+    if (participant) { participants.push({ id: participant[1], label: participant[2] || participant[1] }); nodes.add(participant[1]); continue; }
+    const message = line.match(/^([A-Za-z0-9_-]+)\s*-?->>?\+?\s*([A-Za-z0-9_-]+)\s*:\s*(.+)$/);
+    if (message) { nodes.add(message[1]); nodes.add(message[2]); edges.push({ from: message[1], to: message[2], label: message[3] }); continue; }
+    // stateDiagram: `A --> B: event`
+    // flowchart/graph: `A[Label] --> B[Label]`, `A -->|label| B`
+    const edge = line.match(/^([A-Za-z0-9_:-]+)(?:[[({][^\])}]*[\])}])?\s*-->\s*(?:\|([^|]*)\|\s*)?([A-Za-z0-9_:-]+)(?:[[({][^\])}]*[\])}])?$/);
+    if (edge) {
+      const [, from, label, to] = edge;
+      nodes.add(from); nodes.add(to);
+      if (header.startsWith('stateDiagram')) { states.add(from); states.add(to); }
+      edges.push({ from, to, label: label ? label.trim() : null });
+      continue;
+    }
+    const bare = line.match(/^([A-Za-z0-9_:-]+)[[({][^\])}]*[\])}]$/);
+    if (bare) { nodes.add(bare[1]); continue; }
+    unparsed.push(line);
+  }
+  return { header, nodes: [...nodes].sort(), edges, participants, states: [...states].sort(), unparsed };
+}
+
+// What each diagram kind is checked against. Every resolver reads the implementation directly — a
+// curated list of "things a diagram may name" would be a second architecture-of-record.
+function diagramWorld() {
+  const contextMap = require('./context-map');
+  const telemetry = require('../observability/telemetry');
+  const multiRegion = require('../twin2/multi-region');
+  const bus = require('../observability/business');
+  const caseLifecycle = require('../domain/case-lifecycle');
+
+  const contexts = new Set(contextMap.ids());
+  const contextEdges = new Set(contextMap.ids().flatMap((id) => (contextMap.describe(id).dependsOn || []).map((d) => `${id}→${d.context}`)));
+  const services = new Set(Object.keys(telemetry.TOPOLOGY));
+  const serviceEdges = new Set(Object.entries(telemetry.TOPOLOGY).flatMap(([id, s]) => [
+    ...(s.dependsOn || []).map((d) => `${id}→${d}`),
+    ...(s.degradesOn || []).map((d) => `${id}→${d}`),
+  ]));
+  const zones = new Set(Object.values(telemetry.TOPOLOGY).map((s) => s.zone));
+  const regions = new Set(Object.keys(multiRegion.REGIONS));
+  const chainNodes = new Set(bus.missionDependencyGraph().nodes.map((n) => n.id));
+  const chainEdges = new Set(bus.MISSION_IMPACT_LINKS.map((l) => `${l.from}→${l.to}`));
+  // The case lifecycle's transitions are derived from `allowedEvents` and the event target table
+  // rather than read from a literal map, because that is where the implementation actually decides.
+  const caseStates = new Set(caseLifecycle.STATES);
+  const caseTransitions = new Set(caseLifecycle.STATES.flatMap((from) => caseLifecycle.allowedEvents(from).map((ev) => `${from}→${caseLifecycle.targetFor(ev)}`)));
+  return { contexts, contextEdges, services, serviceEdges, zones, regions, chainNodes, chainEdges, caseStates, caseTransitions };
+}
+
+// Verify one diagram against the implementation.
+function verifyDiagram(diagram, world = diagramWorld()) {
+  const spec = DIAGRAM_KINDS[diagram.kind];
+  const findings = [];
+  if (!spec) {
+    return {
+      ...diagram, nodes: [], edges: 0,
+      findings: [{ subject: diagram.header || '(empty)', detail: `the diagram declares no recognised kind — add '%% njtip:kind=<${Object.keys(DIAGRAM_KINDS).join('|')}>'. A diagram nothing can classify is a diagram nothing can check.` }],
+      sound: false,
+    };
+  }
+  const parsed = parseMermaid(diagram.body);
+  for (const line of parsed.unparsed) findings.push({ subject: line, detail: 'this line could not be parsed — an unparseable line is unverified, not verified' });
+  if (!parsed.nodes.length) findings.push({ subject: diagram.header || '(empty)', detail: 'no nodes could be extracted — a diagram nothing can be read out of cannot be checked against anything' });
+
+  const check = (names, known, what) => {
+    for (const n of names) if (!known.has(n)) findings.push({ subject: n, detail: `is not ${what}` });
+  };
+  const checkEdges = (known, what) => {
+    for (const e of parsed.edges) if (!known.has(`${e.from}→${e.to}`)) findings.push({ subject: `${e.from} → ${e.to}`, detail: `is drawn as an arrow and ${what}` });
+  };
+
+  switch (diagram.kind) {
+    case 'architecture':
+      check(parsed.nodes, world.contexts, 'a bounded context in the context map');
+      checkEdges(world.contextEdges, 'the context map declares no such dependency');
+      break;
+    case 'infrastructure':
+      check(parsed.nodes, world.services, 'a service in the operational topology');
+      checkEdges(world.serviceEdges, 'the topology declares no such dependency');
+      break;
+    case 'deployment':
+      check(parsed.nodes, new Set([...world.regions, ...world.zones]), 'a declared region or deployment zone');
+      break;
+    case 'process-flow':
+      check(parsed.nodes, world.chainNodes, 'a node in the mission chain');
+      checkEdges(world.chainEdges, 'the mission chain declares no such link');
+      break;
+    case 'state':
+      check(parsed.nodes, world.caseStates, 'a state in the case lifecycle');
+      checkEdges(world.caseTransitions, 'the lifecycle declares no such transition');
+      break;
+    case 'sequence': {
+      // Participants may be services, contexts, or an explicitly declared external actor written in
+      // capitals — a citizen is a real participant and is not a service.
+      const known = new Set([...world.services, ...world.contexts]);
+      for (const p of parsed.participants) {
+        if (!known.has(p.id) && !/^[A-Z][A-Za-z]*$/.test(p.id)) findings.push({ subject: p.id, detail: 'is neither a modelled service, a bounded context, nor an external actor written in CamelCase' });
+      }
+      if (!parsed.participants.length) findings.push({ subject: diagram.header, detail: 'a sequence diagram with no declared participants — every lifeline must be named so it can be resolved' });
+      if (!parsed.edges.length) findings.push({ subject: diagram.header, detail: 'a sequence diagram with no messages is a list of participants' });
+      break;
+    }
+    default:
+      findings.push({ subject: diagram.kind, detail: 'no resolver exists for this diagram kind' });
+  }
+  return {
+    document: diagram.document, kind: diagram.kind, header: parsed.header, source: diagram.source,
+    nodes: parsed.nodes, edges: parsed.edges.length, findings, sound: findings.length === 0,
+    ...spec,
+  };
+}
+
+// The OpenAPI half of Part 5. The document is generated from code, so the risk is not that it drifts
+// from the server — it is that the DOCUMENTATION tells an integrator about operations the spec does
+// not contain, or the spec publishes operations no route serves.
+function verifyOpenApi() {
+  const spec = require('../openapi').spec();
+  const routes = serverRoutes();
+  const findings = [];
+  const paths = Object.keys(spec.paths || {});
+  if (!paths.length) findings.push({ subject: 'openapi', detail: 'the generated specification publishes no paths at all' });
+  for (const p of paths) {
+    // `{param}` in OpenAPI; the server matches a literal or a pattern. A trailing `?` distinguishes
+    // a query-string operation from the same path under another verb, and is not part of the route.
+    const base = p.replace(/\?$/, '');
+    const candidates = [base, base.replace(/\{[^}]+\}/g, 'sample'), base.replace(/\{[^}]+\}/g, '1')];
+    if (!candidates.some((c) => routes.literals.has(c) || routes.patterns.some((r) => r.test(c)))) {
+      findings.push({ subject: p, detail: 'is published in the OpenAPI document and no route serves it' });
+    }
+  }
+  for (const [p, ops] of Object.entries(spec.paths || {})) {
+    for (const [method, op] of Object.entries(ops)) {
+      if (!op.operationId) findings.push({ subject: `${method.toUpperCase()} ${p}`, detail: 'has no operationId, so nothing can refer to it' });
+      if (!op.summary) findings.push({ subject: `${method.toUpperCase()} ${p}`, detail: 'has no summary' });
+      if (!op.responses || !Object.keys(op.responses).length) findings.push({ subject: `${method.toUpperCase()} ${p}`, detail: 'declares no responses' });
+    }
+  }
+  return {
+    paths: paths.length,
+    operations: Object.values(spec.paths || {}).reduce((a, ops) => a + Object.keys(ops).length, 0),
+    findings, sound: findings.length === 0,
+    note: 'The specification is generated from code, so this checks the other direction: that everything it publishes is actually served, and that every operation carries what an integrator needs.',
+  };
+}
+
+// The corpus-wide diagram report.
+function verifyDiagrams({ documentsToCheck = null } = {}) {
+  const world = diagramWorld();
+  const rows = [];
+  for (const relative of documentsToCheck || documents()) {
+    const text = readIfPresent(path.join(DOCS, relative));
+    if (text === null) continue;
+    for (const d of extractDiagrams(text, { document: relative })) rows.push(verifyDiagram(d, world));
+  }
+  const findings = rows.flatMap((r) => r.findings.map((f) => ({ document: r.document, kind: r.kind, ...f })));
+  const byKind = {};
+  for (const r of rows) {
+    const acc = (byKind[r.kind] = byKind[r.kind] || { kind: r.kind, diagrams: 0, sound: 0, nodes: 0, edges: 0 });
+    acc.diagrams += 1; acc.nodes += r.nodes.length; acc.edges += r.edges; if (r.sound) acc.sound += 1;
+  }
+  const openapi = verifyOpenApi();
+  return {
+    diagrams: rows, count: rows.length,
+    diagramKinds: Object.entries(DIAGRAM_KINDS).map(([kind, s]) => ({ kind, ...s })),
+    byKind: Object.values(byKind).sort((a, b) => String(a.kind).localeCompare(String(b.kind))),
+    findings, findingCount: findings.length,
+    openapi,
+    // The floor. A corpus with no diagrams passes every rule above trivially, which is exactly how a
+    // diagram checker comes to be verifying nothing.
+    minimumDiagrams: MINIMUM_DIAGRAMS,
+    extractorSound: rows.length >= MINIMUM_DIAGRAMS,
+    unclassified: rows.filter((r) => !DIAGRAM_KINDS[r.kind]).map((r) => `${r.document}: ${r.header}`),
+    sound: findings.length === 0 && rows.length >= MINIMUM_DIAGRAMS && openapi.sound,
+    failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'Every node in a governed diagram must resolve to something the implementation contains, and every arrow to a relationship it declares. An arrow the architecture does not have is not a simplification — it is a false claim about the system.',
+  };
+}
+
 function report({ controls = [] } = {}) {
   const verification = verify({ controls });
   const procedures = verifyProcedures({});
+  const diagrams = verifyDiagrams({});
   return {
-    verification, procedures,
+    verification, procedures, diagrams,
     governedDocuments: Object.entries(GOVERNED_DOCUMENTS).map(([doc, spec]) => ({ document: doc, ...spec })),
-    sound: verification.sound && procedures.complete,
+    sound: verification.sound && procedures.complete && diagrams.sound,
     blockers: [
       ...verification.unresolved.map((u) => `${u.document}: ${u.kind} '${u.value}' — ${u.detail}`),
       ...(verification.extractorSound ? [] : [`only ${verification.claims} claims were extracted from ${verification.documentCount} documents — the extractor has stopped working, and a check that finds nothing to check is worse than no check`]),
       ...procedures.incomplete.map((d) => `${d}: incomplete operational procedure`),
+      ...diagrams.findings.map((f) => `${f.document}: ${f.kind} diagram — '${f.subject}' ${f.detail}`),
+      ...(diagrams.extractorSound ? [] : [`only ${diagrams.count} governed diagram(s) were found, below the floor of ${MINIMUM_DIAGRAMS} — a corpus with no diagrams passes every diagram rule trivially`]),
+      ...diagrams.openapi.findings.map((f) => `openapi: '${f.subject}' ${f.detail}`),
     ],
     failClosed: true, informationalOnly: true, authorizes: false,
-    note: 'Documentation is verified against the implementation on every build. An unresolvable claim is a finding, never a skip, and the extractor\'s own yield is checked so it cannot pass by matching nothing.',
+    note: 'Documentation is verified against the implementation on every build. An unresolvable claim is a finding, never a skip; the extractor\'s own yield is checked so it cannot pass by matching nothing; and diagrams are held to the same rule as prose.',
   };
 }
 
@@ -291,4 +565,6 @@ module.exports = {
   CLAIM_KINDS, GOVERNED_DOCUMENTS, PROCEDURE_REQUIREMENTS, MINIMUM_CLAIMS,
   documents, claimKinds, extractClaims, verifyClaim, verifyDocument, verify, verifyProcedures, report,
   serverRoutes, npmScripts, adrNumbers,
+  DIAGRAM_KINDS, MINIMUM_DIAGRAMS, extractDiagrams, parseMermaid, diagramWorld,
+  verifyDiagram, verifyDiagrams, verifyOpenApi,
 };

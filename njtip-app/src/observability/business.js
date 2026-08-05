@@ -701,7 +701,21 @@ function validateMissionChain() {
   for (const o of Object.keys(MISSION_OUTCOMES)) {
     if (!MISSION_IMPACT_LINKS.some((l) => l.from === o && l.toLayer === 'strategic-goal')) violations.push(`mission objective '${o}' serves no strategic goal — why is it a mission objective?`);
   }
-  return { valid: violations.length === 0, violations, links: MISSION_IMPACT_LINKS.length, layers: MISSION_IMPACT_LAYERS.length };
+  // Phase 14, Part 3: every layer must land in exactly one horizon. A layer added without deciding
+  // when its consequences arrive would otherwise default to being reported nowhere, and a
+  // consequence reported nowhere is one nobody plans for.
+  for (const layer of MISSION_IMPACT_LAYERS) {
+    const owning = IMPACT_HORIZON_ORDER.filter((h) => IMPACT_HORIZONS[h].layers.includes(layer));
+    if (!owning.length) violations.push(`chain layer '${layer}' is assigned to no impact horizon — nothing says when its consequences arrive`);
+    if (owning.length > 1) violations.push(`chain layer '${layer}' is assigned to ${owning.length} horizons: ${owning.join(', ')}`);
+  }
+  for (const h of IMPACT_HORIZON_ORDER) {
+    for (const layer of IMPACT_HORIZONS[h].layers) {
+      if (!MISSION_IMPACT_LAYERS.includes(layer)) violations.push(`horizon '${h}' claims layer '${layer}', which is not in the mission chain`);
+    }
+    if (!IMPACT_HORIZONS[h].whatChangesHere || !IMPACT_HORIZONS[h].ifUnknown) violations.push(`horizon '${h}' does not say what changes there or what an unknown would mean`);
+  }
+  return { valid: violations.length === 0, violations, links: MISSION_IMPACT_LINKS.length, layers: MISSION_IMPACT_LAYERS.length, horizons: IMPACT_HORIZON_ORDER.length };
 }
 
 // Walk the extended chain from any node to the strategic goals it reaches, recording the whole path
@@ -857,6 +871,144 @@ function missionDependencyGraph() {
   };
 }
 
+// --- Temporal mission impact (Phase 14, Part 3) ---------------------------------------------------
+//
+// The Phase 13 forecast answers "what does this change cost?" as though the whole cost arrived at
+// once. It does not. An intake outage stops filings within minutes; the reports that were never filed
+// are missing from the caseload for months; the erosion of the belief that reporting is worth doing
+// shows up years later, if anybody is still measuring. A board given one figure will act on the
+// minutes and discount the years, because the years were never in the number.
+//
+// So impact is evaluated across five horizons. The layer a consequence sits in determines when it
+// manifests — a technical event is immediate by definition, a government mission outcome is not —
+// and the mapping is declared here rather than inferred, so adding a layer without deciding when it
+// lands fails the chain validation rather than silently landing in "immediate".
+//
+// THE RULE THAT SHAPES EVERYTHING BELOW: UNKNOWN IMPACT MUST NEVER BECOME "NO IMPACT". A horizon the
+// chain could not be traversed to reports `unknown`, and so does a horizon where the chain has impact
+// upstream and no declared link forward — because an undeclared path is a gap in the model, not
+// evidence of safety. "No declared impact" is reserved for the case where nothing was affected at
+// all, and even then it is stated as a limit of what is declared.
+const IMPACT_HORIZONS = {
+  immediate: {
+    within: 'minutes to hours', layers: ['technical-event', 'business-process'],
+    whatChangesHere: 'Services stop responding and work stops moving. This is the horizon monitoring already sees.',
+    ifUnknown: 'The platform cannot say what is happening right now, which is the one thing operations exists to know.',
+  },
+  'short-term': {
+    within: 'hours to days', layers: ['justice-service', 'citizen-impact'],
+    whatChangesHere: 'A justice service stops being delivered and a person experiences that directly.',
+    ifUnknown: 'Somebody may be being harmed and nothing in the platform would say so.',
+  },
+  'medium-term': {
+    within: 'weeks to months', layers: ['institutional-impact'],
+    whatChangesHere: 'The institution accumulates backlog, loses evidence, or loses the ability to answer for itself.',
+    ifUnknown: 'Damage is compounding inside an institution while its dashboards read green.',
+  },
+  'long-term': {
+    within: 'months to years', layers: ['mission-objective', 'strategic-goal'],
+    whatChangesHere: 'The objectives the platform exists for stop being achieved, whether or not it is running well.',
+    ifUnknown: 'The platform may be operating perfectly and failing at its purpose.',
+  },
+  'strategic-institutional': {
+    within: 'years, and not fully recoverable', layers: ['government-mission-outcome'],
+    whatChangesHere: 'Public confidence that reporting corruption is worth the risk. Rebuilt far more slowly than it is lost.',
+    ifUnknown: 'The most expensive consequence is the one nothing is measuring.',
+  },
+};
+const IMPACT_HORIZON_ORDER = ['immediate', 'short-term', 'medium-term', 'long-term', 'strategic-institutional'];
+
+function impactHorizons() { return IMPACT_HORIZON_ORDER.map((id) => ({ horizon: id, index: IMPACT_HORIZON_ORDER.indexOf(id), ...IMPACT_HORIZONS[id] })); }
+
+// Which horizon a mission-chain layer manifests in. Declared, not inferred.
+function horizonOfLayer(layer) {
+  return IMPACT_HORIZON_ORDER.find((h) => IMPACT_HORIZONS[h].layers.includes(layer)) || null;
+}
+
+// THE PART 3 REPORT. Time-aware propagation over the same declared links the point-in-time forecast
+// traverses, so the two can never disagree about what is reachable.
+function temporalMissionImpact({ change = 'unnamed change', failed = [], degraded = [] } = {}) {
+  const forecast = missionImpactForecast({ change, failed, degraded });
+
+  // What was reached at each layer, taken from the forecast rather than recomputed.
+  const reachedByLayer = {
+    'technical-event': forecast.technicalEvent.down,
+    'business-process': forecast.businessProcesses || [],
+    'justice-service': forecast.undeliveredServices,
+    'citizen-impact': forecast.citizenImpacts.map((i) => i.impact),
+    'institutional-impact': forecast.institutionalImpacts.map((i) => i.id),
+    'mission-objective': forecast.missionObjectives.map((o) => o.id),
+    'strategic-goal': forecast.strategicGoals.map((g) => g.id),
+    'government-mission-outcome': forecast.governmentMissionOutcomes.map((g) => g.id),
+  };
+  // A component nobody mapped, or nobody modelled, breaks the chain at its source: everything
+  // downstream of it is unknown rather than absent.
+  const coverageComplete = forecast.coverage.complete && forecast.unmodelledComponents.length === 0;
+
+  let upstreamImpact = false;
+  const horizons = IMPACT_HORIZON_ORDER.map((id) => {
+    const spec = IMPACT_HORIZONS[id];
+    const reached = spec.layers.flatMap((l) => reachedByLayer[l] || []);
+    const hadUpstream = upstreamImpact;
+    if (reached.length) upstreamImpact = true;
+
+    let state, reason;
+    if (!coverageComplete) {
+      state = 'unknown';
+      reason = `${forecast.unmappedComponents.length + forecast.unmodelledComponents.length} affected component(s) map to no declared justice service, so the chain cannot be traversed to this horizon. Unknown, not absent.`;
+    } else if (reached.length) {
+      state = 'impact';
+      reason = `${reached.length} declared consequence(s) manifest here: ${reached.join(', ')}`;
+    } else if (hadUpstream) {
+      state = 'unknown';
+      reason = 'the chain carries impact at an earlier horizon and declares no link forward from it — an undeclared path is a gap in the model, not evidence that nothing follows';
+    } else {
+      state = 'no-declared-impact';
+      reason = 'nothing upstream was affected, so nothing reaches this horizon through any declared link';
+    }
+    return {
+      horizon: id, index: IMPACT_HORIZON_ORDER.indexOf(id), within: spec.within, layers: spec.layers,
+      whatChangesHere: spec.whatChangesHere, ifUnknown: spec.ifUnknown,
+      reached, state,
+      // Never rendered as a boolean. `impacted: false` and `unknown` would print identically and mean
+      // opposite things.
+      impacted: state === 'impact', assessable: state !== 'unknown',
+      reason,
+    };
+  });
+
+  const unknown = horizons.filter((h) => h.state === 'unknown');
+  const impacted = horizons.filter((h) => h.state === 'impact');
+  const worst = impacted.length ? impacted[impacted.length - 1] : null;
+  return {
+    change, failed: [...failed].sort(), degraded: [...degraded].sort(),
+    horizons, horizonOrder: [...IMPACT_HORIZON_ORDER],
+    horizonSpecs: impactHorizons(),
+    pointInTime: forecast,
+    impactedHorizons: impacted.map((h) => h.horizon),
+    unknownHorizons: unknown.map((h) => h.horizon),
+    // The furthest horizon impact actually reaches. A change whose consequences stop at the immediate
+    // horizon is a different kind of change from one that reaches the strategic one, and a single
+    // severity score would have flattened them together.
+    furthestImpact: worst ? worst.horizon : null,
+    reachesStrategic: horizons[horizons.length - 1].state === 'impact',
+    // The timeline a board reads: what arrives when, in the order it arrives.
+    timeline: horizons.map((h) => ({
+      when: h.within, horizon: h.horizon,
+      expect: h.state === 'impact' ? h.whatChangesHere : h.state === 'unknown' ? `UNKNOWN — ${h.ifUnknown}` : 'Nothing reaches this horizon through a declared link.',
+      detail: h.reason,
+    })),
+    complete: unknown.length === 0,
+    boardSummary: unknown.length
+      ? `${change}: impact is assessable to ${impacted.length ? IMPACT_HORIZONS[impacted[impacted.length - 1].horizon].within : 'no horizon'}; beyond that it is UNKNOWN (${unknown.map((h) => h.horizon).join(', ')}) — which is not the same as nil.`
+      : worst
+        ? `${change}: consequences reach the ${worst.horizon} horizon (${worst.within}). ${worst.whatChangesHere}`
+        : `${change}: no declared consequence at any horizon. That is a statement about what is declared, not a guarantee.`,
+    failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'Unknown impact is never rendered as no impact. A horizon the chain cannot be traversed to, and a horizon where impact stops with no declared link forward, both report UNKNOWN — because an undeclared path is a gap in the model rather than evidence of safety.',
+  };
+}
+
 // --- Operational intelligence (Phase 13, Part 18) -------------------------------------------------
 //
 // The mission chain traces a technical event forward to a citizen. Part 18 asks the operational
@@ -939,6 +1091,7 @@ module.exports = {
   STRATEGIC_GOALS, SERVICE_DEPENDENCIES, INSTITUTIONAL_IMPACTS, GOVERNMENT_MISSION_OUTCOMES,
   justiceServices, citizenImpacts, strategicGoals, institutionalImpacts, governmentMissionOutcomes, missionImpactLinks, mappedComponents,
   validateMissionChain, traceToStrategic, missionImpactForecast,
+  IMPACT_HORIZONS, IMPACT_HORIZON_ORDER, impactHorizons, horizonOfLayer, temporalMissionImpact,
   traceForward, impactOf, validateChain, executiveAnalytics,
   assertPiiFree, fromEventLog, dwellTimes, derive, assess,
   correlation, correlateWithReliability, dashboard, report,

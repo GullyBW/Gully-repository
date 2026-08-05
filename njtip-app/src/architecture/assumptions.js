@@ -45,9 +45,66 @@ const PREDICATES = {
 
 const DAY = 24 * 3600_000;
 
+// --- Assumption dependency graph (Phase 14, Part 1) ----------------------------------------------
+//
+// A registry of independent assumptions is already better than a pile of comments, and it still gets
+// one thing badly wrong: assumptions are not independent. ASM-0001 ("every cross-context dependency
+// is declared") rests on ASM-0006 ("a fitness identifier names exactly one control"), because the
+// evidence cited for the first is a fitness function identified by name. If identifiers ever drifted
+// from what they check, the evidence for ASM-0001 would prove nothing — and nothing in the Phase 13
+// registry would have said so. The registry would have reported eight assumptions each at their own
+// confidence, and one of them would have been silently worthless.
+//
+// Three rules make the graph a control rather than a diagram:
+//
+//   1. CONFIDENCE FLOWS DOWNSTREAM AND ONLY DOWNWARD. An assumption can never be made more confident
+//      by what it rests on. Inheritance is a CEILING, applied after the intrinsic assessment, so a
+//      strong dependent resting on a weak upstream reports the weak level and says which upstream
+//      capped it.
+//
+//   2. A CASCADING FAILURE IS NOT A REDUCED CONFIDENCE. If a `necessary` upstream does not hold, the
+//      dependent does not hold either — that is a different fact from being less sure of it, and
+//      merging the two would let a broken foundation read as a slightly lower score.
+//
+//   3. A CYCLE IS REFUSED AT DECLARATION. Two assumptions that justify each other are two assumptions
+//      nobody has checked, and a propagation over a cycle either never terminates or quietly picks a
+//      starting point that decides the answer.
+
+// How hard an upstream assumption bears on a dependent.
+const DEPENDENCY_STRENGTHS = {
+  necessary: {
+    propagation: 'ceiling', cascades: true,
+    description: 'The dependent cannot be true unless the upstream is. Full confidence inheritance, and an invalid upstream invalidates the dependent.',
+    ifUpstreamFails: 'The dependent assumption does not hold either. Not "less certain" — not holding.',
+  },
+  supporting: {
+    propagation: 'softened-ceiling', cascades: false,
+    description: 'The dependent is weaker without the upstream but does not collapse. Inherits a ceiling one level better than the upstream.',
+    ifUpstreamFails: 'The dependent is weakened and reported as such; it is not invalidated.',
+  },
+  contextual: {
+    propagation: 'none', cascades: false,
+    description: 'The upstream informs how the dependent is read but does not carry it. Recorded for impact analysis; no confidence propagates.',
+    ifUpstreamFails: 'The dependent is listed as affected so a human can judge it. Nothing is derived.',
+  },
+};
+
+// What KIND of dependency this is. Declared rather than inferred, because the remedy differs: a
+// logical dependency is closed by re-reasoning, an evidential one by finding better evidence, an
+// operational one by changing how the platform runs, and a temporal one simply expires.
+const DEPENDENCY_TYPES = {
+  logical: { description: 'The dependent follows from the upstream by reasoning about the system.' },
+  evidential: { description: 'The evidence cited for the dependent is only meaningful if the upstream holds.' },
+  operational: { description: 'The dependent holds because of how the platform is currently operated.' },
+  temporal: { description: 'The dependent holds only while a condition recorded by the upstream persists.' },
+};
+
 function confidenceRank(level) { return CONFIDENCE_LEVELS.indexOf(level); }
 // Lower rank is stronger (high = 0). "Weaker of the two" therefore takes the higher rank.
 function weaker(a, b) { return confidenceRank(a) >= confidenceRank(b) ? a : b; }
+// One level better, floored at 'high'. A `supporting` dependency degrades the dependent without
+// dragging it all the way down to the upstream's level.
+function softened(level) { const i = confidenceRank(level); return CONFIDENCE_LEVELS[Math.max(0, i - 1)]; }
 
 class AssumptionRegistry {
   constructor({ clock = () => 0 } = {}) { this._clock = clock; this._items = new Map(); this._verifications = new Map(); }
@@ -55,6 +112,7 @@ class AssumptionRegistry {
   register(id, {
     statement, rationale, evidence = [], contexts = [], owner,
     reviewCadenceDays, expiresAt, verificationMethod, confidence = 'unknown', claim = null, at = null,
+    dependsOn = [],
   } = {}) {
     if (!id) throw new Error('an assumption needs an identifier');
     if (this._items.has(id)) throw new Error(`assumption '${id}' is already registered — amend it rather than re-registering`);
@@ -79,8 +137,207 @@ class AssumptionRegistry {
       reviewCadenceDays, expiresAt, verificationMethod,
       declaredConfidence: confidence, claim: claim ? { ...claim } : null,
       registeredAt, lastReviewedAt: null, lastReviewedBy: null,
+      dependsOn: [],
     });
+    for (const edge of dependsOn) this.declareDependency(id, edge);
     return this.describe(id);
+  }
+
+  // --- Part 1: the dependency graph ---------------------------------------------------------------
+
+  // Declare that `from` rests on `on`. Separate from registration because the platform's own
+  // assumptions depend on each other in both directions of the seeding order, and an API that forced
+  // a topological registration order would be an API people worked around.
+  declareDependency(from, { on, strength, type, rationale = null } = {}) {
+    const a = this._items.get(from);
+    if (!a) throw new Error('unknown assumption: ' + from);
+    if (!this._items.has(on)) throw new Error(`assumption '${from}' cannot depend on '${on}' — no such assumption is registered`);
+    if (from === on) { const e = new Error(`assumption '${from}' cannot depend on itself`); e.failClosed = true; throw e; }
+    if (!DEPENDENCY_STRENGTHS[strength]) throw new Error(`unknown dependency strength '${strength}' — one of ${Object.keys(DEPENDENCY_STRENGTHS).join(', ')}`);
+    if (!DEPENDENCY_TYPES[type]) throw new Error(`unknown dependency type '${type}' — one of ${Object.keys(DEPENDENCY_TYPES).join(', ')}`);
+    if (a.dependsOn.some((d) => d.on === on)) throw new Error(`'${from}' already declares a dependency on '${on}' — amend it rather than declaring it twice`);
+    // A cycle would make propagation either non-terminating or dependent on where you started, and
+    // two assumptions that justify each other are two assumptions nobody has checked.
+    if (this._reaches(on, from)) {
+      const e = new Error(`'${from}' → '${on}' would create a cycle — assumptions that justify each other are assumptions nobody has checked`);
+      e.failClosed = true; throw e;
+    }
+    a.dependsOn.push({ on, strength, type, rationale });
+    return this.describe(from);
+  }
+
+  // Can `start` reach `target` by following upstream edges?
+  _reaches(start, target) {
+    const seen = new Set();
+    const walk = (id) => {
+      if (id === target) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return (this._items.get(id)?.dependsOn || []).some((d) => walk(d.on));
+    };
+    return walk(start);
+  }
+
+  upstream(id) { const a = this._items.get(id); if (!a) throw new Error('unknown assumption: ' + id); return a.dependsOn.map((d) => ({ ...d })); }
+  downstream(id) {
+    if (!this._items.has(id)) throw new Error('unknown assumption: ' + id);
+    return this.all().flatMap((a) => a.dependsOn.filter((d) => d.on === id).map((d) => ({ assumption: a.id, strength: d.strength, type: d.type, rationale: d.rationale })));
+  }
+
+  // The graph as data: nodes, directed edges, roots, leaves and a topological order. Reported rather
+  // than drawn, so it cannot drift from the edges propagation actually traverses.
+  dependencyGraph() {
+    const nodes = this.all().map((a) => ({
+      assumption: a.id, owner: a.owner, verificationMethod: a.verificationMethod,
+      upstreamCount: a.dependsOn.length, downstreamCount: this.downstream(a.id).length,
+    }));
+    const edges = this.all().flatMap((a) => a.dependsOn.map((d) => ({ from: a.id, to: d.on, strength: d.strength, type: d.type, rationale: d.rationale })))
+      .sort((x, y) => x.from.localeCompare(y.from) || x.to.localeCompare(y.to));
+    // Kahn's algorithm over upstream edges. Anything left over would be a cycle, which declaration
+    // refuses — so a non-empty remainder means the guard has been bypassed and is a finding.
+    const indegree = new Map(nodes.map((n) => [n.assumption, this._items.get(n.assumption).dependsOn.length]));
+    const queue = [...indegree.entries()].filter(([, d]) => d === 0).map(([id]) => id).sort();
+    const order = [];
+    while (queue.length) {
+      const id = queue.shift();
+      order.push(id);
+      for (const d of this.downstream(id)) {
+        const left = indegree.get(d.assumption) - 1;
+        indegree.set(d.assumption, left);
+        if (left === 0) { queue.push(d.assumption); queue.sort(); }
+      }
+    }
+    return {
+      nodes, edges, edgeCount: edges.length,
+      strengths: Object.entries(DEPENDENCY_STRENGTHS).map(([id, s]) => ({ strength: id, ...s })),
+      types: Object.entries(DEPENDENCY_TYPES).map(([id, s]) => ({ type: id, ...s })),
+      // A root rests on nothing recorded here; a leaf carries nothing. Roots are where verification
+      // effort pays most, because everything downstream inherits from them.
+      roots: nodes.filter((n) => n.upstreamCount === 0).map((n) => n.assumption),
+      leaves: nodes.filter((n) => n.downstreamCount === 0).map((n) => n.assumption),
+      // Load-bearing: the assumptions the most others rest on, transitively.
+      loadBearing: nodes.map((n) => ({ assumption: n.assumption, carries: this._downstreamClosure(n.assumption).length }))
+        .filter((r) => r.carries > 0).sort((a, b) => b.carries - a.carries || a.assumption.localeCompare(b.assumption)),
+      order, acyclic: order.length === nodes.length,
+      unordered: nodes.filter((n) => !order.includes(n.assumption)).map((n) => n.assumption),
+    };
+  }
+
+  // Is this assumption currently INVALID — as distinct from being held with low confidence? Three
+  // ways: the last recorded verification found it did not hold, it has expired, or the caller is
+  // asking a what-if and named it.
+  invalidity(id, { now = null, invalidated = [] } = {}) {
+    const a = this.describe(id);
+    const t = now ?? this._clock();
+    if (invalidated.includes(id)) return { invalid: true, reason: 'named as invalid by the analysis' };
+    const checks = this.verifications(id);
+    if (checks.length && checks[checks.length - 1].holds === false) return { invalid: true, reason: 'the most recent verification found it did not hold' };
+    if (t >= a.expiresAt) return { invalid: true, reason: 'expired — an expired assumption is not a weaker one, it is one nobody is standing behind' };
+    return { invalid: false, reason: null };
+  }
+
+  // CONFIDENCE PROPAGATION. Intrinsic assessment first, then the ceiling every upstream imposes,
+  // walked in topological order so an upstream's own inherited level is known before it is applied.
+  propagateConfidence({ now = null, controls = [], invalidated = [] } = {}) {
+    const graph = this.dependencyGraph();
+    const rows = new Map();
+    const order = graph.acyclic ? graph.order : this.ids();
+    for (const id of order) {
+      const intrinsic = this.assessConfidence(id, { now, controls }).assessed;
+      const invalid = this.invalidity(id, { now, invalidated });
+      let effective = intrinsic;
+      const caps = [];
+      let cascadedFrom = null;
+      for (const edge of this.upstream(id)) {
+        const up = rows.get(edge.on);
+        const upLevel = up ? up.effective : this.assessConfidence(edge.on, { now, controls }).assessed;
+        const upInvalid = up ? up.invalid : this.invalidity(edge.on, { now, invalidated }).invalid;
+        if (edge.strength === 'necessary') {
+          caps.push({ from: edge.on, strength: edge.strength, type: edge.type, ceiling: upLevel, why: `necessary dependency on '${edge.on}', assessed '${upLevel}'` });
+          effective = weaker(effective, upLevel);
+          // Cascade: an invalid necessary upstream invalidates the dependent, transitively.
+          if (upInvalid && !cascadedFrom) cascadedFrom = edge.on;
+        } else if (edge.strength === 'supporting') {
+          const ceiling = softened(upLevel);
+          caps.push({ from: edge.on, strength: edge.strength, type: edge.type, ceiling, why: `supporting dependency on '${edge.on}' (assessed '${upLevel}') caps this at '${ceiling}'` });
+          effective = weaker(effective, ceiling);
+        } else {
+          caps.push({ from: edge.on, strength: edge.strength, type: edge.type, ceiling: null, why: `contextual dependency on '${edge.on}' — recorded for impact, no confidence propagates` });
+        }
+      }
+      const isInvalid = invalid.invalid || cascadedFrom !== null;
+      if (isInvalid) effective = 'unknown';
+      rows.set(id, {
+        assumption: id, owner: this.describe(id).owner,
+        intrinsic, effective,
+        // Named separately so a reader can see whether the drop came from this assumption or from
+        // something it rests on. "Weakened by ASM-0006" is actionable; a bare 'low' is not.
+        inherited: effective !== intrinsic,
+        limitedBy: caps.filter((c) => c.ceiling !== null && confidenceRank(c.ceiling) >= confidenceRank(effective)).map((c) => c.from),
+        upstreamCeilings: caps,
+        invalid: isInvalid,
+        cascaded: cascadedFrom !== null,
+        cascadedFrom,
+        invalidReason: invalid.invalid ? invalid.reason : cascadedFrom ? `a necessary upstream ('${cascadedFrom}') does not hold` : null,
+      });
+    }
+    const all = [...rows.values()].sort((a, b) => a.assumption.localeCompare(b.assumption));
+    return {
+      assumptions: all, count: all.length,
+      degraded: all.filter((r) => r.inherited && !r.invalid).map((r) => ({ assumption: r.assumption, from: r.intrinsic, to: r.effective, limitedBy: r.limitedBy })),
+      invalid: all.filter((r) => r.invalid).map((r) => r.assumption),
+      cascaded: all.filter((r) => r.cascaded).map((r) => ({ assumption: r.assumption, from: r.cascadedFrom })),
+      graph,
+      method: 'Intrinsic assessment first; then every upstream imposes a ceiling. `necessary` inherits the upstream level in full and cascades invalidity; `supporting` caps one level better; `contextual` propagates nothing.',
+      informationalOnly: true, authorizes: false,
+      note: 'Confidence flows downstream and only downward — an assumption is never made more confident by what it rests on. An invalid upstream produces a cascading FAILURE, not a lower score.',
+    };
+  }
+
+  // What does invalidating these assumptions cost? The downstream closure, with the distance and the
+  // strength chain that carries the effect, so a reader can disagree with any hop.
+  assumptionImpact(id, { now = null, controls = [] } = {}) {
+    if (!this._items.has(id)) throw new Error('unknown assumption: ' + id);
+    const rows = this._downstreamClosure(id);
+    const cascade = this.propagateConfidence({ now, controls, invalidated: [id] });
+    return {
+      assumption: id, affected: rows, affectedCount: rows.length,
+      wouldNotHold: rows.filter((r) => r.viaStrength === 'necessary').map((r) => r.assumption),
+      wouldBeWeakened: rows.filter((r) => r.viaStrength === 'supporting').map((r) => r.assumption),
+      toJudge: rows.filter((r) => r.viaStrength === 'contextual').map((r) => r.assumption),
+      contextsAffected: [...new Set([id, ...rows.map((r) => r.assumption)].flatMap((a) => this.describe(a).contexts))].sort(),
+      cascadeConfidence: cascade.assumptions.filter((c) => c.invalid || c.inherited).map((c) => ({ assumption: c.assumption, effective: c.effective, invalid: c.invalid })),
+      informationalOnly: true, authorizes: false,
+      note: rows.length
+        ? `Invalidating '${id}' reaches ${rows.length} other assumption(s). Anything reached by a chain of necessary dependencies does not hold either.`
+        : `Nothing recorded rests on '${id}'. That is not proof nothing does — only that no dependency has been declared.`,
+    };
+  }
+
+  // The transitive downstream set, with the weakest strength along the path. Kept separate from
+  // `assumptionImpact` because the graph itself needs it and calling the full impact analysis from
+  // `dependencyGraph()` would recurse through propagation and back.
+  _downstreamClosure(id) {
+    const affected = new Map();
+    const walk = (current, distance, path, weakestStrength) => {
+      for (const d of this.downstream(current)) {
+        const strength = weakestStrength === 'contextual' || d.strength === 'contextual' ? 'contextual'
+          : weakestStrength === 'supporting' || d.strength === 'supporting' ? 'supporting' : 'necessary';
+        const existing = affected.get(d.assumption);
+        // Keep the SHORTEST path and, at equal distance, the strongest chain — the worst case is the
+        // one a reader needs.
+        if (!existing || distance + 1 < existing.distance) {
+          affected.set(d.assumption, {
+            assumption: d.assumption, distance: distance + 1, viaStrength: strength, viaType: d.type,
+            path: [...path, d.assumption],
+            effect: strength === 'necessary' ? 'would not hold' : strength === 'supporting' ? 'would be weakened' : 'is affected — a human must judge how',
+          });
+          walk(d.assumption, distance + 1, [...path, d.assumption], strength);
+        }
+      }
+    };
+    walk(id, 0, [id], 'necessary');
+    return [...affected.values()].sort((a, b) => a.distance - b.distance || a.assumption.localeCompare(b.assumption));
   }
 
   describe(id) { const a = this._items.get(id); if (!a) throw new Error('unknown assumption: ' + id); return JSON.parse(JSON.stringify(a)); }
@@ -233,9 +490,12 @@ class AssumptionRegistry {
 
   // Health of a set of assumptions, aggregated to the WEAKEST. A simulation resting on five sound
   // assumptions and one expired one rests on an expired assumption.
-  health(ids = null, { now = null, controls = [] } = {}) {
+  health(ids = null, { now = null, controls = [], propagate = true } = {}) {
     const chosen = (ids || this.ids()).filter((id) => this._items.has(id));
     const missing = (ids || []).filter((id) => !this._items.has(id));
+    // Phase 14, Part 1: health is assessed on the PROPAGATED confidence, so a scenario resting on an
+    // assumption whose own foundation is unsound inherits that rather than reading the surface level.
+    const propagated = propagate ? new Map(this.propagateConfidence({ now, controls }).assumptions.map((r) => [r.assumption, r])) : new Map();
     if (!chosen.length) {
       return {
         assumptions: [], count: 0, missing, confidence: 'unknown', sound: false,
@@ -245,16 +505,28 @@ class AssumptionRegistry {
     const rows = chosen.map((id) => {
       const assessed = this.assessConfidence(id, { now, controls });
       const staleRow = this.stale({ now }).find((s) => s.assumption === id) || null;
-      return { assumption: id, owner: this.describe(id).owner, assessed: assessed.assessed, declared: assessed.declared, stale: !!staleRow, expired: !!(staleRow && staleRow.expired), reasons: assessed.reasons };
+      const prop = propagated.get(id) || null;
+      return {
+        assumption: id, owner: this.describe(id).owner,
+        assessed: prop ? prop.effective : assessed.assessed,
+        intrinsic: assessed.assessed, declared: assessed.declared,
+        inherited: prop ? prop.inherited : false, limitedByUpstream: prop ? prop.limitedBy : [],
+        invalid: prop ? prop.invalid : false, cascadedFrom: prop ? prop.cascadedFrom : null,
+        stale: !!staleRow, expired: !!(staleRow && staleRow.expired), reasons: assessed.reasons,
+      };
     });
     const confidence = rows.reduce((w, r) => weaker(w, r.assessed), 'high');
     return {
       assumptions: rows, count: rows.length, missing,
-      confidence, weakest: rows.slice().sort((a, b) => confidenceRank(b.assessed) - confidenceRank(a.assessed))[0].assumption,
+      confidence, weakest: rows.slice().sort((a, b) => confidenceRank(b.assessed) - confidenceRank(a.assessed) || a.assumption.localeCompare(b.assumption))[0].assumption,
       expired: rows.filter((r) => r.expired).map((r) => r.assumption),
       stale: rows.filter((r) => r.stale).map((r) => r.assumption),
-      sound: missing.length === 0 && rows.every((r) => !r.stale) && confidenceRank(confidence) <= confidenceRank('moderate'),
-      reason: missing.length ? `cites unregistered assumptions: ${missing.join(', ')}` : `weakest assumption is '${confidence}'`,
+      invalid: rows.filter((r) => r.invalid).map((r) => r.assumption),
+      inheritedWeakness: rows.filter((r) => r.inherited).map((r) => ({ assumption: r.assumption, from: r.intrinsic, to: r.assessed, limitedBy: r.limitedByUpstream })),
+      sound: missing.length === 0 && rows.every((r) => !r.stale && !r.invalid) && confidenceRank(confidence) <= confidenceRank('moderate'),
+      reason: missing.length ? `cites unregistered assumptions: ${missing.join(', ')}`
+        : rows.some((r) => r.invalid) ? `rests on assumption(s) that do not hold: ${rows.filter((r) => r.invalid).map((r) => r.assumption).join(', ')}`
+          : `weakest assumption is '${confidence}'`,
     };
   }
 
@@ -267,7 +539,16 @@ class AssumptionRegistry {
       if (a.expiresAt <= a.registeredAt) violations.push(`${a.id}: expires before or when it was registered`);
     }
     for (const c of this.contradictions()) violations.push(`contradiction on '${c.subject}': ${c.assumptions.join(' vs ')} — ${c.reason}`);
-    return { valid: violations.length === 0, violations, assumptions: this._items.size };
+    // Part 1: the graph itself must be well formed. A cycle here would mean the declaration guard was
+    // bypassed, and propagation over a cycle answers whatever its starting point decided.
+    const graph = this.dependencyGraph();
+    if (!graph.acyclic) violations.push(`the dependency graph is cyclic — ${graph.unordered.join(', ')} could not be ordered`);
+    for (const e of graph.edges) {
+      if (!this._items.has(e.to)) violations.push(`'${e.from}' depends on '${e.to}', which is not registered`);
+      if (!DEPENDENCY_STRENGTHS[e.strength]) violations.push(`'${e.from}' → '${e.to}' declares unknown strength '${e.strength}'`);
+      if (!DEPENDENCY_TYPES[e.type]) violations.push(`'${e.from}' → '${e.to}' declares unknown type '${e.type}'`);
+    }
+    return { valid: violations.length === 0, violations, assumptions: this._items.size, edges: graph.edgeCount };
   }
 
   report({ now = null, controls = [] } = {}) {
@@ -276,17 +557,22 @@ class AssumptionRegistry {
     const orphaned = this.orphaned();
     const unevidenced = this.unevidenced({ controls });
     const overclaims = this.overclaims({ now, controls });
+    const propagation = this.propagateConfidence({ now, controls });
+    const byId = new Map(propagation.assumptions.map((r) => [r.assumption, r]));
     const blockers = [
       ...stale.filter((s) => s.expired).map((s) => `${s.assumption}: expired`),
       ...contradictions.map((c) => `${c.assumptions.join(' vs ')}: contradiction on '${c.subject}'`),
       ...orphaned.map((o) => `${o.assumption}: ${o.reason}`),
+      ...propagation.cascaded.map((c) => `${c.assumption}: does not hold because '${c.from}' does not hold`),
     ];
     return {
       assumptions: this.all().map((a) => ({
         ...a,
         assessedConfidence: this.assessConfidence(a.id, { now, controls }).assessed,
+        effectiveConfidence: (byId.get(a.id) || {}).effective ?? null,
         verifications: this.verifications(a.id).length,
       })),
+      propagation, dependencyGraph: propagation.graph,
       count: this._items.size,
       confidenceLevels: [...CONFIDENCE_LEVELS],
       verificationMethods: Object.entries(VERIFICATION_METHODS).map(([id, m]) => ({ method: id, ...m })),
@@ -395,11 +681,38 @@ function seedPlatformAssumptions(registry, { at = 0 } = {}) {
     verificationMethod: 'executable-check', confidence: 'moderate',
     claim: { subject: 'zero-runtime-dependencies-sufficient', predicate: 'holds' },
   });
+
+  // PHASE 14, PART 1: the dependencies between these assumptions, declared after every one exists
+  // because they do not form a registration order.
+  //
+  // The edge worth reading twice is the first one. ASM-0001 is evidenced by two fitness functions,
+  // cited by identifier. If ASM-0006 stopped holding — if an identifier no longer named the control
+  // it checks — then the evidence for ASM-0001 would resolve to a control that checks something else,
+  // and ASM-0001 would be resting on nothing while still reporting itself evidenced. Three of the
+  // platform's assumptions are evidentially necessary on ASM-0006, which makes it the single most
+  // load-bearing belief in the registry and the one nobody had noticed was load-bearing.
+  const depend = (from, on, strength, type, rationale) => registry.declareDependency(from, { on, strength, type, rationale });
+
+  depend('ASM-0001', 'ASM-0006', 'necessary', 'evidential',
+    'ASM-0001 is evidenced by APP-FIT-CONTEXT-MAP and APP-FIT-OPERATIONS-TWIN, cited by identifier. If an identifier no longer names the control it checks, that evidence proves something else.');
+  depend('ASM-0008', 'ASM-0006', 'necessary', 'evidential',
+    'Evidenced by APP-FIT-SUPPLY-CHAIN-GOVERNANCE, cited by identifier. The same reasoning applies.');
+  depend('ASM-0005', 'ASM-0001', 'necessary', 'logical',
+    'The synthetic topology is built from the declared dependency graph. If dependencies exist that nobody declared, the topology is missing them, so it cannot reflect production whatever else is true of it.');
+  depend('ASM-0007', 'ASM-0005', 'supporting', 'operational',
+    'The lag-to-staleness constant was chosen against the modelled replication paths. A differently shaped production estate would change those paths, which weakens the constant without invalidating it.');
+  depend('ASM-0004', 'ASM-0001', 'supporting', 'evidential',
+    'The mission chain traverses declared service dependencies. An undeclared path would mean throughput moves for a reason the model cannot see, which weakens the proxy rather than breaking it.');
+  depend('ASM-0002', 'ASM-0006', 'supporting', 'evidential',
+    'Session affinity is observed through APP-FIT-CONSISTENCY-GOVERNANCE. Identifier drift would weaken that observation without making the affinity itself untrue.');
+  depend('ASM-0003', 'ASM-0002', 'contextual', 'operational',
+    'Both rest on reads being session-scoped, but analytics readers and investigators are different populations. Recorded so the pair is read together; nothing propagates.');
   return registry;
 }
 
 module.exports = {
   AssumptionRegistry, seedPlatformAssumptions,
   CONFIDENCE_LEVELS, VERIFICATION_METHODS, PREDICATES,
-  confidenceRank, weaker, contradicts,
+  DEPENDENCY_STRENGTHS, DEPENDENCY_TYPES,
+  confidenceRank, weaker, softened, contradicts,
 };

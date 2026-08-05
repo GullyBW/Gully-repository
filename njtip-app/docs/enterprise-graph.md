@@ -120,3 +120,35 @@ forbid. A relationship that expired and was later re-established is **not** repo
 it still holds.
 
 Live: `GET /api/graph/enterprise/as-of/:instant?node=<key>`.
+
+## The mission chain, drawn
+
+The consequence chain the forecast actually traverses, as data rather than as illustration: every
+node is a declared mission-chain node and every arrow a link in `MISSION_IMPACT_LINKS`. Verified by
+`APP-FIT-DIAGRAM-ASSURANCE`, which is what stops a board being shown a chain the forecast does not
+walk.
+
+```mermaid
+%% njtip:kind=process-flow source=src/observability/business.js
+graph LR
+  case-throughput[Business process: throughput]
+  anonymous-reporting[Justice service: anonymous reporting]
+  cannot-report[Citizen: cannot report]
+  identity-at-risk[Citizen: identity at risk]
+  institutional-credibility-lost[Institution: credibility lost]
+  mandate-undeliverable[Institution: mandate undeliverable]
+  reports-can-be-filed[Mission: reports can be filed]
+  public-trust[Strategic goal: public trust]
+  public-confidence-in-the-state[Government outcome: public confidence]
+  case-throughput --> anonymous-reporting
+  anonymous-reporting --> cannot-report
+  anonymous-reporting --> identity-at-risk
+  cannot-report --> institutional-credibility-lost
+  cannot-report --> mandate-undeliverable
+  institutional-credibility-lost --> reports-can-be-filed
+  reports-can-be-filed --> public-trust
+  public-trust --> public-confidence-in-the-state
+```
+
+Read left to right this is nine hops from a throughput metric to public confidence in the state. Each
+hop states its mechanism in the source; none of them is an inference drawn here.

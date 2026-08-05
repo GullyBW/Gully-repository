@@ -186,3 +186,27 @@ healthy is a model that holds when you do not need it.
 | `GET /api/resilience/consistency` | admin | Models, replication policies, per-context stances, validation |
 | `GET /api/resilience/consistency/dependencies` | admin | The dependency map and its inversions |
 | `GET /api/resilience/consistency/failover/:failed` | admin | Failover validation for a comma-separated region list |
+
+## The deployment, drawn
+
+Every node is a declared region (`src/twin2/multi-region.js`) or a deployment zone
+(`src/observability/telemetry.js`). Checked by `APP-FIT-DIAGRAM-ASSURANCE`, so a region added,
+renamed or withdrawn in code and not here fails the build rather than leaving a picture that lies.
+
+```mermaid
+%% njtip:kind=deployment source=src/twin2/multi-region.js
+graph TD
+  bw-central[Gaborone: sovereign, may hold everything]
+  bw-south[Lobatse: sovereign]
+  bw-north[Francistown: sovereign]
+  za-north[Johannesburg: NOT sovereign]
+  bw-central --> independent
+  bw-central --> executive
+  bw-central --> judiciary
+  bw-south --> independent
+  bw-south --> executive
+  bw-north --> judiciary
+```
+
+`za-north` is drawn deliberately with no zone beneath it. It is a declared region and it is not
+sovereign, so nothing classified may be held there — the absence of an arrow is the point.

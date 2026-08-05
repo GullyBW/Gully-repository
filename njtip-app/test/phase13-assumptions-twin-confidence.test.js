@@ -258,7 +258,9 @@ test('a calibrated simulation on verified assumptions reaches high confidence', 
   for (let i = 0; i < 4; i++) twin.recordValidation('dr-exercise', { predicted: true, observed: true, by: 'ORB', at: i });
   const c = twin.confidence('dr-exercise', { now: 0, controls: [{ id: 'APP-FIT-CONTEXT-MAP', pass: true }] });
   assert.strictEqual(c.confidence, 'high', JSON.stringify(c.factors));
-  assert.deepStrictEqual(c.limitedBy, ['calibration', 'assumptions', 'model-completeness']);
+  // Phase 14, Part 2: six dimensions, all supporting 'high'. The three original factor names are
+  // still among them, so nothing reading `limitedBy` for them had to change.
+  assert.deepStrictEqual(c.limitedBy, ['calibration', 'assumptions', 'model-completeness', 'data', 'simulation', 'forecast']);
 });
 
 test('an expired assumption drags a calibrated simulation back to unknown', () => {

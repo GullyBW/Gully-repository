@@ -50,6 +50,124 @@ const ASSURANCE_DOMAINS = {
   evidenceQuality: { unverifiedMeans: 'Every figure above may rest on evidence nobody has assessed.' },
 };
 
+// --- Governance state intelligence (Phase 14, Part 10) -------------------------------------------
+//
+// Phase 13's assurance framework had three states: verified, failing, unmeasured. That was already
+// an improvement on the usual two, and it still collapsed four genuinely different situations into
+// "unmeasured":
+//
+//   nobody has looked · there is nothing to look at · it does not apply here ·
+//   somebody looked, found a gap, and a named authority accepted it
+//
+// Those four need four different actions from four different people, and a dashboard that renders
+// them identically tells a board that a deliberate, signed-off risk acceptance and a control nobody
+// has ever run are the same thing. So there are seven states and THEY ARE NEVER MERGED — not in
+// aggregation, not in a percentage, not in a colour.
+//
+// The `countsAsAssured` flag exists so that no completeness figure can be computed by accident: every
+// state has to declare whether it counts, and only two of the seven do.
+const GOVERNANCE_STATES = {
+  verified: {
+    countsAsAssured: true, needsAction: false,
+    means: 'A control ran and held, and the evidence resolves.',
+    action: 'Nothing. Keep it running.',
+  },
+  'accepted-risk': {
+    countsAsAssured: true, needsAction: false,
+    means: 'A gap exists and a named authority accepted it, with a rationale and an expiry.',
+    action: 'Review before the acceptance expires. An expired acceptance stops covering anything without anyone withdrawing it.',
+    // Assured is not the same as fine. It means somebody is answerable for it, which is the most any
+    // governance system can offer for a risk that has not been closed.
+    caveat: 'This counts as governed, not as safe. Somebody has taken responsibility; the gap is still there.',
+  },
+  failed: {
+    countsAsAssured: false, needsAction: true,
+    means: 'A control ran and did not hold.',
+    action: 'Fix it, or record why it is acceptable. Both are decisions; leaving it is not.',
+  },
+  missing: {
+    countsAsAssured: false, needsAction: true,
+    means: 'No control exists at all. Distinct from failing: there is nothing to repair.',
+    action: 'Build the control, or record that the obligation does not need one.',
+  },
+  'pending-review': {
+    countsAsAssured: false, needsAction: true,
+    means: 'Evidence exists and the accountable human has not yet assessed it.',
+    action: 'Complete the review. Evidence nobody has read is not assurance.',
+  },
+  'not-applicable': {
+    countsAsAssured: false, needsAction: false,
+    means: 'The obligation genuinely does not apply here, and somebody recorded why.',
+    action: 'Nothing, until the scope changes. An unexplained not-applicable is an unknown wearing a better label.',
+  },
+  unknown: {
+    countsAsAssured: false, needsAction: true,
+    means: 'Nobody has looked. The default state of everything.',
+    action: 'Look. This is the state that must never be rendered as a green tick.',
+  },
+};
+
+// `not-applicable` is the state most easily abused — it removes an item from every denominator — so
+// it is the one state that cannot be asserted without a recorded reason and a named person.
+function governanceState({ state, justification = null, by = null, expiresAt = null, now = 0 } = {}) {
+  if (!GOVERNANCE_STATES[state]) throw new Error(`unknown governance state '${state}' — one of ${Object.keys(GOVERNANCE_STATES).join(', ')}`);
+  const spec = GOVERNANCE_STATES[state];
+  if (state === 'not-applicable' && (!justification || !by)) {
+    const e = new Error('`not-applicable` requires a named person and a recorded reason — an unexplained not-applicable removes an obligation from every denominator and nobody can tell it apart from an unknown');
+    e.failClosed = true; throw e;
+  }
+  if (state === 'accepted-risk') {
+    if (!by || !justification) { const e = new Error('`accepted-risk` requires a named authority and a rationale'); e.failClosed = true; throw e; }
+    if (!Number.isFinite(expiresAt)) { const e = new Error('`accepted-risk` requires an expiry — an acceptance nobody revisits is a gap that was renamed'); e.failClosed = true; throw e; }
+    if (now >= expiresAt) {
+      // Lapses back to the truth rather than to nothing: the risk was never closed.
+      return { state: 'failed', ...GOVERNANCE_STATES.failed, lapsedFrom: 'accepted-risk', by, justification, expiresAt, reason: 'the acceptance has expired, so the gap is uncovered again' };
+    }
+  }
+  return { state, ...spec, by, justification, expiresAt };
+}
+
+// Completeness across a set of governed items. Every state is counted separately and the report
+// refuses to produce a single percentage without also naming what it excluded.
+function governanceCompleteness(items = [], { now = 0 } = {}) {
+  const rows = items.map((i) => {
+    const resolved = governanceState({ ...i, now });
+    return { item: i.item || i.id || '(unnamed)', domain: i.domain || null, ...resolved };
+  });
+  const byState = {};
+  for (const id of Object.keys(GOVERNANCE_STATES)) byState[id] = 0;
+  for (const r of rows) byState[r.state] += 1;
+
+  const applicable = rows.filter((r) => r.state !== 'not-applicable');
+  const assured = applicable.filter((r) => GOVERNANCE_STATES[r.state].countsAsAssured);
+  const actionable = rows.filter((r) => GOVERNANCE_STATES[r.state].needsAction);
+  return {
+    items: rows, count: rows.length,
+    states: Object.entries(GOVERNANCE_STATES).map(([id, s]) => ({ state: id, ...s })),
+    byState,
+    // Never merged: each of the seven is reported by name, and the two that look like success are
+    // reported apart because one of them is a gap somebody signed for.
+    verified: byState.verified, acceptedRisk: byState['accepted-risk'],
+    failed: byState.failed, missing: byState.missing,
+    pendingReview: byState['pending-review'], notApplicable: byState['not-applicable'], unknown: byState.unknown,
+    applicable: applicable.length,
+    completeness: applicable.length ? +(assured.length / applicable.length).toFixed(4) : null,
+    // The sentence that has to travel with the figure. A completeness of 1.0 built mostly out of
+    // accepted risks is a different estate from one built out of verifications.
+    completenessBasis: applicable.length
+      ? `${assured.length} of ${applicable.length} applicable items are assured: ${byState.verified} verified and ${byState['accepted-risk']} accepted as risk. ${byState['not-applicable']} item(s) were excluded as not applicable, each with a recorded reason.`
+      : 'no applicable items — a completeness figure over an empty set would be 100% of nothing',
+    lapsed: rows.filter((r) => r.lapsedFrom).map((r) => r.item),
+    actionable: actionable.map((r) => ({ item: r.item, state: r.state, action: r.action })),
+    // Unknown is called out on its own, because it is the state everything starts in and the one a
+    // dashboard is most tempted to leave off.
+    unexamined: rows.filter((r) => r.state === 'unknown').map((r) => r.item),
+    sound: byState.unknown === 0 && byState.failed === 0 && byState.missing === 0 && byState['pending-review'] === 0,
+    informationalOnly: true, authorizes: false,
+    note: 'Seven states, never merged. Unknown, missing, not-applicable and accepted-risk are four different situations needing four different people to act; a dashboard that colours them identically is telling a board something false.',
+  };
+}
+
 // --- Part 19: continuous improvement -------------------------------------------------------------
 //
 //   Fitness failure → root cause → corrective action → ADR → verification → operational outcome
@@ -214,4 +332,5 @@ function institutionalAssurance(sources = {}) {
 module.exports = {
   EXECUTIVE_PANELS, ASSURANCE_DOMAINS, IMPROVEMENT_STAGES,
   ImprovementLoop, executiveGovernanceIntelligence, institutionalAssurance,
+  GOVERNANCE_STATES, governanceState, governanceCompleteness,
 };

@@ -131,3 +131,34 @@ target (`consolidateInto`) or the map fails validation.
 - No parallel identity model in federation — it conforms to `identity-access`.
 - No new bounded contexts in v1.9. Stabilization added only *descriptive* modules (context map,
   contracts, migration roadmap, correlation register, usability evidence) inside existing contexts.
+
+## The constitutional core, drawn
+
+Verified on every build by `APP-FIT-DIAGRAM-ASSURANCE`: every node below must be a bounded context
+this repository contains, and every arrow a dependency `src/architecture/context-map.js` declares. An
+arrow the architecture does not have is not a simplification of the picture — it is a false claim
+about the system, and the build fails on it.
+
+```mermaid
+%% njtip:kind=architecture source=src/architecture/context-map.js
+graph LR
+  intake[Anonymous intake]
+  custody[Evidence custody]
+  investigation[Case investigation]
+  governance-oversight[Governance and oversight]
+  persistence[Zone-isolated persistence]
+  identity-access[Identity and access]
+  privacy[Privacy engineering]
+  policy-governance[Policy governance]
+  intake --> privacy
+  intake --> persistence
+  investigation --> intake
+  investigation --> custody
+  investigation --> identity-access
+  governance-oversight --> identity-access
+  policy-governance --> identity-access
+```
+
+The shape worth noticing is that `intake` depends on nothing that depends on it. A citizen filing a
+report is not waiting on the investigation context, the governance context, or anything downstream of
+them — which is what makes it possible for reporting to keep working while the rest degrades.

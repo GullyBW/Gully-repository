@@ -4914,7 +4914,13 @@ module.exports = [
     // COUPLING RATCHET. Source coupling is not declared context dependency, so it is informational —
     // but it must not grow unnoticed. If this trips, either reduce the coupling or move the baseline
     // deliberately, with a reason.
-    const COUPLING_BASELINE = 121;
+    // Moved from 121 → 124 in Phase 14. The three new edges all come from the diagram verifier
+    // (`src/architecture/documentation-assurance.js`), which must read the operational topology, the
+    // region table and the mission chain in order to check that a diagram's nodes and arrows resolve
+    // against them. Verifying a claim about another context means reading that context; the
+    // alternative would be a curated copy of each registry inside the verifier, which is the drift
+    // this whole module exists to catch.
+    const COUPLING_BASELINE = 124;
     if (drift.couplingCount > COUPLING_BASELINE) v.push(`cross-context coupling has grown to ${drift.couplingCount} from a baseline of ${COUPLING_BASELINE} — reduce it or move the baseline deliberately`);
 
     // The checks can fail: a fabricated module claim and a fabricated context are both caught.
@@ -5706,6 +5712,502 @@ module.exports = [
     // Elite bands alone are not enough — rising debt blocks the top level.
     const eliteButRotting = ec.engineeringMetrics({ ...{ tests: { unit: 400 }, invariants: { app: 100 }, coverage: 0.95, mutationScore: 0.9, deployments: 60, windowDays: 30, failedDeployments: 1, leadTimeHours: 2, mttrHours: 0.5 }, debtTrend: [2, 5, 10], riskTrend: [1, 5, 9] });
     if (ec.maturity(eliteButRotting).level === 5) v.push('rising debt and risk did not block the top maturity level');
+  }),
+
+  // ===== PHASE 14 =================================================================================
+
+  fit('APP-FIT-ASSUMPTION-GRAPH', 'Invalidating an assumption reduces confidence in everything that rests on it, and a cycle is refused', (v) => {
+    const asm = require('../src/architecture/assumptions');
+    const registry = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+    const graph = registry.dependencyGraph();
+
+    // --- The vocabulary is declared, and every strength says what an upstream failure does ------
+    for (const required of ['necessary', 'supporting', 'contextual']) {
+      if (!asm.DEPENDENCY_STRENGTHS[required]) v.push(`dependency strength '${required}' is not declared`);
+    }
+    for (const [id, s] of Object.entries(asm.DEPENDENCY_STRENGTHS)) {
+      if (!s.description || !s.ifUpstreamFails) v.push(`dependency strength '${id}' does not say what it means or what an upstream failure does`);
+      if (typeof s.cascades !== 'boolean') v.push(`dependency strength '${id}' does not declare whether it cascades`);
+    }
+    for (const [id, t] of Object.entries(asm.DEPENDENCY_TYPES)) if (!t.description) v.push(`dependency type '${id}' has no description`);
+
+    // --- The graph is real, acyclic and orderable ----------------------------------------------
+    if (!graph.edgeCount) v.push('no dependency between platform assumptions is declared — a registry of nine independent beliefs is a registry that has not been examined');
+    if (!graph.acyclic) v.push(`the assumption graph is cyclic: ${graph.unordered.join(', ')}`);
+    if (graph.order.length !== graph.nodes.length) v.push('the topological order does not cover every assumption');
+    if (!graph.roots.length) v.push('every assumption depends on another — the graph has no root, which cannot be true');
+    for (const e of graph.edges) {
+      if (!e.rationale) v.push(`dependency '${e.from}' → '${e.to}' states no rationale — an edge nobody can argue with is a line on a diagram`);
+    }
+    // The load-bearing assumption is named rather than left to be noticed.
+    if (!graph.loadBearing.length || graph.loadBearing[0].carries < 2) v.push('no assumption is reported as load-bearing, though several rest on others');
+
+    // --- A cycle is REFUSED, fail-closed --------------------------------------------------------
+    let cycleRefused = false;
+    try { registry.declareDependency('ASM-0006', { on: 'ASM-0005', strength: 'necessary', type: 'logical', rationale: 'r' }); }
+    catch (e) { cycleRefused = !!e.failClosed; }
+    if (!cycleRefused) v.push('a dependency that would close a cycle was accepted — propagation over a cycle answers whatever its starting point decided');
+    let selfRefused = false;
+    try { registry.declareDependency('ASM-0006', { on: 'ASM-0006', strength: 'necessary', type: 'logical' }); } catch (e) { selfRefused = !!e.failClosed; }
+    if (!selfRefused) v.push('an assumption was allowed to depend on itself');
+    for (const [what, edge] of [
+      ['unknown strength', { on: 'ASM-0001', strength: 'vibes', type: 'logical' }],
+      ['unknown type', { on: 'ASM-0001', strength: 'necessary', type: 'vibes' }],
+      ['unregistered upstream', { on: 'ASM-9999', strength: 'necessary', type: 'logical' }],
+    ]) {
+      let rejected = false;
+      try { registry.declareDependency('ASM-0009', edge); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`a dependency with ${what} was accepted`);
+    }
+
+    // --- THE PART 1 PROOF: invalidating one assumption reduces confidence in all affected ------
+    // A crafted graph, so the success and failure paths are both exercised without depending on the
+    // platform's own (already low) confidence levels masking the effect.
+    const YEAR = 365 * 24 * 3600_000;
+    const probe = new asm.AssumptionRegistry({ clock: () => 0 });
+    const base = {
+      rationale: 'exercises confidence propagation', evidence: ['APP-FIT-CONTEXT-MAP'], contexts: ['assurance'],
+      owner: 'ARB', reviewCadenceDays: 3650, expiresAt: 10 * YEAR, verificationMethod: 'executable-check', confidence: 'high',
+    };
+    for (const id of ['ROOT', 'NEC', 'SUP', 'CTX', 'DEEP']) {
+      probe.register(id, { ...base, statement: `probe assumption ${id}` });
+      probe.recordVerification(id, { holds: true, by: 'Assurance', at: 0 });
+    }
+    probe.declareDependency('NEC', { on: 'ROOT', strength: 'necessary', type: 'logical', rationale: 'r' });
+    probe.declareDependency('SUP', { on: 'ROOT', strength: 'supporting', type: 'evidential', rationale: 'r' });
+    probe.declareDependency('CTX', { on: 'ROOT', strength: 'contextual', type: 'operational', rationale: 'r' });
+    probe.declareDependency('DEEP', { on: 'NEC', strength: 'necessary', type: 'logical', rationale: 'r' });
+
+    const controls = [{ id: 'APP-FIT-CONTEXT-MAP', pass: true }];
+    // Success path first: with everything holding, every assumption is high. Without this the check
+    // could only ever fail, which would prove nothing about propagation.
+    const sound = probe.propagateConfidence({ now: 0, controls });
+    for (const r of sound.assumptions) if (r.effective !== 'high') v.push(`'${r.assumption}' is not 'high' with every dependency holding: ${r.effective}`);
+    if (sound.invalid.length) v.push('a sound graph reported invalid assumptions');
+
+    // Now invalidate the root and watch it propagate.
+    const after = probe.propagateConfidence({ now: 0, controls, invalidated: ['ROOT'] });
+    const level = (id) => (after.assumptions.find((r) => r.assumption === id) || {}).effective;
+    if (!after.invalid.includes('ROOT')) v.push('the invalidated assumption was not reported invalid');
+    if (!after.invalid.includes('NEC')) v.push('a necessary dependent of an invalid assumption still held — a cascading failure was reported as a lower score');
+    if (!after.invalid.includes('DEEP')) v.push('invalidity did not cascade transitively through a chain of necessary dependencies');
+    if (after.invalid.includes('SUP')) v.push('a supporting dependent was INVALIDATED rather than weakened — the two are different facts');
+    if (level('SUP') !== 'low') v.push(`a supporting dependent of an invalid assumption did not degrade to 'low': ${level('SUP')}`);
+    if (level('CTX') !== 'high') v.push('a contextual dependency propagated confidence, which it must not');
+    for (const id of ['NEC', 'DEEP']) if (level(id) !== 'unknown') v.push(`cascaded assumption '${id}' is not 'unknown': ${level(id)}`);
+
+    // Impact analysis names the same set, with the reason for each.
+    const impact = probe.assumptionImpact('ROOT', { now: 0, controls });
+    if (impact.affectedCount !== 4) v.push(`impact analysis found ${impact.affectedCount} affected assumptions, expected 4`);
+    if (!impact.wouldNotHold.includes('NEC') || !impact.wouldNotHold.includes('DEEP')) v.push('impact analysis did not name the assumptions that would stop holding');
+    if (!impact.wouldBeWeakened.includes('SUP')) v.push('impact analysis did not name the weakened assumption');
+    if (!impact.toJudge.includes('CTX')) v.push('impact analysis did not leave the contextual dependent for a human to judge');
+    for (const r of impact.affected) if (!r.effect || !r.path.length) v.push(`impact row for '${r.assumption}' states no effect or path`);
+    if (impact.authorizes !== false) v.push('assumption impact analysis claims authority');
+
+    // An expired upstream cascades the same way — nobody has to declare it invalid by hand.
+    const expiring = new asm.AssumptionRegistry({ clock: () => 0 });
+    expiring.register('OLD', { ...base, statement: 'expires shortly', expiresAt: 10 * 24 * 3600_000 });
+    expiring.register('ON-OLD', { ...base, statement: 'rests on it' });
+    expiring.recordVerification('OLD', { holds: true, by: 'A', at: 0 });
+    expiring.recordVerification('ON-OLD', { holds: true, by: 'A', at: 0 });
+    expiring.declareDependency('ON-OLD', { on: 'OLD', strength: 'necessary', type: 'logical', rationale: 'r' });
+    const later = expiring.propagateConfidence({ now: 100 * 24 * 3600_000, controls });
+    if (!later.invalid.includes('ON-OLD')) v.push('an assumption resting on an EXPIRED assumption still held — expiry must cascade like any other invalidity');
+    if (!later.cascaded.some((c) => c.assumption === 'ON-OLD' && c.from === 'OLD')) v.push('the cascade did not name which upstream caused it');
+
+    // A verification that found the assumption did not hold invalidates it without anyone saying so.
+    expiring.recordVerification('OLD', { holds: false, by: 'Assurance', at: 1 });
+    if (!expiring.propagateConfidence({ now: 0, controls }).invalid.includes('ON-OLD')) v.push('a failed verification of an upstream did not cascade');
+
+    // --- Health, and therefore the twin, reads the propagated level ----------------------------
+    const health = probe.health(['DEEP'], { now: 0, controls });
+    if (health.confidence !== 'high') v.push('a sound chain did not report high health');
+    const brokenChain = new asm.AssumptionRegistry({ clock: () => 0 });
+    brokenChain.register('U', { ...base, statement: 'unverifiable upstream', verificationMethod: 'unverifiable', confidence: 'unknown' });
+    brokenChain.register('D', { ...base, statement: 'well-evidenced dependent' });
+    brokenChain.recordVerification('D', { holds: true, by: 'A', at: 0 });
+    brokenChain.declareDependency('D', { on: 'U', strength: 'necessary', type: 'logical', rationale: 'r' });
+    const inherited = brokenChain.health(['D'], { now: 0, controls });
+    if (inherited.confidence !== 'unknown') v.push(`a well-evidenced assumption resting on an unverifiable one reported '${inherited.confidence}' — confidence must not exceed what it rests on`);
+    if (!inherited.inheritedWeakness.length) v.push('the inherited weakness was not named, so a reader cannot tell whether to fix this assumption or its foundation');
+    if (brokenChain.health(['D'], { now: 0, controls, propagate: false }).confidence === 'unknown') v.push('propagation made no difference, so the mechanism is decoration');
+
+    if (!registry.validate({ now: 0 }).valid) v.push('the platform assumption graph does not validate: ' + registry.validate({ now: 0 }).violations.join('; '));
+    if (registry.report({ now: 0, controls }).authorizes !== false) v.push('the assumption report claims authority');
+  }),
+
+  fit('APP-FIT-TWIN-CONFIDENCE-DIMENSIONS', 'Twin confidence is derived from six independent dimensions, and a simulation missing one refuses to run', (v) => {
+    const twinMod = require('../src/twin2/operations-twin');
+    const asm = require('../src/architecture/assumptions');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Six dimensions, each with a question, a derivation and a stated consequence -----------
+    for (const required of ['model', 'evidence', 'data', 'simulation', 'forecast', 'calibration']) {
+      if (!twinMod.CONFIDENCE_DIMENSIONS[required]) v.push(`confidence dimension '${required}' is not declared`);
+    }
+    if (Object.keys(twinMod.CONFIDENCE_DIMENSIONS).length !== 6) v.push('the confidence model does not have exactly six dimensions');
+    for (const [id, d] of Object.entries(twinMod.CONFIDENCE_DIMENSIONS)) {
+      if (!d.question || !d.question.endsWith('?')) v.push(`confidence dimension '${id}' states no question`);
+      if (!d.derivedFrom) v.push(`confidence dimension '${id}' does not say where it is derived from`);
+      if (!d.absentMeans || d.absentMeans.length < 30) v.push(`confidence dimension '${id}' does not say what its absence would mean`);
+    }
+
+    // --- The completeness guard rejects a partial set, and accepts a full one ------------------
+    const full = Object.keys(twinMod.CONFIDENCE_DIMENSIONS).map((id) => ({ dimension: id, level: 'high', why: 'crafted for the guard' }));
+    if (twinMod.assertCompleteConfidence('probe', full) !== true) v.push('a complete confidence set was rejected — the guard rejects everything and proves nothing');
+    for (const [what, dims] of [
+      ['a missing dimension', full.slice(1)],
+      ['an unrecognised level', full.map((d, i) => (i ? d : { ...d, level: 'quite-good' }))],
+      ['a dimension with no reason', full.map((d, i) => (i ? d : { ...d, why: null }))],
+      ['an undeclared dimension', [...full, { dimension: 'vibes', level: 'high', why: 'x' }]],
+      ['no dimensions at all', null],
+    ]) {
+      let rejected = false;
+      try { twinMod.assertCompleteConfidence('probe', dims); } catch (e) { rejected = !!e.failClosed; }
+      if (!rejected) v.push(`a simulation with ${what} was allowed to run`);
+    }
+
+    // --- Every dimension is derived, and the overall figure is the weakest of them -------------
+    const registry = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+    const twin = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), assumptions: registry, clock: () => 0 });
+    for (const scenario of Object.keys(twinMod.SCENARIOS)) {
+      const c = twin.confidence(scenario, { now: 0, controls });
+      if (c.dimensions.length !== 6) v.push(`scenario '${scenario}' reports ${c.dimensions.length} confidence dimensions`);
+      if (c.manualEntry !== false || c.derived !== true) v.push(`scenario '${scenario}' confidence is not marked as derived`);
+      const weakest = c.dimensions.reduce((w, d) => (['high', 'moderate', 'low', 'unknown'].indexOf(d.level) >= ['high', 'moderate', 'low', 'unknown'].indexOf(w) ? d.level : w), 'high');
+      if (c.confidence !== weakest) v.push(`scenario '${scenario}': overall confidence '${c.confidence}' is not the weakest dimension '${weakest}' — it has been averaged`);
+      for (const d of c.dimensions) if (!d.why) v.push(`scenario '${scenario}': dimension '${d.dimension}' states no reason`);
+      if (!c.limitedBy.length) v.push(`scenario '${scenario}' names no limiting dimension`);
+    }
+
+    // --- Each dimension can actually move it, or it is decoration ------------------------------
+    // data: a scenario perturbing a kind the model does not contain.
+    const emptyModel = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), assumptions: registry, clock: () => 0, regions: [] });
+    const drData = emptyModel.confidenceDimensions('dr-exercise', { now: 0, controls }).find((d) => d.dimension === 'data');
+    if (drData.level !== 'unknown') v.push('a scenario perturbing a kind with no modelled entities did not report unknown data confidence');
+    // forecast: agreement decaying.
+    const decaying = new twinMod.OperationsTwin({ evidenceIds: controls.map((c) => c.id), assumptions: registry, clock: () => 0 });
+    for (let i = 0; i < 6; i++) decaying.recordValidation('migration-plan', { predicted: true, observed: i < 3, by: 'ARB', at: i });
+    const fc = decaying.confidenceDimensions('migration-plan', { now: 0, controls }).find((d) => d.dimension === 'forecast');
+    if (fc.level !== 'unknown') v.push('a model whose agreement with reality is falling did not report unknown forecast confidence');
+    // simulation and model reach 'high' on a sound twin, so both directions exist.
+    const sound = twin.confidenceDimensions('operational-failure', { now: 0, controls });
+    for (const id of ['model', 'simulation']) {
+      if (sound.find((d) => d.dimension === id).level !== 'high') v.push(`dimension '${id}' cannot reach 'high' on a sound twin, so it can only ever fail`);
+    }
+
+    // --- The report says which dimension limits the estate most often --------------------------
+    const report = twin.confidenceReport({ now: 0, controls });
+    if (!report.mostLimitingDimension || !report.mostLimitingDimension.dimension) v.push('the confidence report does not name the dimension limiting the estate most often');
+    if (report.byDimension.length !== 6) v.push('the confidence report does not break down by all six dimensions');
+    if (report.authorizes !== false) v.push('the confidence report claims authority');
+
+    // --- Every simulation carries the breakdown, not just the word ----------------------------
+    const run = twin.simulate({ scenario: 'operational-failure', change: { failed: ['kms'] }, now: 0, controls });
+    if (!run.confidenceDimensions || Object.keys(run.confidenceDimensions).length !== 6) v.push('a simulation result does not carry its six confidence dimensions');
+    if (run.authorizes !== false) v.push('a simulation claims authority');
+  }),
+
+  fit('APP-FIT-TEMPORAL-MISSION-IMPACT', 'Mission impact is evaluated across five horizons, and an unknown horizon is never rendered as no impact', (v) => {
+    const bus = require('../src/observability/business');
+
+    // --- Five horizons, ordered, each saying what changes there and what an unknown would mean --
+    for (const required of ['immediate', 'short-term', 'medium-term', 'long-term', 'strategic-institutional']) {
+      if (!bus.IMPACT_HORIZONS[required]) v.push(`impact horizon '${required}' is not declared`);
+    }
+    if (bus.IMPACT_HORIZON_ORDER.length !== 5) v.push('the temporal model does not have exactly five horizons');
+    for (const [id, h] of Object.entries(bus.IMPACT_HORIZONS)) {
+      if (!h.within) v.push(`horizon '${id}' states no window`);
+      if (!h.whatChangesHere || h.whatChangesHere.length < 30) v.push(`horizon '${id}' does not say what changes there`);
+      if (!h.ifUnknown || h.ifUnknown.length < 30) v.push(`horizon '${id}' does not say what an unknown would cost`);
+      if (!h.layers.length) v.push(`horizon '${id}' claims no chain layer, so nothing can ever land in it`);
+    }
+    // Every chain layer lands in exactly one horizon — enforced by the chain validator, so adding a
+    // layer without deciding when it manifests fails the build.
+    for (const violation of bus.validateMissionChain().violations) v.push(violation);
+    for (const layer of bus.MISSION_IMPACT_LAYERS) {
+      if (!bus.horizonOfLayer(layer)) v.push(`chain layer '${layer}' maps to no horizon`);
+    }
+
+    // --- A constitutional outage reaches every horizon -----------------------------------------
+    const outage = bus.temporalMissionImpact({ change: 'intake withdrawn', failed: ['intake-api'] });
+    if (outage.horizons.length !== 5) v.push('the temporal forecast does not report all five horizons');
+    if (!outage.reachesStrategic) v.push('losing anonymous reporting did not reach the strategic-institutional horizon — the most expensive consequence was dropped');
+    if (outage.furthestImpact !== 'strategic-institutional') v.push('the furthest horizon reached was not reported');
+    for (const h of outage.horizons) {
+      if (h.state !== 'impact') v.push(`horizon '${h.horizon}' reported '${h.state}' for a constitutional outage`);
+      if (!h.reason) v.push(`horizon '${h.horizon}' states no reason`);
+    }
+    if (outage.timeline.length !== 5) v.push('no time-ordered forecast was produced');
+    for (const row of outage.timeline) if (!row.when || !row.expect) v.push('a timeline row does not say when or what to expect');
+
+    // --- THE RULE: unknown is never rendered as no impact --------------------------------------
+    // A component that maps to no declared justice service breaks the chain at its source.
+    const unmapped = bus.temporalMissionImpact({ change: 'search index lost', failed: ['search-index'] });
+    if (unmapped.unknownHorizons.length !== 5) v.push('an unmapped component did not make every downstream horizon unknown');
+    if (unmapped.horizons.some((h) => h.state === 'no-declared-impact')) v.push('an UNMAPPED component produced "no declared impact" at some horizon — unknown was rendered as safe');
+    if (unmapped.complete) v.push('a forecast with unknown horizons reported itself complete');
+    if (!/UNKNOWN/.test(unmapped.boardSummary)) v.push('the board summary did not say the impact was unknown');
+    for (const h of unmapped.horizons) if (h.impacted !== false || h.assessable !== false) v.push(`unknown horizon '${h.horizon}' reports a boolean that reads like an answer`);
+
+    // A component the topology does not model at all is the same failure, more sharply.
+    const unmodelled = bus.temporalMissionImpact({ change: 'a service nobody modelled', failed: ['quantum-widget'] });
+    if (unmodelled.unknownHorizons.length !== 5) v.push('an unmodelled component did not make the horizons unknown');
+
+    // --- And the success path: nothing failed means nothing reaches any horizon ----------------
+    const quiet = bus.temporalMissionImpact({ change: 'a change affecting nothing', failed: [] });
+    if (quiet.impactedHorizons.length) v.push('a change affecting nothing produced an impact');
+    if (quiet.unknownHorizons.length) v.push('a change affecting nothing produced an unknown — then the check can only ever be unknown');
+    if (!quiet.complete) v.push('a fully traversable forecast was not reported complete');
+    if (quiet.horizons.some((h) => h.state !== 'no-declared-impact')) v.push('a quiet forecast did not report no-declared-impact at every horizon');
+    if (!/not a guarantee/.test(quiet.boardSummary)) v.push('a clean forecast did not state that it describes only what is declared');
+
+    // --- A chain that stops with no declared link forward is unknown, not clear ----------------
+    // Degradation with no service loss: business processes move, nothing reaches a justice service.
+    const partial = bus.temporalMissionImpact({ change: 'evidence store degraded', failed: [], degraded: ['evidence-store'] });
+    if (partial.horizons.find((h) => h.horizon === 'immediate').state === 'impact'
+      && partial.horizons.slice(1).every((h) => h.state === 'no-declared-impact')) {
+      v.push('impact at the immediate horizon with nothing declared beyond it was reported as no impact rather than unknown');
+    }
+
+    if (outage.authorizes !== false) v.push('the temporal forecast claims authority');
+    if (outage.failClosed !== true) v.push('the temporal forecast is not fail-closed');
+  }),
+
+  fit('APP-FIT-COMPLIANCE-TRANSITIONS', 'An illegal compliance transition is refused and recorded; an exception is a board decision that expires and can never reach `verified`', (v) => {
+    const ci = require('../src/legislation/compliance-intelligence');
+    const DAY = 24 * 3600_000;
+    const NOW = 100 * DAY;
+
+    // --- The machine is well formed and every state declares whether it counts as compliant ----
+    for (const [state, spec] of Object.entries(ci.COMPLIANCE_STATES)) {
+      if (typeof spec.compliant !== 'boolean') v.push(`compliance state '${state}' does not declare whether it counts as compliant`);
+      if (!ci.COMPLIANCE_TRANSITIONS[state]) v.push(`compliance state '${state}' declares no legal transitions`);
+    }
+    for (const [id, spec] of Object.entries(ci.TRANSITION_LEGALITY)) if (!spec.description) v.push(`transition legality '${id}' has no description`);
+
+    // --- The illegal transition is REFUSED, fail-closed, and the attempt is recorded -----------
+    const plain = new ci.ComplianceIntelligence({ clock: () => NOW });
+    let refused = false;
+    try { plain.transition('OB-1', { to: 'verified', by: 'Auditor', rationale: 'signed off', independent: true }); }
+    catch (e) { refused = !!e.failClosed; }
+    if (!refused) v.push('unknown → verified was accepted — the jump a hurried audit most wants to make');
+    if (plain.refusals().length !== 1) v.push('a refused transition was not recorded — an attempt the machine turned down is exactly what an auditor wants to see');
+    if (plain.refusals()[0].legality !== 'refused') v.push('a refused transition was not labelled as refused');
+    if (plain.state('OB-1').state !== 'unknown') v.push('a refused transition still changed the state');
+
+    // …and the legal path works, or this control could only ever fail.
+    plain.transition('OB-1', { to: 'under-assessment', by: 'Legal Informatics Team', rationale: 'assessment opened' });
+    plain.transition('OB-1', { to: 'compliant', by: 'Legal Informatics Team', rationale: 'controls hold' });
+    plain.transition('OB-1', { to: 'verified', by: 'Attorney General Chambers', rationale: 'independently confirmed', independent: true });
+    if (plain.state('OB-1').state !== 'verified') v.push('the legal path to verified did not work');
+    if (plain.transitionAudit({ now: NOW }).entries.some((e) => e.legality !== 'by-default')) v.push('a default-legal transition was labelled as exceptional');
+
+    // --- An exception is a board decision: attributed, time-bound, one obligation, one move ----
+    const ex = new ci.TransitionExceptions({ clock: () => NOW });
+    for (const [what, args] of [
+      ['no obligation', { from: 'unknown', to: 'compliant', by: 'OB', rationale: 'r', expiresAt: NOW + DAY }],
+      ['no authority', { obligation: 'OB-2', from: 'unknown', to: 'compliant', rationale: 'r', expiresAt: NOW + DAY }],
+      ['no rationale', { obligation: 'OB-2', from: 'unknown', to: 'compliant', by: 'OB', expiresAt: NOW + DAY }],
+      ['no expiry', { obligation: 'OB-2', from: 'unknown', to: 'compliant', by: 'OB', rationale: 'r' }],
+      ['an unknown state', { obligation: 'OB-2', from: 'unknown', to: 'perfect', by: 'OB', rationale: 'r', expiresAt: NOW + DAY }],
+    ]) {
+      let rejected = false;
+      try { ex.grant(args); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`a transition exception with ${what} was granted`);
+    }
+    let notABoard = false;
+    try { ex.grant({ obligation: 'OB-2', from: 'unknown', to: 'compliant', by: 'Platform Engineering', rationale: 'we are in a hurry', expiresAt: NOW + DAY }); }
+    catch (e) { notABoard = !!e.failClosed; }
+    if (!notABoard) v.push('a transition exception was granted by somebody who is not a governance board');
+
+    // THE RULE NO EXCEPTION LIFTS.
+    let verifiedRefused = false;
+    try { ex.grant({ obligation: 'OB-2', from: 'unknown', to: 'verified', by: 'Oversight Board', rationale: 'the auditor is confident', expiresAt: NOW + DAY }); }
+    catch (e) { verifiedRefused = !!e.failClosed; }
+    if (!verifiedRefused) v.push('an exception was granted for reaching `verified` — that would make `verified` mean `compliant` with extra steps');
+
+    // --- A granted exception permits exactly that move, and the audit trail says so forever ----
+    ex.grant({ obligation: 'OB-2', from: 'unknown', to: 'compliant', by: 'Oversight Board', rationale: 'inherited assessment from the predecessor regime, evidenced out of band', expiresAt: NOW + 30 * DAY });
+    const governed = new ci.ComplianceIntelligence({ clock: () => NOW, exceptions: ex });
+    governed.transition('OB-2', { to: 'compliant', by: 'Attorney General Chambers', rationale: 'carried forward under the granted exception' });
+    if (governed.state('OB-2').state !== 'compliant') v.push('a granted exception did not permit the transition it was granted for');
+    const audit = governed.transitionAudit({ now: NOW });
+    if (audit.byExceptionCount !== 1) v.push('the transition made under an exception was not counted');
+    const entry = audit.entries[0];
+    if (entry.legality !== 'by-exception' || !entry.exception || entry.exception.by !== 'Oversight Board') v.push('the audit trail does not record who granted the exception');
+    if (!audit.exceptionRate && audit.exceptionRate !== 0) v.push('the audit trail reports no exception rate');
+
+    // The exception covers ONE move for ONE obligation, and nothing else.
+    let unwidened = false;
+    try { governed.transition('OB-3', { to: 'compliant', by: 'X', rationale: 'the same shortcut, elsewhere' }); } catch (e) { unwidened = !!e.failClosed; }
+    if (!unwidened) v.push('an exception granted for one obligation widened the machine for another');
+
+    // An expired exception stops covering it, with nobody withdrawing anything.
+    const later = new ci.ComplianceIntelligence({ clock: () => NOW + 60 * DAY, exceptions: ex });
+    let lapsed = false;
+    try { later.transition('OB-4', { to: 'compliant', by: 'X', rationale: 'r' }); } catch (e) { lapsed = !!e.failClosed; }
+    if (!lapsed) v.push('an expired exception still permitted a transition');
+    if (!ex.expired({ now: NOW + 60 * DAY }).length) v.push('an expired exception was not reported as expired');
+
+    // The permanent record: the entry still says it was exceptional after the exception has gone.
+    const afterwards = governed.transitionAudit({ now: NOW + 60 * DAY });
+    if (afterwards.byExceptionCount !== 1) v.push('the record that a state was reached by exception disappeared with the exception — which is what makes using one cheap');
+
+    // --- An estate leaning on exceptions has a machine that no longer describes practice -------
+    const heavy = new ci.ComplianceIntelligence({ clock: () => NOW, exceptions: ex });
+    heavy.transition('OB-2', { to: 'compliant', by: 'X', rationale: 'r' });
+    if (heavy.transitionAudit({ now: NOW }).machineDescribesPractice !== false) v.push('an estate whose every transition was exceptional still reported that the machine describes practice');
+    if (audit.authorizes !== false) v.push('the transition audit claims authority');
+  }),
+
+  fit('APP-FIT-DIAGRAM-ASSURANCE', 'Every node in a governed diagram resolves to something that exists, and every arrow to a declared relationship', (v) => {
+    const da = require('../src/architecture/documentation-assurance');
+
+    // --- Seven diagram kinds, each saying what "resolved" means and what a wrong one costs ----
+    for (const required of ['architecture', 'sequence', 'deployment', 'infrastructure', 'process-flow', 'openapi', 'state']) {
+      if (!da.DIAGRAM_KINDS[required]) v.push(`diagram kind '${required}' is not verified`);
+    }
+    for (const [id, k] of Object.entries(da.DIAGRAM_KINDS)) {
+      if (!k.resolvedMeans || !k.ifWrong) v.push(`diagram kind '${id}' does not say what resolved means or what a wrong one costs`);
+    }
+
+    // --- The corpus verifies, and the floor stops it passing by finding nothing ----------------
+    const report = da.verifyDiagrams({});
+    for (const f of report.findings) v.push(`${f.document}: ${f.kind} diagram — '${f.subject}' ${f.detail}`);
+    if (!report.extractorSound) v.push(`only ${report.count} governed diagram(s) found, below the floor of ${da.MINIMUM_DIAGRAMS} — a corpus with no diagrams passes every diagram rule trivially`);
+    if (report.count < da.MINIMUM_DIAGRAMS) v.push('the diagram corpus is below its floor');
+    // Every kind that has a resolver must actually be exercised by the corpus, or its rules are
+    // written and never run.
+    for (const kind of ['architecture', 'deployment', 'infrastructure', 'process-flow', 'sequence', 'state']) {
+      if (!report.byKind.some((k) => k.kind === kind)) v.push(`no governed document contains a '${kind}' diagram, so its rules have never run against anything`);
+    }
+
+    // --- THE COUNTEREXAMPLES: each resolver must reject a diagram that lies -------------------
+    const world = da.diagramWorld();
+    const craft = (kind, body) => da.verifyDiagram({ document: 'crafted', kind, body, source: null }, world);
+    for (const [what, kind, body] of [
+      ['a bounded context that does not exist', 'architecture', 'graph LR\n  intake[a]\n  ministry-of-magic[b]\n  intake --> ministry-of-magic\n'],
+      ['a dependency the context map does not declare', 'architecture', 'graph LR\n  custody[a]\n  intake[b]\n  custody --> intake\n'],
+      ['a service the topology does not contain', 'infrastructure', 'graph LR\n  intake-api[a]\n  quantum-widget[b]\n  intake-api --> quantum-widget\n'],
+      ['a service dependency the topology does not declare', 'infrastructure', 'graph LR\n  intake-api[a]\n  kms[b]\n  intake-api --> kms\n'],
+      ['a region that is not deployed', 'deployment', 'graph TD\n  bw-central[a]\n  atlantis[b]\n  bw-central --> atlantis\n'],
+      ['a mission-chain link that is not declared', 'process-flow', 'graph LR\n  case-throughput[a]\n  public-trust[b]\n  case-throughput --> public-trust\n'],
+      ['a case transition the lifecycle refuses', 'state', 'stateDiagram-v2\n  closed --> received\n'],
+      ['a lifeline that is neither a service nor an actor', 'sequence', 'sequenceDiagram\n  participant nobody-in-particular\n  participant intake-api\n  nobody-in-particular->>intake-api: hello\n'],
+      ['a sequence with no messages', 'sequence', 'sequenceDiagram\n  participant intake-api\n'],
+    ]) {
+      const r = craft(kind, body);
+      if (r.sound) v.push(`a ${kind} diagram containing ${what} was accepted`);
+    }
+    // …and each resolver accepts a correct diagram, so none of them is simply rejecting everything.
+    for (const [kind, body] of [
+      ['architecture', 'graph LR\n  investigation[a]\n  custody[b]\n  investigation --> custody\n'],
+      ['infrastructure', 'graph LR\n  intake-api[a]\n  policy-engine[b]\n  intake-api --> policy-engine\n'],
+      ['deployment', 'graph TD\n  bw-central[a]\n  independent[b]\n  bw-central --> independent\n'],
+      ['process-flow', 'graph LR\n  reports-can-be-filed[a]\n  public-trust[b]\n  reports-can-be-filed --> public-trust\n'],
+      ['state', 'stateDiagram-v2\n  received --> reviewed\n'],
+      ['sequence', 'sequenceDiagram\n  participant Citizen\n  participant intake-api\n  Citizen->>intake-api: POST /api/reports\n'],
+    ]) {
+      const r = craft(kind, body);
+      if (!r.sound) v.push(`a correct ${kind} diagram was rejected: ${r.findings.map((f) => `${f.subject} ${f.detail}`).join('; ')}`);
+    }
+
+    // --- A diagram that declares no kind cannot be checked, and is a finding rather than a skip
+    const unclassified = da.verifyDiagram({ document: 'crafted', kind: null, body: 'graph LR\n  a --> b\n' }, world);
+    if (unclassified.sound) v.push('a diagram declaring no kind was accepted — a diagram nothing can classify is a diagram nothing can check');
+    // An unparseable line is unverified, not verified.
+    const garbled = craft('architecture', 'graph LR\n  intake\n  ??? this is not mermaid ???\n');
+    if (garbled.sound) v.push('a diagram containing an unparseable line was accepted');
+
+    // --- OpenAPI: everything published is served, and every operation carries what is needed ---
+    const api = da.verifyOpenApi();
+    for (const f of api.findings) v.push(`openapi: '${f.subject}' ${f.detail}`);
+    if (api.paths < 10) v.push('the OpenAPI check is reading a specification with almost no paths — it has stopped resolving');
+
+    if (report.authorizes !== false) v.push('the diagram report claims authority');
+    if (!da.report({ controls: [] }).diagrams) v.push('the documentation report does not carry the diagram verification');
+  }),
+
+  fit('APP-FIT-GOVERNANCE-STATES', 'Seven governance states are never merged, and not-applicable cannot be asserted without a reason', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const DAY = 24 * 3600_000;
+
+    // --- All seven, each declaring whether it counts and what to do about it -------------------
+    for (const required of ['unknown', 'missing', 'not-applicable', 'accepted-risk', 'verified', 'failed', 'pending-review']) {
+      if (!inst.GOVERNANCE_STATES[required]) v.push(`governance state '${required}' is not declared`);
+    }
+    if (Object.keys(inst.GOVERNANCE_STATES).length !== 7) v.push('the governance state model does not have exactly seven states');
+    for (const [id, s] of Object.entries(inst.GOVERNANCE_STATES)) {
+      if (typeof s.countsAsAssured !== 'boolean') v.push(`governance state '${id}' does not declare whether it counts as assured`);
+      if (typeof s.needsAction !== 'boolean') v.push(`governance state '${id}' does not declare whether it needs action`);
+      if (!s.means || !s.action) v.push(`governance state '${id}' does not say what it means or what to do`);
+    }
+    // Only verified and accepted-risk count. If `unknown` ever counted, every dashboard here would
+    // be a lie, so it is checked structurally rather than trusted.
+    const assured = Object.entries(inst.GOVERNANCE_STATES).filter(([, s]) => s.countsAsAssured).map(([id]) => id).sort();
+    if (assured.join(',') !== 'accepted-risk,verified') v.push(`the states counting as assured are '${assured.join(', ')}' — only verified and accepted-risk may`);
+    if (inst.GOVERNANCE_STATES.unknown.countsAsAssured) v.push('unknown counts as assured — the failure this whole model exists to prevent');
+    if (!inst.GOVERNANCE_STATES['accepted-risk'].caveat) v.push('accepted-risk does not state that governed is not the same as safe');
+
+    // --- not-applicable and accepted-risk cannot be asserted casually -------------------------
+    for (const [what, args] of [
+      ['not-applicable with no reason', { state: 'not-applicable', by: 'X' }],
+      ['not-applicable with no person', { state: 'not-applicable', justification: 'out of scope' }],
+      ['accepted-risk with no authority', { state: 'accepted-risk', justification: 'r', expiresAt: 10 * DAY }],
+      ['accepted-risk with no expiry', { state: 'accepted-risk', justification: 'r', by: 'Oversight Board' }],
+    ]) {
+      let rejected = false;
+      try { inst.governanceState({ ...args, now: 0 }); } catch (e) { rejected = !!e.failClosed; }
+      if (!rejected) v.push(`'${what}' was accepted`);
+    }
+    let unknownState = false;
+    try { inst.governanceState({ state: 'probably-fine', now: 0 }); } catch (_) { unknownState = true; }
+    if (!unknownState) v.push('an undeclared governance state was accepted');
+    // …and a properly justified one is accepted, so the guard is not simply refusing everything.
+    if (inst.governanceState({ state: 'not-applicable', by: 'DGB', justification: 'this platform holds no payment data', now: 0 }).state !== 'not-applicable') {
+      v.push('a properly justified not-applicable was rejected');
+    }
+
+    // --- An expired acceptance lapses back to the truth, not to nothing -----------------------
+    const lapsed = inst.governanceState({ state: 'accepted-risk', by: 'Oversight Board', justification: 'known limitation', expiresAt: 10 * DAY, now: 100 * DAY });
+    if (lapsed.state !== 'failed') v.push('an expired risk acceptance did not lapse back to failed — the risk was never closed');
+    if (lapsed.lapsedFrom !== 'accepted-risk') v.push('a lapsed acceptance does not say what it lapsed from');
+
+    // --- Completeness counts every state separately and never merges them ---------------------
+    const items = [
+      { item: 'a', state: 'verified' },
+      { item: 'b', state: 'accepted-risk', by: 'Oversight Board', justification: 'redundancy is planned', expiresAt: 100 * DAY },
+      { item: 'c', state: 'failed' },
+      { item: 'd', state: 'missing' },
+      { item: 'e', state: 'pending-review' },
+      { item: 'f', state: 'not-applicable', by: 'DGB', justification: 'no payment data exists' },
+      { item: 'g', state: 'unknown' },
+    ];
+    const c = inst.governanceCompleteness(items, { now: 0 });
+    for (const [state, expected] of Object.entries({ verified: 1, 'accepted-risk': 1, failed: 1, missing: 1, 'pending-review': 1, 'not-applicable': 1, unknown: 1 })) {
+      if (c.byState[state] !== expected) v.push(`governance state '${state}' was counted ${c.byState[state]} times, expected ${expected} — states have been merged`);
+    }
+    if (c.applicable !== 6) v.push('not-applicable was not excluded from the applicable set');
+    if (c.completeness !== 0.3333) v.push(`completeness is ${c.completeness}, expected 2 of 6 applicable items assured`);
+    if (!/not applicable/.test(c.completenessBasis)) v.push('the completeness figure travels without saying what it excluded');
+    if (!/verified/.test(c.completenessBasis) || !/accepted as risk/.test(c.completenessBasis)) v.push('the completeness basis does not separate verifications from accepted risks');
+    if (!c.unexamined.includes('g')) v.push('unknown items were not named separately');
+    if (c.sound) v.push('an estate with unknown, failed, missing and pending items reported itself sound');
+    // The success path: an estate of verifications and justified exclusions is sound.
+    const clean = inst.governanceCompleteness([
+      { item: 'a', state: 'verified' },
+      { item: 'b', state: 'not-applicable', by: 'DGB', justification: 'no payment data exists' },
+      { item: 'c', state: 'accepted-risk', by: 'Oversight Board', justification: 'accepted', expiresAt: 100 * DAY },
+    ], { now: 0 });
+    if (!clean.sound) v.push('an estate of verifications, justified exclusions and live acceptances was not sound — this check can only fail');
+    if (clean.completeness !== 1) v.push('a fully assured estate did not reach completeness 1');
+    if (clean.authorizes !== false) v.push('the governance completeness report claims authority');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

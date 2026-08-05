@@ -119,6 +119,61 @@ const CALIBRATION_STATES = {
 };
 const CALIBRATION_MIN_OBSERVATIONS = 3;
 
+// --- Multi-dimensional confidence (Phase 14, Part 2) ---------------------------------------------
+//
+// Phase 13 capped a single confidence figure by the weakest of three factors. That was an improvement
+// on a number nobody could argue with, and it still hid something: the three factors answered
+// different questions and were reported as one word. A reader told "low" could not tell whether the
+// model was wrong, the assumptions were stale, or nobody had ever checked the output — and those
+// three need work from three different people.
+//
+// So confidence is now SIX INDEPENDENT DIMENSIONS, each with its own question, its own derivation and
+// its own answer. The overall figure is derived from them — the weakest, never the average — and
+// there is no path that sets it directly.
+//
+// The `alias` field keeps the three original factor names, so anything reading `limitedBy` for
+// 'calibration', 'assumptions' or 'model-completeness' keeps working. Renaming them would have been
+// tidier and would have quietly broken every caller, which is the kind of tidiness this platform
+// refuses everywhere else.
+const CONFIDENCE_DIMENSIONS = {
+  model: {
+    alias: 'model-completeness',
+    question: 'Does the model still describe the architecture-of-record, in both directions?',
+    derivedFrom: 'OperationsTwin.validate()',
+    absentMeans: 'The simulation is reasoning about a system that is not the one deployed.',
+  },
+  evidence: {
+    alias: 'assumptions',
+    question: 'Do the assumptions this scenario rests on still hold, including what they themselves rest on?',
+    derivedFrom: 'src/architecture/assumptions.js (propagated health)',
+    absentMeans: 'The answer may be correct about a world that no longer exists.',
+  },
+  data: {
+    alias: 'data',
+    question: 'Is the thing this scenario perturbs actually present in the model, in more than one instance?',
+    derivedFrom: 'the modelled entities of the scenario\'s `perturbs` kind',
+    absentMeans: 'The scenario perturbs something the model does not contain, so its findings are about nothing.',
+  },
+  simulation: {
+    alias: 'simulation',
+    question: 'Did the simulation machinery itself behave — was the baseline left untouched and deep-frozen?',
+    derivedFrom: 'OperationsTwin.verifyIsolation()',
+    absentMeans: 'A simulation has mutated production state, so every previous result is suspect too.',
+  },
+  forecast: {
+    alias: 'forecast',
+    question: 'Is this scenario\'s agreement with reality holding, or decaying?',
+    derivedFrom: 'OperationsTwin.confidenceTrend()',
+    absentMeans: 'The model may have been right once and be drifting away without anybody noticing.',
+  },
+  calibration: {
+    alias: 'calibration',
+    question: 'Has anybody ever compared this scenario\'s output against what actually happened?',
+    derivedFrom: 'OperationsTwin.calibration()',
+    absentMeans: 'Nothing distinguishes this from a plausible story told confidently.',
+  },
+};
+
 // Confidence ranking, shared with the assumption registry so the two cannot drift apart.
 const { CONFIDENCE_LEVELS } = require('../architecture/assumptions');
 function confidenceRankOf(level) { const i = CONFIDENCE_LEVELS.indexOf(level); return i === -1 ? CONFIDENCE_LEVELS.length : i; }
@@ -141,6 +196,29 @@ function assertDeclaredMetadata(scenario, spec) {
   }
   if (!spec.owner) fail(`scenario '${scenario}' has no owner — a model nobody owns is one nobody can correct`);
   if (!Number.isFinite(spec.reviewCadenceDays) || spec.reviewCadenceDays <= 0) fail(`scenario '${scenario}' has no review cadence — a model nobody re-reads goes stale silently`);
+  return true;
+}
+
+// PHASE 14, PART 2: a simulation whose confidence is incomplete may not run. "Incomplete" means a
+// dimension is absent or carries no level — not that a dimension reports `unknown`, which is a
+// perfectly good answer and often the true one. A missing dimension is a question nobody asked, and
+// an overall figure derived from five of six is an overall figure that is wrong in an unknown
+// direction.
+//
+// Exported so the guard can be fed a crafted partial set, on the same principle as
+// `assertDeclaredMetadata`: a check that can only be exercised by breaking the real code is a check
+// nobody dares exercise.
+function assertCompleteConfidence(scenario, dimensions) {
+  const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
+  if (!Array.isArray(dimensions)) fail(`scenario '${scenario}' produced no confidence dimensions at all`);
+  const seen = new Map(dimensions.map((d) => [d.dimension, d]));
+  for (const id of Object.keys(CONFIDENCE_DIMENSIONS)) {
+    const d = seen.get(id);
+    if (!d) fail(`scenario '${scenario}' is missing the '${id}' confidence dimension — an overall figure derived from an incomplete set is wrong in an unknown direction`);
+    if (!CONFIDENCE_LEVELS.includes(d.level)) fail(`scenario '${scenario}': confidence dimension '${id}' carries no recognised level`);
+    if (!d.why) fail(`scenario '${scenario}': confidence dimension '${id}' states no reason — a level nobody can argue with is a score, not an assessment`);
+  }
+  for (const d of dimensions) if (!CONFIDENCE_DIMENSIONS[d.dimension]) fail(`scenario '${scenario}' reports an undeclared confidence dimension '${d.dimension}'`);
   return true;
 }
 
@@ -282,41 +360,95 @@ class OperationsTwin {
     };
   }
 
-  // THE PART 1 FIGURE. Capped by the weakest of assumption health, model completeness and
-  // calibration — never averaged, because a simulation resting on an expired assumption rests on an
-  // expired assumption whatever else is true of it.
-  confidence(scenario, { now = null, controls = [] } = {}) {
+  // THE SIX DIMENSIONS (Phase 14, Part 2). Each is derived independently and answers its own
+  // question; nothing here accepts a level from a caller.
+  confidenceDimensions(scenario, { now = null, controls = [] } = {}) {
     const spec = SCENARIOS[scenario];
     if (!spec) throw new Error(`unknown scenario '${scenario}'`);
     const t = now ?? this._clock();
-    const caps = [];
+    const out = [];
+    const dim = (id, level, why, detail = null) => out.push({ dimension: id, ...CONFIDENCE_DIMENSIONS[id], level, why, detail });
 
+    // Calibration — has the output ever been checked against a real outcome?
     const calibration = this.calibration(scenario);
-    caps.push({ factor: 'calibration', level: CALIBRATION_STATES[calibration.state].ceiling, why: calibration.reason });
+    dim('calibration', CALIBRATION_STATES[calibration.state].ceiling, calibration.reason, calibration);
 
+    // Evidence — the assumptions, including everything they themselves rest on.
     let assumptionHealth = null;
     if (!this._assumptions) {
-      caps.push({ factor: 'assumptions', level: 'unknown', why: 'no assumption registry was supplied — whether this scenario\'s assumptions still hold is unknown, and unknown is not sound' });
+      dim('evidence', 'unknown', 'no assumption registry was supplied — whether this scenario\'s assumptions still hold is unknown, and unknown is not sound');
     } else {
       assumptionHealth = this._assumptions.health(spec.assumptions, { now: t, controls });
-      caps.push({ factor: 'assumptions', level: assumptionHealth.confidence, why: assumptionHealth.reason });
+      dim('evidence', assumptionHealth.confidence, assumptionHealth.reason, assumptionHealth);
     }
 
+    // Model — does it still describe the architecture-of-record?
     const validation = this.validate();
-    caps.push({
-      factor: 'model-completeness',
-      level: validation.valid ? 'high' : 'unknown',
-      why: validation.valid ? 'the model matches the architecture-of-record in both directions' : `the model has drifted: ${validation.violations.join('; ')}`,
-    });
+    dim('model', validation.valid ? 'high' : 'unknown',
+      validation.valid ? 'the model matches the architecture-of-record in both directions' : `the model has drifted: ${validation.violations.join('; ')}`,
+      validation);
 
-    const level = caps.reduce((w, c) => weakerConfidence(w, c.level), 'high');
+    // Data — is the thing this scenario perturbs actually in the model? A scenario perturbing a kind
+    // with no instances produces findings about nothing, and with exactly one instance there is
+    // nothing to compare a perturbation against.
+    const population = this._model.entities.filter((e) => e.kind === spec.perturbs).length;
+    dim('data',
+      population === 0 ? 'unknown' : population === 1 ? 'low' : 'high',
+      population === 0
+        ? `the model contains no '${spec.perturbs}' entities — this scenario perturbs something that is not there`
+        : population === 1
+          ? `only one '${spec.perturbs}' entity is modelled, so a perturbation has nothing to be compared against`
+          : `${population} '${spec.perturbs}' entities are modelled`,
+      { perturbs: spec.perturbs, population });
+
+    // Simulation — did the machinery behave? The baseline must be frozen and its digest unchanged.
+    const isolation = this.verifyIsolation();
+    dim('simulation',
+      isolation.unchanged && isolation.frozen ? 'high' : 'unknown',
+      isolation.unchanged && isolation.frozen
+        ? 'the baseline is deep-frozen and its digest is unchanged, so no previous simulation touched production state'
+        : 'the baseline digest has moved or the model is not frozen — a simulation has mutated production state and every previous result is suspect',
+      isolation);
+
+    // Forecast — is agreement with reality holding, or decaying? Decay is the dimension that catches
+    // a model which used to be right, which no single-point calibration figure ever would.
+    const trend = this.confidenceTrend(scenario);
+    dim('forecast',
+      trend.direction === 'degrading' ? 'unknown' : trend.direction === 'insufficient-data' ? 'low' : 'high',
+      trend.direction === 'degrading'
+        ? `agreement with reality is falling (${trend.earlier} → ${trend.later}) — the model was right and is drifting`
+        : trend.direction === 'insufficient-data'
+          ? 'fewer than two comparisons against reality, so there is no direction to report'
+          : `agreement with reality is ${trend.direction}`,
+      trend);
+
+    return out;
+  }
+
+  // The overall figure, DERIVED from the six dimensions — the weakest, never the average, because a
+  // simulation resting on an expired assumption rests on an expired assumption whatever else is true
+  // of it. There is no parameter anywhere below that sets this.
+  confidence(scenario, { now = null, controls = [] } = {}) {
+    const spec = SCENARIOS[scenario];
+    if (!spec) throw new Error(`unknown scenario '${scenario}'`);
+    const dimensions = this.confidenceDimensions(scenario, { now, controls });
+    assertCompleteConfidence(scenario, dimensions);
+
+    const level = dimensions.reduce((w, d) => weakerConfidence(w, d.level), 'high');
+    // `factors` keeps the legacy names so existing readers of `limitedBy` keep working.
+    const caps = dimensions.map((d) => ({ factor: d.alias, dimension: d.dimension, level: d.level, why: d.why }));
     const limiting = caps.filter((c) => c.level === level).map((c) => c.factor);
+    const calibration = dimensions.find((d) => d.dimension === 'calibration').detail;
+    const assumptionHealth = (dimensions.find((d) => d.dimension === 'evidence') || {}).detail || null;
     return {
-      scenario, confidence: level, limitedBy: limiting, factors: caps,
+      scenario, confidence: level, limitedBy: limiting,
+      dimensions, factors: caps,
+      dimensionLevels: Object.fromEntries(dimensions.map((d) => [d.dimension, d.level])),
+      complete: true, derived: true, manualEntry: false,
       calibration, assumptions: assumptionHealth, evidenceBasis: this.evidenceBasis(),
       owner: spec.owner, reviewCadenceDays: spec.reviewCadenceDays,
-      method: 'the weakest of assumption health, model completeness and calibration — never their average',
-      note: level === 'high' ? 'Every factor supports this level.' : `Capped at '${level}' by ${limiting.join(', ')}. Raising it means fixing that, not re-reading the model.`,
+      method: 'the weakest of six independent dimensions — model, evidence, data, simulation, forecast and calibration — never their average',
+      note: level === 'high' ? 'Every dimension supports this level.' : `Capped at '${level}' by ${limiting.join(', ')}. Raising it means fixing that, not re-reading the model.`,
     };
   }
 
@@ -326,14 +458,28 @@ class OperationsTwin {
       const c = this.confidence(s, { now, controls });
       return {
         scenario: s, confidence: c.confidence, limitedBy: c.limitedBy,
+        dimensions: c.dimensionLevels,
         calibration: c.calibration.state, observations: c.calibration.observations,
         assumptions: SCENARIOS[s].assumptions, limitations: SCENARIOS[s].limitations,
         owner: SCENARIOS[s].owner, trend: this.confidenceTrend(s).direction,
       };
     });
     const weakest = rows.slice().sort((a, b) => confidenceRankOf(b.confidence) - confidenceRankOf(a.confidence))[0];
+    // Which dimension limits the estate most often? The answer says where to spend effort, and it is
+    // counted rather than guessed.
+    const byDimension = {};
+    for (const r of rows) {
+      for (const [d, level] of Object.entries(r.dimensions)) {
+        const acc = (byDimension[d] = byDimension[d] || { dimension: d, weakest: 'high', limiting: 0 });
+        acc.weakest = weakerConfidence(acc.weakest, level);
+        if (level === r.confidence) acc.limiting += 1;
+      }
+    }
     return {
       scenarios: rows, count: rows.length,
+      dimensions: Object.entries(CONFIDENCE_DIMENSIONS).map(([id, d]) => ({ dimension: id, ...d })),
+      byDimension: Object.values(byDimension).sort((a, b) => b.limiting - a.limiting || a.dimension.localeCompare(b.dimension)),
+      mostLimitingDimension: Object.values(byDimension).sort((a, b) => b.limiting - a.limiting || a.dimension.localeCompare(b.dimension))[0] || null,
       // Weakest link again: the twin is as reliable as its least reliable scenario.
       confidence: rows.reduce((w, r) => weakerConfidence(w, r.confidence), 'high'),
       weakestScenario: weakest ? weakest.scenario : null,
@@ -543,6 +689,7 @@ class OperationsTwin {
       scenario, question: spec.question, perturbs: spec.perturbs, label: label || scenario,
       // Part 1: the metadata that makes the answer arguable, carried with every result.
       confidence: confidence.confidence, confidenceDetail: confidence,
+      confidenceDimensions: confidence.dimensionLevels,
       assumptions: [...spec.assumptions], limitations: [...spec.limitations],
       owner: spec.owner, reviewCadenceDays: spec.reviewCadenceDays,
       reviewDueAt: (now ?? this._clock()) + spec.reviewCadenceDays * 24 * 3600_000,
@@ -595,4 +742,7 @@ class OperationsTwin {
   }
 }
 
-module.exports = { OperationsTwin, ENTITY_KINDS, SCENARIOS, CALIBRATION_STATES, CALIBRATION_MIN_OBSERVATIONS, buildModel, assertDeclaredMetadata };
+module.exports = {
+  OperationsTwin, ENTITY_KINDS, SCENARIOS, CALIBRATION_STATES, CALIBRATION_MIN_OBSERVATIONS,
+  CONFIDENCE_DIMENSIONS, buildModel, assertDeclaredMetadata, assertCompleteConfidence,
+};

@@ -91,13 +91,83 @@ const COMPLIANCE_TRANSITIONS = {
   verified: ['under-assessment', 'failing', 'partially-compliant'],
 };
 
+// --- Transition governance (Phase 14, Part 4) -----------------------------------------------------
+//
+// Phase 13 gave the lifecycle a state machine and refused `unknown → verified`. Part 4 asks the
+// harder question: what happens when somebody genuinely needs that jump? A machine with no escape
+// hatch does not stop the jump — it moves it outside the system, where somebody edits a state by hand
+// and no audit trail records that anything unusual happened.
+//
+// So exceptions exist, and everything about them is designed to make using one expensive:
+//
+//   AN EXCEPTION IS A DECISION, NOT A BYPASS. It names a board, states a rationale, expires, and
+//   applies to ONE obligation and ONE transition. It never widens the machine for everybody.
+//
+//   AN EXCEPTION IS PERMANENT IN THE AUDIT TRAIL. The state it produced can be moved on from, and the
+//   record that it was reached by exception never goes away. That is the deterrent.
+//
+//   ONE RULE NO EXCEPTION CAN LIFT: independent verification. `verified` means somebody other than
+//   the assessor confirmed it. An exception that could waive that would make `verified` mean
+//   `compliant` with extra steps, and the distinction is the entire point of having both.
+const TRANSITION_LEGALITY = {
+  'by-default': { description: 'The state machine permits this move.', governed: false },
+  'by-exception': { description: 'The machine refuses it and a named board granted a time-bound, single-obligation exception.', governed: true },
+  refused: { description: 'The machine refuses it and no exception covers it. Recorded so the attempt is visible.', governed: true },
+};
+
+// Boards that may grant a transition exception. Read from the governance model rather than listed
+// here, so a board that is dissolved cannot keep granting exceptions.
+function exceptionAuthorities() {
+  return new Set(ownership.boards().flatMap((b) => [b.id, b.name]));
+}
+
+class TransitionExceptions {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._items = []; }
+
+  grant({ obligation, from, to, by, rationale, expiresAt, at = null } = {}) {
+    if (!obligation) throw new Error('an exception must name the obligation it applies to — a blanket exception is a change to the state machine, and that is an ADR');
+    if (!COMPLIANCE_STATES[from] || !COMPLIANCE_STATES[to]) throw new Error(`an exception must name two known compliance states, not '${from}' → '${to}'`);
+    if (!by || !rationale) { const e = new Error('granting a transition exception requires a named authority and a rationale'); e.failClosed = true; throw e; }
+    if (!exceptionAuthorities().has(by)) {
+      const e = new Error(`'${by}' is not a recognised governance board — only a board may grant a compliance transition exception`);
+      e.failClosed = true; throw e;
+    }
+    if (!Number.isFinite(expiresAt)) { const e = new Error('a transition exception must expire — a permanent exception is a state machine nobody amended'); e.failClosed = true; throw e; }
+    // The rule no exception lifts. Written as a refusal rather than as a check inside `transition`,
+    // so it cannot be reached at all.
+    if (to === 'verified') {
+      const e = new Error('`verified` may never be reached by exception — it means somebody independent confirmed it, and an exception that waived that would make `verified` mean `compliant` with extra steps');
+      e.failClosed = true; throw e;
+    }
+    const rec = { obligation, from, to, by, rationale, expiresAt, at: at ?? this._clock() };
+    this._items.push(rec);
+    return { ...rec };
+  }
+
+  covering(obligation, from, to, { now = null } = {}) {
+    const t = now ?? this._clock();
+    return this._items.find((e) => e.obligation === obligation && e.from === from && e.to === to && t < e.expiresAt) || null;
+  }
+  active({ now = null } = {}) { const t = now ?? this._clock(); return this._items.filter((e) => t < e.expiresAt).map((e) => ({ ...e })); }
+  expired({ now = null } = {}) { const t = now ?? this._clock(); return this._items.filter((e) => t >= e.expiresAt).map((e) => ({ ...e })); }
+  all() { return this._items.map((e) => ({ ...e })); }
+}
+
 class ComplianceIntelligence {
-  constructor({ registry = null, clock = () => 0 } = {}) {
+  constructor({ registry = null, clock = () => 0, exceptions = null } = {}) {
     this._registry = registry;
     this._clock = clock;
     this._changes = new Map();
     this._seq = 0;
+    this._exceptions = exceptions;
+    // Refused transitions are RECORDED. An attempt somebody made and the machine turned down is
+    // exactly the signal an auditor wants, and throwing it away leaves only the successes.
+    this._refusals = [];
   }
+
+  exceptions() { return this._exceptions; }
+  useExceptions(register) { this._exceptions = register; return this; }
+  refusals() { return this._refusals.map((r) => ({ ...r })); }
 
   changeKinds() { return Object.entries(CHANGE_KINDS).map(([id, k]) => ({ kind: id, ...k })); }
   mappingDimensions() { return Object.entries(MAPPING_DIMENSIONS).map(([id, d]) => ({ dimension: id, ...d })); }
@@ -299,9 +369,17 @@ class ComplianceIntelligence {
     if (!this._states) this._states = new Map();
     const current = this.state(obligation);
     const legal = COMPLIANCE_TRANSITIONS[current.state] || [];
+    const t0 = at ?? this._clock();
+    // Phase 14, Part 4: illegal by default, unless a board granted a time-bound exception for this
+    // obligation and this exact move. Either way the audit trail records which it was.
+    let exception = null;
     if (!legal.includes(to)) {
-      const e = new Error(`'${current.state}' → '${to}' is not a legal transition (from '${current.state}' the legal moves are: ${legal.join(', ')})`);
-      e.failClosed = true; throw e;
+      exception = this._exceptions ? this._exceptions.covering(obligation, current.state, to, { now: t0 }) : null;
+      if (!exception) {
+        this._refusals.push({ obligation, from: current.state, to, by, at: t0, rationale, legality: 'refused', legalMoves: [...legal] });
+        const e = new Error(`'${current.state}' → '${to}' is not a legal transition (from '${current.state}' the legal moves are: ${legal.join(', ')})`);
+        e.failClosed = true; throw e;
+      }
     }
     // The one state that cannot be self-declared. Verified means somebody OTHER than the assessor
     // confirmed it; without that, `verified` and `compliant` would mean the same thing.
@@ -309,11 +387,45 @@ class ComplianceIntelligence {
       if (!independent) { const e = new Error('`verified` requires independent confirmation — mark it on the verifier\'s authority, not the assessor\'s'); e.failClosed = true; throw e; }
       if (by === current.by) { const e = new Error(`'${by}' assessed this obligation and cannot also be its independent verifier`); e.failClosed = true; throw e; }
     }
-    const t = at ?? this._clock();
-    const entry = { obligation, from: current.state, to, by, rationale, at: t, independent };
+    const t = t0;
+    const entry = {
+      obligation, from: current.state, to, by, rationale, at: t, independent,
+      legality: exception ? 'by-exception' : 'by-default',
+      // Carried forever. An exception that vanishes from the record once it expires is an exception
+      // nobody is deterred by.
+      exception: exception ? { by: exception.by, rationale: exception.rationale, grantedAt: exception.at, expiresAt: exception.expiresAt } : null,
+    };
     const history = [...(current.history || []), entry];
     this._states.set(obligation, { obligation, state: to, since: t, by, rationale, independent, history });
     return { ...this._states.get(obligation) };
+  }
+
+  // The Part 4 audit trail: every transition that happened, every one that was refused, and every
+  // exception that made one possible — across the whole estate.
+  transitionAudit({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const obligations = this._registry ? this._registry.registryList().map((i) => i.id) : [...(this._states || new Map()).keys()];
+    const entries = obligations.flatMap((id) => (this.state(id).history || []).map((h) => ({ ...h, legality: h.legality || 'by-default' })))
+      .sort((a, b) => a.at - b.at || a.obligation.localeCompare(b.obligation));
+    const byException = entries.filter((e) => e.legality === 'by-exception');
+    const active = this._exceptions ? this._exceptions.active({ now: t }) : [];
+    const expired = this._exceptions ? this._exceptions.expired({ now: t }) : [];
+    return {
+      now: t, entries, transitions: entries.length,
+      refusals: this.refusals(), refusalCount: this._refusals.length,
+      byExceptionCount: byException.length,
+      byException: byException.map((e) => ({ obligation: e.obligation, from: e.from, to: e.to, movedBy: e.by, exceptionBy: e.exception.by, rationale: e.exception.rationale, at: e.at })),
+      exceptions: { active, expired, granted: this._exceptions ? this._exceptions.all().length : 0 },
+      legality: Object.entries(TRANSITION_LEGALITY).map(([id, s]) => ({ legality: id, ...s })),
+      // Every state reached by exception is still reachable by exception only. An estate where a
+      // growing share of moves are exceptional has a state machine that no longer describes practice,
+      // and the remedy is an ADR amending it — not more exceptions.
+      exceptionRate: entries.length ? +(byException.length / entries.length).toFixed(4) : null,
+      machineDescribesPractice: entries.length === 0 || byException.length / entries.length < 0.1,
+      governedStates: Object.keys(COMPLIANCE_STATES),
+      informationalOnly: true, authorizes: false,
+      note: 'An exception is a decision, not a bypass: one board, one obligation, one transition, with an expiry. The record that a state was reached by exception is permanent, which is what makes using one expensive.',
+    };
   }
 
   // What the evidence says the state should be, independent of what anyone declared. Derived, so it
@@ -437,6 +549,7 @@ class ComplianceIntelligence {
       changeKinds: this.changeKinds(), mappingDimensions: this.mappingDimensions(),
       changes: this.changes(),
       complianceStates: this.complianceStates(),
+      transitionAudit: this.transitionAudit({ now }),
       evolution: this.evolution({ now, controls }),
       gapAnalysis: this.gapAnalysis({ controls, datasets, now }),
       remediation: this.remediation({ controls, datasets, now }),
@@ -447,4 +560,8 @@ class ComplianceIntelligence {
   }
 }
 
-module.exports = { ComplianceIntelligence, CHANGE_KINDS, CHANGE_SEVERITY, MAPPING_DIMENSIONS, KIND_READINESS, COMPLIANCE_STATES, COMPLIANCE_TRANSITIONS };
+module.exports = {
+  ComplianceIntelligence, CHANGE_KINDS, CHANGE_SEVERITY, MAPPING_DIMENSIONS, KIND_READINESS,
+  COMPLIANCE_STATES, COMPLIANCE_TRANSITIONS,
+  TRANSITION_LEGALITY, TransitionExceptions, exceptionAuthorities,
+};

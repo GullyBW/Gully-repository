@@ -154,3 +154,70 @@ nobody announced is one the next shift undoes.
 Record every notification against the incident's `traceId`. Notifications are part of the evidence
 package; an escalation raised and never acknowledged is reported by
 `GET /api/governance/continuity/dashboard` and does not close itself.
+
+## Diagrams an operator can trust
+
+Every diagram below is checked against the implementation by `APP-FIT-DIAGRAM-ASSURANCE` on each
+build. That is the whole reason they are worth opening during an incident: a diagram nothing verifies
+is a diagram that was true once.
+
+### Service dependencies in the independent zone
+
+```mermaid
+%% njtip:kind=infrastructure source=src/observability/telemetry.js
+graph LR
+  intake-api[Intake API]
+  policy-engine[Policy engine]
+  event-store-ind[Event store]
+  persistence-ind[Independent store]
+  notification-service[Notifications]
+  intake-api --> policy-engine
+  intake-api --> event-store-ind
+  intake-api -->|degrades| notification-service
+  event-store-ind --> persistence-ind
+```
+
+Read this before deciding what to shed. `notification-service` is on a **degrades** edge: losing it
+makes intake worse, not unavailable. `persistence-ind` is on a hard edge and has no sibling — losing
+it stops anonymous reporting, which is the single point of failure recorded in ADR-0008 and in
+`APP-FIT-INSTITUTIONAL-RESILIENCE`.
+
+### Filing a report
+
+```mermaid
+%% njtip:kind=sequence source=src/server.js
+sequenceDiagram
+  participant Citizen
+  participant intake-api as Intake API
+  participant policy-engine as Policy engine
+  participant event-store-ind as Event store
+  participant persistence-ind as Independent store
+  Citizen->>intake-api: POST /api/reports (no identity)
+  intake-api->>policy-engine: authorize submission
+  intake-api->>event-store-ind: append ReportSubmitted
+  event-store-ind->>persistence-ind: persist
+  intake-api->>Citizen: 201 with case code
+```
+
+`Citizen` is the only participant that is not a modelled service, and that is deliberate: the person
+filing is a real participant in this sequence and the platform holds no record of who they are.
+
+### The case lifecycle
+
+```mermaid
+%% njtip:kind=state source=src/domain/case-lifecycle.js
+stateDiagram-v2
+  received --> reviewed
+  received --> escalated
+  received --> closed
+  reviewed --> escalated
+  reviewed --> resolved
+  reviewed --> closed
+  escalated --> resolved
+  escalated --> closed
+  resolved --> closed
+```
+
+There is no arrow back out of `closed`. If an operator needs one during an incident, the answer is to
+file an appeal against the closed case rather than to force a state change — and this diagram failing
+to show a transition you were told exists is a defect worth raising against the runbook's owner.
