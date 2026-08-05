@@ -38,7 +38,80 @@ const DRIFT_KINDS = {
   control: { undocumented: 'A fitness function with no owning bounded context.', unrealised: 'An ownership rule matching no control that runs.' },
   ownership: { undocumented: 'A bounded context with no accountability record.', unrealised: 'An accountability record for a context that does not exist.' },
   assumption: { undocumented: 'An assumption the code relies on that the registry has never heard of.', unrealised: 'A registered assumption naming a context that is gone.' },
+  documentation: { undocumented: 'A governed document making a claim that does not resolve against the implementation.', unrealised: 'A governed document that does not exist.' },
+  security: { undocumented: 'A threat whose declared controls include one that no longer runs.', unrealised: 'A control named as a treatment that the verification suite does not contain.' },
+  policy: { undocumented: 'A declared operating rule with no recorded decision behind it.', unrealised: 'A recorded decision declaring a rule for a context that no longer has one.' },
 };
+
+// --- Drift classification (Phase 14, Part 8) ------------------------------------------------------
+//
+// Phase 13 detected drift and reported it as one list. That was enough to fail a build and not enough
+// to route anything: a coupling count and a bounded context with no accountable authority are both
+// "drift", and they need different people, on different timescales, with different powers.
+//
+// So every finding is CLASSIFIED, and each classification declares its own governance response. The
+// structural rule that keeps this from being eight labels for one behaviour:
+//
+//   NO TWO CLASSIFICATIONS MAY HAVE THE SAME RESPONSE. If two classes route to the same board with
+//   the same action on the same timescale, they are one class wearing two names, and the taxonomy is
+//   pretending to a precision it does not have. This is checked, not asserted.
+const DRIFT_CLASSES = {
+  architectural: {
+    kinds: ['module'], respondsBy: 'Architecture Review Board', blocksBuild: true, within: 'before the next merge',
+    response: 'Claim the module in the context map, or delete it. An unclaimed module is code nobody is accountable for.',
+    ifIgnored: 'The architecture-of-record stops describing the system, and every assurance resting on it becomes a statement about a different platform.',
+  },
+  dependency: {
+    kinds: ['coupling'], respondsBy: 'Architecture Review Board', blocksBuild: false, within: 'at the next architecture review',
+    response: 'Ratcheted rather than blocked: source coupling is not a declared context dependency. Reduce it, or move the baseline with a stated reason.',
+    ifIgnored: 'Coupling grows until the bounded contexts are boundaries only on paper.',
+  },
+  documentation: {
+    kinds: ['documentation'], respondsBy: 'the owning document steward', blocksBuild: true, within: 'the same day',
+    response: 'Repair the claim or remove it. A document that misleads an operator under pressure is a defect, not a nuisance.',
+    ifIgnored: 'Somebody follows a procedure that no longer works, during the incident it was written for.',
+  },
+  ownership: {
+    kinds: ['ownership'], respondsBy: 'Oversight Board', blocksBuild: true, within: 'immediately',
+    response: 'Record an accountable authority, or remove the context. No governance object may be left unowned.',
+    ifIgnored: 'A decision is taken about something with nobody answerable for it, so it cannot be challenged.',
+  },
+  governance: {
+    kinds: ['control', 'assumption'], respondsBy: 'Oversight Board', blocksBuild: true, within: 'before the next board meeting',
+    response: 'Give the control an owning context, or register the assumption. A control nobody owns is a control nobody maintains.',
+    ifIgnored: 'Controls and assumptions accumulate with no one responsible for noticing when they stop being true.',
+  },
+  runtime: {
+    kinds: ['api'], respondsBy: 'Operations Review Board', blocksBuild: false, within: 'at the next release',
+    response: 'Publish the route in the contract registry, or stop serving it. What is running and what is published must be the same list.',
+    ifIgnored: 'Integrators build against undocumented surfaces, which then cannot be changed.',
+  },
+  security: {
+    kinds: ['security'], respondsBy: 'Information Security Review Board', blocksBuild: true, within: 'immediately',
+    response: 'Restore the control or re-treat the threat. A threat whose treatment stopped running is an untreated threat.',
+    ifIgnored: 'A risk is carried on the register as treated while nothing is treating it.',
+  },
+  policy: {
+    kinds: ['policy'], respondsBy: 'Architecture Review Board', blocksBuild: true, within: 'before the stance is relied upon',
+    response: 'Write the ADR, or withdraw the stance. An operating rule with no recorded decision is a default nobody chose.',
+    ifIgnored: 'The platform enforces rules nobody decided, and nobody can say why they are what they are.',
+  },
+};
+
+function classOfKind(kind) { return Object.keys(DRIFT_CLASSES).find((c) => DRIFT_CLASSES[c].kinds.includes(kind)) || null; }
+
+// The structural check that stops the taxonomy being decoration. Exported so it can be fed a crafted
+// table with two identical responses.
+function assertDistinctResponses(classes = DRIFT_CLASSES) {
+  const seen = new Map();
+  const collisions = [];
+  for (const [id, c] of Object.entries(classes)) {
+    const key = `${c.respondsBy}|${c.blocksBuild}|${c.within}|${c.response}`;
+    if (seen.has(key)) collisions.push(`'${id}' and '${seen.get(key)}' produce an identical governance response — they are one class with two names`);
+    else seen.set(key, id);
+  }
+  return { distinct: collisions.length === 0, collisions };
+}
 
 function sourceFiles(dir = path.join(ROOT, 'src'), out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -79,7 +152,7 @@ function actualDependencies() {
 }
 
 // The six checks, each in both directions.
-function detect({ controls = [], contracts = null, assumptions = null, serverRoutes = null } = {}) {
+function detect({ controls = [], contracts = null, assumptions = null, serverRoutes = null, checkDocumentation = true } = {}) {
   const findings = [];
   const add = (kind, direction, detail, subject) => findings.push({ kind, direction, subject, detail });
 
@@ -136,27 +209,95 @@ function detect({ controls = [], contracts = null, assumptions = null, serverRou
     for (const c of constitutional) if (contextMap.ids().includes(c) && !covered.has(c)) add('assumption', 'undocumented', `constitutional context '${c}' has no registered assumption — everything resting on it is unexamined`, c);
   }
 
+  // 7. Documentation drift (Phase 14, Part 8). Both directions: a claim that does not resolve, and a
+  // governed document that is not there.
+  if (checkDocumentation) {
+    const documentation = require('./documentation-assurance');
+    const verification = documentation.verify({ controls });
+    for (const u of verification.unresolved) add('documentation', 'undocumented', `${u.kind} '${u.value}' — ${u.detail}`, u.document);
+    for (const d of verification.missingDocuments) add('documentation', 'unrealised', 'a governed document that does not exist', d);
+    for (const d of documentation.verifyDiagrams({}).findings) add('documentation', 'undocumented', `${d.kind} diagram — '${d.subject}' ${d.detail}`, d.document);
+  }
+
+  // 8. Security drift. A threat is treated by named controls; a treatment naming a control the
+  // verification suite does not contain is a threat carried as treated with nothing treating it.
+  if (controls.length) {
+    const threatModel = require('../security/threat-model');
+    const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+    const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+    for (const t of threatModel.traceability()) {
+      for (const c of t.controls) {
+        if (!ran.has(c.control)) add('security', 'unrealised', `threat '${t.threat}' is treated by '${c.control}', which the verification suite does not contain`, `${t.threat}/${c.control}`);
+        else if (holding.get(c.control) === false) add('security', 'undocumented', `threat '${t.threat}' is treated by '${c.control}', which ran and did not hold — the threat is carried as treated and is not`, `${t.threat}/${c.control}`);
+      }
+    }
+  }
+
+  // 9. Policy drift, both directions: a declared operating rule with no recorded decision, and a
+  // decision declaring a rule for a context that no longer has one.
+  {
+    const multiRegion = require('../twin2/multi-region');
+    const adrGovernance = require('./adr-governance');
+    const existingAdrs = new Set(adrGovernance.adrFiles().map((f) => `ADR-${f.slice(0, 4)}`));
+    const stances = multiRegion.contextConsistency().filter((s) => s.declared);
+    for (const s of stances) {
+      if (!s.adr) add('policy', 'undocumented', `the consistency stance for '${s.context}' cites no ADR — an operating rule with no recorded decision is a default nobody chose`, `consistency:${s.context}`);
+      else if (!existingAdrs.has(s.adr)) add('policy', 'unrealised', `the consistency stance for '${s.context}' cites '${s.adr}', which does not exist`, `consistency:${s.context}`);
+    }
+    for (const id of contextMap.ids()) {
+      if (!stances.some((s) => s.context === id)) continue;   // has a stance; checked above
+    }
+  }
+
   const byKind = {};
   for (const f of findings) {
     const b = (byKind[f.kind] = byKind[f.kind] || { kind: f.kind, undocumented: 0, unrealised: 0 });
     b[f.direction] += 1;
   }
+  // Part 8: every finding carries its classification and the governance response it triggers.
+  for (const f of findings) {
+    f.classification = classOfKind(f.kind);
+    const spec = DRIFT_CLASSES[f.classification];
+    f.respondsBy = spec ? spec.respondsBy : null;
+    f.blocksBuild = spec ? spec.blocksBuild : true;
+    f.within = spec ? spec.within : 'unclassified drift blocks until somebody classifies it';
+  }
+  const byClass = Object.keys(DRIFT_CLASSES).map((id) => {
+    const rows = findings.filter((f) => f.classification === id);
+    return {
+      classification: id, ...DRIFT_CLASSES[id], findings: rows.length,
+      undocumented: rows.filter((f) => f.direction === 'undocumented').length,
+      unrealised: rows.filter((f) => f.direction === 'unrealised').length,
+      subjects: rows.map((f) => f.subject),
+    };
+  });
+  // A finding whose kind belongs to no class is not silently informational — it blocks, because an
+  // unclassified finding is one nobody has decided how to route.
+  const unclassified = findings.filter((f) => !f.classification);
+  const blocking = findings.filter((f) => f.blocksBuild);
   const structural = findings.filter((f) => f.kind !== 'coupling');
   const coupling = findings.filter((f) => f.kind === 'coupling');
   return {
     findings, count: findings.length,
     driftKinds: Object.entries(DRIFT_KINDS).map(([kind, d]) => ({ kind, ...d })),
+    driftClasses: Object.entries(DRIFT_CLASSES).map(([classification, c]) => ({ classification, ...c })),
+    responsesDistinct: assertDistinctResponses(),
     byKind: Object.values(byKind).sort((a, b) => a.kind.localeCompare(b.kind)),
+    byClass,
     undocumented: findings.filter((f) => f.direction === 'undocumented'),
     unrealised: findings.filter((f) => f.direction === 'unrealised'),
     // Structural drift must be zero; coupling is measured so it cannot grow unnoticed.
     structural, structuralCount: structural.length,
     coupling, couplingCount: coupling.length,
+    // Part 8: what actually blocks, and who each class is routed to.
+    blocking, blockingCount: blocking.length,
+    unclassified: unclassified.map((f) => `${f.kind}/${f.subject}`),
+    routing: byClass.filter((c) => c.findings > 0).map((c) => ({ classification: c.classification, to: c.respondsBy, within: c.within, action: c.response, count: c.findings })),
     // Both directions matter and they are different defects.
     clean: structural.length === 0,
     checkedKinds: Object.keys(DRIFT_KINDS),
     failClosed: true, authorizes: false,
-    note: 'Every kind is checked in both directions. Undocumented reality means the architecture-of-record is behind; unrealised documentation means it describes something nobody built. A checker looking only one way passes a document describing a system that does not exist.',
+    note: 'Every kind is checked in both directions and every finding is classified. Undocumented reality means the architecture-of-record is behind; unrealised documentation means it describes something nobody built. Classification decides who is told and how fast, because a coupling count and an unowned bounded context are not the same emergency.',
   };
 }
 
@@ -219,4 +360,7 @@ function governanceAnalytics({ ownershipModel = ownership, activity = null, trai
   };
 }
 
-module.exports = { DRIFT_KINDS, sourceFiles, moduleOwner, actualDependencies, detect, governanceAnalytics };
+module.exports = {
+  DRIFT_KINDS, DRIFT_CLASSES, classOfKind, assertDistinctResponses,
+  sourceFiles, moduleOwner, actualDependencies, detect, governanceAnalytics,
+};

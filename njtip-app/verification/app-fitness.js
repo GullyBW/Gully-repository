@@ -4518,11 +4518,27 @@ module.exports = [
     const DAY = 24 * 3600_000, NOW = 400 * DAY;
 
     // --- The invariant is stated, and every dimension says how an alternative is validated -----
-    for (const required of ['person', 'team', 'document', 'process', 'service', 'region', 'supplier', 'communication-channel']) {
+    for (const required of ['person', 'team', 'document', 'process', 'service', 'region', 'supplier', 'communication-channel',
+      // Phase 14, Part 11.
+      'data', 'knowledge', 'facility', 'legal-authority', 'governance']) {
       if (!ir.DEPENDENCY_KINDS[required]) v.push(`dependency kind '${required}' is not assessed`);
     }
     for (const [kind, spec] of Object.entries(ir.DEPENDENCY_KINDS)) {
       if (!spec.question || !spec.validatedBy) v.push(`dependency kind '${kind}' does not say what it asks or how an alternative is validated`);
+      if (spec.detectedBy === undefined) v.push(`dependency kind '${kind}' does not say whether anything would detect it breaking`);
+    }
+    // Part 11: the eleven categories, and every kind belongs to exactly one.
+    for (const required of ['people', 'process', 'technology', 'data', 'knowledge', 'documentation', 'facilities', 'communications', 'suppliers', 'legal-authority', 'governance']) {
+      if (!ir.DEPENDENCY_CATEGORIES[required]) v.push(`dependency category '${required}' is not evaluated`);
+    }
+    if (Object.keys(ir.DEPENDENCY_CATEGORIES).length !== 11) v.push('the dependency taxonomy does not have exactly eleven categories');
+    for (const kind of Object.keys(ir.DEPENDENCY_KINDS)) {
+      const owning = Object.entries(ir.DEPENDENCY_CATEGORIES).filter(([, c]) => c.kinds.includes(kind)).map(([id]) => id);
+      if (owning.length !== 1) v.push(`dependency kind '${kind}' belongs to ${owning.length} categories: ${owning.join(', ')}`);
+    }
+    for (const [id, c] of Object.entries(ir.DEPENDENCY_CATEGORIES)) {
+      if (!c.asks || !c.kinds.length) v.push(`dependency category '${id}' asks nothing or covers no kind`);
+      for (const k of c.kinds) if (!ir.DEPENDENCY_KINDS[k]) v.push(`category '${id}' claims unknown kind '${k}'`);
     }
     // Every critical capability states what its loss costs — the sentence that makes narrowing the
     // definition visible.
@@ -4565,7 +4581,17 @@ module.exports = [
     // store: each zone has exactly one, so losing it stops the capabilities in that zone. That is
     // recorded here so it cannot be forgotten — and so any NEW kind of single dependency, or a new
     // capability acquiring one, fails the build rather than joining a growing list.
-    const known = new Set(['anonymous-reporting|service', 'case-investigation|service', 'governance-decision-recording|service']);
+    //
+    // Phase 14 added two entries, both found by the Part 11 taxonomy widening the question from
+    // eight dimensions to thirteen. Nothing in this platform records what LEGALLY AUTHORISES case
+    // investigation or service recovery — the legislative registry holds one instrument and it maps
+    // to neither. Reported as unknown, and unknown is not resilient. The other two findings the
+    // taxonomy produced turned out to be incomplete capability declarations rather than gaps, and
+    // were corrected in `CRITICAL_CAPABILITIES` instead of being recorded here.
+    const known = new Set([
+      'anonymous-reporting|service', 'case-investigation|service', 'governance-decision-recording|service',
+      'case-investigation|legal-authority', 'service-recovery|legal-authority',
+    ]);
     for (const violation of evaluated.violations) {
       for (const kind of violation.singleDependencies) {
         const key = `${violation.capability}|${kind}`;
@@ -4920,7 +4946,11 @@ module.exports = [
     // against them. Verifying a claim about another context means reading that context; the
     // alternative would be a curated copy of each registry inside the verifier, which is the drift
     // this whole module exists to catch.
-    const COUPLING_BASELINE = 124;
+    //
+    // 124 → 125 in Phase 14 Part 8: the drift checker itself now reads the threat model, so that a
+    // treatment naming a control which no longer runs is reported as security drift. Detecting drift
+    // in another context means reading that context.
+    const COUPLING_BASELINE = 125;
     if (drift.couplingCount > COUPLING_BASELINE) v.push(`cross-context coupling has grown to ${drift.couplingCount} from a baseline of ${COUPLING_BASELINE} — reduce it or move the baseline deliberately`);
 
     // The checks can fail: a fabricated module claim and a fabricated context are both caught.
@@ -6208,6 +6238,297 @@ module.exports = [
     if (!clean.sound) v.push('an estate of verifications, justified exclusions and live acceptances was not sound — this check can only fail');
     if (clean.completeness !== 1) v.push('a fully assured estate did not reach completeness 1');
     if (clean.authorizes !== false) v.push('the governance completeness report claims authority');
+  }),
+
+  fit('APP-FIT-DEPENDENCY-RISK', 'Every open dependency is ranked on six factors, constitutional first, and a declared prior is never presented as a measurement', (v) => {
+    const ir = require('../src/governance/institutional-resilience');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Six factors, each declaring its basis and where it comes from ------------------------
+    for (const required of ['likelihood', 'operationalImpact', 'detectability', 'recoveryComplexity', 'businessCriticality', 'governancePriority']) {
+      if (!ir.RISK_FACTORS[required]) v.push(`risk factor '${required}' is not assessed`);
+    }
+    for (const [id, f] of Object.entries(ir.RISK_FACTORS)) {
+      if (!['derived', 'declared'].includes(f.basis)) v.push(`risk factor '${id}' does not declare whether it is derived or a declared prior`);
+      if (!f.scale || f.scale.length < 2) v.push(`risk factor '${id}' has no usable scale`);
+      if (!f.question || !f.derivation) v.push(`risk factor '${id}' does not say what it asks or how it is arrived at`);
+    }
+    // Both kinds must exist. If every factor were "derived" the model would be claiming to measure
+    // things it cannot, and if every one were "declared" nothing would be evidence at all.
+    const derived = Object.values(ir.RISK_FACTORS).filter((f) => f.basis === 'derived').length;
+    const declared = Object.values(ir.RISK_FACTORS).filter((f) => f.basis === 'declared').length;
+    if (!derived || !declared) v.push('the risk model presents every factor as the same kind of thing — derived facts and declared priors must be distinguishable');
+    // Every declared prior states its reasoning, for every kind, or it is an unarguable number.
+    for (const kind of Object.keys(ir.DEPENDENCY_KINDS)) {
+      for (const [table, name] of [[ir.KIND_LIKELIHOOD, 'likelihood'], [ir.KIND_RECOVERY, 'recovery']]) {
+        if (!table[kind]) v.push(`no ${name} prior is declared for dependency kind '${kind}'`);
+        else if (!table[kind].why || table[kind].why.length < 20) v.push(`the ${name} prior for '${kind}' states no reasoning`);
+      }
+    }
+
+    // --- Scoring one dependency ---------------------------------------------------------------
+    const scored = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'service', controls });
+    if (scored.factors.length !== 6) v.push('a scored dependency does not carry all six factors');
+    for (const f of scored.factors) {
+      if (!ir.RISK_FACTORS[f.factor].scale.includes(f.level)) v.push(`factor '${f.factor}' reported '${f.level}', which is not on its scale`);
+      if (!f.why) v.push(`factor '${f.factor}' states no reason`);
+      if (f.basis !== ir.RISK_FACTORS[f.factor].basis) v.push(`factor '${f.factor}' reports a different basis from the one it declares`);
+    }
+    if (scored.category !== 'technology') v.push('a service dependency was not mapped to the technology category');
+    let unknownKind = false;
+    try { ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'astrology', controls }); } catch (_) { unknownKind = true; }
+    if (!unknownKind) v.push('an undeclared dependency kind was scored');
+
+    // --- Detectability actually moves, in both directions -------------------------------------
+    const undetected = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'communication-channel', controls });
+    if (undetected.levels.detectability !== 'undetected') v.push('a dependency kind with no detecting control was not reported as undetected');
+    const blind = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'service', controls: [] });
+    if (blind.levels.detectability !== 'undetected') v.push('a dependency whose detecting control did not run was still reported as detected');
+    const failing = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'service', controls: [{ id: 'APP-FIT-CHAOS-DETECT-RECOVER', pass: false }] });
+    if (failing.levels.detectability !== 'partially-detected') v.push('a failing detecting control was scored the same as a holding one');
+    if (scored.levels.detectability !== 'detected') v.push('a dependency whose control runs and holds was not reported as detected — the factor can only ever be bad');
+
+    // --- THE RANKING RULE: constitutional first, whatever the arithmetic says ------------------
+    const evaluation = ir.evaluate({ controls });
+    const ranked = ir.riskPrioritisation(evaluation, { controls });
+    if (!ranked.count) v.push('an estate with open single dependencies produced no ranking');
+    let seenNonConstitutional = false;
+    for (const r of ranked.ranked) {
+      if (!r.constitutional) seenNonConstitutional = true;
+      else if (seenNonConstitutional) v.push(`a constitutional dependency (${r.capability}/${r.kind}) ranked below a non-constitutional one — the arithmetic was allowed to outweigh what the platform exists to do`);
+    }
+    // …and there IS a non-constitutional one in the list, or the rule was never exercised.
+    if (!seenNonConstitutional) v.push('no non-constitutional dependency is open, so the ranking rule was never tested');
+    for (const r of ranked.ranked) {
+      if (typeof r.rank !== 'number') v.push('a ranked dependency has no rank');
+      if (r.orderingKey > r.maxOrderingKey) v.push('an ordering key exceeded its own maximum');
+    }
+    // Ranking is deterministic: the same input twice gives the same order.
+    const again = ir.riskPrioritisation(evaluation, { controls });
+    if (JSON.stringify(again.ranked.map((r) => `${r.capability}/${r.kind}`)) !== JSON.stringify(ranked.ranked.map((r) => `${r.capability}/${r.kind}`))) {
+      v.push('the risk ranking is not deterministic');
+    }
+
+    // --- Executive remediation priorities name the action, the effort and who decides ---------
+    if (!ranked.remediationPriorities.length) v.push('no executive remediation priorities were produced');
+    for (const p of ranked.remediationPriorities) {
+      if (!p.action || !p.why || !p.effort || !p.decidedBy) v.push(`remediation priority ${p.rank} does not say what to do, why, how hard, or who decides`);
+      if (p.action === 'Review this dependency.') v.push(`remediation priority ${p.rank} (${p.capability}/${p.kind}) has no specific action — a generic action is a placeholder`);
+    }
+    if (ranked.recommendationsOnly !== true || ranked.authorizes !== false) v.push('the risk prioritisation claims to be more than a ranking');
+    if (!/always rank first/.test(ranked.method)) v.push('the ranking method does not state the constitutional-first rule');
+    if (ranked.declaredFactorShare === null || ranked.declaredFactorShare === 0) v.push('the ranking does not disclose that some of its factors are declared priors');
+
+    // --- Part 11: the taxonomy is evaluated per capability and per category -------------------
+    for (const c of evaluation.capabilities) {
+      if (c.categories.length !== 11) v.push(`capability '${c.capability}' was not evaluated across all eleven categories`);
+      for (const cat of c.categories) {
+        if (cat.unassessed) v.push(`category '${cat.category}' was not assessed for '${c.capability}' — an unassessed category is unvalidated, not validated`);
+        if (!cat.reason) v.push(`category '${cat.category}' for '${c.capability}' states no reason`);
+        if (cat.validated && cat.failingKinds.length) v.push(`category '${cat.category}' reported validated with failing kinds`);
+      }
+      if (c.categoriesValidated !== (c.unvalidatedCategories.length === 0)) v.push(`capability '${c.capability}' disagrees with itself about category validation`);
+    }
+    if (evaluation.categoryCoverage.length !== 11) v.push('the estate-wide category coverage does not report all eleven categories');
+    // At least one category must be fully validated across the estate and at least one not, or the
+    // taxonomy is a list that always gives the same answer.
+    if (!evaluation.categoryCoverage.some((c) => c.validatedFor === c.of)) v.push('no category is validated anywhere — the taxonomy can only ever fail');
+    if (!evaluation.categoryCoverage.some((c) => c.validatedFor < c.of)) v.push('every category is validated everywhere — the taxonomy can only ever pass');
+
+    // --- Each new dimension can move in both directions ---------------------------------------
+    // data: reconstructible vs not.
+    if (!ir.dataResilience('governance-decision-recording').reason.includes('reconstructible')) v.push('a capability with a hash-chained ledger was not treated as holding reconstructible data');
+    if (ir.dataResilience('evidence-custody').singleDependency !== false) v.push('a capability with a custody ledger was reported as holding an unreconstructible store');
+    // facility: honest about being a proxy.
+    const fac = ir.facilityResilience('anonymous-reporting');
+    if (fac.proxy !== true || !/proxy/i.test(fac.reason)) v.push('the facilities assessment does not state that it is a proxy for a physical site');
+    if (ir.facilityResilience('anonymous-reporting', { regions: ['bw-central'] }).singleDependency !== true) v.push('a single-site estate was not reported as a single facility dependency');
+    // legal authority: unknown is not resilient, and a real registry changes the answer.
+    if (ir.legalAuthorityResilience('case-investigation').singleDependency !== true) v.push('a capability with no recorded legal authority was treated as resilient — unknown is not resilient');
+    const withInstruments = ir.legalAuthorityResilience('case-investigation', { instruments: [
+      { id: 'corruption-and-economic-crime-act', contexts: ['investigation'] },
+      { id: 'criminal-procedure-and-evidence-act', contexts: ['investigation'] },
+    ] });
+    if (withInstruments.singleDependency !== false) v.push('two authorising instruments were still reported as a single legal-authority dependency');
+    if (ir.legalAuthorityResilience('anonymous-reporting').singleDependency !== false) v.push('a constitutional mandate was reported as resting on a single instrument');
+    // knowledge: needs BOTH a validated person and a followable document.
+    const noContinuity = ir.knowledgeResilience('anonymous-reporting', { controls });
+    if (noContinuity.singleDependency !== true) v.push('a capability with no validated alternative person was reported as holding its knowledge somewhere else');
+    if (!/head/.test(noContinuity.reason) && !/written down/.test(noContinuity.reason)) v.push('the knowledge assessment does not say which half is missing');
+    // governance: separation of duties gives a second authority.
+    if (ir.governanceResilience('anonymous-reporting').singleDependency !== false) v.push('separation of duties did not produce a second governance authority');
+  }),
+
+  fit('APP-FIT-DECISION-EVOLUTION', 'A prediction filed after the result is refused, an unintended consequence that was predicted is reclassified, and a reversal is never a supersession', (v) => {
+    const { DecisionMemory, LINEAGE_STAGES } = require('../src/architecture/decision-memory');
+
+    // --- The four new stages exist and each says what it requires -----------------------------
+    for (const required of ['intent', 'unintended', 'abandoned', 'reversal']) {
+      if (!LINEAGE_STAGES[required]) v.push(`lineage stage '${required}' is not supported`);
+    }
+    for (const [id, s] of Object.entries(LINEAGE_STAGES)) {
+      if (!s.requires || !s.requires.length) v.push(`lineage stage '${id}' requires nothing, so anything counts as one`);
+      if (!s.description || s.description.length < 30) v.push(`lineage stage '${id}' has no usable description`);
+    }
+    // Reversal and supersession must be separate stages. If one were an alias of the other the whole
+    // distinction would be decorative.
+    if (LINEAGE_STAGES.reversal === LINEAGE_STAGES.supersession) v.push('reversal and supersession are the same stage');
+
+    const mem = new DecisionMemory({ clock: () => 0 });
+
+    // --- THE HINDSIGHT RULE -------------------------------------------------------------------
+    mem.record('ADR-0005', 'intent', { by: 'ARB', at: 1, predictions: [{ subject: 'authorization-latency', expectation: 'falls below 5ms at the 99th percentile' }] });
+    mem.record('ADR-0005', 'implementation', { by: 'Platform Engineering', at: 2, modules: ['src/authz.js'] });
+    mem.record('ADR-0005', 'outcome', { by: 'Assurance', at: 3, verdict: 'as-predicted', evidence: ['APP-FIT-AUTHZ-CACHE-SAFETY'] });
+    let hindsight = false;
+    try { mem.record('ADR-0005', 'intent', { by: 'ARB', at: 4, predictions: [{ subject: 'x', expectation: 'we meant that all along' }] }); }
+    catch (e) { hindsight = !!e.failClosed; }
+    if (!hindsight) v.push('an intent was recorded after the outcome — a prediction filed after the result is not a prediction');
+    // A prediction with no subject cannot be matched against anything later.
+    let unmatchable = false;
+    try { mem.record('ADR-0006', 'intent', { by: 'ARB', at: 1, predictions: [{ expectation: 'it will be better' }] }); } catch (_) { unmatchable = true; }
+    if (!unmatchable) v.push('a prediction with no subject was accepted, so no later outcome could ever be matched against it');
+
+    // --- THE UNINTENDED-CONSEQUENCE CHECK -----------------------------------------------------
+    // Something genuinely unforeseen stays unforeseen.
+    mem.record('ADR-0005', 'unintended', { by: 'SRE', at: 5, subject: 'cross-tenant-cache-replay', consequence: 'a cached decision could be replayed across tenants', discoveredBy: 'APP-FIT-AUTHZ-CACHE-SAFETY' });
+    // Something that WAS predicted, filed as unforeseen, is reclassified.
+    mem.record('ADR-0005', 'unintended', { by: 'Somebody Optimistic', at: 6, subject: 'authorization-latency', consequence: 'latency changed', discoveredBy: 'observation' });
+    const lineage = mem.lineage('ADR-0005', { controls: [{ id: 'APP-FIT-AUTHZ-CACHE-SAFETY', pass: true }] });
+    if (!lineage.genuinelyUnintended.includes('a cached decision could be replayed across tenants')) v.push('a genuinely unforeseen consequence was not recorded as unforeseen');
+    if (!lineage.misfiledAsUnintended.length) v.push('a consequence that was predicted at decision time was still reported as unintended');
+    if (lineage.misfiledAsUnintended[0].wasPredictedBy !== 'ARB') v.push('the reclassification does not name who predicted it');
+    if (!lineage.gaps.some((g) => /was predicted at decision time/.test(g))) v.push('the misfiled consequence produced no gap for a reader to see');
+
+    // --- Reversal is not supersession ---------------------------------------------------------
+    let noSuchAdr = false;
+    try { mem.record('ADR-0005', 'reversal', { by: 'ARB', at: 7, reversedBy: 'ADR-9999', reason: 'r' }); } catch (_) { noSuchAdr = true; }
+    if (!noSuchAdr) v.push('a reversal cited an ADR that does not exist');
+    mem.record('ADR-0005', 'reversal', { by: 'ARB', at: 8, reversedBy: 'ADR-0007', reason: 'the caching stance was withdrawn' });
+    mem.record('ADR-0004', 'supersession', { by: 'ARB', at: 8, adr: 'ADR-0007' });
+    const reversedEvo = mem.evolution('ADR-0005', { controls: [] });
+    const supersededEvo = mem.evolution('ADR-0004', { controls: [] });
+    if (!reversedEvo.branches.reversed.length) v.push('a reversal was not recorded as a reversal');
+    if (reversedEvo.branches.superseded.length) v.push('a reversal was reported as a supersession');
+    if (!supersededEvo.branches.superseded.length) v.push('a supersession was not recorded');
+    if (supersededEvo.branches.reversed.length) v.push('a supersession was reported as a reversal');
+    if (!/REVERSED, not superseded/.test(reversedEvo.note)) v.push('the evolution report does not distinguish reversal from supersession in what a reader sees');
+
+    // --- Abandoned approaches are kept, so they are not re-proposed ---------------------------
+    let incomplete = false;
+    try { mem.record('ADR-0004', 'abandoned', { by: 'ARB', at: 1, approach: 'a shared mutable cache' }); } catch (_) { incomplete = true; }
+    if (!incomplete) v.push('an abandoned approach was recorded without saying why it was dropped');
+    mem.record('ADR-0004', 'abandoned', { by: 'ARB', at: 1, approach: 'a shared mutable cache', whyNot: 'no way to bound cross-tenant visibility' });
+    if (!mem.evolution('ADR-0004').branches.abandoned.includes('a shared mutable cache')) v.push('an abandoned approach was not carried into the evolution timeline');
+
+    // --- The timeline is ordered, complete, and names the cost of not learning ----------------
+    if (reversedEvo.events.length < 6) v.push('the evolution timeline is missing events');
+    for (let i = 1; i < reversedEvo.events.length; i++) {
+      if (reversedEvo.events[i].at < reversedEvo.events[i - 1].at) v.push('the evolution timeline is not in chronological order');
+    }
+    for (const e of reversedEvo.events) if (!e.what || !e.by) v.push(`a timeline event at ${e.at} says nothing, or nobody recorded it`);
+    if (reversedEvo.costWithoutLearning !== true) v.push('a decision that was reversed with no lesson recorded was not flagged — that is the most expensive kind');
+    mem.record('ADR-0005', 'lesson', { by: 'ARB', at: 9, statement: 'a cache keyed without the tenant is a cross-tenant channel' });
+    if (mem.evolution('ADR-0005').costWithoutLearning !== false) v.push('recording a lesson did not clear the cost-without-learning flag, so the flag means nothing');
+
+    // --- The catalogue-wide report separates all of it -----------------------------------------
+    const report = mem.report({ controls: [{ id: 'APP-FIT-AUTHZ-CACHE-SAFETY', pass: true }] });
+    if (!report.reversed.some((r) => r.adr === 'ADR-0005')) v.push('the catalogue report does not name reversed decisions');
+    if (!report.superseded.includes('ADR-0004')) v.push('the catalogue report does not name superseded decisions');
+    if (!report.unforeseen.length) v.push('the catalogue report does not name unforeseen consequences');
+    if (!report.misfiledAsUnintended.length) v.push('the catalogue report hides consequences that were predicted and filed as unforeseen');
+    if (!report.unpredicted.length) v.push('every ADR has a recorded intent, on a platform where none had one before this phase — historical evidence must not be fabricated');
+    if (report.authorizes !== false) v.push('the decision memory report claims authority');
+  }),
+
+  fit('APP-FIT-DRIFT-CLASSIFICATION', 'Every drift finding is classified, and no two classifications produce the same governance response', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const asm = require('../src/architecture/assumptions');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Eight classifications, each with its own routing -------------------------------------
+    for (const required of ['architectural', 'documentation', 'ownership', 'governance', 'dependency', 'runtime', 'security', 'policy']) {
+      if (!dp.DRIFT_CLASSES[required]) v.push(`drift classification '${required}' is not supported`);
+    }
+    if (Object.keys(dp.DRIFT_CLASSES).length !== 8) v.push('the drift taxonomy does not have exactly eight classifications');
+    for (const [id, c] of Object.entries(dp.DRIFT_CLASSES)) {
+      if (!c.respondsBy) v.push(`drift class '${id}' names nobody to respond`);
+      if (typeof c.blocksBuild !== 'boolean') v.push(`drift class '${id}' does not declare whether it blocks the build`);
+      if (!c.within) v.push(`drift class '${id}' states no timescale`);
+      if (!c.response || c.response.length < 30) v.push(`drift class '${id}' states no governance response`);
+      if (!c.ifIgnored || c.ifIgnored.length < 30) v.push(`drift class '${id}' does not say what happens if it is ignored`);
+      for (const k of c.kinds) if (!dp.DRIFT_KINDS[k]) v.push(`drift class '${id}' claims unknown kind '${k}'`);
+    }
+    // Every kind is routed by exactly one class, or a finding would arrive with nowhere to go.
+    for (const kind of Object.keys(dp.DRIFT_KINDS)) {
+      const owning = Object.entries(dp.DRIFT_CLASSES).filter(([, c]) => c.kinds.includes(kind)).map(([id]) => id);
+      if (owning.length !== 1) v.push(`drift kind '${kind}' is claimed by ${owning.length} classifications`);
+    }
+
+    // --- THE STRUCTURAL RULE: different categories produce DIFFERENT responses ----------------
+    const distinct = dp.assertDistinctResponses();
+    if (!distinct.distinct) for (const c of distinct.collisions) v.push(c);
+    // …and the check itself can fail, fed a crafted table where two classes are the same class twice.
+    const collided = dp.assertDistinctResponses({
+      a: { respondsBy: 'ARB', blocksBuild: true, within: 'now', response: 'fix it' },
+      b: { respondsBy: 'ARB', blocksBuild: true, within: 'now', response: 'fix it' },
+    });
+    if (collided.distinct) v.push('the distinct-response check accepted two identical responses, so it proves nothing');
+    // At least two classes must differ on whether they block, or "classification" is one behaviour.
+    const blocking = Object.values(dp.DRIFT_CLASSES).filter((c) => c.blocksBuild).length;
+    if (!blocking || blocking === Object.keys(dp.DRIFT_CLASSES).length) v.push('every drift class blocks the build, or none does — the classification changes nothing');
+    if (new Set(Object.values(dp.DRIFT_CLASSES).map((c) => c.respondsBy)).size < 4) v.push('drift is routed to fewer than four distinct authorities, so classification is not routing anything');
+
+    // --- Every finding carries its classification and its routing -----------------------------
+    const registry = asm.seedPlatformAssumptions(new asm.AssumptionRegistry({ clock: () => 0 }));
+    const drift = dp.detect({ controls, assumptions: registry });
+    for (const f of drift.findings) {
+      if (!f.classification) v.push(`a ${f.kind}/${f.direction} finding carries no classification — an unclassified finding is one nobody has decided how to route`);
+      if (!f.respondsBy) v.push(`a ${f.kind} finding names nobody to respond`);
+    }
+    if (drift.unclassified.length) v.push(`unclassified drift findings: ${drift.unclassified.join(', ')}`);
+    if (drift.byClass.length !== 8) v.push('the drift report does not break down by all eight classifications');
+    for (const r of drift.routing) if (!r.to || !r.action || !r.within) v.push(`routing for '${r.classification}' is incomplete`);
+
+    // --- The three new detectors can actually fire --------------------------------------------
+    // Security: a threat treated by a control that ran and failed.
+    const threatModel = require('../src/security/threat-model');
+    const oneControl = threatModel.traceability()[0].controls[0].control;
+    const failing = dp.detect({ controls: controls.map((c) => (c.id === oneControl ? { ...c, pass: false } : c)), assumptions: registry, checkDocumentation: false });
+    if (!failing.findings.some((f) => f.kind === 'security' && f.subject.includes(oneControl))) {
+      v.push('a threat whose treating control ran and failed produced no security drift finding');
+    }
+    if (!failing.findings.filter((f) => f.kind === 'security').every((f) => f.respondsBy === 'Information Security Review Board')) {
+      v.push('security drift was not routed to the Information Security Review Board');
+    }
+    // Security, the other direction: a treatment naming a control the suite does not contain.
+    const missingControl = dp.detect({ controls: controls.filter((c) => c.id !== oneControl), assumptions: registry, checkDocumentation: false });
+    if (!missingControl.findings.some((f) => f.kind === 'security' && f.direction === 'unrealised')) {
+      v.push('a treatment naming a control the verification suite does not contain produced no finding');
+    }
+    // Documentation: the detector is wired in and reports the same findings the doc checker does.
+    const documentation = require('../src/architecture/documentation-assurance');
+    const docFindings = drift.findings.filter((f) => f.kind === 'documentation').length;
+    const docReport = documentation.report({ controls });
+    if (docReport.sound && docFindings) v.push('documentation drift was reported while the documentation checker says the corpus is sound');
+    if (!docReport.sound && !docFindings) v.push('the documentation checker reports findings that the drift classifier never sees');
+    // Policy: every declared stance cites an ADR that exists, and the check can fail.
+    if (drift.findings.some((f) => f.kind === 'policy')) {
+      for (const f of drift.findings.filter((x) => x.kind === 'policy')) v.push(`policy drift: ${f.subject} — ${f.detail}`);
+    }
+
+    // --- The estate is clean of structural drift, and the class breakdown says so -------------
+    if (!drift.clean) for (const f of drift.structural) v.push(`architecture drift (${f.classification}/${f.direction}): ${f.subject} — ${f.detail}`);
+    if (drift.blockingCount !== drift.findings.filter((f) => dp.DRIFT_CLASSES[f.classification].blocksBuild).length) v.push('the blocking count does not agree with the classifications');
+    if (drift.authorizes !== false) v.push('the classified drift report claims authority');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

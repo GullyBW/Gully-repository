@@ -19,11 +19,33 @@
 const adrGovernance = require('./adr-governance');
 
 // What can be recorded against a decision, and what each stage requires to count.
+//
+// Phase 14, Part 7 added four: intent, unintended, abandoned and reversal. The first two are a pair
+// and the pairing is the point — an outcome can only be called UNINTENDED if it was not among the
+// intents recorded at decision time, and the platform checks that rather than taking the word of the
+// person filing it. Without the check, "unintended consequence" is a phrase institutions use for
+// things they did in fact expect and would rather not have written down.
 const LINEAGE_STAGES = {
+  intent: {
+    requires: ['predictions'],
+    description: 'What the decision was expected to achieve, recorded at decision time. A prediction filed after the result is not a prediction.',
+  },
   implementation: { requires: ['modules'], description: 'The decision was built. Named modules, so a reader can go and look.' },
   outcome: { requires: ['evidence'], description: 'What actually happened once it ran, evidenced by a control or a measurement.' },
+  unintended: {
+    requires: ['consequence', 'discoveredBy'],
+    description: 'Something the decision caused that nobody predicted. Checked against the recorded intents; a predicted outcome filed here is reclassified.',
+  },
+  abandoned: {
+    requires: ['approach', 'whyNot'],
+    description: 'An approach that was considered and dropped. Recorded so it is not re-proposed in three years by somebody who was not in the room.',
+  },
   lesson: { requires: ['statement'], description: 'What was learned, stated so the next decision can use it.' },
   supersession: { requires: ['adr'], description: 'A later decision that this one led to.' },
+  reversal: {
+    requires: ['reversedBy', 'reason'],
+    description: 'The decision was undone. Deliberately NOT a supersession: building on a decision and retreating from it are different histories, and merging them lets an institution tell itself it evolved.',
+  },
 };
 
 // How an outcome turned out. `mixed` exists because most real outcomes are, and forcing a binary
@@ -46,7 +68,9 @@ class DecisionMemory {
 
   _entry(adr) {
     const key = this._key(adr);
-    if (!this._entries.has(key)) this._entries.set(key, { adr: key, implementation: [], outcome: [], lesson: [], supersession: [] });
+    if (!this._entries.has(key)) {
+      this._entries.set(key, Object.fromEntries([['adr', key], ...Object.keys(LINEAGE_STAGES).map((s) => [s, []])]));
+    }
     return this._entries.get(key);
   }
 
@@ -66,15 +90,41 @@ class DecisionMemory {
       if (!OUTCOME_VERDICTS[payload.verdict]) throw new Error(`an outcome needs a verdict — one of ${Object.keys(OUTCOME_VERDICTS).join(', ')}`);
     }
     if (stage === 'supersession' && !this._adrExists(payload.adr)) throw new Error(`the superseding ADR '${payload.adr}' does not exist`);
-    const rec = { stage, by, at: at ?? this._clock(), ...payload };
-    this._entry(adr)[stage].push(rec);
+    if (stage === 'reversal' && !this._adrExists(payload.reversedBy)) throw new Error(`the reversing ADR '${payload.reversedBy}' does not exist — a reversal nobody decided is a change, not a decision`);
+
+    const entry = this._entry(adr);
+
+    // THE HINDSIGHT RULE. An intent recorded after the outcome is not a prediction, it is a story
+    // about what we meant to happen, and it is the single easiest way to make a decision record
+    // flatter its authors.
+    if (stage === 'intent' && entry.outcome.length) {
+      const e = new Error(`an intent cannot be recorded for ${this._key(adr)} after an outcome exists — a prediction filed after the result is not a prediction`);
+      e.failClosed = true; throw e;
+    }
+    if (stage === 'intent') {
+      const preds = Array.isArray(payload.predictions) ? payload.predictions : [payload.predictions];
+      for (const p of preds) {
+        if (!p || !p.subject || !p.expectation) throw new Error('every prediction needs a subject and an expectation, so a later outcome can be matched against it');
+      }
+    }
+    // THE UNINTENDED-CONSEQUENCE CHECK. If the "unintended" consequence names a subject the decision
+    // predicted, it was intended and is recorded as such — with the intent that predicted it, so a
+    // reader can see the reclassification rather than being told a tidier story.
+    let reclassified = null;
+    if (stage === 'unintended') {
+      const predicted = entry.intent.flatMap((i) => (Array.isArray(i.predictions) ? i.predictions : [i.predictions]));
+      const match = predicted.find((p) => p && p.subject === payload.subject);
+      if (match) reclassified = { wasPredicted: true, predictedSubject: match.subject, expectation: match.expectation, byIntentOf: entry.intent.find((i) => (Array.isArray(i.predictions) ? i.predictions : [i.predictions]).includes(match)).by };
+    }
+    const rec = { stage, by, at: at ?? this._clock(), ...payload, ...(reclassified ? { reclassified } : {}) };
+    entry[stage].push(rec);
     return { ...rec };
   }
 
   // The lineage of one decision, end to end.
   lineage(adr, { controls = [] } = {}) {
     const key = this._key(adr);
-    const e = this._entries.get(key) || { adr: key, implementation: [], outcome: [], lesson: [], supersession: [] };
+    const e = this._entries.get(key) || Object.fromEntries([['adr', key], ...Object.keys(LINEAGE_STAGES).map((s) => [s, []])]);
     const known = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
     const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
 
@@ -93,24 +143,82 @@ class DecisionMemory {
       };
     });
     const latest = outcomes.length ? outcomes[outcomes.length - 1] : null;
+    // Part 7: an unintended consequence that the decision actually predicted is reported as what it
+    // is, rather than being filed under a heading that flatters the decision.
+    const unintended = e.unintended.map((u) => ({ ...u, genuinelyUnintended: !u.reclassified }));
+    const predictions = e.intent.flatMap((i) => (Array.isArray(i.predictions) ? i.predictions : [i.predictions]).map((p) => ({ ...p, by: i.by, at: i.at })));
+    const reversed = e.reversal.length > 0;
     return {
       adr: key,
+      intents: e.intent, predictions,
       implementation: e.implementation, outcomes, lessons: e.lesson, supersessions: e.supersession,
+      unintended, abandoned: e.abandoned, reversals: e.reversal,
       built: e.implementation.length > 0,
+      predicted: predictions.length > 0,
       // The default state of a decision is that nobody has checked it.
       evaluated: outcomes.length > 0,
       verdict: latest ? latest.verdict : null,
       evidencedOutcome: latest ? latest.state === 'evidenced' : false,
       learned: e.lesson.length > 0,
       ledTo: e.supersession.map((s) => s.adr),
+      // Reversal and supersession kept apart, deliberately.
+      reversed, reversedBy: e.reversal.map((r) => r.reversedBy),
+      genuinelyUnintended: unintended.filter((u) => u.genuinelyUnintended).map((u) => u.consequence),
+      misfiledAsUnintended: unintended.filter((u) => !u.genuinelyUnintended).map((u) => ({ consequence: u.consequence, wasPredictedBy: u.reclassified.byIntentOf })),
+      abandonedApproaches: e.abandoned.map((a) => a.approach),
       complete: e.implementation.length > 0 && outcomes.some((o) => o.state === 'evidenced') && e.lesson.length > 0,
       gaps: [
+        ...(e.intent.length ? [] : ['no intended outcome recorded — nothing states what this decision was supposed to achieve, so nothing can be compared against it']),
         ...(e.implementation.length ? [] : ['no implementation recorded — nothing says this decision was built']),
         ...(outcomes.length ? [] : ['no outcome recorded — nobody has checked whether it worked, which is not the same as it working']),
         ...(outcomes.length && !outcomes.some((o) => o.state === 'evidenced') ? ['every recorded outcome is claimed rather than evidenced'] : []),
         ...(e.lesson.length ? [] : ['no lesson recorded — nothing here can inform the next decision']),
         ...outcomes.filter((o) => o.contradicted).map((o) => `an outcome recorded as '${o.verdict}' cites failing evidence: ${o.failingEvidence.join(', ')}`),
+        ...unintended.filter((u) => !u.genuinelyUnintended).map((u) => `'${u.consequence}' was filed as unintended and was predicted at decision time by ${u.reclassified.byIntentOf}`),
       ],
+    };
+  }
+
+  // PART 7: the evolution timeline. Every recorded event in the order it happened, so a reader can
+  // see what a decision was for, what it did, what it cost that nobody expected, and whether the
+  // institution built on it or backed out of it.
+  evolution(adr, { controls = [] } = {}) {
+    const l = this.lineage(adr, { controls });
+    const events = [
+      ...l.intents.map((i) => ({ at: i.at, stage: 'intent', by: i.by, what: `predicted: ${(Array.isArray(i.predictions) ? i.predictions : [i.predictions]).map((p) => `${p.subject} — ${p.expectation}`).join('; ')}` })),
+      ...l.abandoned.map((a) => ({ at: a.at, stage: 'abandoned', by: a.by, what: `considered and dropped '${a.approach}': ${a.whyNot}` })),
+      ...l.implementation.map((i) => ({ at: i.at, stage: 'implementation', by: i.by, what: `built in ${(i.modules || []).join(', ')}` })),
+      ...l.outcomes.map((o) => ({ at: o.at, stage: 'outcome', by: o.by, what: `${o.verdict} (${o.state})`, verdict: o.verdict })),
+      ...l.unintended.map((u) => ({ at: u.at, stage: 'unintended', by: u.by, what: u.genuinelyUnintended ? `unforeseen: ${u.consequence}` : `filed as unforeseen, but predicted at decision time: ${u.consequence}`, genuinelyUnintended: u.genuinelyUnintended })),
+      ...l.lessons.map((x) => ({ at: x.at, stage: 'lesson', by: x.by, what: x.statement })),
+      ...l.supersessions.map((s) => ({ at: s.at, stage: 'supersession', by: s.by, what: `led to ${s.adr}` })),
+      ...l.reversals.map((r) => ({ at: r.at, stage: 'reversal', by: r.by, what: `reversed by ${r.reversedBy}: ${r.reason}` })),
+    ].sort((a, b) => a.at - b.at || Object.keys(LINEAGE_STAGES).indexOf(a.stage) - Object.keys(LINEAGE_STAGES).indexOf(b.stage));
+
+    // Did it do what it said it would? Answered only where both halves exist.
+    const predictionAccuracy = !l.predicted ? null
+      : !l.evaluated ? null
+        : l.outcomes[l.outcomes.length - 1].verdict;
+    return {
+      adr: l.adr, events, eventCount: events.length,
+      // The three branches Part 7 asks for, kept apart because they mean different things.
+      branches: {
+        superseded: l.ledTo,
+        reversed: l.reversedBy,
+        abandoned: l.abandonedApproaches,
+      },
+      predictionAccuracy,
+      predictedButUnevaluated: l.predicted && !l.evaluated,
+      unforeseenCount: l.genuinelyUnintended.length,
+      misfiledCount: l.misfiledAsUnintended.length,
+      // A decision that was reversed and never had a lesson recorded is the most expensive kind:
+      // the institution paid for the mistake and did not keep the receipt.
+      costWithoutLearning: l.reversed && !l.learned,
+      gaps: l.gaps,
+      informationalOnly: true, authorizes: false,
+      note: l.reversed
+        ? 'This decision was REVERSED, not superseded. Building on a decision and retreating from it are different histories and are recorded as such.'
+        : 'A timeline of what was intended, what was built, what happened, and what it cost that nobody expected.',
     };
   }
 
@@ -135,8 +243,19 @@ class DecisionMemory {
       lessons: rows.flatMap((r) => r.lessons.map((l) => ({ adr: r.adr, statement: l.statement, by: l.by, at: l.at }))),
       chains: rows.filter((r) => r.ledTo.length).map((r) => ({ from: r.adr, to: r.ledTo })),
       complete: rows.filter((r) => r.complete).map((r) => r.adr),
+      // Part 7: evolution across the catalogue.
+      stages: Object.entries(LINEAGE_STAGES).map(([id, s]) => ({ stage: id, ...s })),
+      predicted: rows.filter((r) => r.predicted).map((r) => r.adr),
+      unpredicted: rows.filter((r) => !r.predicted).map((r) => r.adr),
+      reversed: rows.filter((r) => r.reversed).map((r) => ({ adr: r.adr, by: r.reversedBy })),
+      superseded: rows.filter((r) => r.ledTo.length).map((r) => r.adr),
+      unforeseen: rows.flatMap((r) => r.genuinelyUnintended.map((c) => ({ adr: r.adr, consequence: c }))),
+      misfiledAsUnintended: rows.flatMap((r) => r.misfiledAsUnintended.map((m) => ({ adr: r.adr, ...m }))),
+      abandonedApproaches: rows.flatMap((r) => r.abandonedApproaches.map((a) => ({ adr: r.adr, approach: a }))),
+      // The number worth watching: decisions the institution paid for and kept no lesson from.
+      costWithoutLearning: rows.filter((r) => r.reversed && !r.learned).map((r) => r.adr),
       now, informationalOnly: true, authorizes: false,
-      note: 'A decision with no recorded outcome is UNEVALUATED, not successful. An outcome with no resolving evidence is CLAIMED, not evidenced. Both are reported rather than letting silence read as success.',
+      note: 'A decision with no recorded outcome is UNEVALUATED, not successful. An outcome with no resolving evidence is CLAIMED, not evidenced. A consequence filed as unintended that was predicted at decision time is reported as predicted. All three are surfaced rather than letting silence read as success.',
     };
   }
 }
