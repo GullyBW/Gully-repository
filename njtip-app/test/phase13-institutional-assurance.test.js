@@ -17,6 +17,14 @@ const GREEN_SOURCES = {
   training: { sound: true, readinessContribution: 1, expiredQualifications: [] },
   simulation: { confidence: 'high', uncalibrated: [] },
   assumptions: { count: 9, sound: true, stale: [], overclaims: [] },
+  // Phase 14, Part 19 added five strategic panels; Part 20 added five assurance domains.
+  regulatory: { count: 2, ready: true, readinessBasis: '2 forecast change(s) modelled' },
+  adaptive: { constrained: ['auditReadiness'], unconstrained: [], forecasts: [1, 2, 3, 4, 5, 6] },
+  capacity: { measured: ['staffing'], complete: true, shortfallCount: 0, unmeasurable: [] },
+  decisions: { evaluationRate: 1, contradicted: [], unevaluated: [] },
+  publicTrust: { composite: 'warranted', basis: 'every measured condition holds' },
+  learning: { learningRate: 1, correctedNotLearned: [] },
+  optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
 };
 
 // --- Part 15: executive governance intelligence ----------------------------------------------------
@@ -26,7 +34,7 @@ test('every executive panel states its question and where it is derived from', (
     assert.ok(p.question && p.question.endsWith('?'), id);
     assert.ok(p.derivedFrom, id);
   }
-  assert.strictEqual(Object.keys(inst.EXECUTIVE_PANELS).length, 10);
+  assert.strictEqual(Object.keys(inst.EXECUTIVE_PANELS).length, 15);
 });
 
 test('an unmeasured panel is unmeasured, never satisfied', () => {
@@ -158,8 +166,8 @@ test('the operational layers are declared in order, with governance-performance 
 
 // --- Part 20: the institutional assurance framework ------------------------------------------------
 
-test('all thirteen domains are declared, each saying what unverified would mean', () => {
-  assert.strictEqual(Object.keys(inst.ASSURANCE_DOMAINS).length, 13);
+test('all eighteen domains are declared, each saying what unverified would mean', () => {
+  assert.strictEqual(Object.keys(inst.ASSURANCE_DOMAINS).length, 18);
   for (const [id, d] of Object.entries(inst.ASSURANCE_DOMAINS)) {
     assert.ok(d.unverifiedMeans && d.unverifiedMeans.length > 30, id);
   }
@@ -168,7 +176,7 @@ test('all thirteen domains are declared, each saying what unverified would mean'
 test('an unmeasured domain is reported as unmeasured, never as verified', () => {
   const a = inst.institutionalAssurance({});
   assert.strictEqual(a.institutionallyReady, false);
-  assert.strictEqual(a.unmeasured.length, 13);
+  assert.strictEqual(a.unmeasured.length, 18);
   assert.strictEqual(a.verified, 0);
   assert.ok(a.domains.every((d) => d.state === 'unmeasured'));
   for (const b of a.blockers) assert.match(b, /unmeasured|failing/);
@@ -186,12 +194,15 @@ test('a fully verified estate is institutionally ready and still NOT AUTHORIZED'
     drift: { clean: true }, security: true, privacy: true,
     governanceMaturity: { level: 5 }, documentation: { sound: true },
     readiness: { allDimensionsReady: true }, continuity: { sound: true, minimumBusFactor: 2 },
-    resilience: { holds: true }, training: { sound: true },
+    resilience: { holds: true, capabilities: [{ categoriesValidated: true }] }, training: { sound: true },
     compliance: { reconciliation: { sound: true } }, mission: { safeToDeploy: true },
     evidenceQuality: { sound: true },
+    regulatory: { ready: true }, learning: { learningRate: 1, correctedNotLearned: [] },
+    optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
+    publicTrust: { composite: 'warranted' },
   });
   assert.strictEqual(a.institutionallyReady, true, a.blockers.join('; '));
-  assert.strictEqual(a.verified, 13);
+  assert.strictEqual(a.verified, 18);
   // The invariant that has survived every phase.
   assert.strictEqual(a.authorizationStatus, 'NOT AUTHORIZED');
   assert.strictEqual(a.authorizes, false);

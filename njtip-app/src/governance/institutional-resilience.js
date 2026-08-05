@@ -37,10 +37,15 @@ const DEPENDENCY_KINDS = {
   service: { question: 'Would losing one service stop this capability?', validatedBy: 'The capability survives the loss of any single service in the declared topology.', detectedBy: 'APP-FIT-CHAOS-DETECT-RECOVER' },
   region: { question: 'Would losing one region stop this capability?', validatedBy: 'The capability still serves — read-only counts — with any single region lost.', detectedBy: 'APP-FIT-MULTI-REGION' },
   supplier: { question: 'Does this rest on one supplier?', validatedBy: 'More than one approved supplier can provide it, or the platform has no runtime dependency on any.', detectedBy: 'APP-FIT-SUPPLY-CHAIN-GOVERNANCE' },
-  'communication-channel': { question: 'If the usual channel is down, can people still be reached?', validatedBy: 'The escalation path names more than one way to reach the accountable authority.', detectedBy: null },
+  // Detected by the escalation workflow: an escalation raised and never acknowledged is precisely
+  // what a failed communication channel looks like from inside the platform.
+  'communication-channel': { question: 'If the usual channel is down, can people still be reached?', validatedBy: 'The escalation path names more than one way to reach the accountable authority.', detectedBy: 'APP-FIT-GOVERNANCE-CONTINUITY' },
   data: { question: 'Would losing one dataset stop this capability, with no way to reconstruct it?', validatedBy: 'The data is replicated across zones, or derivable from an append-only source the capability also holds.', detectedBy: 'APP-FIT-DATA-GOVERNANCE' },
   knowledge: { question: 'Does the know-how exist anywhere other than in one person\'s head?', validatedBy: 'A second person is trained and has rehearsed, AND the procedure is written down. Either alone is a name, not knowledge.', detectedBy: 'APP-FIT-GOVERNANCE-REHEARSALS' },
-  facility: { question: 'Would losing one physical site stop this capability?', validatedBy: 'More than one sovereign site can host it. NOTE: the platform models regions, not buildings — this is a proxy and is reported as one.', detectedBy: null },
+  // Detected only through the proxy: APP-FIT-MULTI-REGION would fail if the region backing a site
+  // were lost. It would not notice a shared power feed or a shared landlord, and the facility
+  // assessment says so on every row it produces.
+  facility: { question: 'Would losing one physical site stop this capability?', validatedBy: 'More than one sovereign site can host it. NOTE: the platform models regions, not buildings — this is a proxy and is reported as one.', detectedBy: 'APP-FIT-MULTI-REGION' },
   'legal-authority': { question: 'Does this rest on a single legal instrument or mandate?', validatedBy: 'More than one instrument authorises it, or the mandate is constitutional and cannot be withdrawn by ordinary amendment.', detectedBy: 'APP-FIT-LEGISLATIVE-IMPACT' },
   governance: { question: 'If one board or authority is unavailable, can a decision still be taken?', validatedBy: 'A second authority may approve, and the escalation terminates at a board that is not the same one.', detectedBy: 'APP-FIT-RACI-GOVERNANCE' },
 };
@@ -636,6 +641,191 @@ function recommendations(evaluation) {
   };
 }
 
+// --- THE PHASE 14 GLOBAL INVARIANT ----------------------------------------------------------------
+//
+//   NO CRITICAL INSTITUTIONAL CAPABILITY MAY DEPEND UPON AN UNVALIDATED ASSUMPTION, AN UNVERIFIED
+//   DEPENDENCY, AN UNDOCUMENTED GOVERNANCE RELATIONSHIP, OR A SINGLE POINT OF ORGANIZATIONAL FAILURE.
+//
+// Phase 13's invariant was the fourth clause alone. The three new ones each close a way a capability
+// can be quietly fragile while passing the old test:
+//
+//   AN UNVALIDATED ASSUMPTION. A capability can have a validated alternative on every dimension and
+//   rest on a belief nobody has checked since it was written. The registry knows which assumptions
+//   bear on which contexts and whether each still holds; nothing had ever joined that to the
+//   capabilities.
+//
+//   AN UNVERIFIED DEPENDENCY. Phase 13 asked whether an alternative existed. It never asked whether
+//   anything would NOTICE the dependency breaking. A dependency with no detecting control fails
+//   silently, and the first anybody hears of it is the incident.
+//
+//   AN UNDOCUMENTED GOVERNANCE RELATIONSHIP. Every capability spans institutions, and a relationship
+//   with no recorded way for one side to reach the other is one that fails at a meeting nobody
+//   convened.
+//
+// Each clause is evaluated from a register that already exists. Where a register is not supplied the
+// clause reports UNKNOWN and the invariant does not hold — the same rule as everywhere else, because
+// an unexamined capability is not a sound one.
+const INVARIANT_CLAUSES = {
+  'unvalidated-assumption': {
+    statement: 'No critical capability may depend upon an unvalidated assumption.',
+    evaluatedFrom: 'src/architecture/assumptions.js — the propagated health of every assumption bearing on the capability\'s contexts',
+    ifUnknown: 'The capability may rest on a belief that stopped being true, and nothing would say when.',
+  },
+  'unverified-dependency': {
+    statement: 'No critical capability may depend upon an unverified dependency.',
+    evaluatedFrom: 'the `detectedBy` control of each dependency kind, resolved against the checks that actually ran',
+    ifUnknown: 'The dependency may already have broken, and the first anybody hears of it is the incident.',
+  },
+  'undocumented-governance-relationship': {
+    statement: 'No critical capability may depend upon an undocumented governance relationship.',
+    evaluatedFrom: 'src/governance/cross-agency.js — whether every institution pair the capability spans has a recorded way to reach the other',
+    ifUnknown: 'Two institutions may be jointly responsible for something with no recorded way to reach each other.',
+  },
+  'single-point-of-organizational-failure': {
+    statement: 'No critical capability may depend upon a single point of organizational failure.',
+    evaluatedFrom: 'the thirteen dependency kinds across the eleven categories',
+    ifUnknown: 'One person, document, dataset, site, instrument or board may be able to stop a constitutional capability.',
+  },
+};
+
+// Clause 1: the assumptions this capability's contexts rest on.
+function assumptionClause(capability, { assumptions = null, controls = [], now = 0 } = {}) {
+  const spec = CRITICAL_CAPABILITIES[capability];
+  if (!assumptions) {
+    return { clause: 'unvalidated-assumption', capability, holds: false, unknown: true, assumptions: [], reason: 'no assumption registry was supplied — which beliefs this capability rests on, and whether they still hold, is unknown' };
+  }
+  const bearing = spec.contexts.flatMap((c) => assumptions.forContext(c).map((a) => a.id));
+  const unique = [...new Set(bearing)].sort();
+  if (!unique.length) {
+    return { clause: 'unvalidated-assumption', capability, holds: false, unknown: true, assumptions: [], reason: `no assumption is registered against ${spec.contexts.join(', ')} — a capability whose assumptions nobody has written down is not one whose assumptions have been checked` };
+  }
+  const health = assumptions.health(unique, { now, controls });
+  return {
+    clause: 'unvalidated-assumption', capability, assumptions: unique,
+    confidence: health.confidence, invalid: health.invalid || [],
+    holds: health.sound, unknown: false,
+    reason: health.sound
+      ? `${unique.length} assumption(s) bear on this capability and the weakest is '${health.confidence}'`
+      : `rests on assumption(s) that are not validated: ${health.reason}`,
+  };
+}
+
+// Clause 2: would anything notice each dependency breaking?
+function verificationClause(capability, { controls = [] } = {}) {
+  const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+  const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+  const rows = Object.entries(DEPENDENCY_KINDS).map(([kind, spec]) => {
+    const control = spec.detectedBy;
+    const verified = !!control && ran.has(control) && holding.get(control) !== false;
+    return { kind, category: categoryOfKind(kind), detectedBy: control, verified, reason: !control ? 'no control exists that would fail if this dependency broke' : !ran.has(control) ? `${control} did not run` : holding.get(control) === false ? `${control} ran and did not hold` : `${control} runs and would fail` };
+  });
+  const unverified = rows.filter((r) => !r.verified);
+  return {
+    clause: 'unverified-dependency', capability, dependencies: rows,
+    unverified: unverified.map((r) => r.kind),
+    holds: unverified.length === 0, unknown: !controls.length,
+    reason: unverified.length ? `${unverified.length} dependency kind(s) would break without anything noticing: ${unverified.map((r) => r.kind).join(', ')}` : 'every dependency kind has a control that runs and would fail',
+  };
+}
+
+// Clause 3: is every institutional relationship this capability spans recorded and reachable?
+function governanceRelationshipClause(capability) {
+  const crossAgency = require('./cross-agency');
+  const spec = CRITICAL_CAPABILITIES[capability];
+  const institutions = new Set();
+  for (const s of spec.subsystems) {
+    try {
+      const o = ownership.describe(s);
+      institutions.add(o.responsibleAuthority); institutions.add(o.approvingAuthority);
+    } catch (_) { /* not a governed subsystem */ }
+  }
+  const list = [...institutions].sort();
+  const pairs = [];
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const path = crossAgency.communicationPath(list[i], list[j]);
+      pairs.push({ agencies: [list[i], list[j]], reachable: path.reachable, via: path.via, reason: path.reason });
+    }
+  }
+  const unreachable = pairs.filter((p) => !p.reachable);
+  return {
+    clause: 'undocumented-governance-relationship', capability, institutions: list, pairs,
+    unreachable: unreachable.map((p) => p.agencies.join(' ↔ ')),
+    holds: list.length > 0 && unreachable.length === 0,
+    unknown: list.length === 0,
+    reason: !list.length ? 'no institution is recorded as accountable for this capability'
+      : unreachable.length ? `${unreachable.length} institution pair(s) share responsibility with no recorded way to reach each other: ${unreachable.map((p) => p.agencies.join(' ↔ ')).join('; ')}`
+        : `${list.length} institution(s) share responsibility, and each pair has a recorded way to reach the other`,
+  };
+}
+
+// The invariant, evaluated across all four clauses for every critical capability.
+function evaluateGlobalInvariant({ assumptions = null, continuity = null, controls = [], instruments = null, regions = ['bw-central', 'bw-south', 'bw-north'], now = 0 } = {}) {
+  const structural = evaluate({ continuity, controls, regions, instruments });
+  const capabilities = Object.keys(CRITICAL_CAPABILITIES).sort().map((id) => {
+    const spec = CRITICAL_CAPABILITIES[id];
+    const structuralRow = structural.capabilities.find((c) => c.capability === id);
+    const clauses = [
+      assumptionClause(id, { assumptions, controls, now }),
+      verificationClause(id, { controls }),
+      governanceRelationshipClause(id),
+      {
+        clause: 'single-point-of-organizational-failure', capability: id,
+        holds: structuralRow.resilient, unknown: false,
+        singleDependencies: structuralRow.singleDependencies,
+        unvalidatedCategories: structuralRow.unvalidatedCategories,
+        reason: structuralRow.reason,
+      },
+    ];
+    const failing = clauses.filter((c) => !c.holds);
+    return {
+      capability: id, title: spec.title, constitutional: spec.constitutional, lossMeans: spec.lossMeans,
+      clauses, failingClauses: failing.map((c) => c.clause),
+      // Weakest link across four clauses, exactly as within one.
+      holds: failing.length === 0,
+      reason: failing.length ? `fails ${failing.length} clause(s): ${failing.map((c) => c.clause).join(', ')}` : 'satisfies every clause of the invariant',
+    };
+  });
+  const violations = capabilities.filter((c) => !c.holds);
+  const byClause = Object.keys(INVARIANT_CLAUSES).map((clause) => ({
+    clause, ...INVARIANT_CLAUSES[clause],
+    failingCapabilities: capabilities.filter((c) => c.failingClauses.includes(clause)).map((c) => c.capability),
+  }));
+  return {
+    invariant: 'No critical institutional capability may depend upon an unvalidated assumption, an unverified dependency, an undocumented governance relationship, or a single point of organizational failure.',
+    clauses: byClause, capabilities,
+    violations: violations.map((c) => ({ capability: c.capability, constitutional: c.constitutional, failingClauses: c.failingClauses, lossMeans: c.lossMeans })),
+    violationCount: violations.length,
+    constitutionalViolations: violations.filter((c) => c.constitutional).map((c) => c.capability),
+    holds: violations.length === 0,
+    // Violations block institutional readiness until mitigated or formally accepted.
+    blocksInstitutionalReadiness: violations.length > 0,
+    structural,
+    failClosed: true, authorizes: false,
+    note: 'Four clauses, evaluated across architecture, governance, documentation, operations, institutional resilience, organizational capability and strategic planning. A clause with no register behind it reports UNKNOWN and the invariant does not hold, because an unexamined capability is not a sound one.',
+  };
+}
+
+// The same acceptance mechanism, extended to cover a failing CLAUSE rather than only a single
+// dependency kind. Rationale, owner and expiry are all required; constitutional capabilities remain
+// the Oversight Board's alone.
+function globalInvariantReport({ assumptions = null, continuity = null, controls = [], instruments = null, acceptances = null, regions = ['bw-central', 'bw-south', 'bw-north'], now = 0 } = {}) {
+  const evaluation = evaluateGlobalInvariant({ assumptions, continuity, controls, instruments, regions, now });
+  const accepted = acceptances ? acceptances.activeClauses({ now }) : [];
+  const acceptedKeys = new Set(accepted.map((a) => `${a.capability}|${a.clause}`));
+  const unaccepted = evaluation.violations.flatMap((vi) => vi.failingClauses
+    .filter((c) => !acceptedKeys.has(`${vi.capability}|${c}`))
+    .map((c) => ({ capability: vi.capability, clause: c, constitutional: vi.constitutional, ifUnknown: INVARIANT_CLAUSES[c].ifUnknown })));
+  return {
+    ...evaluation,
+    acceptances: accepted,
+    expiredAcceptances: acceptances ? acceptances.expiredClauses({ now }) : [],
+    unaccepted, unacceptedCount: unaccepted.length,
+    blocksInstitutionalReadiness: unaccepted.length > 0,
+    failClosed: true, authorizes: false,
+  };
+}
+
 // An accepted single dependency is still a single dependency; it is just one somebody has taken
 // responsibility for. Acceptances are attributed and time-bound, like every other acceptance here.
 class ResilienceAcceptance {
@@ -655,6 +845,26 @@ class ResilienceAcceptance {
   }
   active({ now = null } = {}) { const t = now ?? this._clock(); return this._items.filter((a) => t < a.expiresAt).map((a) => ({ ...a })); }
   expired({ now = null } = {}) { const t = now ?? this._clock(); return this._items.filter((a) => t >= a.expiresAt).map((a) => ({ ...a })); }
+
+  // Phase 14: accepting a failing CLAUSE of the global invariant. Same requirements — a named
+  // authority, a rationale and an expiry — and the same constitutional restriction, because a clause
+  // failure on a constitutional capability is at least as serious as a single point of failure in it.
+  acceptClause({ capability, clause, by, rationale, expiresAt, at = null } = {}) {
+    if (!CRITICAL_CAPABILITIES[capability]) throw new Error(`unknown critical capability '${capability}'`);
+    if (!INVARIANT_CLAUSES[clause]) throw new Error(`unknown invariant clause '${clause}' — one of ${Object.keys(INVARIANT_CLAUSES).join(', ')}`);
+    if (!by || !rationale) { const e = new Error('accepting a failing clause of the global invariant requires a named authority and a rationale'); e.failClosed = true; throw e; }
+    if (!Number.isFinite(expiresAt)) { const e = new Error('an acceptance must expire — a permanent acceptance is a decision nobody revisits'); e.failClosed = true; throw e; }
+    if (CRITICAL_CAPABILITIES[capability].constitutional && !/oversight board/i.test(by)) {
+      const e = new Error(`'${capability}' is constitutional — only the Oversight Board may accept a failing clause of the global invariant in it`);
+      e.failClosed = true; throw e;
+    }
+    if (!this._clauses) this._clauses = [];
+    const rec = { capability, clause, by, rationale, expiresAt, at: at ?? this._clock() };
+    this._clauses.push(rec);
+    return { ...rec };
+  }
+  activeClauses({ now = null } = {}) { const t = now ?? this._clock(); return (this._clauses || []).filter((a) => t < a.expiresAt).map((a) => ({ ...a })); }
+  expiredClauses({ now = null } = {}) { const t = now ?? this._clock(); return (this._clauses || []).filter((a) => t >= a.expiresAt).map((a) => ({ ...a })); }
 }
 
 function report({ continuity = null, controls = [], acceptances = null, now = 0, regions = ['bw-central', 'bw-south', 'bw-north'], instruments = null } = {}) {
@@ -680,5 +890,7 @@ module.exports = {
   serviceResilience, regionResilience, personResilience, documentResilience, structuralResilience,
   dataResilience, knowledgeResilience, facilityResilience, legalAuthorityResilience, governanceResilience,
   RISK_FACTORS, KIND_LIKELIHOOD, KIND_RECOVERY, scoreDependency, riskPrioritisation,
+  INVARIANT_CLAUSES, assumptionClause, verificationClause, governanceRelationshipClause,
+  evaluateGlobalInvariant, globalInvariantReport,
   evaluate, recommendations, ResilienceAcceptance, report,
 };

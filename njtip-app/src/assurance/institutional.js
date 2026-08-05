@@ -30,6 +30,12 @@ const EXECUTIVE_PANELS = {
   knowledgeContinuity: { question: 'Would the institution keep working if the people changed?', derivedFrom: 'src/governance/ownership.js' },
   simulationConfidence: { question: 'How much may we rely on what the twin predicts?', derivedFrom: 'src/twin2/operations-twin.js' },
   assumptionHealth: { question: 'Are the beliefs the platform rests on still being examined?', derivedFrom: 'src/architecture/assumptions.js' },
+  // --- Strategic intelligence (Phase 14, Part 19) ----------------------------------------------
+  strategicReadiness: { question: 'Could the institution absorb the changes it can already see coming?', derivedFrom: 'src/legislation/compliance-intelligence.js (regulatoryReadiness) and src/twin2/operations-twin.js' },
+  organizationalMaturity: { question: 'Is the institution getting better at governing itself, or only busier?', derivedFrom: 'src/architecture/drift-prevention.js (adaptiveGovernanceAnalytics)' },
+  operationalSustainability: { question: 'Can the estate be run with the people and capacity it actually has?', derivedFrom: 'src/governance/optimization.js (capacityPlan)' },
+  decisionQuality: { question: 'Do the decisions taken turn out to do what they said they would?', derivedFrom: 'src/architecture/decision-memory.js' },
+  publicTrust: { question: 'Do the conditions under which public trust would be warranted currently hold?', derivedFrom: 'src/observability/business.js (publicTrustIndicators)' },
 };
 
 // The thirteen domains Part 20 names. Each declares what it would mean for that domain to be
@@ -48,6 +54,12 @@ const ASSURANCE_DOMAINS = {
   compliance: { unverifiedMeans: 'A legal obligation may be unmet, and discovered at an inspection.' },
   missionReadiness: { unverifiedMeans: 'The platform may be running well and not achieving what it exists for.' },
   evidenceQuality: { unverifiedMeans: 'Every figure above may rest on evidence nobody has assessed.' },
+  // --- Adaptive assurance (Phase 14, Part 20) --------------------------------------------------
+  dependencyResilience: { unverifiedMeans: 'A capability may rest on a single dataset, a single site, a single instrument or a single board, and nothing would have asked.' },
+  strategicReadiness: { unverifiedMeans: 'A change everybody can see coming may arrive with nothing prepared for it.' },
+  learningMaturity: { unverifiedMeans: 'The institution may be repairing the same class of failure indefinitely and scoring perfectly on every improvement measure while it does.' },
+  governanceAdaptability: { unverifiedMeans: 'Governance may be jamming — bottlenecked, overloaded, or leaning on exceptions — with no signal until a decision is missed.' },
+  publicTrustIndicators: { unverifiedMeans: 'The conditions under which reporting corruption is worth the risk may have stopped holding, and that is the one thing the platform exists to protect.' },
 };
 
 // --- Governance state intelligence (Phase 14, Part 10) -------------------------------------------
@@ -382,6 +394,13 @@ function executiveGovernanceIntelligence(sources = {}) {
     panel('knowledgeContinuity', g(() => sources.training && sources.training.readinessContribution), g(() => sources.training && sources.training.sound), g(() => sources.training && `${sources.training.expiredQualifications.length} expired qualification(s)`, 'not assessed')),
     panel('simulationConfidence', g(() => sources.simulation && sources.simulation.confidence), g(() => sources.simulation && ['high', 'moderate'].includes(sources.simulation.confidence)), g(() => sources.simulation && `${sources.simulation.uncalibrated.length} scenario(s) never compared against reality`, 'not assessed')),
     panel('assumptionHealth', g(() => sources.assumptions && sources.assumptions.count), g(() => sources.assumptions && sources.assumptions.sound), g(() => sources.assumptions && `${sources.assumptions.stale.length} stale, ${sources.assumptions.overclaims.length} overclaimed`, 'not assessed')),
+    // Part 19. Each is a function of a register, exactly like the ten above; there is still no
+    // parameter anywhere in this module that accepts a figure.
+    panel('strategicReadiness', g(() => sources.regulatory && sources.regulatory.count), g(() => sources.regulatory && sources.regulatory.ready), g(() => sources.regulatory && sources.regulatory.readinessBasis, 'not assessed')),
+    panel('organizationalMaturity', g(() => sources.adaptive && sources.adaptive.constrained.length), g(() => sources.adaptive && sources.adaptive.unconstrained.length === 0), g(() => sources.adaptive && `${sources.adaptive.unconstrained.length} of ${sources.adaptive.forecasts.length} forecasts rest on too few observations to constrain anything`, 'not assessed')),
+    panel('operationalSustainability', g(() => sources.capacity && sources.capacity.measured.length), g(() => sources.capacity && sources.capacity.complete && sources.capacity.shortfallCount === 0), g(() => sources.capacity && `${sources.capacity.shortfallCount} capacity shortfall(s), ${sources.capacity.unmeasurable.length} dimension(s) unmeasurable`, 'not assessed')),
+    panel('decisionQuality', g(() => sources.decisions && sources.decisions.evaluationRate), g(() => sources.decisions && sources.decisions.contradicted.length === 0 && sources.decisions.unevaluated.length === 0), g(() => sources.decisions && `${sources.decisions.unevaluated.length} decision(s) never evaluated, ${sources.decisions.contradicted.length} contradicted by their own evidence`, 'not assessed')),
+    panel('publicTrust', g(() => sources.publicTrust && sources.publicTrust.composite), g(() => sources.publicTrust && sources.publicTrust.composite === 'warranted'), g(() => sources.publicTrust && sources.publicTrust.basis, 'not assessed')),
   ];
   const unmeasured = panels.filter((p) => !p.measured).map((p) => p.panel);
   const unsound = panels.filter((p) => p.sound === false).map((p) => p.panel);
@@ -414,6 +433,16 @@ function institutionalAssurance(sources = {}) {
     compliance: sources.compliance && sources.compliance.reconciliation ? sources.compliance.reconciliation.sound : null,
     missionReadiness: sources.mission ? sources.mission.safeToDeploy : null,
     evidenceQuality: sources.evidenceQuality ? sources.evidenceQuality.sound : null,
+    // Part 20. Each verdict resolves to `null` when nothing was supplied, so an unmeasured domain
+    // stays unmeasured rather than defaulting either way.
+    dependencyResilience: sources.resilience && Array.isArray(sources.resilience.capabilities)
+      ? sources.resilience.capabilities.every((c) => c.categoriesValidated) : null,
+    strategicReadiness: sources.regulatory ? sources.regulatory.ready : null,
+    learningMaturity: sources.learning && sources.learning.learningRate !== null && sources.learning.learningRate !== undefined
+      ? sources.learning.learningRate > 0 && sources.learning.correctedNotLearned.length === 0 : null,
+    governanceAdaptability: sources.optimization
+      ? sources.optimization.bottleneckAuthorities.length === 0 && sources.optimization.overCapacityAuthorities.length === 0 : null,
+    publicTrustIndicators: sources.publicTrust ? sources.publicTrust.composite === 'warranted' : null,
   };
   const domains = Object.keys(ASSURANCE_DOMAINS).map((id) => ({
     domain: id,

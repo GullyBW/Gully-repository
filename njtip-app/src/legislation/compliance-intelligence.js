@@ -153,6 +153,16 @@ class TransitionExceptions {
   all() { return this._items.map((e) => ({ ...e })); }
 }
 
+// How sure the forecaster is. Declared bands rather than a probability, because nobody in this
+// building can honestly put a number on whether a bill passes.
+const FORECAST_CONFIDENCE = {
+  signalled: { description: 'A minister or regulator has publicly stated an intention.' },
+  drafted: { description: 'A draft instrument exists and is circulating.' },
+  possible: { description: 'Reasonably anticipated from the direction of policy. The weakest band, and the honest one for most forecasts.' },
+};
+const EFFORT_BANDS = ['absorbed', 'contained', 'substantial', 'programme'];
+const DAY = 24 * 3600_000;
+
 class ComplianceIntelligence {
   constructor({ registry = null, clock = () => 0, exceptions = null } = {}) {
     this._registry = registry;
@@ -524,6 +534,137 @@ class ComplianceIntelligence {
     };
   }
 
+  // --- Regulatory change forecasting (Phase 14, Part 15) -----------------------------------------
+  //
+  // Everything above deals with a change that HAS happened. Part 15 asks about one that has not: an
+  // amendment in draft, a directive expected next session, a policy the ministry has signalled. The
+  // question is worth asking early, and it carries a specific danger:
+  //
+  //   A FORECAST MUST NEVER BECOME A COMPLIANCE RECORD. A hypothetical obligation sitting in the same
+  //   register as an observed one is how "we expect to comply" becomes "we comply". So forecasts live
+  //   in their own register, they can never move an obligation's state, and every figure they produce
+  //   is labelled `hypothetical: true`.
+  //
+  // The effort estimate is derived from what is MISSING rather than declared by whoever files the
+  // forecast: controls that do not exist, contexts with no ADR bearing on them, policies with no
+  // recorded decision. An estimate somebody types in is a negotiating position.
+  forecast({ kind, summary, instrument = null, affects = {}, expectedAt = null, forecastBy, confidence = 'possible', at = null } = {}) {
+    if (!CHANGE_KINDS[kind]) throw new Error(`unknown change kind '${kind}' — one of ${Object.keys(CHANGE_KINDS).join(', ')}`);
+    if (!summary) throw new Error('a forecast change must be summarised');
+    if (!forecastBy) { const e = new Error('a regulatory forecast must name who made it — an anonymous prediction is a rumour'); e.failClosed = true; throw e; }
+    if (!FORECAST_CONFIDENCE[confidence]) throw new Error(`unknown forecast confidence '${confidence}' — one of ${Object.keys(FORECAST_CONFIDENCE).join(', ')}`);
+    if (!Number.isFinite(expectedAt)) { const e = new Error('a forecast must state when the change is expected — a prediction with no horizon cannot be wrong, and cannot be planned against either'); e.failClosed = true; throw e; }
+    if (!this._forecasts) this._forecasts = new Map();
+    const id = `FCH-${String(this._forecasts.size + 1).padStart(4, '0')}`;
+    const rec = {
+      id, kind, summary, instrument, forecastBy, confidence, expectedAt,
+      at: at ?? this._clock(),
+      affects: { contexts: [...(affects.contexts || [])], controls: [...(affects.controls || [])], datasets: [...(affects.datasets || [])] },
+      // Carried on the record itself, so nothing downstream can mistake it for an observation.
+      hypothetical: true, observed: false,
+    };
+    this._forecasts.set(id, rec);
+    return { ...rec };
+  }
+  forecasts() { return [...(this._forecasts || new Map()).values()].map((f) => ({ ...f })).sort((a, b) => a.id.localeCompare(b.id)); }
+
+  // What one forecast would cost. Every dimension is resolved against a registry; nothing is typed in.
+  forecastImpact(id, { controls = [], datasets = [], now = null } = {}) {
+    const f = (this._forecasts || new Map()).get(id);
+    if (!f) throw new Error('unknown forecast: ' + id);
+    const t = now ?? this._clock();
+    const knownContexts = new Set(contextMap.ids());
+    const contexts = f.affects.contexts.filter((x) => knownContexts.has(x));
+    const unresolvedContexts = f.affects.contexts.filter((x) => !knownContexts.has(x));
+
+    // Affected policies: consistency stances governing an affected context.
+    const policies = multiRegion.contextConsistency().filter((p) => contexts.includes(p.context))
+      .map((p) => ({ policy: `consistency:${p.context}`, model: p.model, adr: p.adr || null }));
+
+    // Required ADRs: an affected context with no ADR naming it needs one; a policy with no recorded
+    // decision needs one. Derived, so the count moves when the catalogue does.
+    const adrText = adrGovernance.adrFiles().map((file) => adrGovernance.parse(file));
+    const contextsWithoutAdr = contexts.filter((ctx) => !adrText.some((p) => new RegExp(`\\b${ctx.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`).test(p.raw)));
+    const policiesWithoutAdr = policies.filter((p) => !p.adr).map((p) => p.policy);
+    const requiredAdrs = [
+      ...contextsWithoutAdr.map((ctx) => `a decision covering '${ctx}', which no existing ADR names`),
+      ...policiesWithoutAdr.map((p) => `a decision behind '${p}', which currently rests on none`),
+    ];
+
+    // Controls: which named controls exist and hold, and which would have to be built.
+    const known = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+    const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+    const existing = f.affects.controls.filter((c) => known.has(c));
+    const toBuild = f.affects.controls.filter((c) => !known.has(c));
+    const failing = existing.filter((c) => holding.get(c) === false);
+
+    // Governance impact: which boards and authorities would have to act.
+    const boards = new Set();
+    const authorities = new Set();
+    for (const ctx of contexts) {
+      try {
+        const o = ownership.describe(ctx);
+        boards.add(o.governanceBoard); authorities.add(o.responsibleAuthority); authorities.add(o.approvingAuthority);
+      } catch (_) { /* not a governed context */ }
+    }
+
+    // Operational disruption: the declared data flows that would be touched.
+    const flows = [];
+    for (const ctx of contexts) {
+      for (const dep of contextMap.describe(ctx).dependsOn || []) flows.push(`${ctx} → ${dep.context}`);
+      for (const other of contextMap.ids()) {
+        if ((contextMap.describe(other).dependsOn || []).some((d) => d.context === ctx)) flows.push(`${other} → ${ctx}`);
+      }
+    }
+
+    // EFFORT, derived from what is missing. The band boundaries are declared and stated as declared.
+    const workItems = toBuild.length + requiredAdrs.length + failing.length;
+    const effort = workItems === 0 ? 'absorbed' : workItems <= 2 ? 'contained' : workItems <= 6 ? 'substantial' : 'programme';
+    const affectedDatasets = f.affects.datasets.filter((d) => datasets.includes(d));
+
+    return {
+      forecast: id, kind: f.kind, summary: f.summary, expectedAt: f.expectedAt, confidence: f.confidence,
+      daysAway: Number.isFinite(f.expectedAt) ? Math.round((f.expectedAt - t) / DAY) : null,
+      hypothetical: true,
+      affectedContexts: contexts.sort(), unresolvedContexts,
+      affectedPolicies: policies,
+      requiredAdrs, requiredAdrCount: requiredAdrs.length,
+      controls: { existing: existing.sort(), toBuild: toBuild.sort(), failing: failing.sort() },
+      governanceImpact: { boards: [...boards].sort(), authorities: [...authorities].sort() },
+      operationalDisruption: { dataFlows: [...new Set(flows)].sort(), datasets: affectedDatasets.sort() },
+      effort, workItems,
+      effortBasis: `derived from ${toBuild.length} control(s) to build, ${requiredAdrs.length} decision(s) to record and ${failing.length} failing control(s). The band boundaries (0 / ≤2 / ≤6 / more) are a declared judgement, not a measurement.`,
+      // Stated on every impact, because this is the sentence that stops a forecast being read as a plan.
+      caveat: 'A forecast about a change that has not happened. It moves no obligation into any compliance state, and the platform has no way to know whether the change will occur as described.',
+      informationalOnly: true, authorizes: false,
+    };
+  }
+
+  // The Part 15 report: everything expected, what it would cost, and how ready the estate is.
+  regulatoryReadiness({ controls = [], datasets = [], now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = this.forecasts().map((f) => this.forecastImpact(f.id, { controls, datasets, now: t }));
+    const imminent = rows.filter((r) => r.daysAway !== null && r.daysAway <= 180);
+    const heavy = rows.filter((r) => ['substantial', 'programme'].includes(r.effort));
+    return {
+      forecasts: rows, count: rows.length,
+      confidenceBands: Object.entries(FORECAST_CONFIDENCE).map(([band, b]) => ({ band, ...b })),
+      effortBands: [...EFFORT_BANDS],
+      imminent: imminent.map((r) => r.forecast),
+      heavy: heavy.map((r) => ({ forecast: r.forecast, effort: r.effort, workItems: r.workItems })),
+      totalWorkItems: rows.reduce((a, r) => a + r.workItems, 0),
+      // An estate with no forecasts is not a prepared one; it is one nobody has looked ahead for.
+      ready: rows.length > 0 && heavy.length === 0,
+      readinessBasis: rows.length
+        ? `${rows.length} forecast change(s) modelled; ${heavy.length} would be substantial or larger.`
+        : 'No regulatory change has been forecast. That is not evidence that none is coming — it is evidence that nobody has looked.',
+      // The structural guarantee, checked rather than promised: forecasting has not moved anything.
+      obligationsMoved: 0,
+      now: t, hypothetical: true, informationalOnly: true, authorizes: false,
+      note: 'Forecasts live in their own register. A forecast can never move an obligation into a compliance state, because a hypothetical obligation beside an observed one is how "we expect to comply" becomes "we comply".',
+    };
+  }
+
   validate() {
     const violations = [];
     for (const [state, spec] of Object.entries(COMPLIANCE_STATES)) {
@@ -550,6 +691,7 @@ class ComplianceIntelligence {
       changes: this.changes(),
       complianceStates: this.complianceStates(),
       transitionAudit: this.transitionAudit({ now }),
+      regulatoryReadiness: this.regulatoryReadiness({ controls, datasets, now }),
       evolution: this.evolution({ now, controls }),
       gapAnalysis: this.gapAnalysis({ controls, datasets, now }),
       remediation: this.remediation({ controls, datasets, now }),
@@ -564,4 +706,5 @@ module.exports = {
   ComplianceIntelligence, CHANGE_KINDS, CHANGE_SEVERITY, MAPPING_DIMENSIONS, KIND_READINESS,
   COMPLIANCE_STATES, COMPLIANCE_TRANSITIONS,
   TRANSITION_LEGALITY, TransitionExceptions, exceptionAuthorities,
+  FORECAST_CONFIDENCE, EFFORT_BANDS,
 };

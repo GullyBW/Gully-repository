@@ -33,9 +33,10 @@ test('every dependency kind says whether anything would detect it breaking', () 
     assert.notStrictEqual(spec.detectedBy, undefined, kind);
     assert.ok(spec.validatedBy, kind);
   }
-  // At least one kind is honestly undetectable — a taxonomy where everything is detected is one
-  // that has stopped looking.
-  assert.ok(Object.values(ir.DEPENDENCY_KINDS).some((k) => k.detectedBy === null));
+  // Every kind names a control that would fail if it broke. Two of them detect only through a
+  // proxy — the facility check watches the region behind a site, not the building — and those say so
+  // in the assessment they produce rather than in the table.
+  for (const [kind, spec] of Object.entries(ir.DEPENDENCY_KINDS)) assert.ok(spec.detectedBy, kind);
 });
 
 test('each capability is evaluated across all eleven categories, and an unassessed one is unvalidated', () => {
@@ -117,8 +118,11 @@ test('detectability is derived and moves in both directions', () => {
     ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'service', controls: [{ id: 'APP-FIT-CHAOS-DETECT-RECOVER', pass: false }] }).levels.detectability,
     'partially-detected',
   );
-  // A kind nothing detects is undetected however green the estate is.
-  assert.strictEqual(ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'communication-channel', controls }).levels.detectability, 'undetected');
+  // A kind whose detecting control did not run is undetected however green the rest of the estate is.
+  assert.strictEqual(
+    ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'communication-channel', controls: controls.filter((c) => c.id !== 'APP-FIT-GOVERNANCE-CONTINUITY') }).levels.detectability,
+    'undetected',
+  );
 });
 
 test('a constitutional dependency always ranks above a non-constitutional one', () => {

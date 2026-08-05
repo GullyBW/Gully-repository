@@ -5017,9 +5017,15 @@ module.exports = [
       training: { sound: true, readinessContribution: 1, expiredQualifications: [] },
       simulation: { confidence: 'high', uncalibrated: [] },
       assumptions: { count: 9, sound: true, stale: [], overclaims: [] },
+      // Phase 14, Part 19 added five strategic panels.
+      regulatory: { count: 2, ready: true, readinessBasis: '2 forecast change(s) modelled' },
+      adaptive: { constrained: ['auditReadiness'], unconstrained: [], forecasts: [1, 2, 3, 4, 5, 6] },
+      capacity: { measured: ['staffing'], complete: true, shortfallCount: 0, unmeasurable: [] },
+      decisions: { evaluationRate: 1, contradicted: [], unevaluated: [] },
+      publicTrust: { composite: 'warranted', basis: 'every measured condition holds' },
     });
-    if (!wired.sound) v.push('a fully evidenced executive dashboard was not sound: ' + wired.unsound.join(', '));
-    if (wired.authorizationStatus !== 'NOT AUTHORIZED') v.push('ten green executive panels produced an authorization');
+    if (!wired.sound) v.push('a fully evidenced executive dashboard was not sound: ' + wired.unsound.concat(wired.unmeasured).join(', '));
+    if (wired.authorizationStatus !== 'NOT AUTHORIZED') v.push('fifteen green executive panels produced an authorization');
     if (wired.authorizes !== false) v.push('the executive dashboard claims authority');
 
     // --- Part 19: the improvement loop must close ---------------------------------------------
@@ -5087,13 +5093,18 @@ module.exports = [
       drift: { clean: true }, security: true, privacy: true,
       governanceMaturity: { level: 5 }, documentation: { sound: true },
       readiness: { allDimensionsReady: true }, continuity: { sound: true, minimumBusFactor: 2 },
-      resilience: { holds: true }, training: { sound: true },
+      resilience: { holds: true, capabilities: [{ categoriesValidated: true }] }, training: { sound: true },
       compliance: { reconciliation: { sound: true } }, mission: { safeToDeploy: true },
       evidenceQuality: { sound: true },
+      // Phase 14, Part 20 added five domains: dependency resilience, strategic readiness, learning
+      // maturity, governance adaptability and public trust indicators.
+      regulatory: { ready: true }, learning: { learningRate: 1, correctedNotLearned: [] },
+      optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
+      publicTrust: { composite: 'warranted' },
     });
     if (!green.institutionallyReady) v.push('a fully verified estate was not reported institutionally ready: ' + green.blockers.join('; '));
-    // THE INVARIANT. Thirteen verified domains still print NOT AUTHORIZED.
-    if (green.authorizationStatus !== 'NOT AUTHORIZED') v.push('thirteen verified assurance domains produced an authorization');
+    // THE INVARIANT. Eighteen verified domains still print NOT AUTHORIZED.
+    if (green.authorizationStatus !== 'NOT AUTHORIZED') v.push('eighteen verified assurance domains produced an authorization');
     if (green.authorizes !== false || green.derivedFromReadiness !== false) v.push('the institutional assurance framework claims to derive authorization');
     if (!/does not replace human authority/.test(green.note)) v.push('the framework does not state that it never replaces human authority');
     if (green.failClosed !== true) v.push('the institutional assurance framework is not fail-closed');
@@ -6289,8 +6300,14 @@ module.exports = [
     if (!unknownKind) v.push('an undeclared dependency kind was scored');
 
     // --- Detectability actually moves, in both directions -------------------------------------
-    const undetected = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'communication-channel', controls });
-    if (undetected.levels.detectability !== 'undetected') v.push('a dependency kind with no detecting control was not reported as undetected');
+    // Phase 14 gave every kind a detecting control, so 'undetected' is now demonstrated by a control
+    // that did not run rather than by a kind that has none. Both are the same finding: nothing would
+    // notice this dependency breaking.
+    const undetected = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'communication-channel', controls: controls.filter((c) => c.id !== 'APP-FIT-GOVERNANCE-CONTINUITY') });
+    if (undetected.levels.detectability !== 'undetected') v.push('a dependency whose detecting control did not run was not reported as undetected');
+    for (const [kind, spec] of Object.entries(ir.DEPENDENCY_KINDS)) {
+      if (!spec.detectedBy) v.push(`dependency kind '${kind}' names no detecting control — a dependency nothing would notice breaking is the worst kind`);
+    }
     const blind = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'service', controls: [] });
     if (blind.levels.detectability !== 'undetected') v.push('a dependency whose detecting control did not run was still reported as detected');
     const failing = ir.scoreDependency({ capability: 'anonymous-reporting', kind: 'service', controls: [{ id: 'APP-FIT-CHAOS-DETECT-RECOVER', pass: false }] });
@@ -7021,6 +7038,262 @@ module.exports = [
     // --- And it is wired into the governance analytics the platform already ran --------------
     const analytics = dp.governanceAnalytics({ controls, now: 0 });
     if (!analytics.adaptive || analytics.adaptive.forecasts.length !== 6) v.push('the adaptive forecasts are not carried by the governance analytics report');
+  }),
+
+  fit('APP-FIT-REGULATORY-FORECAST', 'A forecast about a change that has not happened can never move an obligation into a compliance state', (v) => {
+    const ci = require('../src/legislation/compliance-intelligence');
+    const { LegislativeRegistry } = require('../src/legislation/registry');
+    const DAY = 24 * 3600_000;
+    const controls = require('./app-fitness').map((f) => ({ id: f.id, pass: true }));
+
+    for (const [id, b] of Object.entries(ci.FORECAST_CONFIDENCE)) if (!b.description) v.push(`forecast confidence band '${id}' has no description`);
+    if (ci.EFFORT_BANDS.length < 3) v.push('fewer than three effort bands — the estimate cannot distinguish anything');
+
+    // --- A forecast is attributed and has a horizon, or it is a rumour ------------------------
+    const c = new ci.ComplianceIntelligence({ registry: new LegislativeRegistry(), clock: () => 0 });
+    for (const [what, args] of [
+      ['no author', { kind: 'legislative-change', summary: 's', expectedAt: 100 * DAY }],
+      ['no horizon', { kind: 'legislative-change', summary: 's', forecastBy: 'AG' }],
+      ['no summary', { kind: 'legislative-change', forecastBy: 'AG', expectedAt: 100 * DAY }],
+      ['an unknown kind', { kind: 'vibes', summary: 's', forecastBy: 'AG', expectedAt: 100 * DAY }],
+      ['an unknown confidence band', { kind: 'legislative-change', summary: 's', forecastBy: 'AG', expectedAt: 100 * DAY, confidence: 'certain' }],
+    ]) {
+      let rejected = false;
+      try { c.forecast(args); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`a regulatory forecast with ${what} was accepted`);
+    }
+
+    // --- THE RULE: forecasting moves nothing -------------------------------------------------
+    c.forecast({ kind: 'legislative-change', summary: 'Whistleblower Protection Amendment', affects: { contexts: ['intake', 'custody'], controls: ['APP-FIT-ANONYMITY-BOUNDARY', 'APP-FIT-WHISTLEBLOWER-SHIELD'] }, expectedAt: 200 * DAY, forecastBy: 'Attorney General Chambers', confidence: 'drafted' });
+    if (c.changes().length) v.push('a forecast appeared in the OBSERVED change register — a hypothetical beside an observation is how "we expect to comply" becomes "we comply"');
+    if (c.state('data-protection-act').state !== 'unknown') v.push('forecasting moved an obligation out of unknown');
+    if (c.transitionAudit({ now: 0 }).transitions !== 0) v.push('forecasting produced a compliance transition');
+    for (const f of c.forecasts()) {
+      if (f.hypothetical !== true || f.observed !== false) v.push(`forecast '${f.id}' is not labelled as hypothetical`);
+    }
+
+    // --- The impact is DERIVED from what is missing, not typed in ----------------------------
+    const impact = c.forecastImpact('FCH-0001', { controls, now: 0 });
+    if (!impact.affectedContexts.includes('intake')) v.push('an affected context was not resolved');
+    if (!impact.controls.toBuild.includes('APP-FIT-WHISTLEBLOWER-SHIELD')) v.push('a control that does not exist was not identified as work');
+    if (!impact.controls.existing.includes('APP-FIT-ANONYMITY-BOUNDARY')) v.push('a control that already runs was not identified as existing');
+    if (!impact.governanceImpact.boards.length) v.push('no governance impact was derived');
+    if (!impact.operationalDisruption.dataFlows.length) v.push('no operational disruption was derived from the declared data flows');
+    if (!ci.EFFORT_BANDS.includes(impact.effort)) v.push(`effort '${impact.effort}' is not a declared band`);
+    if (!/derived from/.test(impact.effortBasis)) v.push('the effort estimate does not say how it was arrived at');
+    if (impact.daysAway !== 200) v.push('the horizon was not computed');
+    if (!/has not happened/.test(impact.caveat)) v.push('a forecast impact does not carry its caveat');
+    // Effort moves with the work: a change needing nothing is 'absorbed'.
+    c.forecast({ kind: 'policy-update', summary: 'a change already covered', affects: { contexts: ['intake'], controls: ['APP-FIT-ANONYMITY-BOUNDARY'] }, expectedAt: 300 * DAY, forecastBy: 'ARB' });
+    if (c.forecastImpact('FCH-0002', { controls, now: 0 }).effort !== 'absorbed') v.push('a forecast change requiring no new work was not reported as absorbed — the estimate does not move');
+    // An unresolvable context is reported, not carried through.
+    c.forecast({ kind: 'policy-update', summary: 'names a context that does not exist', affects: { contexts: ['ministry-of-magic'] }, expectedAt: 300 * DAY, forecastBy: 'ARB' });
+    if (!c.forecastImpact('FCH-0003', { controls, now: 0 }).unresolvedContexts.includes('ministry-of-magic')) v.push('a forecast naming a context the architecture does not contain was carried through silently');
+
+    // --- Readiness, and what an empty register actually means --------------------------------
+    const readiness = c.regulatoryReadiness({ controls, now: 0 });
+    if (readiness.count !== 3) v.push('not every forecast was assessed');
+    if (readiness.obligationsMoved !== 0) v.push('regulatory forecasting moved an obligation');
+    if (readiness.hypothetical !== true) v.push('the readiness report is not labelled hypothetical');
+    if (readiness.authorizes !== false) v.push('the regulatory readiness report claims authority');
+    const empty = new ci.ComplianceIntelligence({ clock: () => 0 }).regulatoryReadiness({ controls, now: 0 });
+    if (empty.ready) v.push('an estate with no forecast at all reported itself regulatorily ready');
+    if (!/nobody has looked/.test(empty.readinessBasis)) v.push('an empty forecast register was not reported as nobody having looked');
+  }),
+
+  fit('APP-FIT-GLOBAL-INVARIANT', 'No critical capability rests on an unvalidated assumption, an unverified dependency, an undocumented governance relationship, or a single point of organizational failure', (v) => {
+    const ir = require('../src/governance/institutional-resilience');
+    const own = require('../src/governance/ownership');
+    const asm = require('../src/architecture/assumptions');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const DAY = 24 * 3600_000, YEAR = 365 * DAY, NOW = 400 * DAY;
+
+    // --- Four clauses, each naming where it is evaluated from and what an unknown costs -------
+    for (const required of ['unvalidated-assumption', 'unverified-dependency', 'undocumented-governance-relationship', 'single-point-of-organizational-failure']) {
+      if (!ir.INVARIANT_CLAUSES[required]) v.push(`invariant clause '${required}' is not evaluated`);
+    }
+    if (Object.keys(ir.INVARIANT_CLAUSES).length !== 4) v.push('the global invariant does not have exactly four clauses');
+    for (const [id, c] of Object.entries(ir.INVARIANT_CLAUSES)) {
+      if (!c.statement || !c.evaluatedFrom || !c.ifUnknown) v.push(`invariant clause '${id}' does not state itself, where it is evaluated from, or what an unknown means`);
+    }
+
+    // --- With no registers, every clause that needs one reports UNKNOWN and does not hold ----
+    const blind = ir.evaluateGlobalInvariant({ controls: [], now: NOW });
+    if (blind.holds) v.push('the invariant held with nothing supplied to evaluate it against');
+    if (!blind.blocksInstitutionalReadiness) v.push('an unheld invariant did not block institutional readiness');
+    for (const cap of blind.capabilities) {
+      const assumption = cap.clauses.find((c) => c.clause === 'unvalidated-assumption');
+      if (assumption.holds || !assumption.unknown) v.push(`'${cap.capability}': an unknown assumption position was not treated as a failure`);
+      const verification = cap.clauses.find((c) => c.clause === 'unverified-dependency');
+      if (verification.holds) v.push(`'${cap.capability}': every dependency was reported verified with no control results at all`);
+    }
+    if (blind.authorizes !== false) v.push('the global invariant report claims authority');
+
+    // --- Every clause can FAIL on its own, fed a crafted position ----------------------------
+    // Assumption clause: an expired assumption bearing on the capability's context.
+    const stale = new asm.AssumptionRegistry({ clock: () => NOW });
+    stale.register('STALE-1', { statement: 's', rationale: 'r', evidence: ['APP-FIT-CUSTODY-SIGNED-CHAIN'], contexts: ['custody'], owner: 'DFS', reviewCadenceDays: 90, expiresAt: 10 * DAY, verificationMethod: 'executable-check', confidence: 'high' });
+    const withStale = ir.assumptionClause('evidence-custody', { assumptions: stale, controls, now: NOW });
+    if (withStale.holds) v.push('a capability resting on an expired assumption satisfied the assumption clause');
+    // Verification clause: a detecting control that ran and failed.
+    const oneKind = Object.entries(ir.DEPENDENCY_KINDS).find(([, k]) => k.detectedBy);
+    const broken = ir.verificationClause('evidence-custody', { controls: controls.map((c) => (c.id === oneKind[1].detectedBy ? { ...c, pass: false } : c)) });
+    if (broken.holds) v.push('a dependency whose detecting control ran and failed satisfied the verification clause');
+    if (!broken.unverified.includes(oneKind[0])) v.push('the unverified dependency kind was not named');
+    // …and a control that never ran is equally unverified.
+    if (ir.verificationClause('evidence-custody', { controls: controls.filter((c) => c.id !== oneKind[1].detectedBy) }).holds) {
+      v.push('a dependency whose detecting control did not run satisfied the verification clause');
+    }
+    // Governance relationship clause: it holds on the real estate, so both directions exist.
+    const rel = ir.governanceRelationshipClause('evidence-custody');
+    if (!rel.holds) v.push(`the governance relationship clause fails on the real estate: ${rel.reason}`);
+    if (!rel.institutions.length) v.push('no institution was resolved for a capability');
+
+    // --- THE SUCCESS PATH: a fully evidenced capability satisfies all four clauses -----------
+    const availability = new own.AvailabilityRegister({ clock: () => NOW });
+    const activity = new own.ActivityRegister({ clock: () => NOW });
+    const training = new own.TrainingRegister({ clock: () => NOW });
+    const exercises = new own.ExerciseRegister({ clock: () => NOW });
+    for (const s of own.subsystems()) {
+      for (const role of own.DEPUTY_ROLES) {
+        for (const person of [own.OWNERSHIP[s][role], own.deputyOf(own.OWNERSHIP[s][role])]) {
+          activity.recordAct({ person, act: 'review', subsystem: s, at: NOW - 10 * DAY });
+          for (const course of own.REQUIRED_TRAINING[role]) training.recordCompletion({ person, course, at: NOW - 30 * DAY, by: 'Registrar' });
+          for (const [id, k] of Object.entries(own.EXERCISE_KINDS)) if (k.relevantTo.includes(role)) exercises.recordParticipation({ person, exercise: id, at: NOW - 60 * DAY, by: 'ORB', role });
+        }
+      }
+    }
+    const continuity = own.knowledgeContinuity({ availability, activity, training, exercises, now: NOW });
+    const sound = new asm.AssumptionRegistry({ clock: () => NOW });
+    sound.register('CUSTODY-SOUND', { statement: 'a verified assumption for the success path', rationale: 'exercises the passing branch of the assumption clause', evidence: ['APP-FIT-CUSTODY-SIGNED-CHAIN'], contexts: ['custody'], owner: 'Directorate of Forensic Services', reviewCadenceDays: 3650, expiresAt: NOW + 10 * YEAR, verificationMethod: 'executable-check', confidence: 'high' });
+    sound.recordVerification('CUSTODY-SOUND', { holds: true, by: 'Assurance', at: NOW });
+    const evidenced = ir.evaluateGlobalInvariant({ assumptions: sound, continuity, controls, now: NOW });
+    const custody = evidenced.capabilities.find((c) => c.capability === 'evidence-custody');
+    if (!custody.holds) v.push(`a fully evidenced constitutional capability did not satisfy the invariant: ${custody.clauses.filter((c) => !c.holds).map((c) => `${c.clause} — ${c.reason}`).join('; ')}`);
+    // …and the invariant as a whole still does NOT hold, because other capabilities genuinely fail.
+    if (evidenced.holds) v.push('the whole estate satisfied the invariant, which the recorded evidence does not support');
+
+    // --- Acceptance: attributed, time-bound, constitutionally restricted ---------------------
+    const acceptances = new ir.ResilienceAcceptance({ clock: () => NOW });
+    for (const [what, args] of [
+      ['no authority', { capability: 'anonymous-reporting', clause: 'unvalidated-assumption', rationale: 'r', expiresAt: NOW + DAY }],
+      ['no rationale', { capability: 'anonymous-reporting', clause: 'unvalidated-assumption', by: 'Oversight Board', expiresAt: NOW + DAY }],
+      ['no expiry', { capability: 'anonymous-reporting', clause: 'unvalidated-assumption', by: 'Oversight Board', rationale: 'r' }],
+      ['an unknown clause', { capability: 'anonymous-reporting', clause: 'inconvenience', by: 'Oversight Board', rationale: 'r', expiresAt: NOW + DAY }],
+    ]) {
+      let rejected = false;
+      try { acceptances.acceptClause(args); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`a failing clause was accepted with ${what}`);
+    }
+    let wrongAuthority = false;
+    try { acceptances.acceptClause({ capability: 'anonymous-reporting', clause: 'unvalidated-assumption', by: 'Platform Engineering', rationale: 'known', expiresAt: NOW + DAY }); }
+    catch (e) { wrongAuthority = !!e.failClosed; }
+    if (!wrongAuthority) v.push('a failing clause on a constitutional capability was accepted by somebody other than the Oversight Board');
+
+    acceptances.acceptClause({ capability: 'anonymous-reporting', clause: 'unvalidated-assumption', by: 'Oversight Board', rationale: 'the assumption register is new and verification is scheduled', expiresAt: NOW + 30 * DAY });
+    const accepted = ir.globalInvariantReport({ assumptions: sound, continuity, controls, acceptances, now: NOW });
+    if (accepted.unaccepted.some((u) => u.capability === 'anonymous-reporting' && u.clause === 'unvalidated-assumption')) v.push('an accepted clause was still reported as unaccepted');
+    if (!accepted.blocksInstitutionalReadiness) v.push('the estate still has unaccepted violations and did not block institutional readiness');
+    for (const u of accepted.unaccepted) if (!u.ifUnknown) v.push(`an unaccepted violation of '${u.clause}' does not say what it costs`);
+    // An expired acceptance stops covering it, with nobody withdrawing anything.
+    const later = ir.globalInvariantReport({ assumptions: sound, continuity, controls, acceptances, now: NOW + 60 * DAY });
+    if (!later.unaccepted.some((u) => u.capability === 'anonymous-reporting' && u.clause === 'unvalidated-assumption')) v.push('an expired acceptance still covered a failing clause');
+    if (!later.expiredAcceptances.length) v.push('an expired acceptance was not reported as expired');
+
+    // --- Evaluated across every capability, and the per-clause view is produced --------------
+    if (evidenced.clauses.length !== 4) v.push('the per-clause view does not report all four clauses');
+    for (const c of evidenced.clauses) if (!Array.isArray(c.failingCapabilities)) v.push(`clause '${c.clause}' does not name which capabilities fail it`);
+    if (evidenced.capabilities.length !== Object.keys(ir.CRITICAL_CAPABILITIES).length) v.push('the invariant was not evaluated for every critical capability');
+  }),
+
+  fit('APP-FIT-STRATEGIC-INTELLIGENCE', 'Every strategic panel and assurance domain is derived, and eighteen verified domains still print NOT AUTHORIZED', (v) => {
+    const inst = require('../src/assurance/institutional');
+
+    // --- Part 19: the strategic panels ------------------------------------------------------
+    for (const required of ['institutionalResilience', 'strategicReadiness', 'governanceMaturity', 'complianceEvolution', 'documentationHealth', 'organizationalMaturity', 'operationalSustainability', 'decisionQuality', 'publicTrust']) {
+      if (!inst.EXECUTIVE_PANELS[required]) v.push(`executive panel '${required}' is not provided`);
+    }
+    for (const [id, p] of Object.entries(inst.EXECUTIVE_PANELS)) {
+      if (!p.question || !p.question.endsWith('?')) v.push(`executive panel '${id}' states no question`);
+      if (!p.derivedFrom) v.push(`executive panel '${id}' does not say where it is derived from`);
+    }
+    if (Object.keys(inst.EXECUTIVE_PANELS).length !== 15) v.push('the executive dashboard does not carry all fifteen panels');
+
+    // No hand-entered metric, still. Supplying a figure for a panel changes nothing.
+    const injected = inst.executiveGovernanceIntelligence({ publicTrust: 1, decisionQuality: 0.99, strategicReadiness: true });
+    for (const p of injected.panels) if (p.manualEntry !== false || p.derived !== true) v.push(`panel '${p.panel}' is not marked as derived`);
+    if (injected.panels.find((p) => p.panel === 'decisionQuality').measured) v.push('a hand-entered executive figure was accepted');
+    if (injected.everyMetricDerived !== true) v.push('the dashboard does not assert that every metric is derived');
+    // Unmeasured stays unmeasured.
+    const empty = inst.executiveGovernanceIntelligence({});
+    if (empty.unmeasured.length !== Object.keys(inst.EXECUTIVE_PANELS).length) v.push('an empty dashboard did not report every panel as unmeasured');
+    if (empty.sound) v.push('an entirely unmeasured dashboard reported itself sound');
+
+    // A fully evidenced dashboard is sound and still prints NOT AUTHORIZED.
+    const green = {
+      resilience: { holds: true, violationCount: 0, capabilities: [{ categoriesValidated: true }] },
+      governanceMaturity: { level: 5, name: 'Continuously assured' },
+      readiness: { readyCount: 10, dimensionCount: 10, allDimensionsReady: true },
+      mission: { safeToDeploy: true, boardSummary: 'no declared justice service is affected' },
+      documentation: { sound: true, verification: { claims: 132, unresolvedCount: 0 } },
+      continuity: { sound: true, minimumBusFactor: 2, singlePersonDependencies: [] },
+      compliance: { complianceRate: 1, direction: 'improving', recentDirection: 'improving', reconciliation: { sound: true } },
+      training: { sound: true, readinessContribution: 1, expiredQualifications: [] },
+      simulation: { confidence: 'high', uncalibrated: [] },
+      assumptions: { count: 9, sound: true, stale: [], overclaims: [] },
+      regulatory: { count: 2, ready: true, readinessBasis: '2 forecast change(s) modelled' },
+      adaptive: { constrained: ['auditReadiness'], unconstrained: [], forecasts: [1, 2, 3, 4, 5, 6] },
+      capacity: { measured: ['staffing'], complete: true, shortfallCount: 0, unmeasurable: [] },
+      decisions: { evaluationRate: 1, contradicted: [], unevaluated: [] },
+      publicTrust: { composite: 'warranted', basis: 'every measured condition holds' },
+    };
+    const dashboard = inst.executiveGovernanceIntelligence(green);
+    if (!dashboard.sound) v.push('a fully evidenced strategic dashboard was not sound: ' + dashboard.unsound.concat(dashboard.unmeasured).join(', '));
+    if (dashboard.authorizationStatus !== 'NOT AUTHORIZED' || dashboard.authorizes !== false) v.push('a green strategic dashboard claims authority');
+    // A failing strategic source turns its own panel red rather than being averaged away.
+    const trustLost = inst.executiveGovernanceIntelligence({ ...green, publicTrust: { composite: 'not-warranted', basis: 'a citizen cannot report' } });
+    if (!trustLost.unsound.includes('publicTrust')) v.push('a failing public-trust indicator did not turn its panel red');
+    if (trustLost.sound) v.push('a dashboard with a red panel reported itself sound');
+
+    // --- Part 20: eighteen assurance domains -------------------------------------------------
+    for (const required of ['architecture', 'governance', 'compliance', 'documentation', 'institutionalResilience', 'dependencyResilience', 'organizationalReadiness', 'strategicReadiness', 'learningMaturity', 'governanceAdaptability', 'evidenceQuality', 'publicTrustIndicators']) {
+      if (!inst.ASSURANCE_DOMAINS[required]) v.push(`assurance domain '${required}' is not verified`);
+    }
+    if (Object.keys(inst.ASSURANCE_DOMAINS).length !== 18) v.push('the assurance framework does not carry all eighteen domains');
+    for (const [id, d] of Object.entries(inst.ASSURANCE_DOMAINS)) {
+      if (!d.unverifiedMeans || d.unverifiedMeans.length < 30) v.push(`assurance domain '${id}' does not say what unverified would mean`);
+    }
+
+    const unmeasuredAll = inst.institutionalAssurance({});
+    if (unmeasuredAll.unmeasured.length !== 18) v.push('an unmeasured estate did not report all eighteen domains as unmeasured');
+    if (unmeasuredAll.institutionallyReady) v.push('an entirely unmeasured estate was reported institutionally ready');
+    // Failing and unmeasured stay different states.
+    const mixed = inst.institutionalAssurance({ drift: { clean: false }, learning: { learningRate: 0, correctedNotLearned: ['IMP-0001'] } });
+    if (!mixed.failing.includes('architecture')) v.push('a failing domain was not reported as failing');
+    if (!mixed.failing.includes('learningMaturity')) v.push('an institution that corrects without learning was not reported as failing learning maturity');
+    if (mixed.unmeasured.includes('architecture')) v.push('a failing domain was also reported as unmeasured');
+
+    // THE INVARIANT THAT OUTLIVES EVERY PHASE.
+    const verified = inst.institutionalAssurance({
+      drift: { clean: true }, security: true, privacy: true,
+      governanceMaturity: { level: 5 }, documentation: { sound: true },
+      readiness: { allDimensionsReady: true }, continuity: { sound: true, minimumBusFactor: 2 },
+      resilience: { holds: true, capabilities: [{ categoriesValidated: true }] }, training: { sound: true },
+      compliance: { reconciliation: { sound: true } }, mission: { safeToDeploy: true },
+      evidenceQuality: { sound: true },
+      regulatory: { ready: true }, learning: { learningRate: 1, correctedNotLearned: [] },
+      optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
+      publicTrust: { composite: 'warranted' },
+    });
+    if (!verified.institutionallyReady) v.push('a fully verified estate was not institutionally ready: ' + verified.blockers.join('; '));
+    if (verified.verified !== 18) v.push(`only ${verified.verified} of 18 domains verified on a fully evidenced estate`);
+    if (verified.authorizationStatus !== 'NOT AUTHORIZED') v.push('eighteen verified domains produced an authorization');
+    if (verified.authorizes !== false || verified.derivedFromReadiness !== false) v.push('institutional readiness was allowed to imply authorization');
+    if (!/does not replace human authority/.test(verified.note)) v.push('the framework no longer states that it does not replace human authority');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
