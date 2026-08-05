@@ -7501,6 +7501,205 @@ module.exports = [
     if (!contextMap.zoneGovernanceAll().some((g) => g.failover === 'no-failover')) v.push('every context claims a failover, which is not true of a privacy control that must fail closed');
   }),
 
+  fit('APP-FIT-LEGAL-AUTHORITY', 'Every critical capability declares what legally authorises it, and unknown authority blocks readiness', (v) => {
+    const la = require('../src/legislation/legal-authority');
+    const ir = require('../src/governance/institutional-resilience');
+    const DAY = 24 * 3600_000;
+    const controls = require('./app-fitness').map((f) => ({ id: f.id, pass: true }));
+
+    // --- Five kinds of authority, each saying how it can be withdrawn -------------------------
+    for (const required of ['constitutional', 'legislation', 'delegated-authority', 'regulation', 'policy']) {
+      if (!la.AUTHORITY_KINDS[required]) v.push(`authority kind '${required}' is not modelled`);
+    }
+    for (const [id, k] of Object.entries(la.AUTHORITY_KINDS)) {
+      if (!k.withdrawnBy) v.push(`authority kind '${id}' does not say how it can be withdrawn — that is the only thing that distinguishes them`);
+      if (!k.means || k.means.length < 25) v.push(`authority kind '${id}' does not say what it means`);
+    }
+    // Constitutional must be the strongest and policy the weakest, or the ordering is decorative.
+    if (la.AUTHORITY_KINDS.constitutional.rank >= la.AUTHORITY_KINDS.policy.rank) v.push('a policy is ranked at least as strong as a constitutional mandate');
+    // Unknown, expired and withdrawn are all distinct states, and all block.
+    for (const required of ['unknown', 'declared', 'reviewed', 'expired', 'overdue', 'withdrawn']) {
+      if (!la.AUTHORITY_STATES[required]) v.push(`authority state '${required}' is not modelled`);
+    }
+    if (la.AUTHORITY_STATES.unknown.authorized) v.push('unknown legal authority counts as authorized');
+    if (!la.AUTHORITY_STATES.unknown.blocksReadiness) v.push('unknown legal authority does not block readiness');
+    if (la.AUTHORITY_STATES.unknown.means === la.AUTHORITY_STATES.expired.means) v.push('unknown and expired are described identically — nobody looking and an instrument lapsing need different work');
+
+    // --- A declaration must be complete, or it reads as complete to everybody downstream ------
+    const reg = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    const good = {
+      kind: 'legislation', instrument: 'an instrument recorded by the institution',
+      approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 365,
+      expiresAt: 1000 * DAY, evidence: ['APP-FIT-LEGISLATIVE-IMPACT'],
+      scope: 'investigate reports to an outcome', declaredBy: 'Legal Informatics Team',
+    };
+    for (const field of Object.keys(la.AUTHORITY_FIELDS)) {
+      const partial = { ...good };
+      delete partial[field];
+      let rejected = false;
+      try { reg.declare('case-investigation', partial); } catch (_) { rejected = true; }
+      if (!rejected) v.push(`a legal authority declaration with no '${field}' was accepted`);
+    }
+    let unattributed = false;
+    try { reg.declare('case-investigation', { ...good, declaredBy: null }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a legal authority declaration was accepted with nobody named as recording it');
+    let untraceable = false;
+    try { reg.declare('case-investigation', { ...good, kind: 'delegated-authority' }); } catch (e) { untraceable = !!e.failClosed; }
+    if (!untraceable) v.push('delegated authority was accepted without naming what it was delegated from');
+
+    // --- Review is BY the approving organization, and by nobody else --------------------------
+    reg.declare('case-investigation', good);
+    if (reg.state('case-investigation', { now: 0 }).state !== 'declared') v.push('a fresh declaration is not in the declared state');
+    if (reg.state('case-investigation', { now: 0 }).authorized) v.push('an unreviewed declaration counted as authorized');
+    let wrongReviewer = false;
+    try { reg.review('case-investigation', { by: 'Platform Engineering', at: 1 }); } catch (e) { wrongReviewer = !!e.failClosed; }
+    if (!wrongReviewer) v.push('a legal authority was reviewed by somebody other than the approving organization');
+    reg.review('case-investigation', { by: 'Attorney General Chambers', at: 1 });
+    const reviewed = reg.state('case-investigation', { now: 2, controls });
+    if (reviewed.state !== 'reviewed' || !reviewed.authorized) v.push('a reviewed declaration did not reach the authorized state — this check would then have no success path');
+
+    // --- Lapse, expiry and withdrawal are each their own state -------------------------------
+    if (reg.state('case-investigation', { now: 500 * DAY }).state !== 'overdue') v.push('a missed review schedule was not reported as overdue');
+    if (reg.state('case-investigation', { now: 2000 * DAY }).state !== 'expired') v.push('an expired declaration was not reported as expired');
+    const withdrawn = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    withdrawn.declare('case-investigation', good);
+    withdrawn.review('case-investigation', { by: 'Attorney General Chambers', at: 1 });
+    withdrawn.withdraw('case-investigation', { by: 'Attorney General Chambers', reason: 'the instrument was repealed', at: 2 });
+    if (withdrawn.state('case-investigation', { now: 3 }).state !== 'withdrawn') v.push('a withdrawn authority was not reported as withdrawn');
+    if (withdrawn.state('case-investigation', { now: 3 }).blocksReadiness !== true) v.push('a withdrawn authority did not block readiness');
+    // A review that finds the authority no longer stands is the same finding by a different route.
+    const lapsed = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    lapsed.declare('case-investigation', good);
+    lapsed.review('case-investigation', { by: 'Attorney General Chambers', at: 1, stillStands: false, note: 'amended away' });
+    if (lapsed.state('case-investigation', { now: 2 }).state !== 'withdrawn') v.push('a review finding the authority no longer stands did not withdraw it');
+    let unattributedWithdrawal = false;
+    try { lapsed.withdraw('case-investigation', { by: 'X' }); } catch (e) { unattributedWithdrawal = !!e.failClosed; }
+    if (!unattributedWithdrawal) v.push('an authority was withdrawn with no reason recorded');
+
+    // --- THE PART 5 RULE: unknown authority blocks readiness ---------------------------------
+    const empty = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    const report = empty.report({ now: 0, controls });
+    if (report.count !== Object.keys(ir.CRITICAL_CAPABILITIES).length) v.push('not every critical capability was assessed for legal authority');
+    if (!report.blocksReadiness) v.push('an estate with no legal authority declared did not block readiness');
+    if (report.complete) v.push('an entirely undeclared estate reported its legal authority complete');
+    if (report.unknown.length !== report.count) v.push('not every capability was reported as unknown on an empty registry');
+    if (!report.criticalGaps.length) v.push('constitutional capabilities with no recorded legal authority were not named as critical gaps');
+    if (!/three different people/.test(report.completenessBasis)) v.push('the completeness basis does not distinguish unknown from expired and withdrawn');
+    // The register ships EMPTY of statutory claims, which is the honest state and is stated as such.
+    if (!/no statutory claims/.test(report.note)) v.push('the registry does not state that it ships with no statutory claims');
+    if (empty.declarations().length) v.push('the legal authority registry ships with fabricated statutory claims');
+
+    // --- Validation catches a declaration that names something that does not exist ------------
+    if (!reg.validate().valid) v.push('a well-formed declaration failed validation: ' + reg.validate().violations.join('; '));
+    let unknownCapability = false;
+    try { reg.declare('ministry-of-magic', good); } catch (_) { unknownCapability = true; }
+    if (!unknownCapability) { if (reg.validate().valid) v.push('a declaration for a capability that does not exist passed validation'); }
+    const wrongOrg = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    wrongOrg.declare('case-investigation', { ...good, approvingOrganization: 'The Ministry of Magic' });
+    if (wrongOrg.validate().valid) v.push('an authority approved by a body that is not in the accountability record passed validation');
+  }),
+
+  fit('APP-FIT-DEPENDENCY-INTELLIGENCE', 'Every dependency carries a standardized type, impact propagates over declared structure only, and constitutional priority is never averaged', (v) => {
+    const ir = require('../src/governance/institutional-resilience');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Ten standardized types, each saying how it fails -------------------------------------
+    for (const required of ['technical', 'operational', 'organizational', 'legal', 'contractual', 'informational', 'governance', 'infrastructure', 'communications', 'facilities']) {
+      if (!ir.DEPENDENCY_TYPES[required]) v.push(`standardized dependency type '${required}' is not modelled`);
+    }
+    if (Object.keys(ir.DEPENDENCY_TYPES).length !== 10) v.push('the standardized type vocabulary does not have exactly ten values');
+    for (const [id, t] of Object.entries(ir.DEPENDENCY_TYPES)) {
+      if (!t.failsBy || t.failsBy.length < 30) v.push(`dependency type '${id}' does not say how it fails — that is what distinguishes the ten`);
+      if (!t.detectedIn) v.push(`dependency type '${id}' does not say how quickly it is noticed`);
+    }
+    // Every assessable kind maps to exactly one type, and every type is used — a type nothing maps
+    // to is a vocabulary entry, not a classification.
+    for (const kind of Object.keys(ir.DEPENDENCY_KINDS)) {
+      const t = ir.typeOfKind(kind);
+      if (!t) v.push(`dependency kind '${kind}' carries no standardized type`);
+      else if (!ir.DEPENDENCY_TYPES[t]) v.push(`dependency kind '${kind}' maps to unknown type '${t}'`);
+    }
+    const used = new Set(Object.keys(ir.DEPENDENCY_KINDS).map((k) => ir.typeOfKind(k)));
+    for (const t of Object.keys(ir.DEPENDENCY_TYPES)) if (!used.has(t)) v.push(`standardized type '${t}' classifies no assessable dependency kind`);
+
+    // --- The intelligence report carries all three views without three models ----------------
+    const evaluation = ir.evaluate({ controls });
+    const di = ir.dependencyIntelligence(evaluation);
+    if (!di.count) v.push('no dependency was assessed');
+    for (const d of di.dependencies) {
+      if (!d.kind || !d.category || !d.type) v.push(`a dependency is missing one of kind/category/type: ${JSON.stringify({ k: d.kind, c: d.category, t: d.type })}`);
+      if (!d.reason) v.push(`dependency ${d.capability}/${d.kind} states no reason`);
+    }
+    if (di.unmappedKinds.length) v.push(`dependency kinds with no standardized type: ${di.unmappedKinds.join(', ')}`);
+    if (di.blindSpots.length) v.push(`standardized types nothing assesses: ${di.blindSpots.join(', ')}`);
+    if (!di.weakestType) v.push('the report does not name where the institution is structurally weakest');
+    if (di.authorizes !== false) v.push('the dependency intelligence report claims authority');
+
+    // --- Impact propagation is over DECLARED structure, and says it is a lower bound ----------
+    const impact = ir.dependencyImpact({ capability: 'anonymous-reporting', kind: 'service', controls });
+    if (!impact.type || !impact.failsBy) v.push('an impact analysis does not carry the dependency type or its failure mode');
+    if (!/lower bound/.test(impact.caveat)) v.push('impact propagation does not state that it is a lower bound');
+    if (!impact.summary) v.push('an impact analysis produces no summary');
+    // An organizational dependency propagates through shared subsystems, not through services.
+    const org = ir.dependencyImpact({ capability: 'anonymous-reporting', kind: 'person', controls });
+    if (org.impactedServices.length) v.push('an organizational dependency was propagated through the service topology');
+    if (org.type !== 'organizational') v.push('a person dependency was not classified as organizational');
+    // A capability that shares nothing reaches nothing, so the analysis can say "no reach".
+    const isolated = ir.dependencyImpact({ capability: 'evidence-custody', kind: 'legal-authority', controls });
+    if (typeof isolated.reachCount !== 'number') v.push('reach was not computed');
+    // Detection is derived from the kind's control, both ways.
+    if (!ir.dependencyImpact({ capability: 'anonymous-reporting', kind: 'service', controls }).detected) v.push('a dependency whose control runs and holds was not reported as detected');
+    if (ir.dependencyImpact({ capability: 'anonymous-reporting', kind: 'service', controls: [] }).detected) v.push('a dependency whose control did not run was reported as detected');
+    let unknownKind = false;
+    try { ir.dependencyImpact({ capability: 'anonymous-reporting', kind: 'astrology', controls }); } catch (_) { unknownKind = true; }
+    if (!unknownKind) v.push('impact was computed for an undeclared dependency kind');
+
+    // --- Seven perspectives, computed in parallel, never averaged ----------------------------
+    for (const required of ['constitutional', 'operational', 'mission', 'citizenImpact', 'likelihood', 'recoveryDifficulty', 'urgency']) {
+      if (!ir.RISK_PERSPECTIVES[required]) v.push(`risk perspective '${required}' is not computed`);
+    }
+    if (Object.keys(ir.RISK_PERSPECTIVES).length !== 7) v.push('there are not exactly seven risk perspectives');
+    for (const [id, p] of Object.entries(ir.RISK_PERSPECTIVES)) {
+      if (!p.asks || !p.asks.endsWith('?')) v.push(`perspective '${id}' states no question`);
+      if (!p.orderedBy) v.push(`perspective '${id}' does not say what it orders by`);
+    }
+    // Exactly one perspective is a BAND rather than a factor, and it is the constitutional one.
+    const banded = Object.entries(ir.RISK_PERSPECTIVES).filter(([, p]) => p.band).map(([id]) => id);
+    if (banded.join(',') !== 'constitutional') v.push(`the banded perspectives are '${banded.join(', ')}' — only the constitutional one may be a band`);
+
+    const mp = ir.multiPerspectiveRisk(evaluation, { controls });
+    if (mp.perspectiveCount !== 7) v.push('not all seven perspectives were produced');
+    for (const p of mp.perspectives) {
+      if (p.ranking.length !== mp.count) v.push(`perspective '${p.perspective}' ranked ${p.ranking.length} of ${mp.count} dependencies`);
+      for (let n = 0; n < p.ranking.length; n++) if (p.ranking[n].rank !== n + 1) v.push(`perspective '${p.perspective}' produced a broken rank sequence`);
+    }
+    // The perspectives genuinely differ, or seven questions are being answered once.
+    if (mp.distinctOrderings < 3) v.push(`the seven perspectives produce only ${mp.distinctOrderings} distinct orderings — they are not answering different questions`);
+    if (!mp.contested) v.push('the perspectives were reported as uncontested though they order things differently');
+
+    // --- THE RULE: constitutional priority is never collapsed into an average ----------------
+    if (!mp.constitutionalPrimacy) v.push('the constitutional ranking does not put constitutional capabilities first');
+    if (ir.assertConstitutionalPrimacy(mp.perspectives.find((p) => p.perspective === 'constitutional').ranking) !== true) {
+      v.push('the constitutional ranking failed its own primacy check');
+    }
+    // …and the check can fail, fed a crafted ranking that violates it.
+    let caught = false;
+    try {
+      ir.assertConstitutionalPrimacy([
+        { capability: 'service-recovery', kind: 'data', constitutional: false },
+        { capability: 'anonymous-reporting', kind: 'service', constitutional: true },
+      ]);
+    } catch (e) { caught = !!e.failClosed; }
+    if (!caught) v.push('a ranking placing a non-constitutional dependency above a constitutional one was accepted — that is the one thing this rule exists to prevent');
+    // A ranking with no constitutional items, and one with only them, both pass.
+    if (ir.assertConstitutionalPrimacy([{ capability: 'a', kind: 'x', constitutional: false }]) !== true) v.push('a ranking with no constitutional items was rejected');
+    if (mp.authorizes !== false) v.push('the multi-perspective ranking claims authority');
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });

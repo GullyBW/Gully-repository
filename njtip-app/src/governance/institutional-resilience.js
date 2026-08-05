@@ -69,6 +69,41 @@ const DEPENDENCY_CATEGORIES = {
 
 function categoryOfKind(kind) { return Object.keys(DEPENDENCY_CATEGORIES).find((c) => DEPENDENCY_CATEGORIES[c].kinds.includes(kind)) || null; }
 
+// --- Dependency intelligence (Phase 15, Part 2) ---------------------------------------------------
+//
+// Part 2 asks for a STANDARDIZED type on every dependency. The temptation is to build a third
+// taxonomy beside the thirteen kinds and the eleven categories, which would be the duplicate
+// framework the phase forbids and would immediately drift from both.
+//
+// So the standardized types are a LABEL on the existing kinds, not a parallel model. The kinds remain
+// what can actually be assessed; the categories remain what a board asks about; the types are the
+// vocabulary an external reviewer expects to see. One taxonomy, three views of it.
+//
+// Each type declares what MAKES it fail, because the ten differ mainly in how they break: a technical
+// dependency fails suddenly and visibly, a legal one fails silently on a date nobody diarised.
+const DEPENDENCY_TYPES = {
+  technical: { failsBy: 'A component stops working. Sudden, visible, and the one every runbook covers.', detectedIn: 'seconds to minutes' },
+  operational: { failsBy: 'A process becomes unavailable or unusable, usually because something it rests on did.', detectedIn: 'minutes to hours' },
+  organizational: { failsBy: 'A person leaves, is unavailable, or was never competent for the role. Fails quietly and is discovered when needed.', detectedIn: 'at the moment of need' },
+  legal: { failsBy: 'An instrument is repealed, amended, or lapses on a date nobody diarised. Fails silently and completely.', detectedIn: 'at an inspection, or in court' },
+  contractual: { failsBy: 'A supplier withdraws, is acquired, or does not renew. Usually with notice that somebody did not act on.', detectedIn: 'at renewal' },
+  informational: { failsBy: 'Data is lost, corrupted, or was never written down. Loss is often unrecoverable rather than temporary.', detectedIn: 'when somebody looks for it' },
+  governance: { failsBy: 'A board cannot convene, or an authority is vacant. The decision waits rather than fails.', detectedIn: 'at the next decision that needs it' },
+  infrastructure: { failsBy: 'A region, zone or platform service is lost. Infrequent, large, and rehearsed.', detectedIn: 'seconds to minutes' },
+  communications: { failsBy: 'The channel is down exactly when it is needed, often taken out by the same incident.', detectedIn: 'when an escalation goes unacknowledged' },
+  facilities: { failsBy: 'A physical site becomes unusable. The platform assesses this by proxy and cannot see a building.', detectedIn: 'immediately, by somebody standing outside it' },
+};
+
+// Which standardized type each assessable kind is. Declared, so the mapping is reviewable in one place.
+const KIND_TYPE = {
+  person: 'organizational', team: 'organizational', knowledge: 'organizational',
+  process: 'operational', service: 'technical', region: 'infrastructure',
+  supplier: 'contractual', 'communication-channel': 'communications',
+  document: 'informational', data: 'informational',
+  facility: 'facilities', 'legal-authority': 'legal', governance: 'governance',
+};
+function typeOfKind(kind) { return KIND_TYPE[kind] || null; }
+
 // The capabilities that must not rest on a single anything. Constitutional ones first: these are the
 // things the platform exists to do, and their loss is not an inconvenience.
 const CRITICAL_CAPABILITIES = {
@@ -415,6 +450,106 @@ function evaluate({ continuity = null, controls = [], regions = ['bw-central', '
   };
 }
 
+// PART 2: the dependency intelligence report. Every finding carries its kind, its category and its
+// standardized type, so the same assessment answers an engineer's question, a board's question and an
+// external reviewer's question without three models drifting apart.
+function dependencyIntelligence(evaluation) {
+  const rows = [];
+  for (const c of evaluation.capabilities) {
+    for (const f of c.findings) {
+      rows.push({
+        capability: c.capability, constitutional: c.constitutional,
+        kind: f.kind, category: categoryOfKind(f.kind), type: typeOfKind(f.kind),
+        singleDependency: !!f.singleDependency,
+        detectedBy: (DEPENDENCY_KINDS[f.kind] || {}).detectedBy || null,
+        basis: f.basis || 'derived from the declared topology',
+        reason: f.reason,
+      });
+    }
+  }
+  const byType = Object.keys(DEPENDENCY_TYPES).map((type) => {
+    const inType = rows.filter((r) => r.type === type);
+    const open = inType.filter((r) => r.singleDependency);
+    return {
+      type, ...DEPENDENCY_TYPES[type],
+      assessed: inType.length, singleDependencies: open.length,
+      kinds: [...new Set(inType.map((r) => r.kind))].sort(),
+      capabilities: [...new Set(open.map((r) => r.capability))].sort(),
+      // A type nothing assesses is a blind spot, not a clean bill.
+      blindSpot: inType.length === 0,
+    };
+  });
+  const unmapped = [...new Set(rows.filter((r) => !r.type).map((r) => r.kind))];
+  return {
+    dependencies: rows, count: rows.length,
+    types: Object.entries(DEPENDENCY_TYPES).map(([type, t]) => ({ type, ...t })),
+    byType,
+    blindSpots: byType.filter((t) => t.blindSpot).map((t) => t.type),
+    unmappedKinds: unmapped,
+    open: rows.filter((r) => r.singleDependency).length,
+    // The type most often open across the estate. Says where the institution is structurally weak
+    // rather than which capability happens to be worst.
+    weakestType: byType.filter((t) => t.assessed).sort((a, b) => b.singleDependencies - a.singleDependencies || a.type.localeCompare(b.type))[0] || null,
+    informationalOnly: true, authorizes: false,
+    note: 'One taxonomy, three views: the kind is what can be assessed, the category is what a board asks about, and the type is the vocabulary an external reviewer expects. A type nothing assesses is reported as a blind spot rather than as clean.',
+  };
+}
+
+// PART 2: impact propagation. What else is affected when one dependency of one capability fails?
+// Propagated through the declared topology and the shared contexts, never guessed.
+function dependencyImpact({ capability, kind, controls = [], continuity = null, regions = ['bw-central', 'bw-south', 'bw-north'], instruments = null } = {}) {
+  const spec = CRITICAL_CAPABILITIES[capability];
+  if (!spec) throw new Error(`unknown critical capability '${capability}'`);
+  if (!DEPENDENCY_KINDS[kind]) throw new Error(`unknown dependency kind '${kind}'`);
+
+  // Technical and infrastructure dependencies propagate through the service topology; the rest
+  // propagate through shared subsystems and contexts, which is how an organizational failure spreads.
+  const type = typeOfKind(kind);
+  const services = ['technical', 'infrastructure'].includes(type) ? spec.services : [];
+  const propagation = services.length ? telemetry.failurePropagation(services) : { impacted: [], blastRadius: 0 };
+  const impactedServices = [...new Set(propagation.impacted)].sort();
+
+  // Other critical capabilities that share a service, a subsystem or a context with this one.
+  const others = Object.entries(CRITICAL_CAPABILITIES).filter(([id]) => id !== capability).map(([id, other]) => {
+    const sharedServices = other.services.filter((svc) => spec.services.includes(svc) || impactedServices.includes(svc));
+    const sharedSubsystems = other.subsystems.filter((sub) => spec.subsystems.includes(sub));
+    const sharedContexts = other.contexts.filter((ctx) => spec.contexts.includes(ctx));
+    const reached = sharedServices.length || sharedSubsystems.length || sharedContexts.length;
+    return {
+      capability: id, constitutional: other.constitutional,
+      via: [
+        ...(sharedServices.length ? [`shared service(s): ${sharedServices.sort().join(', ')}`] : []),
+        ...(sharedSubsystems.length ? [`shared subsystem(s): ${sharedSubsystems.sort().join(', ')}`] : []),
+        ...(sharedContexts.length ? [`shared context(s): ${sharedContexts.sort().join(', ')}`] : []),
+      ],
+      reached: !!reached,
+    };
+  }).filter((o) => o.reached);
+
+  // Would anything notice? The same question the global invariant asks, answered per dependency.
+  const control = DEPENDENCY_KINDS[kind].detectedBy;
+  const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+  const holding = new Map(controls.filter((c) => typeof c === 'object').map((c) => [c.id, c.pass]));
+  const detected = !!control && ran.has(control) && holding.get(control) !== false;
+
+  return {
+    capability, kind, type, category: categoryOfKind(kind),
+    failsBy: DEPENDENCY_TYPES[type] ? DEPENDENCY_TYPES[type].failsBy : 'unknown failure mode',
+    detectedIn: DEPENDENCY_TYPES[type] ? DEPENDENCY_TYPES[type].detectedIn : 'unknown',
+    directServices: [...spec.services].sort(), impactedServices,
+    reaches: others, reachCount: others.length,
+    constitutionalReach: others.filter((o) => o.constitutional).map((o) => o.capability),
+    detected, detectedBy: control,
+    // Propagation over declared structure is a LOWER bound, and it says so — the same caveat blast
+    // radius has carried since Phase 10.
+    caveat: 'Propagation follows declared services, subsystems and contexts. An undeclared coupling does not appear here, so this is a lower bound on the reach rather than a bound on it.',
+    summary: others.length
+      ? `A ${type} failure of '${capability}' reaches ${others.length} other critical capability(ies)${others.some((o) => o.constitutional) ? ', including constitutional ones' : ''}.`
+      : `A ${type} failure of '${capability}' reaches no other critical capability through any declared path.`,
+    informationalOnly: true, authorizes: false,
+  };
+}
+
 // --- Institutional risk prioritisation (Phase 14, Part 6) -----------------------------------------
 //
 // Phase 13 produced a list of single dependencies with constitutional ones first. That was enough to
@@ -602,6 +737,134 @@ function riskPrioritisation(evaluation, { controls = [] } = {}) {
     method: 'Constitutional capabilities always rank first, whatever the arithmetic says. Within a band, four factors order the list; two of those four are declared priors and are marked as such.',
     recommendationsOnly: true, informationalOnly: true, authorizes: false,
     note: 'A ranking, not a decision. Closing a dependency is work somebody does; accepting one is a decision a named authority records with a rationale and an expiry.',
+  };
+}
+
+// --- Multi-perspective prioritisation (Phase 15, Part 9) ------------------------------------------
+//
+// One ranking answers one question, and the people who read it are asking seven different ones. A
+// board asks what is constitutionally most serious. An operations chief asks what will bite first. A
+// service owner asks what a citizen feels. Handing all three the same list and expecting them to
+// re-sort it in their heads is how a ranking gets ignored.
+//
+// So seven perspectives are computed in PARALLEL, each ordering the same open dependencies by its own
+// question. And the rule that survives from Phase 14, restated because it is the one that matters:
+//
+//   CONSTITUTIONAL PRIORITY IS NEVER COLLAPSED INTO AN ARITHMETIC AVERAGE.
+//
+// It is not a factor with a weight. It is a BAND: within the constitutional band the other
+// perspectives order things, and no amount of low likelihood or easy recovery moves a
+// non-constitutional dependency above a constitutional one. `assertConstitutionalPrimacy` checks that
+// structurally on every ranking this module produces.
+const RISK_PERSPECTIVES = {
+  constitutional: { asks: 'What does the platform exist to do, and what threatens it?', orderedBy: 'constitutional status, then the ordering key', band: true },
+  operational: { asks: 'What will bite first in day-to-day running?', orderedBy: 'likelihood, then detectability', band: false },
+  mission: { asks: 'What stops the outcomes the platform exists for?', orderedBy: 'operational impact, then criticality', band: false },
+  citizenImpact: { asks: 'What does a person filing a report actually experience?', orderedBy: 'whether the capability is citizen-facing, then impact', band: false },
+  likelihood: { asks: 'What is most likely to happen at all?', orderedBy: 'the declared likelihood prior', band: false },
+  recoveryDifficulty: { asks: 'What takes longest to put right once it happens?', orderedBy: 'the declared recovery prior', band: false },
+  urgency: { asks: 'What needs a decision soonest?', orderedBy: 'likelihood against detectability — a likely thing nothing would notice is the most urgent', band: false },
+};
+
+// Which capabilities a citizen experiences directly. Declared, because "citizen-facing" is a
+// judgement about who feels it rather than a property of the topology.
+const CITIZEN_FACING = new Set(['anonymous-reporting', 'case-investigation']);
+
+// The structural guarantee. Exported so it can be fed a crafted ranking that violates it.
+function assertConstitutionalPrimacy(ranked = []) {
+  let seenNonConstitutional = null;
+  for (const r of ranked) {
+    if (!r.constitutional) { seenNonConstitutional = seenNonConstitutional || r; continue; }
+    if (seenNonConstitutional) {
+      const e = new Error(`'${r.capability}/${r.kind}' is constitutional and ranks below '${seenNonConstitutional.capability}/${seenNonConstitutional.kind}', which is not — constitutional priority may never be collapsed into an arithmetic average`);
+      e.failClosed = true; throw e;
+    }
+  }
+  return true;
+}
+
+function multiPerspectiveRisk(evaluation, { controls = [] } = {}) {
+  const scored = [];
+  for (const c of evaluation.capabilities.filter((x) => !x.resilient)) {
+    for (const f of c.findings.filter((x) => x.singleDependency)) {
+      const s = scoreDependency({ capability: c.capability, kind: f.kind, finding: f.reason, controls });
+      scored.push({ ...s, type: typeOfKind(f.kind), citizenFacing: CITIZEN_FACING.has(c.capability) });
+    }
+  }
+  const idx = (factor, level) => RISK_FACTORS[factor].scale.indexOf(level);
+  const tie = (a, b) => a.capability.localeCompare(b.capability) || a.kind.localeCompare(b.kind);
+  const rank = (rows) => rows.map((r, i) => ({
+    rank: i + 1, capability: r.capability, kind: r.kind, type: r.type,
+    constitutional: r.constitutional, levels: r.levels,
+  }));
+
+  const orders = {
+    // The banded one. Constitutional first, always, then the ordering key.
+    constitutional: scored.slice().sort((a, b) => (b.constitutional ? 1 : 0) - (a.constitutional ? 1 : 0) || b.orderingKey - a.orderingKey || tie(a, b)),
+    operational: scored.slice().sort((a, b) => idx('likelihood', b.levels.likelihood) - idx('likelihood', a.levels.likelihood)
+      || idx('detectability', b.levels.detectability) - idx('detectability', a.levels.detectability) || tie(a, b)),
+    mission: scored.slice().sort((a, b) => idx('operationalImpact', b.levels.operationalImpact) - idx('operationalImpact', a.levels.operationalImpact)
+      || idx('businessCriticality', b.levels.businessCriticality) - idx('businessCriticality', a.levels.businessCriticality) || tie(a, b)),
+    citizenImpact: scored.slice().sort((a, b) => (b.citizenFacing ? 1 : 0) - (a.citizenFacing ? 1 : 0)
+      || idx('operationalImpact', b.levels.operationalImpact) - idx('operationalImpact', a.levels.operationalImpact) || tie(a, b)),
+    likelihood: scored.slice().sort((a, b) => idx('likelihood', b.levels.likelihood) - idx('likelihood', a.levels.likelihood) || tie(a, b)),
+    recoveryDifficulty: scored.slice().sort((a, b) => idx('recoveryComplexity', b.levels.recoveryComplexity) - idx('recoveryComplexity', a.levels.recoveryComplexity) || tie(a, b)),
+    urgency: scored.slice().sort((a, b) => (idx('likelihood', b.levels.likelihood) + idx('detectability', b.levels.detectability))
+      - (idx('likelihood', a.levels.likelihood) + idx('detectability', a.levels.detectability)) || tie(a, b)),
+  };
+
+  const perspectives = Object.keys(RISK_PERSPECTIVES).map((id) => ({
+    perspective: id, ...RISK_PERSPECTIVES[id],
+    ranking: rank(orders[id]),
+    top: orders[id].length ? `${orders[id][0].capability}/${orders[id][0].kind}` : null,
+  }));
+
+  // Where the perspectives AGREE is the interesting output: a dependency at the top of several
+  // different questions is one nobody has to be persuaded about.
+  const appearances = new Map();
+  for (const p of perspectives) {
+    for (const r of p.ranking.slice(0, 3)) {
+      const key = `${r.capability}/${r.kind}`;
+      if (!appearances.has(key)) appearances.set(key, { item: key, capability: r.capability, kind: r.kind, constitutional: r.constitutional, perspectives: [] });
+      appearances.get(key).perspectives.push(p.perspective);
+    }
+  }
+  const consensus = [...appearances.values()]
+    .filter((a) => a.perspectives.length >= 3)
+    .sort((a, b) => b.perspectives.length - a.perspectives.length || a.item.localeCompare(b.item));
+
+  // Where they DISAGREE is worth just as much: it says the choice is a judgement, not a calculation.
+  // Measured over the WHOLE ordering rather than the first item, because two perspectives that agree
+  // on what is worst and disagree about everything else have not agreed.
+  const distinctTops = [...new Set(perspectives.map((p) => p.top).filter(Boolean))];
+  const signatures = new Map();
+  for (const p of perspectives) {
+    const sig = p.ranking.map((r) => `${r.capability}/${r.kind}`).join('|');
+    if (!signatures.has(sig)) signatures.set(sig, []);
+    signatures.get(sig).push(p.perspective);
+  }
+  const orderings = [...signatures.values()].map((group) => ({ perspectives: group.sort(), distinct: group.length === 1 }));
+
+  return {
+    perspectives, count: scored.length,
+    perspectiveCount: perspectives.length,
+    consensus, consensusCount: consensus.length,
+    distinctTopItems: distinctTops,
+    // How many genuinely different answers the seven questions produce. A single figure would be the
+    // thing this whole structure exists to avoid, so there is not one.
+    distinctOrderings: orderings.length, orderings,
+    // Perspectives that produce an identical ordering are answering the same question twice on this
+    // data, and saying so is more useful than pretending to seven independent views.
+    coincidingPerspectives: orderings.filter((o) => o.perspectives.length > 1).map((o) => o.perspectives),
+    contested: orderings.length > 1,
+    contestedNote: distinctTops.length > 1
+      ? `The seven perspectives put ${distinctTops.length} different dependencies first, and produce ${orderings.length} distinct orderings. There is no single correct order, and producing one number would have hidden that.`
+      : orderings.length > 1
+        ? `Every perspective agrees on what is worst, and they produce ${orderings.length} distinct orderings below it — so they agree on the emergency and not on the queue behind it.`
+        : 'All seven perspectives produce the same ordering. That is unusual, and it means the priorities are currently uncontested rather than that the perspectives are redundant.',
+    constitutionalPrimacy: (() => { try { assertConstitutionalPrimacy(orders.constitutional); return true; } catch (_) { return false; } })(),
+    recommendationsOnly: true, informationalOnly: true, authorizes: false,
+    note: 'Seven parallel rankings, never averaged into one. Constitutional priority is a band rather than a factor: within it the other perspectives order things, and nothing non-constitutional moves above it whatever the arithmetic says.',
   };
 }
 
@@ -881,6 +1144,8 @@ function report({ continuity = null, controls = [], acceptances = null, now = 0,
     blocksInstitutionalReadiness: unaccepted.length > 0,
     recommendations: recommendations(evaluation),
     riskPrioritisation: riskPrioritisation(evaluation, { controls }),
+    dependencyIntelligence: dependencyIntelligence(evaluation),
+    multiPerspectiveRisk: multiPerspectiveRisk(evaluation, { controls }),
     failClosed: true, authorizes: false,
   };
 }
@@ -889,6 +1154,8 @@ module.exports = {
   DEPENDENCY_KINDS, DEPENDENCY_CATEGORIES, CRITICAL_CAPABILITIES, categoryOfKind,
   serviceResilience, regionResilience, personResilience, documentResilience, structuralResilience,
   dataResilience, knowledgeResilience, facilityResilience, legalAuthorityResilience, governanceResilience,
+  DEPENDENCY_TYPES, KIND_TYPE, typeOfKind, dependencyIntelligence, dependencyImpact,
+  RISK_PERSPECTIVES, CITIZEN_FACING, assertConstitutionalPrimacy, multiPerspectiveRisk,
   RISK_FACTORS, KIND_LIKELIHOOD, KIND_RECOVERY, scoreDependency, riskPrioritisation,
   INVARIANT_CLAUSES, assumptionClause, verificationClause, governanceRelationshipClause,
   evaluateGlobalInvariant, globalInvariantReport,
