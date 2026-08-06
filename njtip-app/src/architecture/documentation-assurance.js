@@ -88,6 +88,8 @@ const GOVERNED_DOCUMENTS = {
   // can quietly stop describing the implementation and nothing would notice.
   'legal-authority.md': { role: 'governance-documentation', audience: 'reviewer' },
   'institutional-intelligence.md': { role: 'governance-documentation', audience: 'reviewer' },
+  // Phase 16.
+  'operational-validation.md': { role: 'governance-documentation', audience: 'reviewer' },
 };
 
 // Below this, the extractor has broken rather than the corpus being clean.

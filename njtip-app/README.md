@@ -16,9 +16,9 @@ quality gate.
 
 ```bash
 cd njtip-app
-npm test                     # 953 tests
+npm test                     # 997 tests
 npm start                    # serve the app + UI at http://localhost:8087
-npm run twin                 # combined gate: 175 invariants (14 twin + 152 app + 9 infrastructure)
+npm run twin                 # combined gate: 190 invariants (14 twin + 167 app + 9 infrastructure)
 npm run assurance            # 16 assurance domains → signed deployment authorization package
 npm run production-readiness # …plus the six items only a named human can close
 npm run chaos                # resilience: load/stress/spike/soak/recovery + 7 fault injections
@@ -34,34 +34,38 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.15 — institutional intelligence, legal authority assurance & adaptive governance.** The
+> **v1.16 — operational validation, production readiness & institutional calibration.** The
 > architecture stays **frozen** at [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md)
-> ([ADR-0010](./docs/adr/0010-institutional-intelligence-legal-authority-and-the-six-clause-invariant.md)).
-> Phase 14 widened the invariant to four clauses and recorded two debts it could not close. Phase 15
-> closes one, replaces the other with an honest one, and finds a third nobody had seen: **a control
-> that runs and passes is not a control that works.** The invariant is now six clauses — *no critical
-> institutional capability may depend upon an unverified assumption, an undocumented legal authority,
-> an ineffective detecting control, an undeclared constitutional relationship, or a single point of
-> organizational failure*. It does not hold, which is again the point; `evidence-custody` satisfies
-> all six under evidenced conditions, so the bar is reachable rather than decorative.
-> The [legal authority register](./docs/legal-authority.md) ships **empty of statutory claims** —
-> declaring that an Act authorises a capability is a legal assertion about the Republic, and a
-> plausible-looking statute name in a governed register is worse than an empty one, so every critical
-> capability reports UNKNOWN and the [legal dependency graph](./docs/legal-authority.md) is blocked at
-> the first hop. [Control effectiveness](./docs/institutional-intelligence.md) measures seven
-> dimensions against declared thresholds and reports `effectivenessRate: null` over all 175 controls,
-> because not one has a single observation of it catching anything.
-> Also: [constitutional zone governance](./docs/institutional-intelligence.md) for all 30 bounded
-> contexts, enforced as a startup gate; [cross-government readiness](./docs/institutional-intelligence.md)
-> over five aspects aggregated to the weakest link, which found the Information Security Review Board
-> cluster **disconnected from the governance graph** — six institutions holding identity, cryptography
-> and incident response that share no forum with any other institution at any distance;
-> [institutional sustainability](./docs/institutional-intelligence.md) over seven dimensions each
-> carrying its own horizon; [executive decision packages](./docs/institutional-intelligence.md) that
-> conclude with a constant string nothing computes; an [assumption maturity model](./docs/assumptions.md)
-> A0–A5 where the estate sits at A2 with a nine-item verification backlog; and six workload forecasts
-> that stay `null` until the capacity record that feeds them arrives.
-> Combined gate: **175 invariants**, 953 tests. Full summary: [`docs/institutional-intelligence.md`](./docs/institutional-intelligence.md) ·
+> ([ADR-0011](./docs/adr/0011-operational-validation-calibration-and-the-traceability-invariant.md)).
+> Phase 15 asked whether a capability was sound. Phase 16 asks a different question: **can the
+> platform explain the figures its board acts on, and has it ever checked a prediction against what
+> happened?** It could not, and it had not. So a **second global invariant** — *no executive
+> conclusion, readiness assessment, governance recommendation, institutional forecast, or operational
+> decision shall exist without a complete, explainable, evidence-backed traceability chain* —
+> evaluated across five subjects and ten areas. It does not hold, and all fifteen violations are
+> **unknown** rather than examined, which is the honest state of an estate nobody has started
+> recording outcomes for.
+> Every [executive value now walks seven derived hops](./docs/operational-validation.md) — metric →
+> readiness dimension → evidence → control → policy → ADR → source record — and a broken chain is
+> reported **at the hop that broke**, never as a percentage, because a chain six-sevenths complete
+> supports nothing. Traceability runs **both ways**, and the backward direction found something
+> nothing had ever counted: **75 of 190 controls hold up no readiness conclusion at all**, across
+> seventeen bounded contexts.
+> Also: [evidence acquisition](./docs/operational-validation.md) where a connector's trust level is a
+> **ceiling, not a label** and a stale feed drops back to unknown with nobody acting; governed data
+> population where **synthetic data can never become operational evidence** and there is no
+> `promote()`; [forecast and twin calibration](./docs/operational-validation.md) holding the line
+> that **unknown calibration is not poor calibration**; nine control performance measures where
+> **precision and recall are never combined**; exercise intelligence where **realism is derived from
+> the conditions rather than graded by the facilitator**; capability maturity where **unknown is not
+> level zero**; five legal defects each with their own correction; workflow validation where
+> **unknown collaboration is never successful collaboration**; validation workshops where **closing
+> does not resolve an unresolved issue**; continuous architecture validation that **rejects**
+> undocumented evolution rather than reporting it; and a production transition framework that plans
+> and never acts — no `ready` state, no deployment permission, and the absence of any execution path
+> checked rather than trusted.
+> Combined gate: **190 invariants**, 997 tests. Full summary: [`docs/operational-validation.md`](./docs/operational-validation.md) ·
+> v1.15: [`docs/institutional-intelligence.md`](./docs/institutional-intelligence.md) ·
 > v1.14: [`docs/strategic-planning.md`](./docs/strategic-planning.md) ·
 > v1.13: [`docs/institutional-assurance.md`](./docs/institutional-assurance.md) ·
 > v1.12: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·

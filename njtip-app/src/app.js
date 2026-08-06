@@ -482,6 +482,26 @@ function createApp(overrides = {}) {
   // external body has assessed this platform, and no evidence has been submitted for landing.
   const trustEvidence = new institutional.TrustEvidenceRegister({ clock: () => Date.now() });
   const evidenceOnboarding = new institutional.EvidenceOnboarding({ clock: () => Date.now() });
+  // Phase 16. Four more registers, and every one is empty for a reason the phase turns on.
+  //
+  // No evidence connector is declared: this platform is offline and synthetic, nothing external
+  // supplies it, and a declared connector would imply a feed that does not exist.
+  //
+  // No forecast has ever been scored against an outcome. Twelve dimensions have been produced since
+  // Phase 14 and the platform's forecasting accuracy is entirely UNKNOWN — which is not the same as
+  // poor, and needs somebody to start recording outcomes rather than somebody to fix a model.
+  //
+  // No validation workshop has been convened: the institution has never sat down and looked at how
+  // it actually works, which is a different gap from any control failing.
+  //
+  // No architecture baseline is recorded HERE. Baseline v1.7 is frozen in documentation and nothing
+  // has recorded it in the register with the decision that approved it, so whether the architecture
+  // has evolved beyond what was approved is UNKNOWN — and undetectable evolution is not absent
+  // evolution. Recording it is a governance act by the Architecture Review Board, not a startup step.
+  const evidenceConnectors = new institutional.EvidenceConnectorRegistry({ clock: () => Date.now() });
+  const forecasts = new driftPrevention.ForecastRegister({ clock: () => Date.now() });
+  const validationWorkshops = new institutional.ValidationWorkshop({ clock: () => Date.now() });
+  const architectureBaseline = new driftPrevention.ArchitectureBaseline({ clock: () => Date.now() });
   // Phase 14, Part 4: compliance transition exceptions. Empty — no board has granted one, and a
   // pre-granted exception would be a governance decision nobody took.
   legislation.transitionExceptions = new (require('./legislation/compliance-intelligence').TransitionExceptions)({ clock: () => Date.now() });
@@ -706,7 +726,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, optimization, crossAgency, controlEffectiveness, controlObservations, trustEvidence, evidenceOnboarding, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, optimization, crossAgency, controlEffectiveness, controlObservations, trustEvidence, evidenceOnboarding, evidenceConnectors, forecasts, validationWorkshops, architectureBaseline, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

@@ -26,6 +26,64 @@ function bearer(req) { const m = (req.headers.authorization || '').match(/^Beare
 function fitness() { return [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); }
 // Knowledge continuity from the ownership registers. These start empty, so this reports an estate
 // nobody has been recorded operating — which is the truth of a freshly composed platform.
+// A per-request governance context. `readiness()` and `engineeringIntelligence()` each re-run the
+// whole fitness suite internally, so a handler that calls them once per report spends minutes doing
+// the same work. Everything below is computed AT MOST ONCE per request and shared.
+function governanceContext(app) {
+  const now = Date.now();
+  const memo = new Map();
+  const once = (key, fn) => { if (!memo.has(key)) memo.set(key, fn()); return memo.get(key); };
+  const ctx = {
+    now,
+    controls: () => once('controls', fitness),
+    continuity: () => once('continuity', () => knowledgeContinuity(app)),
+    readiness: () => once('readiness', () => app.assurance.readiness()),
+    engineering: () => once('engineering', () => app.assurance.engineeringIntelligence()),
+    evidence: () => once('evidence', () => app.assurance.evidenceRegister()),
+    documentation: () => once('documentation', () => require('./architecture/documentation-assurance').report({ controls: ctx.controls() })),
+    resilience: () => once('resilience', () => app.institutionalResilience.evaluate({ continuity: ctx.continuity(), controls: ctx.controls() })),
+    legalAuthority: () => once('legal', () => app.legislation.legalAuthority.report({ controls: ctx.controls(), now })),
+    optimization: () => once('optimization', () => app.optimization.governanceOptimization({ controls: ctx.controls(), now })),
+    controlPerformance: () => once('perf', () => app.controlEffectiveness.performanceDashboard({ register: app.controlObservations, controls: ctx.controls(), now })),
+    capabilityMaturity: () => once('capability', () => require('./governance/ownership').capabilityMaturity({
+      governanceMaturity: ctx.engineering().governanceMaturity,
+      readiness: ctx.readiness(),
+      resilience: ctx.resilience(),
+      compliance: app.legislation.intelligence.evolution({ controls: ctx.controls() }),
+      legalAuthority: ctx.legalAuthority(),
+      continuity: ctx.continuity(),
+    })),
+    // The dashboard the board is actually shown. Shared by the explainability chain and the
+    // traceability invariant so both explain the same figures.
+    dashboard: () => once('dashboard', () => {
+      const o = require('./governance/ownership');
+      return app.institutional.executiveGovernanceIntelligence({
+        resilience: ctx.resilience(), documentation: ctx.documentation(),
+        readiness: ctx.readiness(), continuity: ctx.continuity(),
+        assumptions: app.assumptions.report({ controls: ctx.controls() }),
+        training: o.trainingAssurance({ activity: o.activity, training: o.training, exercises: o.exercises, now }),
+        legalAuthority: ctx.legalAuthority(),
+        assumptionMaturity: app.assumptions.maturityReport({ controls: ctx.controls(), now }),
+        controlEffectiveness: app.controlEffectiveness.effectivenessDashboard({ register: app.controlObservations, controls: ctx.controls(), now }),
+        optimization: ctx.optimization(),
+      });
+    }),
+    explainability: () => once('explainability', () => app.institutional.explainability({
+      dashboard: ctx.dashboard(), evidence: ctx.evidence(), controls: ctx.controls(), now,
+    })),
+    traceability: () => once('traceability', () => app.institutional.readinessTraceability({
+      readiness: ctx.readiness(), evidence: ctx.evidence(), controls: ctx.controls(), now,
+    })),
+    // Every indicator is a function of a report; there is no path here that accepts a figure, which
+    // is the Part 14 prohibition made structural rather than promised.
+    performance: () => once('performance', () => app.institutional.institutionalPerformance({
+      optimization: ctx.optimization(), controlPerformance: ctx.controlPerformance(),
+      capabilityMaturity: ctx.capabilityMaturity(), legalAuthority: ctx.legalAuthority(),
+      documentation: ctx.documentation(), resilience: ctx.resilience(),
+    })),
+  };
+  return ctx;
+}
 function knowledgeContinuity(app) {
   const o = require('./governance/ownership');
   return o.knowledgeContinuity({ availability: o.availabilityRegister, activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() });
@@ -331,6 +389,55 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/assurance/trust-evidence') { requireRole('oversight-board'); const f = fitness(); return json(200, app.institutional.trustEvidence({ register: app.trustEvidence, controls: f, now: Date.now() })); }
   if (method === 'GET' && p === '/api/assurance/evidence-onboarding') { requireRole('admin'); return json(200, app.evidenceOnboarding.auditTrail()); }
   if (method === 'GET' && p === '/api/graph/legal-dependencies') { requireRole('oversight-board'); const f = fitness(); return json(200, require('./graph/enterprise-graph').legalDependencyGraph({ authorities: app.legislation.legalAuthority, controls: f, now: Date.now() })); }
+  // --- Phase 16: acquisition, calibration, explainability, validation, performance ---------------
+  // Read-only except the acts only a human can perform: declaring and verifying an evidence
+  // connector, recording a synchronization, recording a forecast and its outcome, and everything a
+  // validation workshop consists of.
+  if (method === 'GET' && p === '/api/assurance/evidence-connectors') { requireRole('admin'); return json(200, app.evidenceConnectors.report({ now: Date.now() })); }
+  if (method === 'POST' && p === '/api/assurance/evidence-connectors') { const u = requireRole('admin'); return json(201, app.evidenceConnectors.declare((body && body.id), { ...(body || {}), declaredBy: (body && body.declaredBy) || u.principal })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/assurance\/evidence-connectors\/([^/]+)\/verify$/))) { requireRole('admin'); return json(200, app.evidenceConnectors.verify(dec(m[1]), { ...(body || {}), at: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/assurance\/evidence-connectors\/([^/]+)\/sync$/))) { const u = requireRole('admin'); return json(201, app.evidenceConnectors.recordSync(dec(m[1]), { ...(body || {}), by: (body && body.by) || u.principal, at: Date.now() })); }
+  if (method === 'GET' && p === '/api/governance/forecast-calibration') { requireRole('admin'); return json(200, app.forecasts.report({ now: Date.now() })); }
+  if (method === 'POST' && p === '/api/governance/forecasts') { const u = requireRole('admin'); return json(201, app.forecasts.record((body && body.dimension), { ...(body || {}), madeBy: (body && body.madeBy) || u.principal, at: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/forecasts\/([^/]+)\/outcome$/))) { const u = requireRole('admin'); return json(200, app.forecasts.recordOutcome(dec(m[1]), { ...(body || {}), observedBy: (body && body.observedBy) || u.principal, at: Date.now() })); }
+  if (method === 'GET' && p === '/api/twin/operations/calibration') { requireRole('admin'); return json(200, app.operationsTwin().calibrationReport({ now: Date.now() })); }
+  if (method === 'GET' && p === '/api/assurance/explainability') { requireRole('oversight-board'); return json(200, governanceContext(app).explainability()); }
+  if (method === 'GET' && (m = p.match(/^\/api\/assurance\/explainability\/([^/]+)$/))) {
+    requireRole('oversight-board');
+    const ctx = governanceContext(app);
+    return json(200, app.institutional.explain(dec(m[1]), { dashboard: ctx.dashboard(), evidence: ctx.evidence(), controls: ctx.controls(), now: ctx.now }));
+  }
+  if (method === 'GET' && p === '/api/assurance/readiness-traceability') { requireRole('oversight-board'); return json(200, governanceContext(app).traceability()); }
+  if (method === 'GET' && p === '/api/assurance/control-performance') { requireRole('admin'); return json(200, governanceContext(app).controlPerformance()); }
+  if (method === 'GET' && p === '/api/governance/exercise-maturity') { requireRole('oversight-board'); return json(200, app.rehearsals.exerciseMaturity({ now: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/rehearsals\/([^/]+)\/conditions$/))) { const u = requireRole('admin'); return json(201, app.rehearsals.declareConditions(dec(m[1]), { ...(body || {}), by: (body && body.by) || u.principal, at: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/rehearsals\/([^/]+)\/assessment$/))) { const u = requireRole('admin'); return json(201, app.rehearsals.assess(dec(m[1]), { ...(body || {}), by: (body && body.by) || u.principal, at: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/rehearsals\/([^/]+)\/lessons$/))) { const u = requireRole('admin'); return json(201, app.rehearsals.recordLesson(dec(m[1]), { ...(body || {}), by: (body && body.by) || u.principal, at: Date.now() })); }
+  if (method === 'GET' && p === '/api/governance/capability-maturity') { requireRole('oversight-board'); return json(200, governanceContext(app).capabilityMaturity()); }
+  if (method === 'GET' && p === '/api/legislation/legal-dependencies') { requireRole('oversight-board'); const f = fitness(); return json(200, require('./legislation/legal-authority').legalDependencyIntelligence(app.legislation.legalAuthority, { now: Date.now(), controls: f })); }
+  if (method === 'GET' && (m = p.match(/^\/api\/legislation\/legal-impact\/([^/]+)$/))) { requireRole('oversight-board'); const f = fitness(); return json(200, require('./legislation/legal-authority').legalImpact(app.legislation.legalAuthority, dec(m[1]), { now: Date.now(), controls: f })); }
+  if (method === 'GET' && p === '/api/governance/workflow-validation') { requireRole('oversight-board'); const o = require('./governance/ownership'); const f = fitness(); return json(200, app.crossAgency.workflowValidation({ authorities: app.legislation.legalAuthority, activity: o.activity, exercises: o.exercises, controls: f, now: Date.now() })); }
+  if (method === 'GET' && p === '/api/governance/validation-workshops') { requireRole('oversight-board'); return json(200, app.validationWorkshops.report({ now: Date.now() })); }
+  if (method === 'POST' && p === '/api/governance/validation-workshops') { const u = requireRole('oversight-board'); return json(201, app.validationWorkshops.convene({ ...(body || {}), facilitator: (body && body.facilitator) || u.principal, at: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/validation-workshops\/([^/]+)\/outcomes$/))) { requireRole('oversight-board'); return json(201, app.validationWorkshops.record(dec(m[1]), { ...(body || {}), at: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/validation-workshops\/([^/]+)\/close$/))) { const u = requireRole('oversight-board'); return json(200, app.validationWorkshops.close(dec(m[1]), { by: (body && body.by) || u.principal, at: Date.now() })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/governance\/validation-workshops\/([^/]+)\/follow-up$/))) { requireRole('oversight-board'); return json(201, app.validationWorkshops.followUp(dec(m[1]), { ...(body || {}), at: Date.now() })); }
+  if (method === 'GET' && p === '/api/architecture/validation') { requireRole('admin'); const f = fitness(); return json(200, require('./architecture/drift-prevention').continuousArchitectureValidation({ controls: f, assumptions: app.assumptions, baseline: app.architectureBaseline, now: Date.now() })); }
+  if (method === 'POST' && p === '/api/architecture/baseline') { const u = requireRole('admin'); return json(201, app.architectureBaseline.record({ ...(body || {}), recordedBy: (body && body.recordedBy) || u.principal, at: Date.now() })); }
+  if (method === 'GET' && p === '/api/executive/performance') { requireRole('oversight-board'); return json(200, governanceContext(app).performance()); }
+  if (method === 'GET' && p === '/api/governance/traceability-invariant') {
+    requireRole('oversight-board');
+    const ctx = governanceContext(app);
+    const o = require('./governance/ownership');
+    return json(200, app.institutional.traceabilityInvariantReport({
+      explainability: ctx.explainability(), traceability: ctx.traceability(),
+      calibration: app.forecasts.report({ now: ctx.now }),
+      decisionMemory: app.decisionMemory.report({ controls: ctx.controls() }),
+      acceptances: o.resilienceAcceptances, now: ctx.now,
+    }));
+  }
+  if (method === 'GET' && p === '/api/migration/production-transition') { requireRole('admin'); const ctx = governanceContext(app); return json(200, require('./migration/roadmap').productionTransitionPlan({ readinessAssessment: ctx.readiness(), fitnessResults: ctx.controls(), rehearsals: app.rehearsals, now: ctx.now })); }
+
   if (method === 'GET' && p === '/api/governance/adaptive-forecasts') {
     requireRole('admin');
     const f = fitness();
