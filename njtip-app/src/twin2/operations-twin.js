@@ -359,12 +359,31 @@ class OperationsTwin {
   // Record what a simulation predicted against what was actually observed. Append-only, attributed
   // and NEVER seeded: fabricating a calibration history would make every confidence figure below a
   // lie, and it is the single cheapest way to make this whole framework worthless.
-  recordValidation(scenario, { predicted, observed, by, at = null, note = null } = {}) {
+  recordValidation(scenario, { predicted, observed, by, at = null, note = null, predictedValue = null, observedValue = null } = {}) {
     if (!SCENARIOS[scenario]) throw new Error(`unknown scenario '${scenario}'`);
     if (typeof predicted !== 'boolean' || typeof observed !== 'boolean') throw new Error('a validation must record what was predicted and what was observed, as booleans');
     if (!by) { const e = new Error('a simulation validation must name who compared it against reality'); e.failClosed = true; throw e; }
+    // Phase 16, Part 10. A magnitude is optional — many scenarios genuinely only have a yes/no
+    // outcome — but half of one is not: a predicted value with nothing to compare it against is a
+    // number that will be read as an error measurement.
+    if ((predictedValue === null) !== (observedValue === null)) {
+      const e = new Error('a quantitative validation needs both a predicted and an observed value — one without the other cannot produce a calibration error, and will be read as though it had');
+      e.failClosed = true; throw e;
+    }
+    if (predictedValue !== null && (!Number.isFinite(predictedValue) || !Number.isFinite(observedValue))) {
+      throw new Error('predicted and observed values must be numbers on the same scale');
+    }
     if (!this._validations.has(scenario)) this._validations.set(scenario, []);
-    const rec = { scenario, predicted, observed, agreed: predicted === observed, by, at: at ?? this._clock(), note };
+    const rec = {
+      scenario, predicted, observed, agreed: predicted === observed, by, at: at ?? this._clock(), note,
+      predictedValue, observedValue,
+      calibrationError: predictedValue === null ? null : +Math.abs(predictedValue - observedValue).toFixed(4),
+      signedError: predictedValue === null ? null : +(predictedValue - observedValue).toFixed(4),
+      // THE STAMP THAT MAKES THIS HONEST. Calibration evidence is about the model that produced it.
+      // The twin freezes its model at construction, so a comparison recorded against a different
+      // model is evidence about a different twin, and this is the only thing that can tell.
+      modelDigest: this._baselineDigest,
+    };
     this._validations.get(scenario).push(rec);
     return { ...rec };
   }
@@ -388,6 +407,98 @@ class OperationsTwin {
       scenario, state, observations: history.length, window: recent.length, agreementRate: rate,
       ...CALIBRATION_STATES[state],
       reason: `${agreed} of the last ${recent.length} comparisons agreed with the observed outcome`,
+    };
+  }
+
+  // --- Twin calibration (Phase 16, Part 10) ------------------------------------------------------
+  //
+  // `calibration()` above answers "did the simulation agree?" as a yes/no over a window. Part 10
+  // asks four questions it cannot answer: how accurate, how confident, how far off, and how steady.
+  //
+  // The distinction this whole section exists to preserve:
+  //
+  //   UNKNOWN CALIBRATION IS NOT POOR CALIBRATION. A scenario nobody has compared has an unknown
+  //   accuracy. A scenario compared and found wrong has a poor one. The first needs somebody to
+  //   start looking; the second needs somebody to fix a model. Merging them sends the wrong person.
+  scenarioCalibration(scenario, { now = null } = {}) {
+    if (!SCENARIOS[scenario]) throw new Error(`unknown scenario '${scenario}'`);
+    const t = now ?? this._clock();
+    const history = this.validationHistory(scenario);
+    const quantitative = history.filter((h) => h.calibrationError !== null);
+    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const round = (x) => (x === null ? null : +x.toFixed(4));
+
+    // Evidence recorded against a superseded model is about a different twin. Kept, named, and
+    // excluded from the figures rather than quietly counted.
+    const currentModel = history.filter((h) => h.modelDigest === this._baselineDigest);
+    const supersededModel = history.filter((h) => h.modelDigest !== this._baselineDigest);
+
+    if (!currentModel.length) {
+      return {
+        scenario, state: 'unknown', calibrated: false, assessed: false,
+        comparisons: 0, quantitativeComparisons: 0, supersededComparisons: supersededModel.length,
+        predictionAccuracy: null, calibrationError: null, signedError: null, modelStability: null,
+        simulationConfidence: 'unknown',
+        reason: supersededModel.length
+          ? `${supersededModel.length} comparison(s) exist and every one was recorded against a different model — they are evidence about a twin this is not, and this scenario's accuracy against THIS model is unknown`
+          : 'no simulation of this scenario has ever been compared against a real outcome, so its accuracy is UNKNOWN — which is not the same as poor',
+      };
+    }
+    const accuracy = round(currentModel.filter((h) => h.agreed).length / currentModel.length);
+    const q = currentModel.filter((h) => h.calibrationError !== null);
+    // Stability: how much the observed error moves between consecutive comparisons. A model that is
+    // wrong by a consistent amount is a different problem from one that is unpredictably wrong, and
+    // only the second is unusable.
+    const steps = q.slice(1).map((h, i) => Math.abs(h.calibrationError - q[i].calibrationError));
+    const modelStability = steps.length ? round(mean(steps)) : null;
+
+    const assessed = currentModel.length >= CALIBRATION_MIN_OBSERVATIONS;
+    const state = !assessed ? 'insufficient' : accuracy >= 0.8 ? 'calibrated' : 'poor';
+    // Confidence is capped by the evidence, never by the arithmetic: three agreeing comparisons do
+    // not make a model trustworthy, they make it not-yet-contradicted.
+    const simulationConfidence = !assessed ? 'unknown' : state === 'poor' ? 'low' : q.length >= CALIBRATION_MIN_OBSERVATIONS ? 'high' : 'moderate';
+    return {
+      scenario, state, calibrated: state === 'calibrated', assessed,
+      comparisons: currentModel.length, quantitativeComparisons: q.length,
+      supersededComparisons: supersededModel.length,
+      required: CALIBRATION_MIN_OBSERVATIONS,
+      predictionAccuracy: accuracy,
+      calibrationError: q.length ? round(mean(q.map((h) => h.calibrationError))) : null,
+      signedError: q.length ? round(mean(q.map((h) => h.signedError))) : null,
+      modelStability, simulationConfidence,
+      // A magnitude nobody recorded is not a magnitude of zero.
+      quantitativeBasis: q.length
+        ? `${q.length} comparison(s) recorded a magnitude, so a calibration error is measurable`
+        : 'every comparison recorded only agree/disagree, so how far off the simulation was is unknown',
+      reason: !assessed
+        ? `${currentModel.length} of ${CALIBRATION_MIN_OBSERVATIONS} comparisons against this model — too few to distinguish a working simulation from a lucky one`
+        : `${Math.round(accuracy * 100)}% of ${currentModel.length} comparisons agreed with the observed outcome`,
+      now: t,
+    };
+  }
+
+  // Part 10's report across every scenario. Unknown, insufficient and poor are three columns.
+  calibrationReport({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = Object.keys(SCENARIOS).sort().map((s) => this.scenarioCalibration(s, { now: t }));
+    const assessed = rows.filter((r) => r.assessed);
+    return {
+      scenarios: rows, count: rows.length,
+      modelDigest: this._baselineDigest,
+      unknown: rows.filter((r) => r.state === 'unknown').map((r) => r.scenario),
+      insufficient: rows.filter((r) => r.state === 'insufficient').map((r) => r.scenario),
+      poor: rows.filter((r) => r.state === 'poor').map((r) => r.scenario),
+      calibrated: rows.filter((r) => r.calibrated).map((r) => r.scenario),
+      supersededEvidence: rows.filter((r) => r.supersededComparisons > 0).map((r) => ({ scenario: r.scenario, comparisons: r.supersededComparisons })),
+      // Over assessed scenarios only. Counting the unexamined as failures would punish the
+      // institution for not yet having a history, which is not a finding about the model.
+      accuracyRate: assessed.length ? +(assessed.filter((r) => r.calibrated).length / assessed.length).toFixed(4) : null,
+      measurable: assessed.length > 0,
+      basis: assessed.length
+        ? `${assessed.filter((r) => r.calibrated).length} of ${assessed.length} ASSESSED scenarios are calibrated. ${rows.length - assessed.length} have never been compared enough times and are excluded rather than counted as poor.`
+        : `No scenario has been compared against a real outcome enough times to assess. The twin's prediction accuracy is UNKNOWN across all ${rows.length} scenarios — which is distinct from poor, and needs somebody to start recording outcomes rather than somebody to fix a model.`,
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'Calibration evidence is about the model that produced it. Every comparison is stamped with the model digest it was recorded against, and evidence about a superseded model is named and excluded rather than counted — a twin that changed since it was last checked has not been checked.',
     };
   }
 

@@ -528,20 +528,74 @@ const EVIDENCE_TYPES = {
   'cross-agency': { targetRegister: 'ownership.ActivityRegister', acceptedBy: 'the accountable authority of both institutions', means: 'Two institutions performed a joint governance act.' },
   'assumption-verification': { targetRegister: 'assumptions.AssumptionRegistry', acceptedBy: 'somebody other than the assumption owner', means: 'An assumption was checked and found to hold, or not to.' },
   acceptance: { targetRegister: 'institutional-resilience.ResilienceAcceptance', acceptedBy: 'the Oversight Board for constitutional capabilities', means: 'A named authority accepted a gap, with a rationale and an expiry.' },
+  // Phase 16, Part 2. The three registers Phase 15 built and left with no way in.
+  'legal-authority': { targetRegister: 'legislation.LegalAuthorityRegistry', acceptedBy: 'the approving organization named in the declaration', means: 'An instrument was recorded as authorising a capability.', legalAssertion: true },
+  'control-observation': { targetRegister: 'assurance.ControlObservationRegister', acceptedBy: 'the operations authority for the control', means: 'Somebody watched a control do — or fail to do — its job.' },
+  'governance-agreement': { targetRegister: 'ownership.ActivityRegister', acceptedBy: 'the accountable authority of every party to it', means: 'Two or more institutions recorded an agreement about how they will work together.' },
 };
 
 const ONBOARDING_STATES = ['submitted', 'accepted', 'rejected', 'landed'];
 
+// --- Part 2: where a record came from, and what it is -------------------------------------------
+//
+// Every register in this platform is empty, and Part 2 is the machinery for filling them. That makes
+// one distinction load-bearing above all others:
+//
+//   SYNTHETIC DATA IS NEVER OPERATIONAL EVIDENCE, AND CANNOT BECOME IT.
+//
+// This whole repository is synthetic by design. The moment a governed register can hold both, a
+// report that counts them together is a report claiming operational history the institution does not
+// have. So every submission declares its class, the class is carried onto the landed record, and no
+// transition promotes one to the other — `promote()` does not exist, deliberately.
+const DATA_CLASSES = {
+  synthetic: {
+    operational: false, countsAsEvidence: false,
+    means: 'Generated for exercise, demonstration or test. Real in shape, invented in substance.',
+    ifMiscounted: 'The institution believes it has an operational history it does not have, and every downstream figure inherits the belief.',
+  },
+  operational: {
+    operational: true, countsAsEvidence: true,
+    means: 'Recorded from something that actually happened, traceable to the source that observed it.',
+    ifMiscounted: 'Real evidence is discounted as a drill, and a genuine finding is filed as practice.',
+  },
+};
+
+// What must be true before an operational record is allowed to land. Each says what its absence
+// means, because "incomplete provenance" is not a finding anybody can act on.
+const PROVENANCE_FIELDS = {
+  sourceSystem: { absentMeans: 'Nothing says which system observed this, so nobody can go back and check it.' },
+  observedAt: { absentMeans: 'Nothing says when it happened, so freshness and ordering are both unknowable.' },
+  acquiredVia: { absentMeans: 'Nothing says how it got here, so the acquisition path cannot be audited.' },
+};
+
 class EvidenceOnboarding {
   constructor({ clock = () => 0 } = {}) { this._clock = clock; this._items = new Map(); this._seq = 0; }
 
-  submit({ type, payload = {}, submittedBy, rationale, at = null } = {}) {
+  submit({ type, payload = {}, submittedBy, rationale, dataClass = null, provenance = null, connector = null, at = null } = {}) {
     if (!EVIDENCE_TYPES[type]) throw new Error(`unknown evidence type '${type}' — one of ${Object.keys(EVIDENCE_TYPES).join(', ')}`);
     if (!submittedBy) { const e = new Error('an evidence submission must name who submitted it'); e.failClosed = true; throw e; }
     if (!rationale) { const e = new Error('an evidence submission must say why this record is being added — a fact with no stated reason for being here is one nobody can question later'); e.failClosed = true; throw e; }
+    // Phase 16, Part 2. A submission with no declared class would default to something, and whichever
+    // default was chosen would be wrong half the time in the direction nobody notices.
+    if (!DATA_CLASSES[dataClass]) {
+      const e = new Error(`an evidence submission must declare its data class — one of ${Object.keys(DATA_CLASSES).join(', ')}. Synthetic data is never operational evidence and there is no default that is safe to assume.`);
+      e.failClosed = true; throw e;
+    }
+    // Operational evidence must be traceable to what observed it. Synthetic evidence must not claim
+    // to be: a drill with a provenance record reads as a real event to everybody downstream.
+    if (dataClass === 'operational') {
+      for (const [field, meta] of Object.entries(PROVENANCE_FIELDS)) {
+        if (!provenance || provenance[field] === undefined || provenance[field] === null || provenance[field] === '') {
+          const e = new Error(`operational evidence must record '${field}' — ${meta.absentMeans}`);
+          e.failClosed = true; throw e;
+        }
+      }
+    }
     const id = `EVD-${String(++this._seq).padStart(4, '0')}`;
     const rec = {
       id, type, payload: JSON.parse(JSON.stringify(payload)), submittedBy, rationale,
+      dataClass, ...DATA_CLASSES[dataClass],
+      provenance: provenance ? { ...provenance } : null, connector,
       state: 'submitted', at: at ?? this._clock(),
       history: [{ state: 'submitted', by: submittedBy, at: at ?? this._clock(), detail: rationale }],
     };
@@ -615,8 +669,250 @@ class EvidenceOnboarding {
       // people believed rather than what they tried.
       rejections: rejected.map((r) => ({ id: r.id, type: r.type, reason: (r.history[r.history.length - 1] || {}).detail })),
       byType: Object.keys(EVIDENCE_TYPES).map((type) => ({ type, submitted: rows.filter((r) => r.type === type).length, landed: rows.filter((r) => r.type === type && r.state === 'landed').length })),
+      // Phase 16, Part 2. The two classes are counted apart and never summed into a total that would
+      // read as operational history.
+      dataClasses: Object.entries(DATA_CLASSES).map(([dataClass, d]) => ({ dataClass, ...d, submitted: rows.filter((r) => r.dataClass === dataClass).length, landed: landed.filter((r) => r.dataClass === dataClass).length })),
+      operationalLanded: landed.filter((r) => r.dataClass === 'operational').length,
+      syntheticLanded: landed.filter((r) => r.dataClass === 'synthetic').length,
+      // Every operational record is traceable to what observed it, or it did not land.
+      everyOperationalRecordTraceable: landed.filter((r) => r.dataClass === 'operational')
+        .every((r) => r.provenance && Object.keys(PROVENANCE_FIELDS).every((f) => r.provenance[f])),
+      provenanceFields: Object.entries(PROVENANCE_FIELDS).map(([field, f]) => ({ field, ...f })),
       now, informationalOnly: true, authorizes: false,
-      note: 'Onboarding never bypasses a target register\'s own rules: it carries a submission and the register decides. A refusal is recorded with the register\'s reason rather than overridden, and every landed record names who submitted it, who accepted it, and why it is here.',
+      note: 'Onboarding never bypasses a target register\'s own rules: it carries a submission and the register decides. A refusal is recorded with the register\'s reason rather than overridden, and every landed record names who submitted it, who accepted it, and why it is here. Synthetic and operational records are counted apart and never summed — there is no transition that promotes one to the other.',
+    };
+  }
+}
+
+// --- Evidence acquisition connectors (Phase 16, Part 1) --------------------------------------------
+//
+// Onboarding answers "how does a fact get into a register, auditably". It assumes a human is
+// carrying the fact. Part 1 is the other half: the systems that would supply facts continuously, and
+// what has to be true about one before anything it supplies may be believed.
+//
+// The rule that keeps this from becoming an automated way to fabricate history:
+//
+//   A CONNECTOR'S TRUST LEVEL IS A CEILING, NOT A LABEL. Evidence acquired through a connector can
+//   never be trusted more than the connector it came through, and a connector nobody has assessed
+//   supplies UNKNOWN evidence — which is not verified evidence, and never becomes it by arriving
+//   repeatedly.
+//
+// Nothing here connects to anything. This platform is synthetic and offline; these are declarations
+// of what a connector must state about itself before its output may be counted, and the registry
+// ships EMPTY because no external system has been connected to anything.
+const CONNECTOR_KINDS = {
+  'legislation-repository': {
+    supplies: 'Instruments, amendments and commencement dates.',
+    cannotTell: 'Whether an instrument authorises a particular capability. That is a legal reading, not a record lookup.',
+    failsAs: 'A repealed instrument stays cited because the feed stopped and nobody noticed.',
+  },
+  'pki-infrastructure': {
+    supplies: 'Certificate inventory, expiry, revocation status and issuing chain.',
+    cannotTell: 'Whether the key behind a certificate is still under the custody it was issued under.',
+    failsAs: 'A certificate is reported valid and its private key left the HSM a year ago.',
+  },
+  'siem-platform': {
+    supplies: 'Security events, correlations and alert dispositions.',
+    cannotTell: 'What it did not see. A SIEM reports detections, and the gap is the thing that matters.',
+    failsAs: 'A false-negative rate of zero, because only detected incidents were ever recorded.',
+  },
+  'audit-system': {
+    supplies: 'Audit findings, their status, and who they were raised against.',
+    cannotTell: 'Whether a closed finding was actually remediated or merely closed.',
+    failsAs: 'A closed finding is counted as a fixed one.',
+  },
+  'monitoring-system': {
+    supplies: 'Availability, latency and error rates for declared services.',
+    cannotTell: 'Whether the service was doing the right thing while it was up.',
+    failsAs: 'Green dashboards during an outage of something nobody monitored.',
+  },
+  'identity-provider': {
+    supplies: 'Authentication events, assurance levels and credential lifecycle.',
+    cannotTell: 'Whether the person behind a credential is the person it was issued to.',
+    failsAs: 'A shared account reads as one diligent individual.',
+  },
+  'workflow-engine': {
+    supplies: 'Case and process transitions, timings and outcomes.',
+    cannotTell: 'Whether a transition reflected a decision somebody actually made.',
+    failsAs: 'A bulk state change reads as a hundred considered dispositions.',
+  },
+  'observability-platform': {
+    supplies: 'Traces, metrics and logs across declared services.',
+    cannotTell: 'Anything about work that produced no telemetry.',
+    failsAs: 'A silent failure path is invisible and therefore reported as absent.',
+  },
+};
+
+// Trust in a connector. `unknown` is the state of a connector nobody has assessed, and it is the
+// default because assuming anything else about an unassessed system is the failure this prevents.
+const TRUST_LEVELS = {
+  unknown: { rank: 0, verifiable: false, means: 'Nobody has assessed this source. Its output is unknown evidence.' },
+  declared: { rank: 1, verifiable: false, means: 'Somebody stated what it is. Nothing has checked the statement.' },
+  attested: { rank: 2, verifiable: false, means: 'The operating institution attests to it. Still a self-assessment.' },
+  verified: { rank: 3, verifiable: true, means: 'An independent party verified the source and its integrity controls.' },
+};
+const TRUST_ORDER = ['unknown', 'declared', 'attested', 'verified'];
+
+// Whether what arrived is what was sent. Distinct from trust: a source nobody trusts can still have
+// intact transport, and a trusted source can deliver corrupted records.
+const INTEGRITY_STATES = {
+  unknown: { intact: false, means: 'No integrity control is declared, so nothing says whether what arrived is what was sent.' },
+  unprotected: { intact: false, means: 'The path has no integrity control. Records could be altered in transit and nothing would show it.' },
+  checksummed: { intact: true, means: 'Records carry a digest that is checked on arrival.' },
+  signed: { intact: true, means: 'Records are signed by the source and the signature is verified on arrival.' },
+};
+
+// How stale the connector's newest record is, against the freshness the connector itself declared it
+// needs. A freshness requirement nobody stated cannot be missed, so it is required at declaration.
+const FRESHNESS_STATES = {
+  unknown: { fresh: false, means: 'Nothing has ever synchronized, so there is no record to be stale.' },
+  fresh: { fresh: true, means: 'The newest record is within the declared freshness requirement.' },
+  stale: { fresh: false, means: 'The newest record is older than this connector declared it needs to be.' },
+};
+
+const SYNC_STATES = {
+  'never-synchronized': { healthy: false, means: 'No synchronization has ever been attempted or recorded.' },
+  synchronized: { healthy: true, means: 'The last synchronization completed and reported a record count.' },
+  degraded: { healthy: false, means: 'The last synchronization completed with errors.' },
+  failed: { healthy: false, means: 'The last synchronization did not complete.' },
+};
+
+const DAY_MS = 24 * 3600_000;
+
+class EvidenceConnectorRegistry {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._connectors = new Map(); this._syncs = new Map(); }
+
+  // Declare a connector. Every field Part 1 requires is mandatory at declaration, because a
+  // half-declared connector is one whose gaps are discovered when its evidence is already being
+  // counted.
+  declare(id, { kind, owner, sourceSystem, integrity = 'unknown', trustLevel = 'unknown', freshnessRequirementDays, supplies = [], declaredBy, at = null } = {}) {
+    if (!id) throw new Error('a connector must have an identifier');
+    if (!CONNECTOR_KINDS[kind]) throw new Error(`unknown connector kind '${kind}' — one of ${Object.keys(CONNECTOR_KINDS).join(', ')}`);
+    if (!owner) { const e = new Error('a connector must name the institution accountable for it — an unowned feed is one nobody fixes'); e.failClosed = true; throw e; }
+    if (!sourceSystem) { const e = new Error('a connector must name the system it reads from'); e.failClosed = true; throw e; }
+    if (!declaredBy) { const e = new Error('a connector declaration must name who made it'); e.failClosed = true; throw e; }
+    if (!INTEGRITY_STATES[integrity]) throw new Error(`unknown integrity state '${integrity}' — one of ${Object.keys(INTEGRITY_STATES).join(', ')}`);
+    if (!TRUST_LEVELS[trustLevel]) throw new Error(`unknown trust level '${trustLevel}' — one of ${TRUST_ORDER.join(', ')}`);
+    if (!Number.isFinite(freshnessRequirementDays) || freshnessRequirementDays <= 0) {
+      const e = new Error('a connector must declare how fresh its evidence needs to be — a freshness requirement nobody stated cannot be missed');
+      e.failClosed = true; throw e;
+    }
+    // Verified is an independent party's conclusion. A declaration cannot assert it about itself.
+    if (trustLevel === 'verified') {
+      const e = new Error('a connector cannot declare itself verified — verification is an independent party\'s conclusion, recorded with verify()');
+      e.failClosed = true; throw e;
+    }
+    const rec = {
+      id, kind, ...CONNECTOR_KINDS[kind], owner, sourceSystem,
+      integrity, trustLevel, freshnessRequirementDays, supplies: [...supplies],
+      declaredBy, at: at ?? this._clock(), verification: null,
+    };
+    this._connectors.set(id, rec);
+    return { ...rec };
+  }
+
+  // Independent verification. By somebody who is not the connector's own owner, for the same reason
+  // an assumption is not verified by the person who made it.
+  verify(id, { by, independent, findings = null, at = null } = {}) {
+    const c = this._connectors.get(id);
+    if (!c) throw new Error('unknown connector: ' + id);
+    if (!by) { const e = new Error('verifying a connector requires a named verifier'); e.failClosed = true; throw e; }
+    if (by === c.owner) { const e = new Error(`'${by}' owns this connector and cannot verify it — that is a self-assessment, which is what 'attested' already means`); e.failClosed = true; throw e; }
+    if (independent !== true) { const e = new Error('a connector verification must state that the verifier is independent of the institution operating the source'); e.failClosed = true; throw e; }
+    // Integrity is the thing verification is about. A verified connector over an unprotected path is
+    // a verified claim that nothing checks what arrives.
+    if (!INTEGRITY_STATES[c.integrity].intact) {
+      const e = new Error(`'${id}' has integrity '${c.integrity}', so nothing checks that what arrived is what was sent — that cannot be verified away`);
+      e.failClosed = true; throw e;
+    }
+    c.trustLevel = 'verified';
+    c.verification = { by, independent, findings, at: at ?? this._clock() };
+    return { ...c };
+  }
+
+  // Record a synchronization. Attributed and counted; an unattributed sync is a claim that something
+  // ran.
+  recordSync(id, { outcome, records = 0, newestRecordAt = null, errors = [], by, at = null } = {}) {
+    const c = this._connectors.get(id);
+    if (!c) throw new Error('unknown connector: ' + id);
+    if (!['synchronized', 'degraded', 'failed'].includes(outcome)) throw new Error(`unknown sync outcome '${outcome}'`);
+    if (!by) { const e = new Error('a synchronization record must name what performed it'); e.failClosed = true; throw e; }
+    if (outcome === 'synchronized' && !Number.isFinite(newestRecordAt)) {
+      const e = new Error('a successful synchronization must record the timestamp of the newest record it brought — without it freshness is unknowable');
+      e.failClosed = true; throw e;
+    }
+    const rec = { connector: id, outcome, records, newestRecordAt, errors: [...errors], by, at: at ?? this._clock() };
+    if (!this._syncs.has(id)) this._syncs.set(id, []);
+    this._syncs.get(id).push(rec);
+    return { ...rec };
+  }
+
+  connectors() { return [...this._connectors.values()].map((c) => ({ ...c })).sort((a, b) => a.id.localeCompare(b.id)); }
+  syncs(id) { return (this._syncs.get(id) || []).map((s) => ({ ...s })); }
+
+  // The state of one connector, derived. Nothing here is declared except what the declaration said.
+  state(id, { now = null } = {}) {
+    const t = now ?? this._clock();
+    const c = this._connectors.get(id);
+    if (!c) throw new Error('unknown connector: ' + id);
+    const syncs = this._syncs.get(id) || [];
+    const last = syncs[syncs.length - 1] || null;
+    const sync = !last ? 'never-synchronized' : last.outcome;
+    const freshness = !last || !Number.isFinite(last.newestRecordAt) ? 'unknown'
+      : (t - last.newestRecordAt) <= c.freshnessRequirementDays * DAY_MS ? 'fresh' : 'stale';
+    // THE CEILING. Evidence through this connector can be no better than the weakest of: what
+    // somebody assessed about the source, whether the path protects what it carries, whether
+    // anything has actually arrived, and whether what arrived is recent enough to mean anything.
+    const blockers = [
+      ...(TRUST_LEVELS[c.trustLevel].verifiable ? [] : [`trust is '${c.trustLevel}' — ${TRUST_LEVELS[c.trustLevel].means}`]),
+      ...(INTEGRITY_STATES[c.integrity].intact ? [] : [`integrity is '${c.integrity}' — ${INTEGRITY_STATES[c.integrity].means}`]),
+      ...(SYNC_STATES[sync].healthy ? [] : [`synchronization is '${sync}' — ${SYNC_STATES[sync].means}`]),
+      ...(FRESHNESS_STATES[freshness].fresh ? [] : [`freshness is '${freshness}' — ${FRESHNESS_STATES[freshness].means}`]),
+    ];
+    return {
+      connector: id, kind: c.kind, owner: c.owner, sourceSystem: c.sourceSystem,
+      trustLevel: c.trustLevel, ...TRUST_LEVELS[c.trustLevel],
+      integrity: c.integrity, integrityIntact: INTEGRITY_STATES[c.integrity].intact,
+      sync, syncHealthy: SYNC_STATES[sync].healthy,
+      freshness, fresh: FRESHNESS_STATES[freshness].fresh,
+      lastSync: last, syncCount: syncs.length,
+      recordsAcquired: syncs.reduce((a, s) => a + (s.records || 0), 0),
+      // The ceiling itself: `verified` only when nothing above blocks it, `unknown` otherwise.
+      evidenceCeiling: blockers.length ? 'unknown' : 'verified',
+      blockers,
+      cannotTell: c.cannotTell, failsAs: c.failsAs,
+      reason: blockers.length
+        ? `evidence from '${id}' is capped at UNKNOWN: ${blockers.join('; ')}`
+        : `'${id}' is independently verified over a protected path, synchronized and fresh — evidence from it may be counted as verified`,
+      now: t,
+    };
+  }
+
+  // Part 1's question, answered for the whole estate.
+  report({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = this.connectors().map((c) => this.state(c.id, { now: t }));
+    const verifiedSources = rows.filter((r) => r.evidenceCeiling === 'verified');
+    return {
+      connectors: rows, count: rows.length,
+      kinds: Object.entries(CONNECTOR_KINDS).map(([kind, k]) => ({ kind, ...k, declared: rows.filter((r) => r.kind === kind).length })),
+      trustLevels: TRUST_ORDER.map((level) => ({ level, ...TRUST_LEVELS[level], connectors: rows.filter((r) => r.trustLevel === level).length })),
+      integrityStates: Object.entries(INTEGRITY_STATES).map(([state, s]) => ({ state, ...s })),
+      freshnessStates: Object.entries(FRESHNESS_STATES).map(([state, s]) => ({ state, ...s })),
+      syncStates: Object.entries(SYNC_STATES).map(([state, s]) => ({ state, ...s })),
+      // Kinds Part 1 asks for that nothing supplies. Declared as a gap rather than omitted, because a
+      // report over three connectors that silently omits the other five reads as complete.
+      undeclaredKinds: Object.keys(CONNECTOR_KINDS).filter((k) => !rows.some((r) => r.kind === k)),
+      verifiedSources: verifiedSources.map((r) => r.connector),
+      cappedAtUnknown: rows.filter((r) => r.evidenceCeiling === 'unknown').map((r) => ({ connector: r.connector, blockers: r.blockers })),
+      // THE PART 1 RULE, computed rather than promised.
+      anyVerifiedEvidence: verifiedSources.length > 0,
+      acquisitionBasis: rows.length
+        ? `${verifiedSources.length} of ${rows.length} declared connectors can supply verified evidence. The rest are capped at UNKNOWN, and unknown evidence is never promoted to verified by arriving repeatedly.`
+        : 'No evidence connector is declared. This platform is offline and synthetic; nothing external supplies it, and every register it holds was filled by a named human or is empty.',
+      failClosed: true, informationalOnly: true, authorizes: false,
+      note: 'A connector\'s trust level is a ceiling, not a label. Evidence can never be trusted more than the path it came through, and each kind states what it CANNOT tell you — because the gap in a source is the part that gets forgotten once its output is on a dashboard.',
+      now: t,
     };
   }
 }
@@ -932,6 +1228,9 @@ module.exports = {
   LEARNING_STAGES, institutionalLearning,
   TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,
   EVIDENCE_TYPES, ONBOARDING_STATES, EvidenceOnboarding,
+  DATA_CLASSES, PROVENANCE_FIELDS,
+  CONNECTOR_KINDS, TRUST_LEVELS, TRUST_ORDER, INTEGRITY_STATES, FRESHNESS_STATES, SYNC_STATES,
+  EvidenceConnectorRegistry,
   SUSTAINABILITY_DIMENSIONS, institutionalSustainability,
   DECISION_PACKAGE_FIELDS, HUMAN_AUTHORIZATION_REQUIRED, assertAdvisory, decisionPackage, decisionSupport,
 };

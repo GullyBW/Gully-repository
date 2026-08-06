@@ -8269,11 +8269,17 @@ module.exports = [
     const ob = new inst.EvidenceOnboarding({ clock: () => 0 });
     const course = Object.values(own.REQUIRED_TRAINING)[0][0];
 
-    // --- Submission is attributed and reasoned -------------------------------------------------
+    // --- Submission is attributed, reasoned and CLASSIFIED -------------------------------------
     for (const [what, args] of [
-      ['no submitter', { type: 'training', payload: {}, rationale: 'r' }],
-      ['no rationale', { type: 'training', payload: {}, submittedBy: 'P' }],
-      ['an unknown type', { type: 'a feeling', payload: {}, submittedBy: 'P', rationale: 'r' }],
+      ['no submitter', { type: 'training', payload: {}, rationale: 'r', dataClass: 'synthetic' }],
+      ['no rationale', { type: 'training', payload: {}, submittedBy: 'P', dataClass: 'synthetic' }],
+      ['an unknown type', { type: 'a feeling', payload: {}, submittedBy: 'P', rationale: 'r', dataClass: 'synthetic' }],
+      // Phase 16, Part 2. No default is safe: whichever way it defaulted would be wrong half the
+      // time, in the direction nobody notices.
+      ['no declared data class', { type: 'training', payload: {}, submittedBy: 'P', rationale: 'r' }],
+      ['an unknown data class', { type: 'training', payload: {}, submittedBy: 'P', rationale: 'r', dataClass: 'probably-real' }],
+      ['operational class and no provenance', { type: 'training', payload: {}, submittedBy: 'P', rationale: 'r', dataClass: 'operational' }],
+      ['operational class and a partial provenance record', { type: 'training', payload: {}, submittedBy: 'P', rationale: 'r', dataClass: 'operational', provenance: { sourceSystem: 'hr' } }],
     ]) {
       let rejected = false;
       try { ob.submit(args); } catch (_) { rejected = true; }
@@ -8281,7 +8287,7 @@ module.exports = [
     }
 
     // --- A submission cannot accept itself ----------------------------------------------------
-    const s1 = ob.submit({ type: 'training', payload: { person: 'P', course, at: 1, by: 'Registrar' }, submittedBy: 'P', rationale: 'completed the course' });
+    const s1 = ob.submit({ type: 'training', payload: { person: 'P', course, at: 1, by: 'Registrar' }, submittedBy: 'P', rationale: 'completed the course', dataClass: 'synthetic' });
     let selfAccepted = false;
     try { ob.accept(s1.id, { by: 'P' }); } catch (e) { selfAccepted = !e.failClosed; }
     if (selfAccepted) v.push('a submission accepted itself — a submission that accepts itself was never reviewed');
@@ -8303,7 +8309,7 @@ module.exports = [
     if (target.completions().length !== 1) v.push('the evidence did not reach the target register');
 
     // A payload the register would refuse is REJECTED with the register's own reason.
-    const s2 = ob.submit({ type: 'training', payload: { person: 'Q' }, submittedBy: 'Q', rationale: 'incomplete on purpose' });
+    const s2 = ob.submit({ type: 'training', payload: { person: 'Q' }, submittedBy: 'Q', rationale: 'incomplete on purpose', dataClass: 'synthetic' });
     ob.accept(s2.id, { by: 'Registrar' });
     let refusalRecorded = false;
     try { ob.land(s2.id, { register: target, apply: (r, p) => r.recordCompletion(p), by: 'Registrar' }); }
@@ -8313,7 +8319,7 @@ module.exports = [
     if (!ob.item(s2.id).history.some((h) => /the target register refused it/.test(h.detail || ''))) v.push('the register\'s reason for refusing was not recorded');
     if (target.completions().length !== 1) v.push('refused evidence still reached the register');
     // Landing something that was never accepted is refused.
-    const s3 = ob.submit({ type: 'rehearsal', payload: {}, submittedBy: 'X', rationale: 'r' });
+    const s3 = ob.submit({ type: 'rehearsal', payload: {}, submittedBy: 'X', rationale: 'r', dataClass: 'synthetic' });
     let landedUnaccepted = false;
     try { ob.land(s3.id, { register: target, apply: () => {}, by: 'Y' }); landedUnaccepted = true; } catch (_) { /* refused */ }
     if (landedUnaccepted) v.push('evidence nobody accepted was landed');
@@ -8390,6 +8396,351 @@ module.exports = [
     const later = graph.legalDependencyGraph({ authorities: reg, controls, now: 2000 * DAY });
     if (!later.blocksReadiness) v.push('an expired legal authority did not block readiness');
     if (later.authorizes !== false) v.push('the legal dependency graph claims authority');
+  }),
+
+  fit('APP-FIT-FORECAST-CALIBRATION', 'A forecast nobody scored has an unknown accuracy, not a poor one, and confidence rises only on observed outcomes', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const DAY = 24 * 3600_000;
+
+    // --- Six measures, each saying what its absence means ------------------------------------
+    for (const required of ['accuracy', 'meanAbsoluteError', 'bias', 'confidenceCalibration', 'stability', 'drift']) {
+      if (!dp.CALIBRATION_MEASURES[required]) v.push(`calibration measure '${required}' is not computed`);
+    }
+    if (Object.keys(dp.CALIBRATION_MEASURES).length !== 6) v.push('forecast calibration does not carry exactly six measures');
+    for (const [id, m] of Object.entries(dp.CALIBRATION_MEASURES)) {
+      if (!m.asks || !m.asks.endsWith('?') || !m.unit || !m.ifUnknown) v.push(`calibration measure '${id}' does not state its question, unit or what an unknown costs`);
+    }
+    // Only 'calibrated' counts as calibrated, and only graded states are grades.
+    if (Object.entries(dp.CALIBRATION_GRADES).filter(([, g]) => g.calibrated).map(([id]) => id).join(',') !== 'calibrated') {
+      v.push('a grade other than "calibrated" counts as calibrated');
+    }
+    if (dp.CALIBRATION_GRADES.unknown.graded || dp.CALIBRATION_GRADES.insufficient.graded) v.push('an unscored dimension was treated as graded');
+
+    // --- Nothing recorded: every dimension is UNKNOWN, and unknown is not miscalibrated -------
+    const empty = new dp.ForecastRegister({ clock: () => 0 });
+    const blank = empty.report({ now: 0 });
+    if (blank.count !== Object.keys(dp.FORECAST_DIMENSIONS).length) v.push('the calibration report does not cover every forecast dimension');
+    if (blank.unknown.length !== blank.count) v.push('a register with no forecasts did not report every dimension as unknown');
+    if (blank.miscalibrated.length) v.push('a dimension nobody has scored was reported as miscalibrated');
+    if (blank.calibrationRate !== null) v.push('a calibration rate was computed over nothing');
+    if (blank.measurable) v.push('an unscored estate reported itself measurable');
+    if (blank.authorizes !== false) v.push('the calibration report claims authority');
+    for (const d of blank.dimensions) {
+      // A bias of 0 over no outcomes reads as an unbiased model. Every measure must be null.
+      for (const measure of ['accuracy', 'meanAbsoluteError', 'bias', 'confidenceCalibration', 'drift']) {
+        if (d[measure] !== null) v.push(`dimension '${d.dimension}' produced a ${measure} with no outcomes recorded`);
+      }
+    }
+
+    // --- A forecast that cannot be scored is refused rather than recorded unscoreable ---------
+    const reg = new dp.ForecastRegister({ clock: () => 0 });
+    const base = { point: 0.5, interval: [0.3, 0.7], constrained: true, horizonDays: 30, madeBy: 'analytics' };
+    for (const [what, override] of [
+      ['no point estimate', { point: null }],
+      ['no horizon', { horizonDays: undefined }],
+      ['a horizon of zero days', { horizonDays: 0 }],
+      ['nothing that produced it', { madeBy: undefined }],
+    ]) {
+      let refused = false;
+      try { reg.record('auditReadiness', { ...base, ...override }); } catch (_) { refused = true; }
+      if (!refused) v.push(`a forecast with ${what} was recorded`);
+    }
+    let unknownDimension = false;
+    try { reg.record('vibes', base); } catch (_) { unknownDimension = true; }
+    if (!unknownDimension) v.push('a forecast was recorded against a dimension nothing forecasts');
+
+    // --- An outcome cannot be recorded early, twice, or by nobody -----------------------------
+    const f = reg.record('auditReadiness', { ...base, at: 0 });
+    let early = false;
+    try { reg.recordOutcome(f.id, { observed: 0.5, observedBy: 'ORB', at: DAY }); } catch (e) { early = !!e.failClosed; }
+    if (!early) v.push('a forecast was scored before its horizon elapsed — that scores a different forecast');
+    let unattributed = false;
+    try { reg.recordOutcome(f.id, { observed: 0.5, at: 31 * DAY }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('an outcome was recorded with nobody having observed it');
+    reg.recordOutcome(f.id, { observed: 0.5, observedBy: 'ORB', at: 31 * DAY });
+    let rescored = false;
+    try { reg.recordOutcome(f.id, { observed: 0.9, observedBy: 'ORB', at: 32 * DAY }); } catch (e) { rescored = !!e.failClosed; }
+    if (!rescored) v.push('a forecast was scored twice — that is a forecast scored until it passes');
+
+    // --- Too few outcomes is INSUFFICIENT, which is neither calibrated nor miscalibrated ------
+    const thin = reg.calibration('auditReadiness');
+    if (thin.grade !== 'insufficient') v.push(`one scored outcome produced grade '${thin.grade}' rather than insufficient`);
+    if (thin.calibrated || thin.graded) v.push('a dimension with one outcome was graded');
+
+    // --- THE SUCCESS PATH: an accurate dimension grades calibrated ---------------------------
+    const good = new dp.ForecastRegister({ clock: () => 0 });
+    let t = 0;
+    for (let i = 0; i < 8; i += 1) {
+      const rec = good.record('auditReadiness', { point: 0.9, interval: [0.8, 1], constrained: i % 2 === 0, horizonDays: 30, madeBy: 'analytics', at: t });
+      good.recordOutcome(rec.id, { observed: 0.88, observedBy: 'ORB', at: t + 31 * DAY });
+      t += 40 * DAY;
+    }
+    const accurate = good.calibration('auditReadiness');
+    if (accurate.grade !== 'calibrated') v.push(`an accurate dimension graded '${accurate.grade}' — the bar is unreachable`);
+    if (!accurate.calibrated) v.push('a calibrated dimension did not report itself calibrated');
+    if (accurate.accuracy !== 1) v.push('every outcome fell inside its interval and accuracy was not 1');
+    if (good.report({ now: t }).calibrationRate !== 1) v.push('a fully calibrated estate did not report a rate of 1');
+
+    // --- …and an inaccurate one grades MISCALIBRATED, which is a different finding ------------
+    const bad = new dp.ForecastRegister({ clock: () => 0 });
+    t = 0;
+    for (let i = 0; i < 8; i += 1) {
+      const rec = bad.record('auditReadiness', { point: 0.95, interval: [0.9, 1], constrained: true, horizonDays: 30, madeBy: 'analytics', at: t });
+      bad.recordOutcome(rec.id, { observed: 0.4, observedBy: 'ORB', at: t + 31 * DAY });
+      t += 40 * DAY;
+    }
+    const wrong = bad.calibration('auditReadiness');
+    if (wrong.grade !== 'miscalibrated') v.push(`a dimension whose outcomes all fell outside its intervals graded '${wrong.grade}'`);
+    if (wrong.calibrated) v.push('a miscalibrated dimension reported itself calibrated');
+    // Bias is signed, and a governance forecast that leans optimistic is named rather than averaged.
+    if (!(wrong.bias > 0)) v.push('a consistently over-optimistic dimension did not report a positive bias');
+    if (!wrong.leansOptimistic) v.push('a dimension forecasting 0.95 against outcomes of 0.4 was not named as leaning optimistic');
+    if (!bad.report({ now: t }).optimisticDimensions.includes('auditReadiness')) v.push('the report does not name the optimistic dimensions');
+    // …and the estate rate excludes the eleven dimensions nobody scored rather than failing them.
+    const mixed = bad.report({ now: t });
+    if (mixed.calibrationRate !== 0) v.push('a single miscalibrated scored dimension did not produce a rate of 0');
+    if (mixed.unknown.length !== mixed.count - 1) v.push('unscored dimensions were counted in the calibration rate');
+
+    // --- Confidence calibration needs both kinds scored, or it says nothing -------------------
+    const oneKind = new dp.ForecastRegister({ clock: () => 0 });
+    t = 0;
+    for (let i = 0; i < 6; i += 1) {
+      const rec = oneKind.record('policyEffectiveness', { point: 0.5, interval: [0, 1], constrained: true, horizonDays: 10, madeBy: 'a', at: t });
+      oneKind.recordOutcome(rec.id, { observed: 0.5, observedBy: 'b', at: t + 11 * DAY });
+      t += 20 * DAY;
+    }
+    if (oneKind.calibration('policyEffectiveness').confidenceCalibration !== null) {
+      v.push('a confidence-calibration difference was computed with only one kind of forecast scored — a difference against nothing is not a difference');
+    }
+  }),
+
+  fit('APP-FIT-TWIN-CALIBRATION', 'An uncompared scenario has an unknown accuracy, not a poor one, and calibration evidence is about the model that produced it', (v) => {
+    const { OperationsTwin, SCENARIOS, CALIBRATION_MIN_OBSERVATIONS } = require('../src/twin2/operations-twin');
+    const scenario = Object.keys(SCENARIOS).sort()[0];
+    const other = Object.keys(SCENARIOS).sort()[1];
+
+    // --- Nothing compared: every scenario is UNKNOWN, distinct from poor ----------------------
+    const fresh = new OperationsTwin({ evidenceIds: ['APP-FIT-CONTEXT-MAP-INTEGRITY'], clock: () => 0 });
+    const blank = fresh.calibrationReport({ now: 0 });
+    if (blank.count !== Object.keys(SCENARIOS).length) v.push('the calibration report does not cover every scenario');
+    if (blank.unknown.length !== blank.count) v.push('an uncompared twin did not report every scenario as unknown');
+    if (blank.poor.length) v.push('a scenario nobody has compared was reported as poorly calibrated');
+    if (blank.accuracyRate !== null) v.push('an accuracy rate was computed over nothing');
+    if (blank.measurable) v.push('an uncompared twin reported itself measurable');
+    if (blank.authorizes !== false) v.push('the twin calibration report claims authority');
+    for (const s of blank.scenarios) {
+      for (const measure of ['predictionAccuracy', 'calibrationError', 'modelStability']) {
+        if (s[measure] !== null) v.push(`scenario '${s.scenario}' produced a ${measure} with nothing compared`);
+      }
+      if (s.simulationConfidence !== 'unknown') v.push(`scenario '${s.scenario}' reported a confidence with nothing compared`);
+    }
+
+    // --- Half a quantitative comparison is refused -------------------------------------------
+    const twin = new OperationsTwin({ evidenceIds: ['APP-FIT-CONTEXT-MAP-INTEGRITY'], clock: () => 0 });
+    for (const [what, args] of [
+      ['a predicted value and no observed value', { predicted: true, observed: true, by: 'ORB', predictedValue: 0.9 }],
+      ['an observed value and no predicted value', { predicted: true, observed: true, by: 'ORB', observedValue: 0.9 }],
+    ]) {
+      let refused = false;
+      try { twin.recordValidation(scenario, args); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(`a validation with ${what} was recorded — it will be read as an error measurement`);
+    }
+    let unattributed = false;
+    try { twin.recordValidation(scenario, { predicted: true, observed: true }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a validation was recorded with nobody having compared it against reality');
+
+    // --- Too few comparisons is INSUFFICIENT, not poor and not calibrated ---------------------
+    twin.recordValidation(scenario, { predicted: true, observed: true, by: 'ORB' });
+    const thin = twin.scenarioCalibration(scenario, { now: 0 });
+    if (thin.state !== 'insufficient') v.push(`one comparison produced state '${thin.state}' rather than insufficient`);
+    if (thin.assessed || thin.calibrated) v.push('a scenario with one comparison was assessed');
+    if (thin.simulationConfidence !== 'unknown') v.push('a scenario with too few comparisons reported a confidence other than unknown');
+
+    // --- THE SUCCESS PATH: an agreeing scenario is calibrated, with a measured error ----------
+    for (let i = 0; i < CALIBRATION_MIN_OBSERVATIONS + 2; i += 1) {
+      twin.recordValidation(other, { predicted: true, observed: true, by: 'ORB', predictedValue: 0.9, observedValue: 0.88 + i * 0.005 });
+    }
+    const good = twin.scenarioCalibration(other, { now: 0 });
+    if (good.state !== 'calibrated') v.push(`an agreeing scenario reported state '${good.state}' — the bar is unreachable`);
+    if (good.predictionAccuracy !== 1) v.push('every comparison agreed and accuracy was not 1');
+    if (good.calibrationError === null) v.push('quantitative comparisons produced no calibration error');
+    if (good.modelStability === null) v.push('quantitative comparisons produced no model stability figure');
+    if (good.simulationConfidence !== 'high') v.push('a calibrated scenario with magnitudes did not reach high simulation confidence');
+    const measured = twin.calibrationReport({ now: 0 });
+    if (!measured.measurable || measured.accuracyRate !== 1) v.push('a calibrated scenario did not produce a measurable accuracy rate');
+    // The unexamined scenarios are excluded, not counted as poor.
+    if (measured.poor.length) v.push('unexamined scenarios were counted as poorly calibrated');
+
+    // --- …and a disagreeing scenario is POOR, which is a different finding --------------------
+    const failing = new OperationsTwin({ evidenceIds: ['APP-FIT-CONTEXT-MAP-INTEGRITY'], clock: () => 0 });
+    for (let i = 0; i < CALIBRATION_MIN_OBSERVATIONS + 2; i += 1) {
+      failing.recordValidation(scenario, { predicted: true, observed: false, by: 'ORB', predictedValue: 0.9, observedValue: 0.2 });
+    }
+    const poor = failing.scenarioCalibration(scenario, { now: 0 });
+    if (poor.state !== 'poor') v.push(`a scenario that disagreed every time reported state '${poor.state}'`);
+    if (poor.calibrated) v.push('a scenario that disagreed every time reported itself calibrated');
+    if (poor.simulationConfidence !== 'low') v.push('a poorly calibrated scenario did not report low simulation confidence');
+    if (!(poor.calibrationError > 0.5)) v.push('a simulation predicting 0.9 against outcomes of 0.2 reported a small calibration error');
+    if (!failing.calibrationReport({ now: 0 }).poor.includes(scenario)) v.push('the report does not name the poorly calibrated scenarios');
+
+    // --- Calibration evidence is about the model that produced it -----------------------------
+    // A comparison recorded against a twin built over different evidence is evidence about a
+    // different model. Stamped, named, and excluded rather than quietly counted.
+    const otherModel = new OperationsTwin({ evidenceIds: ['APP-FIT-CONTEXT-MAP-INTEGRITY', 'APP-FIT-ADR-GOVERNANCE'], clock: () => 0 });
+    if (otherModel.digest() === twin.digest()) v.push('two twins built over different evidence produced the same model digest, so superseded calibration cannot be detected');
+    const stamped = twin.validationHistory(other)[0];
+    if (stamped.modelDigest !== twin.digest()) v.push('a validation was not stamped with the model it was recorded against');
+    // …and a scenario whose only evidence is against a superseded model reports UNKNOWN, not poor.
+    const supersededOnly = new OperationsTwin({ evidenceIds: ['APP-FIT-CONTEXT-MAP-INTEGRITY'], clock: () => 0 });
+    const history = supersededOnly.validationHistory(scenario);
+    if (history.length) v.push('a fresh twin has a validation history');
+  }),
+
+  fit('APP-FIT-EVIDENCE-ACQUISITION', 'A connector\'s trust level is a ceiling, unknown evidence is never promoted to verified, and synthetic data never becomes operational', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const own = require('../src/governance/ownership');
+    const DAY = 24 * 3600_000;
+
+    // --- Part 1: eight source kinds, each stating what it CANNOT tell you ---------------------
+    for (const required of ['legislation-repository', 'pki-infrastructure', 'siem-platform', 'audit-system', 'monitoring-system', 'identity-provider', 'workflow-engine', 'observability-platform']) {
+      if (!inst.CONNECTOR_KINDS[required]) v.push(`connector kind '${required}' is not supported`);
+    }
+    if (Object.keys(inst.CONNECTOR_KINDS).length !== 8) v.push('the acquisition framework does not carry exactly eight connector kinds');
+    for (const [id, k] of Object.entries(inst.CONNECTOR_KINDS)) {
+      // The gap in a source is the part that gets forgotten once its output is on a dashboard.
+      if (!k.supplies || !k.cannotTell || !k.failsAs) v.push(`connector kind '${id}' does not say what it supplies, what it cannot tell you, or how it fails`);
+    }
+    // `unknown` is the weakest trust level and the only one a connector starts in.
+    if (inst.TRUST_ORDER[0] !== 'unknown') v.push('the weakest trust level is not "unknown"');
+    if (inst.TRUST_ORDER.filter((l) => inst.TRUST_LEVELS[l].verifiable).join(',') !== 'verified') {
+      v.push('a trust level other than "verified" counts as verifiable evidence');
+    }
+
+    // --- An empty registry says the estate is offline rather than reporting health ------------
+    const empty = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+    const blank = empty.report({ now: 0 });
+    if (blank.count !== 0) v.push('a fresh connector registry is not empty — no external system has been connected to anything');
+    if (blank.anyVerifiedEvidence) v.push('an estate with no connectors reported that it has verified external evidence');
+    if (blank.undeclaredKinds.length !== 8) v.push('an empty registry did not report all eight kinds as undeclared');
+    if (blank.authorizes !== false) v.push('the acquisition report claims authority');
+
+    // --- Every declaration field is mandatory, and each can refuse on its own -----------------
+    const base = { kind: 'siem-platform', owner: 'National Computer Incident Response Team', sourceSystem: 'gov-siem', integrity: 'signed', trustLevel: 'attested', freshnessRequirementDays: 1, declaredBy: 'OCISO' };
+    for (const [what, override] of [
+      ['no owner', { owner: undefined }],
+      ['no source system', { sourceSystem: undefined }],
+      ['nobody declaring it', { declaredBy: undefined }],
+      ['an unknown kind', { kind: 'a hunch' }],
+      ['an unknown integrity state', { integrity: 'probably-fine' }],
+      ['an unknown trust level', { trustLevel: 'quite-good' }],
+      ['no freshness requirement', { freshnessRequirementDays: undefined }],
+      ['a freshness requirement of zero days', { freshnessRequirementDays: 0 }],
+      // Verification is an independent party's conclusion. A source cannot assert it about itself.
+      ['a self-declared verified trust level', { trustLevel: 'verified' }],
+    ]) {
+      const reg = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+      let refused = false;
+      try { reg.declare('probe', { ...base, ...override }); } catch (_) { refused = true; }
+      if (!refused) v.push(`a connector with ${what} was declared`);
+    }
+
+    // --- THE CEILING: each blocker caps evidence at UNKNOWN, and each can be cleared ----------
+    const reg = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+    reg.declare('siem-1', base);
+    const declaredOnly = reg.state('siem-1', { now: 0 });
+    if (declaredOnly.evidenceCeiling !== 'unknown') v.push('a connector that has never synchronized supplies verified evidence');
+    for (const expected of ['trust is', 'synchronization is', 'freshness is']) {
+      if (!declaredOnly.blockers.some((b) => b.startsWith(expected))) v.push(`the ceiling does not name the '${expected.replace(' is', '')}' blocker`);
+    }
+    // A synchronization that claims success without saying how recent its newest record is cannot
+    // be assessed for freshness at all, so it is refused.
+    let noTimestamp = false;
+    try { reg.recordSync('siem-1', { outcome: 'synchronized', records: 10, by: 'scheduler' }); } catch (e) { noTimestamp = !!e.failClosed; }
+    if (!noTimestamp) v.push('a successful synchronization was recorded with no newest-record timestamp');
+    let unattributedSync = false;
+    try { reg.recordSync('siem-1', { outcome: 'synchronized', records: 10, newestRecordAt: 0 }); } catch (e) { unattributedSync = !!e.failClosed; }
+    if (!unattributedSync) v.push('a synchronization was recorded with nothing named as having performed it');
+
+    reg.recordSync('siem-1', { outcome: 'synchronized', records: 400, newestRecordAt: 0, by: 'scheduler' });
+    const synced = reg.state('siem-1', { now: 0 });
+    if (synced.evidenceCeiling !== 'unknown') v.push('an attested-but-unverified connector supplied verified evidence');
+    if (synced.blockers.length !== 1 || !synced.blockers[0].startsWith('trust is')) v.push('synchronizing did not clear the sync and freshness blockers');
+
+    // The owner cannot verify their own connector — that is what 'attested' already means.
+    let selfVerified = false;
+    try { reg.verify('siem-1', { by: base.owner, independent: true }); } catch (e) { selfVerified = !!e.failClosed; }
+    if (!selfVerified) v.push('a connector was verified by the institution that owns it');
+    let notIndependent = false;
+    try { reg.verify('siem-1', { by: 'Auditor General', independent: false }); } catch (e) { notIndependent = !!e.failClosed; }
+    if (!notIndependent) v.push('a connector was verified by somebody who did not state their independence');
+
+    // --- THE SUCCESS PATH: everything cleared, and the ceiling rises to verified --------------
+    reg.verify('siem-1', { by: 'Auditor General', independent: true, at: 0 });
+    const verified = reg.state('siem-1', { now: 0 });
+    if (verified.evidenceCeiling !== 'verified') v.push(`a verified, protected, synchronized, fresh connector still capped evidence at unknown: ${verified.blockers.join('; ')}`);
+    if (verified.blockers.length) v.push('a fully cleared connector still reported blockers');
+    if (!reg.report({ now: 0 }).anyVerifiedEvidence) v.push('the estate report did not recognise a verified source');
+
+    // --- …and it is lost again with nobody doing anything -------------------------------------
+    const stale = reg.state('siem-1', { now: 5 * DAY });
+    if (stale.evidenceCeiling !== 'unknown') v.push('a connector whose newest record aged past its declared freshness still supplied verified evidence');
+    if (!stale.blockers.some((b) => b.startsWith('freshness is'))) v.push('a stale connector did not name freshness as the blocker');
+
+    // Integrity cannot be verified away: a verified claim over an unprotected path is a verified
+    // claim that nothing checks what arrives.
+    const unprotected = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+    unprotected.declare('mon-1', { ...base, kind: 'monitoring-system', integrity: 'unprotected' });
+    unprotected.recordSync('mon-1', { outcome: 'synchronized', records: 1, newestRecordAt: 0, by: 'scheduler' });
+    let verifiedUnprotected = false;
+    try { unprotected.verify('mon-1', { by: 'Auditor General', independent: true }); } catch (e) { verifiedUnprotected = !!e.failClosed; }
+    if (!verifiedUnprotected) v.push('a connector over an unprotected path was independently verified');
+    if (unprotected.state('mon-1', { now: 0 }).evidenceCeiling !== 'unknown') v.push('an unprotected path supplied verified evidence');
+    // A degraded or failed sync is not a healthy one, whatever else is true.
+    for (const outcome of ['degraded', 'failed']) {
+      const r2 = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+      r2.declare('c', base);
+      r2.recordSync('c', { outcome, records: 0, errors: ['x'], by: 'scheduler' });
+      if (r2.state('c', { now: 0 }).syncHealthy) v.push(`a '${outcome}' synchronization was reported healthy`);
+    }
+
+    // --- Part 2: synthetic never becomes operational ------------------------------------------
+    if (Object.keys(inst.DATA_CLASSES).length !== 2) v.push('the data classification does not carry exactly two classes');
+    if (inst.DATA_CLASSES.synthetic.operational || inst.DATA_CLASSES.synthetic.countsAsEvidence) v.push('synthetic data counts as operational evidence');
+    if (!inst.DATA_CLASSES.operational.countsAsEvidence) v.push('operational evidence does not count as evidence');
+    for (const [id, c] of Object.entries(inst.DATA_CLASSES)) if (!c.means || !c.ifMiscounted) v.push(`data class '${id}' does not say what it is or what miscounting it costs`);
+    // There is no promotion path, and its absence is checked rather than assumed.
+    const ob = new inst.EvidenceOnboarding({ clock: () => 0 });
+    for (const forbidden of ['promote', 'reclassify', 'setDataClass']) {
+      if (typeof ob[forbidden] === 'function') v.push(`EvidenceOnboarding exposes '${forbidden}' — there must be no path that promotes synthetic data to operational evidence`);
+    }
+
+    // Part 2's three new evidence types reach the registers Phase 15 left with no way in.
+    for (const required of ['legal-authority', 'control-observation', 'governance-agreement']) {
+      if (!inst.EVIDENCE_TYPES[required]) v.push(`evidence type '${required}' cannot be onboarded`);
+    }
+    for (const [id, t] of Object.entries(inst.EVIDENCE_TYPES)) {
+      if (!t.targetRegister || !t.acceptedBy || !t.means) v.push(`evidence type '${id}' does not name its target register, who accepts it, or what it means`);
+    }
+
+    // A landed operational record is traceable to what observed it; a synthetic one is not counted.
+    const course = Object.values(own.REQUIRED_TRAINING)[0][0];
+    const target = new own.TrainingRegister({ clock: () => 0 });
+    const real = ob.submit({
+      type: 'training', payload: { person: 'P', course, at: 1, by: 'Registrar' },
+      submittedBy: 'P', rationale: 'completed the course',
+      dataClass: 'operational', provenance: { sourceSystem: 'learning-management', observedAt: 1, acquiredVia: 'connector:lms-1' }, connector: 'lms-1',
+    });
+    ob.accept(real.id, { by: 'Registrar' });
+    ob.land(real.id, { register: target, apply: (r, p) => r.recordCompletion(p), by: 'Registrar' });
+    const drill = ob.submit({ type: 'rehearsal', payload: {}, submittedBy: 'X', rationale: 'a drill', dataClass: 'synthetic' });
+    ob.accept(drill.id, { by: 'Y' });
+    const audit = ob.auditTrail({ now: 0 });
+    if (audit.operationalLanded !== 1) v.push('a landed operational record was not counted as operational');
+    if (audit.syntheticLanded !== 0) v.push('an accepted-but-unlanded synthetic record was counted as landed');
+    if (!audit.everyOperationalRecordTraceable) v.push('a landed operational record is not traceable to what observed it');
+    if (audit.dataClasses.length !== 2) v.push('the audit trail does not report both data classes separately');
+    // The classes are never summed into one figure that would read as operational history.
+    if (audit.operationalLanded + audit.syntheticLanded !== audit.landed) v.push('landed records are not fully accounted for by class');
   }),
 
   fit('APP-FIT-CROSS-GOVERNMENT', 'A whole-of-government relationship is only as ready as its weakest of five aspects, and unknown is counted apart from blocked', (v) => {

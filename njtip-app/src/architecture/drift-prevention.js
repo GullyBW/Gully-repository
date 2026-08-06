@@ -516,8 +516,213 @@ function adaptiveGovernanceAnalytics({
   };
 }
 
+// --- Forecast calibration (Phase 16, Part 3) -------------------------------------------------------
+//
+// Twelve forecast dimensions have been produced since Phase 14 and not one has ever been checked
+// against what actually happened. A forecasting framework nobody scores is a framework that cannot be
+// wrong, and a framework that cannot be wrong will be believed indefinitely.
+//
+// The rule that makes this worth having:
+//
+//   CONFIDENCE RISES ONLY ON OBSERVED OUTCOMES. A forecast's interval is a function of its
+//   observation count and nothing else can widen or narrow it. Recording an outcome is the only act
+//   that changes what this platform is entitled to claim about its own predictions.
+//
+// And the distinction everything below preserves:
+//
+//   UNCALIBRATED IS NOT INACCURATE. A dimension nobody has scored has an UNKNOWN accuracy, which is
+//   a different finding from a dimension scored and found wrong, and it needs a different person.
+const CALIBRATION_MEASURES = {
+  accuracy: {
+    asks: 'How often did the outcome land inside the interval the forecast offered?',
+    unit: 'fraction of scored forecasts whose outcome fell within their interval',
+    ifUnknown: 'Nothing says whether this dimension has ever been right.',
+  },
+  meanAbsoluteError: {
+    asks: 'On average, how far was the point estimate from the outcome?',
+    unit: 'mean |predicted − observed|, on the dimension\'s own [0,1] scale',
+    ifUnknown: 'The size of the typical miss is unknown, so nobody can say whether it matters.',
+  },
+  bias: {
+    asks: 'Does this dimension consistently forecast HIGH or LOW?',
+    unit: 'mean signed (predicted − observed); positive is optimistic',
+    ifUnknown: 'A systematic lean is invisible, and a systematically optimistic governance forecast is the most dangerous kind.',
+  },
+  confidenceCalibration: {
+    asks: 'Were the forecasts that called themselves constrained actually more accurate than the ones that did not?',
+    unit: 'accuracy when constrained minus accuracy when unconstrained',
+    ifUnknown: 'Nothing says whether the interval means anything at all.',
+  },
+  stability: {
+    asks: 'How much does this dimension\'s forecast move between successive periods?',
+    unit: 'mean |change| between consecutive forecasts; lower is steadier',
+    ifUnknown: 'Nothing says whether a change in the figure is signal or noise.',
+  },
+  drift: {
+    asks: 'Is the error growing over time?',
+    unit: 'mean error in the later half minus the earlier half; positive is degrading',
+    ifUnknown: 'A model that used to be right and is quietly getting worse looks identical to one that always was.',
+  },
+};
+
+// Where a dimension sits once it has been scored. `unknown` is not a grade.
+const CALIBRATION_GRADES = {
+  unknown: { calibrated: false, graded: false, means: 'No outcome has been recorded for this dimension. Its accuracy is unknown, which is not the same as poor.' },
+  insufficient: { calibrated: false, graded: false, means: 'Some outcomes exist but too few to distinguish a run of luck from a working model.' },
+  miscalibrated: { calibrated: false, graded: true, means: 'Scored, and the outcomes fell outside the intervals more often than inside.' },
+  calibrated: { calibrated: true, graded: true, means: 'Scored, and the outcomes fell inside the intervals as often as the intervals claim.' },
+};
+// Below this, a run of luck and a working model are indistinguishable. Declared, and deliberately the
+// same floor the evidence-confidence module uses for an established estimate.
+const CALIBRATION_MIN_OUTCOMES = 5;
+const DAY = 24 * 3600_000;
+
+class ForecastRegister {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._forecasts = new Map(); this._seq = 0; }
+
+  // Record a forecast AS IT WAS MADE. The point, the interval and whether it called itself
+  // constrained are all captured here, because scoring a forecast against an interval reconstructed
+  // afterwards would score a different forecast.
+  record(dimension, { point, interval = null, constrained = false, horizonDays, madeBy, at = null } = {}) {
+    if (!FORECAST_DIMENSIONS[dimension]) throw new Error(`unknown forecast dimension '${dimension}' — one of ${Object.keys(FORECAST_DIMENSIONS).join(', ')}`);
+    if (!Number.isFinite(point)) {
+      const e = new Error('a forecast with no point estimate cannot be scored — an unforecastable dimension is recorded by not recording it');
+      e.failClosed = true; throw e;
+    }
+    if (!Number.isFinite(horizonDays) || horizonDays <= 0) {
+      const e = new Error('a forecast must state the horizon it is about — a prediction with no timeframe can never be shown to be wrong');
+      e.failClosed = true; throw e;
+    }
+    if (!madeBy) { const e = new Error('a forecast must name what produced it'); e.failClosed = true; throw e; }
+    const id = `FC-${String(++this._seq).padStart(4, '0')}`;
+    const rec = {
+      id, dimension, point, interval: interval ? [...interval] : null, constrained: !!constrained,
+      horizonDays, madeBy, at: at ?? this._clock(), outcome: null,
+    };
+    this._forecasts.set(id, rec);
+    return { ...rec };
+  }
+
+  // Record what actually happened. Attributed, because an unattributed outcome is somebody's opinion
+  // of how the forecast did.
+  recordOutcome(id, { observed, observedBy, at = null, note = null } = {}) {
+    const f = this._forecasts.get(id);
+    if (!f) throw new Error('unknown forecast: ' + id);
+    if (f.outcome) { const e = new Error(`'${id}' already has a recorded outcome — a forecast scored twice is a forecast scored until it passes`); e.failClosed = true; throw e; }
+    if (!Number.isFinite(observed)) throw new Error('an outcome must be a number on the same scale as the forecast');
+    if (!observedBy) { const e = new Error('an outcome must name who observed it'); e.failClosed = true; throw e; }
+    const t = at ?? this._clock();
+    // An outcome recorded before the horizon elapsed is not the outcome of this forecast.
+    if (t < f.at + f.horizonDays * DAY) {
+      const e = new Error(`'${id}' forecast ${f.horizonDays} day(s) ahead and this outcome is earlier than that — scoring a forecast before its horizon scores something else`);
+      e.failClosed = true; throw e;
+    }
+    f.outcome = {
+      observed, observedBy, at: t, note,
+      error: f.point - observed,
+      absoluteError: Math.abs(f.point - observed),
+      withinInterval: !!(f.interval && observed >= f.interval[0] && observed <= f.interval[1]),
+    };
+    return { ...f };
+  }
+
+  forecasts(dimension = null) {
+    return [...this._forecasts.values()].filter((f) => !dimension || f.dimension === dimension).map((f) => ({ ...f }));
+  }
+  scored(dimension = null) { return this.forecasts(dimension).filter((f) => f.outcome); }
+
+  // Calibration for one dimension. Every measure returns null rather than a figure when nothing
+  // supports it — a bias of 0 computed over no outcomes reads as an unbiased model.
+  calibration(dimension) {
+    if (!FORECAST_DIMENSIONS[dimension]) throw new Error(`unknown forecast dimension '${dimension}'`);
+    const all = this.forecasts(dimension).sort((a, b) => a.at - b.at);
+    const scored = all.filter((f) => f.outcome);
+    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const round = (x) => (x === null ? null : +x.toFixed(4));
+
+    // Stability is about the forecasts themselves and needs no outcomes at all — a dimension that
+    // swings wildly is telling you something before anybody scores it.
+    const steps = all.slice(1).map((f, i) => Math.abs(f.point - all[i].point));
+    const stability = steps.length ? round(mean(steps)) : null;
+
+    if (!scored.length) {
+      return {
+        dimension, ...FORECAST_DIMENSIONS[dimension],
+        grade: 'unknown', ...CALIBRATION_GRADES.unknown,
+        forecasts: all.length, outcomes: 0, required: CALIBRATION_MIN_OUTCOMES,
+        accuracy: null, meanAbsoluteError: null, bias: null, confidenceCalibration: null,
+        stability, drift: null,
+        reason: all.length
+          ? `${all.length} forecast(s) recorded and none scored against an outcome — this dimension's accuracy is UNKNOWN, which is not the same as poor`
+          : 'no forecast has been recorded for this dimension, so there is nothing to score',
+      };
+    }
+    const errors = scored.map((f) => f.outcome.error);
+    const abs = scored.map((f) => f.outcome.absoluteError);
+    const accuracy = round(scored.filter((f) => f.outcome.withinInterval).length / scored.length);
+    const constrained = scored.filter((f) => f.constrained);
+    const unconstrained = scored.filter((f) => !f.constrained);
+    // Only computable when BOTH kinds have been scored. A difference against nothing is not a
+    // difference, and reporting 0 would say the interval makes no difference.
+    const confidenceCalibration = constrained.length && unconstrained.length
+      ? round((constrained.filter((f) => f.outcome.withinInterval).length / constrained.length)
+        - (unconstrained.filter((f) => f.outcome.withinInterval).length / unconstrained.length))
+      : null;
+    // Drift needs enough scored outcomes to have two halves worth comparing.
+    const half = Math.floor(scored.length / 2);
+    const drift = scored.length >= 2 * CALIBRATION_MIN_OUTCOMES
+      ? round(mean(abs.slice(half)) - mean(abs.slice(0, half)))
+      : null;
+
+    const grade = scored.length < CALIBRATION_MIN_OUTCOMES ? 'insufficient'
+      : accuracy >= 0.5 ? 'calibrated' : 'miscalibrated';
+    return {
+      dimension, ...FORECAST_DIMENSIONS[dimension],
+      grade, ...CALIBRATION_GRADES[grade],
+      forecasts: all.length, outcomes: scored.length, required: CALIBRATION_MIN_OUTCOMES,
+      accuracy, meanAbsoluteError: round(mean(abs)), bias: round(mean(errors)),
+      confidenceCalibration, stability, drift,
+      // Named rather than left in the arithmetic: a governance forecast that leans optimistic is the
+      // one that gets somebody hurt.
+      leansOptimistic: mean(errors) > 0.05,
+      reason: scored.length < CALIBRATION_MIN_OUTCOMES
+        ? `${scored.length} of ${CALIBRATION_MIN_OUTCOMES} outcomes — too few to tell a run of luck from a working model`
+        : `${Math.round(accuracy * 100)}% of ${scored.length} outcomes fell inside their interval; mean absolute error ${round(mean(abs))}, bias ${round(mean(errors))}`,
+    };
+  }
+
+  // The Part 3 dashboard, over every declared dimension.
+  report({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = Object.keys(FORECAST_DIMENSIONS).map((d) => this.calibration(d));
+    const graded = rows.filter((r) => r.graded);
+    return {
+      dimensions: rows, count: rows.length,
+      measures: Object.entries(CALIBRATION_MEASURES).map(([measure, m]) => ({ measure, ...m })),
+      grades: Object.entries(CALIBRATION_GRADES).map(([grade, g]) => ({ grade, ...g })),
+      // Counted apart, and this is the whole discipline of the section.
+      unknown: rows.filter((r) => r.grade === 'unknown').map((r) => r.dimension),
+      insufficient: rows.filter((r) => r.grade === 'insufficient').map((r) => r.dimension),
+      miscalibrated: rows.filter((r) => r.grade === 'miscalibrated').map((r) => r.dimension),
+      calibrated: rows.filter((r) => r.grade === 'calibrated').map((r) => r.dimension),
+      optimisticDimensions: rows.filter((r) => r.leansOptimistic).map((r) => r.dimension),
+      totalForecasts: this.forecasts().length, totalOutcomes: this.scored().length,
+      // A rate over graded dimensions only. A rate that counted unscored dimensions as failures
+      // would punish the institution for not having a history yet, which is not a finding.
+      calibrationRate: graded.length ? +(graded.filter((r) => r.calibrated).length / graded.length).toFixed(4) : null,
+      measurable: graded.length > 0,
+      basis: graded.length
+        ? `${graded.filter((r) => r.calibrated).length} of ${graded.length} SCORED dimensions are calibrated. ${rows.length - graded.length} dimension(s) have never been scored and are excluded rather than counted as failing.`
+        : `No forecast has ever been compared against an outcome. Twelve dimensions have been produced since Phase 14 and the platform's forecasting accuracy is entirely UNKNOWN — which is not the same as poor, and needs somebody to start recording outcomes rather than somebody to fix a model.`,
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'Confidence rises only on observed outcomes. An interval is a function of the observation count and nothing else widens or narrows it, so recording an outcome is the only act that changes what this platform may claim about its own predictions.',
+    };
+  }
+}
+
 module.exports = {
   DRIFT_KINDS, DRIFT_CLASSES, classOfKind, assertDistinctResponses,
   FORECAST_DIMENSIONS, forecastInterval, adaptiveGovernanceAnalytics,
+  CALIBRATION_MEASURES, CALIBRATION_GRADES, CALIBRATION_MIN_OUTCOMES, ForecastRegister,
   sourceFiles, moduleOwner, actualDependencies, detect, governanceAnalytics,
 };
