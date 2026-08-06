@@ -4869,6 +4869,193 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-LEGAL-HIERARCHY', 'An instrument cannot exceed what it was made under, and an empty hierarchy is not a consistent one', (v) => {
+    const la = require('../src/legislation/legal-authority');
+
+    // --- Six tiers, strictly ordered, each stating what it may not do -------------------------
+    if (la.LEGAL_TIER_ORDER.length !== 6) v.push('the legal hierarchy does not carry exactly six tiers');
+    la.LEGAL_TIER_ORDER.forEach((tier, i) => {
+      const t = la.LEGAL_TIERS[tier];
+      if (!t) { v.push(`legal tier '${tier}' is not defined`); return; }
+      if (t.rank !== i) v.push(`legal tier '${tier}' has rank ${t.rank} at position ${i} — the hierarchy is not strictly ordered`);
+      if (!t.mayNot) v.push(`legal tier '${tier}' does not state what it may not do, which is the only reason precedence matters`);
+      if (!t.derivesFrom || !t.amendedBy) v.push(`legal tier '${tier}' does not state where it comes from or how it changes`);
+    });
+    if (la.LEGAL_TIERS.constitution.rank !== 0) v.push('the Constitution is not at the top of the hierarchy');
+    if (la.LEGAL_TIERS.procedure.rank !== 5) v.push('procedure is not at the bottom of the hierarchy');
+    if (!/ultra vires/.test(la.LEGAL_TIERS.regulation.mayNot)) v.push('the regulation tier does not say that exceeding its enabling provision is ultra vires');
+    for (const [id, c] of Object.entries(la.HIERARCHY_CONFLICTS)) {
+      if (!c.means || !c.detectedBy || !c.ifIgnored) v.push(`hierarchy conflict '${id}' does not say what it means, how it is found or what it costs`);
+    }
+
+    // --- AN EMPTY REGISTER IS NOT A CLEAN BILL OF HEALTH --------------------------------------
+    const empty = la.legalHierarchy(new la.LegalAuthorityRegistry({ clock: () => 0 }), { now: 0 });
+    if (empty.measurable) v.push('an empty hierarchy reported itself measurable');
+    if (empty.consistent) v.push('an empty hierarchy reported itself CONSISTENT — zero conflicts across zero instruments is not a clean bill of health');
+    if (empty.rootedRate !== null) v.push('a rooted rate was computed over no instruments');
+    if (!/unopened book/.test(empty.basis)) v.push('an empty hierarchy does not say why it found no conflicts');
+    if (empty.authorizes !== false) v.push('the legal hierarchy report claims authority');
+
+    // --- Structural refusals: a broken chain cannot be recorded as a whole one ----------------
+    const reg = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    const rec = (id, tier, derivesFrom, permits = [], prohibits = []) =>
+      reg.recordInstrument(id, { tier, derivesFrom, issuedBy: 'Government of Botswana', permits, prohibits, recordedBy: 'Registrar', at: 0 });
+    let refused = 0;
+    try { rec('Loose Policy', 'policy', null); } catch (e) { if (e.failClosed) refused += 1; }
+    try { rec('Super Constitution', 'constitution', 'Something Above'); } catch (e) { if (e.failClosed) refused += 1; }
+    if (refused !== 2) v.push('an instrument with no parent, or a Constitution derived from something, was accepted into the register');
+    let unattributed = false;
+    try { reg.recordInstrument('X', { tier: 'act', derivesFrom: 'C', issuedBy: 'P', recordedBy: null }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('an instrument was recorded with nobody named as having recorded it');
+
+    // --- THE FIVE CONFLICTS, each on a crafted counterexample ---------------------------------
+    rec('Constitution of Botswana', 'constitution', null, ['publish-judgments'], ['disclose-sealed-records']);
+    rec('Courts Act', 'act', 'Constitution of Botswana', ['publish-judgments']);
+    // A regulation permitting what its Act does not: ultra vires, and currently invisible.
+    rec('Publication Regulations', 'regulation', 'Courts Act', ['publish-judgments', 'publish-litigant-addresses']);
+    // A directive permitting what the Constitution forbids.
+    rec('Records Directive', 'directive', 'Publication Regulations', ['disclose-sealed-records']);
+    // A policy made under an instrument nobody recorded.
+    rec('Retention Policy', 'policy', 'Missing Directive');
+    // Two directives at the same tier taking opposite positions.
+    rec('Access Directive A', 'directive', 'Publication Regulations', ['bulk-export']);
+    rec('Access Directive B', 'directive', 'Publication Regulations', [], ['bulk-export']);
+
+    const h = la.legalHierarchy(reg, { now: 0 });
+    if (!h.measurable) v.push('a populated hierarchy reported itself unmeasurable');
+    if (h.consistent) v.push('a hierarchy carrying four planted conflicts reported itself consistent');
+    const kinds = new Set(h.conflicts.map((c) => c.conflict));
+    for (const required of ['orphaned-instrument', 'exceeds-parent', 'contradicts-ancestor', 'sibling-contradiction']) {
+      if (!kinds.has(required)) v.push(`conflict '${required}' was planted in the register and not detected`);
+    }
+    const exceeds = h.conflicts.find((c) => c.conflict === 'exceeds-parent' && c.instrument === 'Publication Regulations');
+    if (!exceeds) v.push('a regulation permitting something its Act does not was not detected as exceeding its parent');
+    else if (exceeds.subject !== 'publish-litigant-addresses') v.push('the excess does not name the permission manufactured on the way down');
+    const contradicts = h.conflicts.find((c) => c.conflict === 'contradicts-ancestor');
+    if (contradicts) {
+      if (contradicts.resolvedBy !== 'Constitution of Botswana') v.push('a directive contradicting the Constitution did not name it as what settles the conflict');
+      if (!/void to that extent/.test(contradicts.detail)) v.push('a contradiction does not state that the lower instrument is void to the extent of it');
+    }
+    // Precedence cannot settle a fight between equals, and the report must say so rather than pick.
+    const sibling = h.conflicts.find((c) => c.conflict === 'sibling-contradiction');
+    if (sibling) {
+      if (!/neither outranks the other/.test(sibling.detail)) v.push('a conflict between equals does not say that precedence cannot resolve it');
+      if (sibling.sharedAncestor !== 'Publication Regulations') v.push('a sibling contradiction does not name the nearest shared ancestor');
+      if (!/human decision, not a rule/.test(la.HIERARCHY_CONFLICTS['sibling-contradiction'].ifIgnored)) {
+        v.push('a sibling contradiction does not say it needs a human decision rather than a rule');
+      }
+    }
+    if (!h.unrooted.includes('Retention Policy')) v.push('an instrument whose chain does not reach the Constitution was not reported as unrooted');
+    if (!h.rooted.includes('Courts Act')) v.push('an Act made under the Constitution was not reported as rooted');
+    // A permission the Act DID grant must not be flagged, or the finding fires on everything.
+    if (h.conflicts.some((c) => c.subject === 'publish-judgments')) v.push('a permission genuinely granted by an ancestor was reported as an excess');
+
+    // --- Inverted derivation: a structure that cannot exist -----------------------------------
+    const inverted = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    inverted.recordInstrument('Departmental Policy', { tier: 'policy', derivesFrom: 'Some Act', issuedBy: 'Ministry', recordedBy: 'Registrar', at: 0 });
+    inverted.recordInstrument('Some Act', { tier: 'act', derivesFrom: 'Departmental Policy', issuedBy: 'Parliament', recordedBy: 'Registrar', at: 0 });
+    if (!la.legalHierarchy(inverted, { now: 0 }).conflicts.some((c) => c.conflict === 'inverted-derivation')) {
+      v.push('an Act claiming to be made under a departmental policy was not detected as an inverted derivation');
+    }
+    // EQUAL rank is as wrong as inverted. A policy is not made under another policy in this
+    // hierarchy — it is made under whatever sits above policy — and a parent that merely fails to
+    // outrank its child leaves the chain unable to reach the Constitution.
+    const flat = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    flat.recordInstrument('Retention Policy', { tier: 'policy', derivesFrom: 'Access Policy', issuedBy: 'Ministry', recordedBy: 'Registrar', at: 0 });
+    flat.recordInstrument('Access Policy', { tier: 'policy', derivesFrom: 'Publication Directive', issuedBy: 'Ministry', recordedBy: 'Registrar', at: 0 });
+    flat.recordInstrument('Publication Directive', { tier: 'directive', derivesFrom: 'Courts Act', issuedBy: 'Minister', recordedBy: 'Registrar', at: 0 });
+    const flatConflicts = la.legalHierarchy(flat, { now: 0 }).conflicts.filter((c) => c.conflict === 'inverted-derivation');
+    if (!flatConflicts.some((c) => c.instrument === 'Retention Policy')) {
+      v.push('a policy made under another policy was accepted — a parent at the SAME rank does not outrank its child, and the chain can never reach the Constitution');
+    }
+    // …and a properly stepped chain is not flagged, or the check fires on every instrument.
+    const stepped = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    stepped.recordInstrument('Constitution', { tier: 'constitution', issuedBy: 'Republic', recordedBy: 'Registrar', at: 0 });
+    stepped.recordInstrument('An Act', { tier: 'act', derivesFrom: 'Constitution', issuedBy: 'Parliament', recordedBy: 'Registrar', at: 0 });
+    stepped.recordInstrument('A Policy', { tier: 'policy', derivesFrom: 'An Act', issuedBy: 'Ministry', recordedBy: 'Registrar', at: 0 });
+    if (la.legalHierarchy(stepped, { now: 0 }).conflicts.some((c) => c.conflict === 'inverted-derivation')) {
+      v.push('a correctly stepped chain was reported as an inverted derivation');
+    }
+
+    // --- A capability citing an instrument the hierarchy has never heard of -------------------
+    const cited = new la.LegalAuthorityRegistry({ clock: () => 0 });
+    cited.declare('case-filing', {
+      kind: 'legislation', instrument: 'Uncited Act', approvingOrganization: 'Attorney General Chambers',
+      reviewEveryDays: 365, expiresAt: 10 ** 12, evidence: ['APP-FIT-LEGAL-HIERARCHY'], scope: 'filing',
+      declaredBy: 'Registrar', at: 0,
+    });
+    cited.recordInstrument('Constitution of Botswana', { tier: 'constitution', issuedBy: 'Republic', recordedBy: 'Registrar', at: 0 });
+    const cs = la.legalHierarchy(cited, { now: 0 });
+    if (!cs.uncitedInstruments.includes('Uncited Act')) v.push('a capability citing an instrument absent from the hierarchy was not reported');
+    const uncited = cs.conflicts.find((c) => c.conflict === 'uncited-basis');
+    if (!uncited || !uncited.capabilities.includes('case-filing')) v.push('an uncited legal basis does not name the capabilities resting on it');
+  }),
+
+  fit('APP-FIT-WORKFLOW-INTELLIGENCE', 'Coordination quality excludes hand-offs nobody examined instead of counting them as failures', (v) => {
+    const ca = require('../src/governance/cross-agency');
+
+    for (const band of ['isolated', 'shared', 'systemic']) {
+      if (!ca.PROPAGATION_BANDS[band]) v.push(`propagation band '${band}' is not defined`);
+      else if (!ca.PROPAGATION_BANDS[band].means) v.push(`propagation band '${band}' does not say what it means`);
+    }
+
+    const report = ca.workflowIntelligence({ now: 0 });
+    if (report.authorizes !== false) v.push('the workflow intelligence report claims authority');
+    if (!report.stepCount) v.push('no workflow step was derived, so propagation was computed over nothing');
+
+    // --- Structure is measurable even though behaviour is not --------------------------------
+    if (!report.measurable.failurePropagation) v.push('failure propagation was reported as unmeasurable, though it is derived from the architecture');
+    if (report.measurable.workflowCompletion) v.push('workflow completion was reported as measurable with no activity register supplied');
+
+    // --- THE POINT OF PART 8: a hand-off nobody examined is not one that failed ---------------
+    // On this estate no institutional relationship has been examined, so the quality must be
+    // UNKNOWN. Reporting 0 would read as "cross-government coordination does not work".
+    if (report.coordinationQuality !== null) v.push(`coordination quality reported as ${report.coordinationQuality} across hand-offs nobody has examined — unknown is not zero`);
+    if (report.measurable.coordinationQuality) v.push('coordination quality was reported as measurable with no hand-off examined');
+    if (!/not zero/.test(report.coordinationBasis)) v.push('the coordination basis does not say that an unexamined relationship is not a failing one');
+    for (const c of report.coordination) {
+      if (c.quality !== null && c.examinedHandoffs === 0) v.push(`workflow '${c.capability}' produced a coordination quality over zero examined hand-offs`);
+      if (c.handoffCount > 0 && c.examinedHandoffs === 0 && c.measurable) v.push(`workflow '${c.capability}' reported unexamined coordination as measurable`);
+      if (c.blockedHandoffs > c.examinedHandoffs) v.push(`workflow '${c.capability}' counted more blocked hand-offs than it examined`);
+    }
+
+    // --- Blast radius is derived from shared steps; compounding is named, not scored ----------
+    for (const s of report.steps) {
+      if (s.blastRadius < 1) v.push(`step '${s.context}' has a blast radius below one, which would mean it is on no workflow`);
+      const expected = s.blastRadius >= 4 ? 'systemic' : s.blastRadius >= 2 ? 'shared' : 'isolated';
+      if (s.propagation !== expected) v.push(`step '${s.context}' has a blast radius of ${s.blastRadius} and a propagation band of '${s.propagation}'`);
+      if (s.compounding && s.propagation === 'isolated') v.push(`step '${s.context}' is compounding while affecting one workflow`);
+      if (s.compounding && !s.unvalidatedDownstream.length) v.push(`step '${s.context}' is compounding with nothing unvalidated downstream`);
+    }
+    if (report.maxBlastRadius !== report.steps[0].blastRadius) v.push('the steps are not ordered by blast radius, so the widest is not first');
+    if (report.systemicSteps.some((s) => s.blastRadius < 4)) v.push('a step affecting fewer than four workflows was reported as systemic');
+
+    // --- A shared step on unvalidated workflows is a finding, and this estate has some --------
+    // Nothing here has ever been validated, so every shared step compounds. If that stops being
+    // true it is because workflows started being validated, and this should be read again.
+    if (!report.compoundingSteps.length) v.push('no compounding step was found on an estate where no workflow has been validated and steps are shared');
+    for (const f of report.compoundingSteps) {
+      if (!report.findings.some((x) => x.includes(f.context))) v.push(`compounding step '${f.context}' does not appear in the findings`);
+    }
+
+    // --- The validation trend obeys the Phase 17 improvement rule ----------------------------
+    if (report.validationTrend.state !== 'unknown') v.push('a validation trend was derived with no history supplied');
+    if (ca.workflowIntelligence({ history: [0.2, 0.8], now: 0 }).validationTrend.state !== 'unverified-improvement') {
+      v.push('a rising validation rate with nothing behind it was reported as progress');
+    }
+    if (ca.workflowIntelligence({
+      history: [0.2, 0.8],
+      improvementEvidence: [{ kind: 'observed-outcome', detail: 'the workflows were run and recorded', by: 'Operations Review Board' }],
+      now: 0,
+    }).validationTrend.state !== 'verified-improvement') {
+      v.push('a rise supported by an observed outcome was not reported as verified');
+    }
+
+    // --- It EXTENDS the Phase 16 validation rather than replacing it -------------------------
+    if (!report.validation || !Array.isArray(report.validation.workflows)) v.push('the intelligence report does not carry the validation it is built on, so the two could disagree');
+    if (report.validation.workflows.length !== ca.workflowValidation({ now: 0 }).workflows.length) v.push('the embedded validation differs from the validation run on its own');
+  }),
+
   fit('APP-FIT-ADVANCED-CONTROL-ANALYTICS', 'Detection coverage is computed over the controls that ran, not over the ones somebody watched', (v) => {
     const ce = require('../src/assurance/control-effectiveness');
     const DAY = 24 * 3600_000, MINUTE = 60_000;

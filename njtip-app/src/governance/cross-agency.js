@@ -899,8 +899,137 @@ function workflowValidation({ authorities = null, activity = null, exercises = n
   };
 }
 
+// --- Enterprise workflow intelligence (Phase 17, Part 8) --------------------------------------------
+//
+// `workflowValidation` asks whether each workflow COULD run. Part 8 asks the question that only
+// appears once you have several of them:
+//
+//   WHEN ONE STEP STOPS, WHAT ELSE STOPS WITH IT?
+//
+// Workflows are not independent. They share bounded contexts, and a context that appears on several
+// paths is a single point whose failure takes several pieces of cross-government work down at once —
+// completely invisible when each workflow is validated on its own.
+//
+// Two properties make this worth computing separately from everything above:
+//
+//   1. Propagation is STRUCTURAL. It is derived from the architecture, so it is knowable even
+//      though no workflow has ever been observed running. Behaviour is unknown here; shape is not.
+//   2. A wide blast radius on a workflow nobody has validated is WORSE than one on a validated
+//      workflow, not better. Unknown reliability and wide reach compound, and the report names that
+//      pairing rather than scoring it.
+const PROPAGATION_BANDS = {
+  isolated: { rank: 0, means: 'This step is on one workflow. Its failure stops that workflow and nothing else.' },
+  shared: { rank: 1, means: 'This step is on two or three workflows. Its failure stops all of them.' },
+  systemic: { rank: 2, means: 'This step is on four or more workflows. Its failure stops a large part of cross-government delivery at once.' },
+};
+
+function workflowIntelligence({
+  authorities = null, activity = null, exercises = null, controls = [],
+  history = [], improvementEvidence = [], now = 0,
+} = {}) {
+  const evidenceConfidence = require('../assurance/evidence-confidence');
+  const validation = workflowValidation({ authorities, activity, exercises, controls, now });
+
+  // Which workflows each context sits on. Derived from the paths, never listed.
+  const onWorkflows = new Map();
+  for (const row of validation.workflows) {
+    for (const step of workflowPath(row.capability)) {
+      if (!onWorkflows.has(step.context)) {
+        onWorkflows.set(step.context, { context: step.context, institution: step.institution, zone: step.zone, workflows: [] });
+      }
+      onWorkflows.get(step.context).workflows.push(row.capability);
+    }
+  }
+
+  const steps = [...onWorkflows.values()].map((s) => {
+    const blastRadius = s.workflows.length;
+    const band = blastRadius >= 4 ? 'systemic' : blastRadius >= 2 ? 'shared' : 'isolated';
+    const unvalidated = s.workflows.filter((c) => validation.unvalidated.includes(c));
+    return {
+      ...s, workflows: s.workflows.slice().sort(), blastRadius,
+      propagation: band, ...PROPAGATION_BANDS[band],
+      unvalidatedDownstream: unvalidated.slice().sort(),
+      // Named rather than scored: this is a place to look, not a number to track.
+      compounding: band !== 'isolated' && unvalidated.length > 0,
+      detail: `'${s.context}' (${s.institution}) is on ${blastRadius} workflow(s)${unvalidated.length ? `, ${unvalidated.length} of which have never been validated` : ''}.`,
+    };
+  }).sort((a, b) => (b.blastRadius - a.blastRadius) || a.context.localeCompare(b.context));
+
+  // Coordination quality per workflow, from the institution pairs the path actually crosses.
+  const coordination = validation.workflows.map((row) => {
+    const path = workflowPath(row.capability);
+    const pairs = [];
+    for (let i = 1; i < path.length; i += 1) {
+      if (path[i - 1].institution === path[i].institution) continue;
+      const key = [path[i - 1].institution, path[i].institution].sort();
+      if (!pairs.some((p) => p[0] === key[0] && p[1] === key[1])) pairs.push(key);
+    }
+    const assessed = pairs.map(([a, b]) => pairGovernmentReadiness(a, b, { authorities, activity, exercises, now, controls }));
+    // A hand-off with an unexamined aspect is EXCLUDED from the rate, never counted as a failure.
+    // Counting it would turn "nobody has looked at this relationship" into "this relationship does
+    // not work", which is the one mistake this whole report exists to avoid making.
+    const examined = assessed.filter((p) => !p.unknownAspects.length);
+    const ready = examined.filter((p) => p.ready);
+    const withUnknown = assessed.filter((p) => p.unknownAspects.length);
+    return {
+      capability: row.capability,
+      handoffs: pairs.map((p) => p.join(' → ')), handoffCount: pairs.length,
+      examinedHandoffs: examined.length, readyHandoffs: ready.length,
+      handoffsWithUnknownAspects: withUnknown.length,
+      blockedHandoffs: examined.filter((p) => !p.ready).length,
+      quality: examined.length ? +(ready.length / examined.length).toFixed(4) : null,
+      measurable: examined.length > 0,
+      detail: !pairs.length
+        ? 'this workflow never leaves one institution, so there is no coordination to assess — which is not the same as coordinating well'
+        : examined.length
+          ? `${ready.length} of ${examined.length} EXAMINED hand-off(s) are ready; ${withUnknown.length} of ${pairs.length} are excluded because an aspect of them has never been examined.`
+          : `all ${pairs.length} institutional hand-off(s) on this path carry an unexamined aspect, so coordination quality is unknown rather than zero.`,
+    };
+  });
+
+  const trend = evidenceConfidence.verifiedImprovement({
+    subject: 'cross-government workflow validation rate', series: history, evidence: improvementEvidence,
+  });
+
+  const systemic = steps.filter((s) => s.propagation === 'systemic');
+  const compounding = steps.filter((s) => s.compounding);
+  const measurableCoordination = coordination.filter((c) => c.measurable);
+  return {
+    validation,
+    bands: Object.entries(PROPAGATION_BANDS).map(([band, b]) => ({ band, ...b })),
+    steps, stepCount: steps.length,
+    systemicSteps: systemic.map((s) => ({ context: s.context, institution: s.institution, blastRadius: s.blastRadius })),
+    compoundingSteps: compounding.map((s) => ({ context: s.context, blastRadius: s.blastRadius, unvalidatedDownstream: s.unvalidatedDownstream })),
+    maxBlastRadius: steps.length ? steps[0].blastRadius : null,
+    coordination,
+    coordinationQuality: measurableCoordination.length
+      ? +(measurableCoordination.reduce((a, c) => a + c.quality, 0) / measurableCoordination.length).toFixed(4) : null,
+    coordinationBasis: measurableCoordination.length
+      ? `computed over ${measurableCoordination.length} of ${coordination.length} workflow(s) that have at least one EXAMINED institutional hand-off; the other ${coordination.length - measurableCoordination.length} are excluded rather than counted as poorly coordinated`
+      : `no workflow has an examined institutional hand-off, so coordination quality is unknown across all ${coordination.length} of them — not zero`,
+    workflowsWithoutCoordination: coordination.filter((c) => !c.measurable).map((c) => c.capability),
+    validationTrend: trend,
+    everyImprovementVerified: !trend.violatesInvariant,
+    // Structure is measurable here even though behaviour is not, and the report distinguishes them
+    // rather than letting one stand in for the other.
+    measurable: {
+      failurePropagation: steps.length > 0,
+      coordinationQuality: measurableCoordination.length > 0,
+      workflowCompletion: activity !== null,
+      legalCompatibility: authorities !== null,
+    },
+    findings: [
+      ...compounding.map((s) => `'${s.context}' is on ${s.blastRadius} workflow(s), ${s.unvalidatedDownstream.length} of which have never been validated`),
+      ...validation.findings,
+    ],
+    now, informationalOnly: true, authorizes: false,
+    note: 'Failure propagation is derived from the architecture, so it is knowable even though no workflow has ever been observed running: shape can be measured where behaviour cannot. A step on many unvalidated workflows is reported as compounding rather than scored, because the pairing of wide reach and unknown reliability is a place to look, not a number to watch. Unknown collaboration is excluded from the coordination rate rather than counted as failed collaboration.',
+  };
+}
+
 module.exports = {
   WORKFLOW_DIMENSIONS, WORKFLOW_STATES, workflowPath, validateWorkflow, workflowValidation,
+  PROPAGATION_BANDS, workflowIntelligence,
   COORDINATION_DIMENSIONS, READINESS_BANDS,
   agencies, agencyOf, informationSharing, approvalDependencies,
   communicationPath, demonstratedCoordination, pairReadiness, interAgencyRisks, collaborationReadiness,

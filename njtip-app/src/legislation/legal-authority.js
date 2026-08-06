@@ -77,12 +77,103 @@ const AUTHORITY_STATES = {
   withdrawn: { authorized: false, blocksReadiness: true, means: 'The instrument was repealed, amended away, or the delegation ended.' },
 };
 
+// --- Legal precedence (Phase 17, Part 9) ------------------------------------------------------------
+//
+// AUTHORITY_KINDS above says what kind of authority a CAPABILITY has. It cannot answer the question
+// Part 9 asks, because that question is about the instruments themselves:
+//
+//   AN INSTRUMENT MADE UNDER ANOTHER CANNOT GO BEYOND IT. A regulation cannot enlarge its Act, a
+//   directive cannot contradict its regulation, and a procedure cannot quietly permit what policy
+//   forbids. Each of these is legal, readable, and completely invisible to a register that records
+//   only which instrument a capability cites.
+//
+// The hierarchy is six tiers deep and strictly ordered. Precedence is not voted on: where two
+// instruments conflict, THE HIGHER TIER WINS and the lower is void to the extent of the
+// inconsistency. That is a legal rule, stated here rather than computed, and everything below is
+// derived from it.
+const LEGAL_TIERS = {
+  constitution: {
+    rank: 0, derivesFrom: 'nothing — it is the source of legal authority in the Republic',
+    mayNot: 'There is no instrument it could exceed.',
+    amendedBy: 'A constitutional amendment, by the procedure the Constitution itself prescribes.',
+  },
+  act: {
+    rank: 1, derivesFrom: 'the Constitution',
+    mayNot: 'An Act may not authorise what the Constitution forbids.',
+    amendedBy: 'Parliament.',
+  },
+  regulation: {
+    rank: 2, derivesFrom: 'the Act under which it is made',
+    mayNot: 'A regulation may not enlarge the Act it is made under. Subsidiary legislation that exceeds its enabling provision is ultra vires.',
+    amendedBy: 'The Minister or authority the enabling Act names.',
+  },
+  directive: {
+    rank: 3, derivesFrom: 'a regulation, or the Act that permits directions to be issued',
+    mayNot: 'A directive may not contradict the regulation it is issued under.',
+    amendedBy: 'The issuing authority, at will.',
+  },
+  policy: {
+    rank: 4, derivesFrom: 'a directive, regulation or Act',
+    mayNot: 'A policy may not permit what any instrument above it prohibits. Policy is the level most often mistaken for a legal basis.',
+    amendedBy: 'The issuing body, by internal decision.',
+  },
+  procedure: {
+    rank: 5, derivesFrom: 'the policy it implements',
+    mayNot: 'A procedure may not do anything its policy does not permit. It is how a policy is carried out, not a source of authority.',
+    amendedBy: 'The operational owner, often without any record at all.',
+  },
+};
+const LEGAL_TIER_ORDER = ['constitution', 'act', 'regulation', 'directive', 'policy', 'procedure'];
+
+// The conflicts detectable from the hierarchy. Each says what is wrong, how it is found, and what it
+// costs — because "conflict" on its own tells nobody which of these very different problems they
+// have, and they need different people.
+const HIERARCHY_CONFLICTS = {
+  'orphaned-instrument': {
+    severity: 'critical',
+    means: 'An instrument names a parent that is not in the register, so its chain to the Constitution cannot be walked.',
+    detectedBy: 'a declared parent with no corresponding instrument record',
+    ifIgnored: 'An instrument is cited as a legal basis and nothing can confirm it has one.',
+  },
+  'inverted-derivation': {
+    severity: 'critical',
+    means: 'An instrument claims to be made under one at the same tier or below it — an Act said to be made under a departmental policy.',
+    detectedBy: "the parent's rank against the child's",
+    ifIgnored: 'The register asserts a legal structure that cannot exist, and every conclusion drawn from it inherits the error.',
+  },
+  'exceeds-parent': {
+    severity: 'critical',
+    means: 'An instrument permits something no instrument above it permits. Subsidiary instruments cannot enlarge what they are made under.',
+    detectedBy: 'each permission checked against the permissions of every ancestor that stated any',
+    ifIgnored: 'A capability operates on an authority manufactured on the way down the hierarchy rather than granted at the top.',
+  },
+  'contradicts-ancestor': {
+    severity: 'critical',
+    means: 'An instrument permits what an instrument above it prohibits. The higher instrument wins and the lower is void to that extent.',
+    detectedBy: 'each permission checked against the prohibitions of every ancestor',
+    ifIgnored: 'Two answers to "may we do this" exist, and which one is followed depends on which document somebody opened.',
+  },
+  'sibling-contradiction': {
+    severity: 'important',
+    means: 'Two instruments at the same tier, one permitting and one prohibiting the same subject, with no shared ancestor that settles it.',
+    detectedBy: 'permissions and prohibitions compared across instruments of equal rank',
+    ifIgnored: 'Precedence cannot resolve it, because neither instrument outranks the other. It needs a human decision, not a rule.',
+  },
+  'uncited-basis': {
+    severity: 'important',
+    means: 'A capability cites an instrument that is not in the hierarchy register, so its legal basis cannot be traced upward at all.',
+    detectedBy: 'declared instruments against recorded instruments',
+    ifIgnored: 'The chain from a running capability to the Constitution has a hole in it that no report currently shows.',
+  },
+};
+
 class LegalAuthorityRegistry {
   constructor({ clock = () => 0 } = {}) {
     this._clock = clock;
     this._declarations = new Map();   // capability -> [declaration]
     this._reviews = new Map();        // capability -> [review]
     this._withdrawals = new Map();    // capability -> [withdrawal]
+    this._instruments = new Map();    // instrument -> record (Phase 17, Part 9)
   }
 
   // Declare an authority for a capability. Every required field is checked, because a partial legal
@@ -148,6 +239,41 @@ class LegalAuthorityRegistry {
     return [...this._declarations.keys()].sort().flatMap((c) => this.declarations(c));
   }
   reviews(capability) { return (this._reviews.get(capability) || []).map((r) => ({ ...r })); }
+
+  // --- Part 9 (Phase 17): the instruments themselves ----------------------------------------------
+  //
+  // A declaration says what authorises a CAPABILITY. Part 9 is about the instruments: what each one
+  // is, what it was made under, and what it permits or forbids. Nothing above records that, so a
+  // regulation that quietly enlarges the Act it was made under is currently invisible.
+  recordInstrument(instrument, {
+    tier, title = null, derivesFrom = null, issuedBy,
+    permits = [], prohibits = [], commencedAt = null, recordedBy, at = null,
+  } = {}) {
+    if (!instrument) throw new Error('an instrument record must name the instrument');
+    if (!LEGAL_TIERS[tier]) throw new Error(`unknown legal tier '${tier}' — one of ${LEGAL_TIER_ORDER.join(', ')}`);
+    if (!issuedBy) { const e = new Error('an instrument must name the body that issued it'); e.failClosed = true; throw e; }
+    if (!recordedBy) { const e = new Error('an instrument record must name who recorded it'); e.failClosed = true; throw e; }
+    // The Constitution derives from nothing; everything else derives from something. An instrument
+    // below the Constitution with no parent has no legal basis, and recording it as though it did
+    // would put a broken chain into the register as a complete one.
+    if (tier !== 'constitution' && !derivesFrom) {
+      const e = new Error(`a '${tier}' must name the instrument it is made under — ${LEGAL_TIERS[tier].derivesFrom}`);
+      e.failClosed = true; throw e;
+    }
+    if (tier === 'constitution' && derivesFrom) {
+      const e = new Error('the Constitution derives from nothing — an instrument above it would not be the Constitution');
+      e.failClosed = true; throw e;
+    }
+    const rec = {
+      instrument, tier, ...LEGAL_TIERS[tier], title, derivesFrom, issuedBy,
+      permits: [...permits], prohibits: [...prohibits], commencedAt,
+      recordedBy, at: at ?? this._clock(),
+    };
+    this._instruments.set(instrument, rec);
+    return { ...rec };
+  }
+
+  instruments() { return [...this._instruments.values()].map((i) => ({ ...i })).sort((a, b) => a.instrument.localeCompare(b.instrument)); }
 
   // The state of one capability's legal authority. Derived, never declared.
   state(capability, { now = null, controls = [] } = {}) {
@@ -381,6 +507,150 @@ function legalDependencyIntelligence(registry, { now = 0, controls = [], capabil
 
 // What falls if a named instrument is withdrawn. The question a legal adviser actually asks, and
 // which nothing could answer before: the register knew what authorised what, and never the reverse.
+// The Part 9 analysis. Walks each instrument up to its root and checks what it does against what
+// everything above it allows.
+//
+// The rule that keeps this honest is the same one every register in this platform obeys:
+//
+//   AN EMPTY HIERARCHY IS NOT A CONSISTENT ONE. "No conflicts detected" across zero instruments is
+//   the most dangerous sentence this module could produce, so `measurable` is false, `consistent` is
+//   false, and the basis says so in words rather than reporting a clean bill of health over nothing.
+function legalHierarchy(registry, { now = 0 } = {}) {
+  const all = registry.instruments();
+  const byId = new Map(all.map((i) => [i.instrument, i]));
+  const conflicts = [];
+
+  // Walk from an instrument to its root, stopping at a missing parent or a cycle.
+  const ancestorsOf = (id) => {
+    const chain = [];
+    const seen = new Set([id]);
+    let current = byId.get(id);
+    while (current && current.derivesFrom) {
+      if (seen.has(current.derivesFrom)) break;        // a cycle; reported as inverted derivation
+      seen.add(current.derivesFrom);
+      const parent = byId.get(current.derivesFrom);
+      if (!parent) return { chain, broken: current.derivesFrom, rooted: false };
+      chain.push(parent);
+      current = parent;
+    }
+    return { chain, broken: null, rooted: !!current && current.tier === 'constitution' };
+  };
+
+  const rows = all.map((i) => {
+    const { chain, broken, rooted } = ancestorsOf(i.instrument);
+    const found = [];
+
+    if (broken) {
+      found.push({
+        conflict: 'orphaned-instrument', ...HIERARCHY_CONFLICTS['orphaned-instrument'], instrument: i.instrument,
+        detail: `'${i.instrument}' is made under '${broken}', which is not recorded`,
+      });
+    }
+    // A parent must OUTRANK its child. Equal rank is as wrong as inverted: a policy is not made
+    // under another policy in this hierarchy, it is made under what sits above policy.
+    const parent = i.derivesFrom ? byId.get(i.derivesFrom) : null;
+    if (parent && parent.rank >= i.rank) {
+      found.push({
+        conflict: 'inverted-derivation', ...HIERARCHY_CONFLICTS['inverted-derivation'], instrument: i.instrument,
+        detail: `'${i.instrument}' (${i.tier}, rank ${i.rank}) claims to be made under '${parent.instrument}' (${parent.tier}, rank ${parent.rank})`,
+      });
+    }
+
+    // What this instrument permits, against what everything above it permits and forbids.
+    for (const subject of i.permits) {
+      const forbidding = chain.find((a) => a.prohibits.includes(subject));
+      if (forbidding) {
+        found.push({
+          conflict: 'contradicts-ancestor', ...HIERARCHY_CONFLICTS['contradicts-ancestor'], instrument: i.instrument,
+          subject, resolvedBy: forbidding.instrument,
+          detail: `'${i.instrument}' (${i.tier}) permits '${subject}', which '${forbidding.instrument}' (${forbidding.tier}) prohibits. The higher instrument wins; '${i.instrument}' is void to that extent.`,
+        });
+        continue;
+      }
+      // Only checkable where an ancestor actually stated its permissions. An ancestor that lists
+      // none has not implicitly permitted nothing — it has said nothing, and that is reported as
+      // unverifiable rather than as an excess.
+      const stating = chain.filter((a) => a.permits.length > 0);
+      if (stating.length && !stating.some((a) => a.permits.includes(subject))) {
+        found.push({
+          conflict: 'exceeds-parent', ...HIERARCHY_CONFLICTS['exceeds-parent'], instrument: i.instrument,
+          subject, resolvedBy: stating[0].instrument,
+          detail: `'${i.instrument}' (${i.tier}) permits '${subject}' and no instrument above it does. A '${i.tier}' cannot create an authority its parent does not hold.`,
+        });
+      }
+    }
+
+    return {
+      instrument: i.instrument, tier: i.tier, rank: i.rank, title: i.title,
+      derivesFrom: i.derivesFrom, issuedBy: i.issuedBy,
+      permits: i.permits, prohibits: i.prohibits,
+      chain: chain.map((a) => a.instrument),
+      // A chain that does not end at the Constitution stops somewhere, and the report says where
+      // rather than how long it was.
+      rootedInConstitution: rooted,
+      depth: chain.length + 1,
+      conflicts: found,
+      mayNot: i.mayNot,
+    };
+  });
+  conflicts.push(...rows.flatMap((r) => r.conflicts));
+
+  // Same tier, opposite positions, and nothing above them settles it. Precedence cannot resolve a
+  // conflict between equals: this one needs somebody to decide.
+  for (const a of all) {
+    for (const b of all) {
+      if (a.instrument >= b.instrument || a.rank !== b.rank) continue;
+      for (const subject of a.permits) {
+        if (!b.prohibits.includes(subject)) continue;
+        const aChain = ancestorsOf(a.instrument).chain.map((x) => x.instrument);
+        const shared = aChain.find((x) => ancestorsOf(b.instrument).chain.some((y) => y.instrument === x));
+        conflicts.push({
+          conflict: 'sibling-contradiction', ...HIERARCHY_CONFLICTS['sibling-contradiction'],
+          instrument: a.instrument, other: b.instrument, subject,
+          sharedAncestor: shared || null,
+          detail: `'${a.instrument}' permits '${subject}' and '${b.instrument}' prohibits it. Both are ${a.tier}s, so neither outranks the other${shared ? `; the nearest shared ancestor is '${shared}'` : ' and they share no recorded ancestor'}.`,
+        });
+      }
+    }
+  }
+
+  // Capabilities citing instruments the hierarchy has never heard of. This is the hole between the
+  // two halves of this module, and it is the one nothing looked for before.
+  const cited = [...new Set(registry.declarations().map((d) => d.instrument))].sort();
+  const uncited = cited.filter((x) => !byId.has(x));
+  for (const instrument of uncited) {
+    conflicts.push({
+      conflict: 'uncited-basis', ...HIERARCHY_CONFLICTS['uncited-basis'], instrument,
+      capabilities: registry.declarations().filter((d) => d.instrument === instrument).map((d) => d.capability),
+      detail: `'${instrument}' is cited as a legal basis and is not recorded in the hierarchy, so nothing can trace it upward to the Constitution.`,
+    });
+  }
+
+  const critical = conflicts.filter((c) => c.severity === 'critical');
+  return {
+    tiers: LEGAL_TIER_ORDER.map((tier) => ({ tier, ...LEGAL_TIERS[tier], count: all.filter((i) => i.tier === tier).length })),
+    conflictKinds: Object.entries(HIERARCHY_CONFLICTS).map(([conflict, c]) => ({ conflict, ...c })),
+    instruments: rows, count: rows.length,
+    byTier: Object.fromEntries(LEGAL_TIER_ORDER.map((tier) => [tier, rows.filter((r) => r.tier === tier).map((r) => r.instrument)])),
+    conflicts, conflictCount: conflicts.length,
+    criticalConflicts: critical.map((c) => ({ conflict: c.conflict, instrument: c.instrument, detail: c.detail })),
+    rooted: rows.filter((r) => r.rootedInConstitution).map((r) => r.instrument),
+    unrooted: rows.filter((r) => !r.rootedInConstitution).map((r) => r.instrument),
+    citedInstruments: cited, uncitedInstruments: uncited,
+    maxDepth: LEGAL_TIER_ORDER.length,
+    // A rate over instruments that exist. With none, it is null — not 1.
+    rootedRate: rows.length ? +(rows.filter((r) => r.rootedInConstitution).length / rows.length).toFixed(4) : null,
+    // THE RULE. Zero instruments means nothing was examined, not that everything is consistent.
+    measurable: rows.length > 0,
+    consistent: rows.length > 0 && conflicts.length === 0,
+    basis: rows.length
+      ? `${rows.length} instrument(s) across ${new Set(rows.map((r) => r.tier)).size} of ${LEGAL_TIER_ORDER.length} tiers. ${conflicts.length} conflict(s), ${critical.length} critical. ${rows.filter((r) => r.rootedInConstitution).length} chain(s) reach the Constitution.`
+      : 'No instrument is recorded in the hierarchy. Nothing has been examined, so nothing is consistent: an empty register produces no conflicts for the same reason an unopened book contains no errors.',
+    now, informationalOnly: true, authorizes: false,
+    note: 'Precedence is a legal rule, not a vote: where instruments conflict the higher tier wins and the lower is void to the extent of the inconsistency. The one conflict precedence cannot settle is between equals, and it is reported separately because it needs a human decision rather than a rule.',
+  };
+}
+
 function legalImpact(registry, instrument, { now = 0, controls = [] } = {}) {
   if (!instrument) throw new Error('a legal impact analysis must name the instrument being withdrawn');
   const ir = require('../governance/institutional-resilience');
@@ -425,4 +695,5 @@ function legalImpact(registry, instrument, { now = 0, controls = [] } = {}) {
 module.exports = {
   LegalAuthorityRegistry, AUTHORITY_KINDS, AUTHORITY_ORDER, AUTHORITY_FIELDS, AUTHORITY_STATES,
   LEGAL_DEFECTS, legalDependencyIntelligence, legalImpact,
+  LEGAL_TIERS, LEGAL_TIER_ORDER, HIERARCHY_CONFLICTS, legalHierarchy,
 };

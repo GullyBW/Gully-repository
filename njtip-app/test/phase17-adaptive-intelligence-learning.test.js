@@ -763,3 +763,193 @@ test('phase17: with no workshop held, nothing can have been learned from one', (
   assert.match(report.basis, /nothing can have been learned/);
   assert.equal(report.authorizes, false);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 9 — legal hierarchy intelligence. An instrument cannot go beyond what it was made under.
+// ---------------------------------------------------------------------------------------------
+
+const la = require('../src/legislation/legal-authority');
+
+function hierarchyOf(rows) {
+  const reg = new la.LegalAuthorityRegistry({ clock: () => 0 });
+  for (const [id, tier, derivesFrom, permits = [], prohibits = []] of rows) {
+    reg.recordInstrument(id, { tier, derivesFrom, issuedBy: 'Government of Botswana', permits, prohibits, recordedBy: 'Registrar', at: 0 });
+  }
+  return { reg, report: la.legalHierarchy(reg, { now: 0 }) };
+}
+
+test('phase17: the hierarchy is six tiers, strictly ordered, each stating what it may not do', () => {
+  assert.deepEqual(la.LEGAL_TIER_ORDER, ['constitution', 'act', 'regulation', 'directive', 'policy', 'procedure']);
+  la.LEGAL_TIER_ORDER.forEach((tier, i) => {
+    assert.equal(la.LEGAL_TIERS[tier].rank, i, tier);
+    assert.ok(la.LEGAL_TIERS[tier].mayNot, tier);
+    assert.ok(la.LEGAL_TIERS[tier].amendedBy, tier);
+  });
+  assert.match(la.LEGAL_TIERS.regulation.mayNot, /ultra vires/);
+});
+
+test('phase17: an empty hierarchy is not a consistent one', () => {
+  const empty = la.legalHierarchy(new la.LegalAuthorityRegistry({ clock: () => 0 }), { now: 0 });
+  assert.equal(empty.measurable, false);
+  assert.equal(empty.consistent, false, 'zero conflicts across zero instruments is not a clean bill of health');
+  assert.equal(empty.conflictCount, 0);
+  assert.equal(empty.rootedRate, null);
+  assert.match(empty.basis, /unopened book/);
+  assert.equal(empty.authorizes, false);
+});
+
+test('phase17: an instrument below the Constitution must name what it was made under', () => {
+  const reg = new la.LegalAuthorityRegistry({ clock: () => 0 });
+  assert.throws(
+    () => reg.recordInstrument('Loose Policy', { tier: 'policy', issuedBy: 'Ministry', recordedBy: 'Registrar', at: 0 }),
+    (e) => e.failClosed === true && /must name the instrument it is made under/.test(e.message),
+  );
+  assert.throws(
+    () => reg.recordInstrument('Super Constitution', { tier: 'constitution', derivesFrom: 'Something', issuedBy: 'X', recordedBy: 'R', at: 0 }),
+    /derives from nothing/,
+  );
+});
+
+test('phase17: a regulation permitting what its Act does not is detected as exceeding its parent', () => {
+  const { report } = hierarchyOf([
+    ['Constitution of Botswana', 'constitution', null, ['publish-judgments']],
+    ['Courts Act', 'act', 'Constitution of Botswana', ['publish-judgments']],
+    ['Publication Regulations', 'regulation', 'Courts Act', ['publish-judgments', 'publish-litigant-addresses']],
+  ]);
+  const exceeds = report.conflicts.find((c) => c.conflict === 'exceeds-parent');
+  assert.ok(exceeds);
+  assert.equal(exceeds.instrument, 'Publication Regulations');
+  assert.equal(exceeds.subject, 'publish-litigant-addresses');
+  assert.equal(report.consistent, false);
+  // The permission the Act DID grant is not flagged, or the finding fires on everything.
+  assert.equal(report.conflicts.filter((c) => c.subject === 'publish-judgments').length, 0);
+});
+
+test('phase17: a directive permitting what the Constitution prohibits is void to that extent', () => {
+  const { report } = hierarchyOf([
+    ['Constitution of Botswana', 'constitution', null, ['publish-judgments'], ['disclose-sealed-records']],
+    ['Courts Act', 'act', 'Constitution of Botswana', ['publish-judgments']],
+    ['Publication Regulations', 'regulation', 'Courts Act', ['publish-judgments']],
+    ['Records Directive', 'directive', 'Publication Regulations', ['disclose-sealed-records']],
+  ]);
+  const c = report.conflicts.find((x) => x.conflict === 'contradicts-ancestor');
+  assert.ok(c);
+  assert.equal(c.instrument, 'Records Directive');
+  assert.equal(c.resolvedBy, 'Constitution of Botswana', 'the higher instrument settles it');
+  assert.match(c.detail, /void to that extent/);
+});
+
+test('phase17: precedence cannot settle a conflict between equals, and the report says so', () => {
+  const { report } = hierarchyOf([
+    ['Constitution of Botswana', 'constitution', null, ['bulk-export']],
+    ['Courts Act', 'act', 'Constitution of Botswana', ['bulk-export']],
+    ['Access Directive A', 'directive', 'Courts Act', ['bulk-export']],
+    ['Access Directive B', 'directive', 'Courts Act', [], ['bulk-export']],
+  ]);
+  const sibling = report.conflicts.find((c) => c.conflict === 'sibling-contradiction');
+  assert.ok(sibling);
+  assert.equal(sibling.subject, 'bulk-export');
+  assert.match(sibling.detail, /neither outranks the other/);
+  assert.equal(sibling.sharedAncestor, 'Courts Act');
+  assert.match(la.HIERARCHY_CONFLICTS['sibling-contradiction'].ifIgnored, /human decision, not a rule/);
+});
+
+test('phase17: a parent must OUTRANK its child — equal rank is as wrong as inverted', () => {
+  const { report: inverted } = hierarchyOf([
+    ['Departmental Policy', 'policy', 'Some Act'],
+    ['Some Act', 'act', 'Departmental Policy'],
+  ]);
+  assert.ok(inverted.conflicts.some((c) => c.conflict === 'inverted-derivation'));
+
+  const { report: flat } = hierarchyOf([
+    ['Retention Policy', 'policy', 'Access Policy'],
+    ['Access Policy', 'policy', 'Publication Directive'],
+    ['Publication Directive', 'directive', 'Courts Act'],
+  ]);
+  assert.ok(flat.conflicts.some((c) => c.conflict === 'inverted-derivation' && c.instrument === 'Retention Policy'),
+    'a policy made under another policy can never reach the Constitution');
+
+  const { report: stepped } = hierarchyOf([
+    ['Constitution', 'constitution', null],
+    ['An Act', 'act', 'Constitution'],
+    ['A Policy', 'policy', 'An Act'],
+  ]);
+  assert.equal(stepped.conflicts.filter((c) => c.conflict === 'inverted-derivation').length, 0);
+});
+
+test('phase17: a capability citing an instrument absent from the hierarchy is reported, not assumed sound', () => {
+  const reg = new la.LegalAuthorityRegistry({ clock: () => 0 });
+  reg.declare('case-filing', {
+    kind: 'legislation', instrument: 'Uncited Act', approvingOrganization: 'Attorney General Chambers',
+    reviewEveryDays: 365, expiresAt: 10 ** 12, evidence: ['APP-FIT-LEGAL-HIERARCHY'], scope: 'filing',
+    declaredBy: 'Registrar', at: 0,
+  });
+  reg.recordInstrument('Constitution of Botswana', { tier: 'constitution', issuedBy: 'Republic', recordedBy: 'Registrar', at: 0 });
+  const report = la.legalHierarchy(reg, { now: 0 });
+  assert.deepEqual(report.uncitedInstruments, ['Uncited Act']);
+  assert.deepEqual(report.conflicts.find((c) => c.conflict === 'uncited-basis').capabilities, ['case-filing']);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 8 — enterprise workflow intelligence. Structure is knowable where behaviour is not.
+// ---------------------------------------------------------------------------------------------
+
+const ca = require('../src/governance/cross-agency');
+
+test('phase17: an unexamined hand-off is excluded from coordination quality, not counted as failed', () => {
+  const report = ca.workflowIntelligence({ now: 0 });
+  // Nothing on this estate has been examined, so the answer must be UNKNOWN. A zero would read as
+  // "cross-government coordination does not work", which nobody has established.
+  assert.equal(report.coordinationQuality, null);
+  assert.equal(report.measurable.coordinationQuality, false);
+  assert.match(report.coordinationBasis, /not zero/);
+  for (const c of report.coordination) {
+    if (c.examinedHandoffs === 0) {
+      assert.equal(c.quality, null, c.capability);
+      assert.equal(c.measurable, false, c.capability);
+    }
+    assert.ok(c.blockedHandoffs <= c.examinedHandoffs, c.capability);
+  }
+  assert.equal(report.authorizes, false);
+});
+
+test('phase17: failure propagation is structural, so it is known even though behaviour is not', () => {
+  const report = ca.workflowIntelligence({ now: 0 });
+  assert.equal(report.measurable.failurePropagation, true);
+  assert.equal(report.measurable.workflowCompletion, false, 'no workflow has been observed running');
+  assert.ok(report.stepCount > 0);
+  assert.equal(report.maxBlastRadius, report.steps[0].blastRadius, 'steps are ordered widest-first');
+  for (const s of report.steps) {
+    const expected = s.blastRadius >= 4 ? 'systemic' : s.blastRadius >= 2 ? 'shared' : 'isolated';
+    assert.equal(s.propagation, expected, s.context);
+    if (s.compounding) {
+      assert.notEqual(s.propagation, 'isolated');
+      assert.ok(s.unvalidatedDownstream.length > 0);
+    }
+  }
+});
+
+test('phase17: a shared step on unvalidated workflows compounds, and appears in the findings', () => {
+  const report = ca.workflowIntelligence({ now: 0 });
+  assert.ok(report.compoundingSteps.length > 0);
+  for (const s of report.compoundingSteps) {
+    assert.ok(report.findings.some((f) => f.includes(s.context)), s.context);
+  }
+});
+
+test('phase17: the intelligence report carries the validation it extends rather than recomputing it', () => {
+  assert.deepEqual(
+    ca.workflowIntelligence({ now: 0 }).validation.workflows.map((w) => w.capability),
+    ca.workflowValidation({ now: 0 }).workflows.map((w) => w.capability),
+  );
+});
+
+test('phase17: a rising workflow validation rate needs verified evidence like every other trend', () => {
+  assert.equal(ca.workflowIntelligence({ now: 0 }).validationTrend.state, 'unknown');
+  assert.equal(ca.workflowIntelligence({ history: [0.2, 0.8], now: 0 }).validationTrend.state, 'unverified-improvement');
+  assert.equal(ca.workflowIntelligence({
+    history: [0.2, 0.8],
+    improvementEvidence: [{ kind: 'observed-outcome', detail: 'the workflows were run and recorded', by: 'ORB' }],
+    now: 0,
+  }).validationTrend.state, 'verified-improvement');
+});
