@@ -413,6 +413,154 @@ function institutionalLearning({ loop = null, training = null, exercises = null,
   };
 }
 
+// --- Institutional validation workshops (Phase 16, Part 6) -----------------------------------------
+//
+// The improvement loop above starts from a control that FAILED. That is the right trigger for a
+// correction and it cannot start the other kind of learning: the kind where people sit in a room,
+// look at how the institution actually works, and find something no control was watching for.
+//
+// A validation workshop is that room, made auditable. Its whole value rests on one rule:
+//
+//   AN UNRESOLVED ISSUE IS A FIRST-CLASS OUTCOME, AND CLOSING A WORKSHOP DOES NOT CLOSE IT.
+//
+// The failure mode of every workshop ever held is that the minutes record the decisions and quietly
+// lose the things nobody agreed on. So an unresolved issue survives the close, is carried in the
+// report, and the workshop cannot be closed while a corrective action has no owner or no follow-up
+// date — because an action with neither is a sentence in a document.
+const WORKSHOP_OUTCOMES = {
+  finding: { mustHave: ['detail'], resolvesWorkshop: false, means: 'Something the participants observed about how the institution actually works.' },
+  decision: { mustHave: ['detail', 'by'], resolvesWorkshop: false, means: 'Something the participants agreed, attributed to who agreed it.' },
+  'unresolved-issue': { mustHave: ['detail'], resolvesWorkshop: false, means: 'Something nobody could agree on or answer. Survives the close, deliberately.' },
+  'corrective-action': { mustHave: ['detail', 'owner', 'dueAt'], resolvesWorkshop: false, means: 'Something somebody committed to do, with a name and a date.' },
+};
+
+const WORKSHOP_STATES = ['convened', 'closed'];
+
+class ValidationWorkshop {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._workshops = new Map(); this._seq = 0; }
+
+  // Objectives are declared at convening. A workshop whose objectives are written afterwards is a
+  // workshop that achieved whatever it happened to achieve.
+  convene({ subject, objectives = [], participants = [], facilitator, at = null } = {}) {
+    if (!subject) throw new Error('a validation workshop must state what it is about');
+    if (!facilitator) { const e = new Error('a validation workshop must name a facilitator'); e.failClosed = true; throw e; }
+    if (!objectives.length) { const e = new Error('a validation workshop must declare its objectives before it begins — objectives written afterwards are a description of whatever happened'); e.failClosed = true; throw e; }
+    if (participants.length < 2) { const e = new Error('a validation workshop needs at least two participants — one person reviewing their own work is a review, not a validation'); e.failClosed = true; throw e; }
+    const id = `VW-${String(++this._seq).padStart(4, '0')}`;
+    const rec = {
+      id, subject, objectives: [...objectives], participants: [...participants], facilitator,
+      state: 'convened', convenedAt: at ?? this._clock(), outcomes: [], followUps: [],
+    };
+    this._workshops.set(id, rec);
+    return { ...rec };
+  }
+
+  record(id, { outcome, detail, by = null, owner = null, dueAt = null, objective = null, at = null } = {}) {
+    const w = this._workshops.get(id);
+    if (!w) throw new Error('unknown validation workshop: ' + id);
+    if (w.state === 'closed') { const e = new Error(`${id} is closed — an outcome added afterwards is one the room never saw`); e.failClosed = true; throw e; }
+    const spec = WORKSHOP_OUTCOMES[outcome];
+    if (!spec) throw new Error(`unknown workshop outcome '${outcome}' — one of ${Object.keys(WORKSHOP_OUTCOMES).join(', ')}`);
+    const values = { detail, by, owner, dueAt };
+    for (const field of spec.mustHave) {
+      if (values[field] === null || values[field] === undefined || values[field] === '') {
+        const e = new Error(`a '${outcome}' must state '${field}'${field === 'owner' ? ' — an action nobody owns is a sentence in a document' : field === 'dueAt' ? ' — an action with no date is one nobody is late for' : ''}`);
+        e.failClosed = true; throw e;
+      }
+    }
+    // An outcome may cite an objective, and if it does the objective must be one that was declared.
+    if (objective && !w.objectives.includes(objective)) throw new Error(`'${objective}' was not one of this workshop's declared objectives`);
+    const rec = { outcome, detail, by, owner, dueAt, objective, at: at ?? this._clock(), resolved: false };
+    w.outcomes.push(rec);
+    return { ...rec };
+  }
+
+  // Closing records what the room concluded. It does NOT resolve anything: an unresolved issue and
+  // an open corrective action both survive it, which is the point.
+  close(id, { by, at = null } = {}) {
+    const w = this._workshops.get(id);
+    if (!w) throw new Error('unknown validation workshop: ' + id);
+    if (!by) { const e = new Error('closing a validation workshop requires a named human'); e.failClosed = true; throw e; }
+    const orphaned = w.outcomes.filter((o) => o.outcome === 'corrective-action' && (!o.owner || !Number.isFinite(o.dueAt)));
+    if (orphaned.length) { const e = new Error(`${orphaned.length} corrective action(s) have no owner or no due date — a workshop cannot close over an action nobody is late for`); e.failClosed = true; throw e; }
+    w.state = 'closed'; w.closedBy = by; w.closedAt = at ?? this._clock();
+    return { ...w };
+  }
+
+  // A follow-up review. Separate from the close and attributable to somebody else, because the
+  // person who ran the workshop is not the person who should confirm its actions landed.
+  followUp(id, { reviewedBy, at = null, resolvedIndexes = [], note = null } = {}) {
+    const w = this._workshops.get(id);
+    if (!w) throw new Error('unknown validation workshop: ' + id);
+    if (w.state !== 'closed') { const e = new Error(`${id} is not closed — a follow-up reviews what a workshop concluded`); e.failClosed = true; throw e; }
+    if (!reviewedBy) { const e = new Error('a follow-up review requires a named reviewer'); e.failClosed = true; throw e; }
+    if (reviewedBy === w.facilitator) { const e = new Error(`'${reviewedBy}' facilitated this workshop and cannot also review whether its actions landed`); e.failClosed = true; throw e; }
+    for (const i of resolvedIndexes) {
+      if (!w.outcomes[i]) throw new Error(`no outcome at index ${i}`);
+      w.outcomes[i].resolved = true;
+      w.outcomes[i].resolvedBy = reviewedBy;
+    }
+    const rec = { reviewedBy, at: at ?? this._clock(), resolved: [...resolvedIndexes], note };
+    w.followUps.push(rec);
+    return { ...rec };
+  }
+
+  workshops() { return [...this._workshops.values()].map((w) => JSON.parse(JSON.stringify(w))); }
+  workshop(id) { const w = this._workshops.get(id); return w ? JSON.parse(JSON.stringify(w)) : null; }
+
+  // The Part 6 report. Every category is counted separately; nothing is summed into a score.
+  report({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = this.workshops().map((w) => {
+      const of = (kind) => w.outcomes.filter((o) => o.outcome === kind);
+      const actions = of('corrective-action');
+      const overdue = actions.filter((a) => !a.resolved && Number.isFinite(a.dueAt) && a.dueAt < t);
+      const unresolved = of('unresolved-issue').filter((o) => !o.resolved);
+      // Objectives an outcome actually cited. An objective nothing cited was not met by the workshop
+      // saying it was; it was simply not addressed.
+      const addressed = w.objectives.filter((obj) => w.outcomes.some((o) => o.objective === obj));
+      return {
+        id: w.id, subject: w.subject, state: w.state,
+        facilitator: w.facilitator, participants: w.participants.length,
+        objectives: w.objectives, objectivesAddressed: addressed,
+        objectivesUnaddressed: w.objectives.filter((o) => !addressed.includes(o)),
+        findings: of('finding').length, decisions: of('decision').length,
+        unresolvedIssues: unresolved.map((o) => o.detail),
+        correctiveActions: actions.map((a) => ({ detail: a.detail, owner: a.owner, dueAt: a.dueAt, resolved: a.resolved })),
+        overdueActions: overdue.map((a) => ({ detail: a.detail, owner: a.owner, dueAt: a.dueAt })),
+        followUps: w.followUps.length,
+        // Closed is not finished. A closed workshop with open issues or overdue actions is the
+        // normal state of institutional validation and the report says so rather than hiding it.
+        finished: w.state === 'closed' && !unresolved.length && actions.every((a) => a.resolved),
+        reason: w.state !== 'closed' ? 'still convened'
+          : unresolved.length ? `closed with ${unresolved.length} unresolved issue(s) — closing a workshop does not resolve them`
+            : actions.some((a) => !a.resolved) ? `closed with ${actions.filter((a) => !a.resolved).length} corrective action(s) still open`
+              : 'closed, every issue resolved and every action confirmed by a follow-up review',
+      };
+    });
+    const openIssues = rows.flatMap((r) => r.unresolvedIssues);
+    const overdue = rows.flatMap((r) => r.overdueActions);
+    return {
+      workshops: rows, count: rows.length,
+      outcomes: Object.entries(WORKSHOP_OUTCOMES).map(([outcome, o]) => ({ outcome, ...o })),
+      states: [...WORKSHOP_STATES],
+      convened: rows.filter((r) => r.state === 'convened').length,
+      closed: rows.filter((r) => r.state === 'closed').length,
+      finished: rows.filter((r) => r.finished).length,
+      unresolvedIssues: openIssues, unresolvedIssueCount: openIssues.length,
+      overdueActions: overdue, overdueActionCount: overdue.length,
+      unaddressedObjectives: rows.flatMap((r) => r.objectivesUnaddressed.map((o) => ({ workshop: r.id, objective: o }))),
+      // Never a score. The figure that matters is how much is still open, not how many rooms met.
+      measurable: rows.length > 0,
+      basis: rows.length
+        ? `${rows.length} workshop(s); ${rows.filter((r) => r.finished).length} finished. ${openIssues.length} issue(s) remain unresolved and ${overdue.length} corrective action(s) are overdue.`
+        : 'No validation workshop has been convened. The institution has never sat down and looked at how it actually works, which is a different gap from any control failing.',
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'An unresolved issue is a first-class outcome and closing a workshop does not close it. The failure mode of every workshop is minutes that record the decisions and lose what nobody agreed on, so unresolved issues survive the close and are carried here until a follow-up review — by somebody other than the facilitator — resolves them.',
+    };
+  }
+}
+
 // --- Trust evidence (Phase 15, Part 8) -------------------------------------------------------------
 //
 // Phase 14 built leading indicators of whether public trust would be WARRANTED, and put
@@ -1489,6 +1637,7 @@ module.exports = {
   ImprovementLoop, executiveGovernanceIntelligence, institutionalAssurance,
   GOVERNANCE_STATES, governanceState, governanceCompleteness,
   LEARNING_STAGES, institutionalLearning,
+  WORKSHOP_OUTCOMES, WORKSHOP_STATES, ValidationWorkshop,
   TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,
   EVIDENCE_TYPES, ONBOARDING_STATES, EvidenceOnboarding,
   DATA_CLASSES, PROVENANCE_FIELDS,

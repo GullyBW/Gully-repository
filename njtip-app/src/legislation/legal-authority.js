@@ -258,6 +258,171 @@ class LegalAuthorityRegistry {
   }
 }
 
+// --- Legal dependency intelligence (Phase 16, Part 9) ----------------------------------------------
+//
+// `state()` answers one capability's question. Part 9 asks the questions that only appear when you
+// look at the register as a whole — and every one of them is a way a legal basis can be wrong while
+// each individual declaration reads as fine.
+//
+// The five defects, and why each is its own finding rather than a variant of "not authorized":
+const LEGAL_DEFECTS = {
+  'missing-authority': {
+    severity: 'critical',
+    means: 'A capability requires a legal basis and nothing is recorded.',
+    detectedBy: 'a critical capability with no declaration',
+    ifIgnored: 'The capability operates and nobody can say what permits it to.',
+  },
+  'expired-authority': {
+    severity: 'critical',
+    means: 'The declaration passed its own expiry. The instrument may still stand; nothing here can say so.',
+    detectedBy: 'the declared expiry against the current time',
+    ifIgnored: 'A lapsed citation is quoted as a live one, and the lapse is invisible because nobody withdrew anything.',
+  },
+  'superseded-authority': {
+    severity: 'important',
+    means: 'An earlier declaration for the same capability was replaced by a later one and is still being cited elsewhere.',
+    detectedBy: 'more than one declaration for a capability, where an earlier instrument differs from the current one',
+    ifIgnored: 'Two answers to "what authorises this" exist, and which one somebody quotes depends on where they looked.',
+  },
+  'duplicated-authority': {
+    severity: 'important',
+    means: 'The same instrument was declared twice for the same capability. Reviewing one does not review the other.',
+    detectedBy: 'repeated instrument names within one capability',
+    ifIgnored: 'A review clears one copy, the register still shows an unreviewed declaration, and nobody can tell which is authoritative.',
+  },
+  'conflicting-authority': {
+    severity: 'critical',
+    means: 'The same instrument is declared as two different KINDS of authority, or a capability\'s basis was quietly downgraded to a weaker kind.',
+    detectedBy: 'one instrument bearing two kinds across the register, or a later declaration weaker than the one it replaced',
+    ifIgnored: 'An instrument that is constitutional in one place and a departmental policy in another can be withdrawn by whichever route is easiest.',
+  },
+};
+
+// The Part 9 analysis. Derived entirely from the register; nothing here is declared.
+function legalDependencyIntelligence(registry, { now = 0, controls = [], capabilities = null } = {}) {
+  const ir = require('../governance/institutional-resilience');
+  const required = capabilities || Object.keys(ir.CRITICAL_CAPABILITIES).sort();
+  const findings = [];
+  const add = (defect, capability, detail, extra = {}) => findings.push({
+    defect, ...LEGAL_DEFECTS[defect], capability, detail, ...extra,
+  });
+
+  // Kinds an instrument has been declared as, across the whole register. An instrument cannot be
+  // both a constitutional mandate and a departmental policy, and only a whole-register view sees it.
+  const kindsByInstrument = new Map();
+  for (const d of registry.declarations()) {
+    if (!kindsByInstrument.has(d.instrument)) kindsByInstrument.set(d.instrument, new Set());
+    kindsByInstrument.get(d.instrument).add(d.kind);
+  }
+  for (const [instrument, kinds] of [...kindsByInstrument.entries()].sort()) {
+    if (kinds.size > 1) {
+      add('conflicting-authority', null,
+        `'${instrument}' is declared as ${[...kinds].sort().join(' and ')} — an instrument cannot be two kinds of authority, because each is withdrawn a different way`,
+        { instrument, kinds: [...kinds].sort() });
+    }
+  }
+
+  for (const capability of required) {
+    const declarations = registry.declarations(capability);
+    if (!declarations.length) {
+      add('missing-authority', capability, `nothing records what permits '${capability}' to operate`);
+      continue;
+    }
+    const current = declarations[declarations.length - 1];
+    const earlier = declarations.slice(0, -1);
+    const state = registry.state(capability, { now, controls });
+
+    if (state.state === 'expired') {
+      add('expired-authority', capability, `the declaration for '${capability}' expired at ${current.expiresAt}`, { instrument: current.instrument, expiresAt: current.expiresAt });
+    }
+    // Superseded: an earlier declaration citing a DIFFERENT instrument. A re-declaration of the same
+    // instrument is a duplicate, not a supersession, and the two need different corrections.
+    for (const d of earlier) {
+      if (d.instrument !== current.instrument) {
+        add('superseded-authority', capability,
+          `'${d.instrument}' was replaced by '${current.instrument}' for '${capability}' and may still be cited elsewhere`,
+          { instrument: d.instrument, replacedBy: current.instrument });
+      }
+    }
+    // Duplicated: the same instrument recorded more than once for the same capability.
+    const counts = new Map();
+    for (const d of declarations) counts.set(d.instrument, (counts.get(d.instrument) || 0) + 1);
+    for (const [instrument, count] of [...counts.entries()].sort()) {
+      if (count > 1) add('duplicated-authority', capability, `'${instrument}' is declared ${count} times for '${capability}'; reviewing one does not review the other`, { instrument, count });
+    }
+    // Downgraded: the current basis is a WEAKER kind than one it replaced. Rank ascends as authority
+    // weakens, so a higher rank now than before is a downgrade.
+    const strongestEarlier = earlier.reduce((best, d) => (best === null || AUTHORITY_KINDS[d.kind].rank < AUTHORITY_KINDS[best].rank ? d.kind : best), null);
+    if (strongestEarlier && AUTHORITY_KINDS[current.kind].rank > AUTHORITY_KINDS[strongestEarlier].rank) {
+      add('conflicting-authority', capability,
+        `'${capability}' rested on ${strongestEarlier} authority and now rests on ${current.kind}, which is weaker — ${AUTHORITY_KINDS[current.kind].withdrawnBy}`,
+        { from: strongestEarlier, to: current.kind, downgrade: true });
+    }
+  }
+
+  const bySeverity = (s) => findings.filter((f) => f.severity === s);
+  return {
+    findings: findings.sort((a, b) => a.defect.localeCompare(b.defect) || String(a.capability).localeCompare(String(b.capability))),
+    count: findings.length,
+    defects: Object.entries(LEGAL_DEFECTS).map(([defect, d]) => ({ defect, ...d, found: findings.filter((f) => f.defect === defect).length })),
+    critical: bySeverity('critical').length, important: bySeverity('important').length,
+    byDefect: Object.fromEntries(Object.keys(LEGAL_DEFECTS).map((d) => [d, findings.filter((f) => f.defect === d).map((f) => f.capability || f.instrument)])),
+    // A clean register is a real state and is reported as such, rather than as an absence of output.
+    clean: findings.length === 0,
+    capabilitiesExamined: required.length,
+    declarationsExamined: registry.declarations().length,
+    basis: findings.length
+      ? `${findings.length} legal defect(s) across ${required.length} critical capabilities: ${bySeverity('critical').length} critical, ${bySeverity('important').length} important.`
+      : `No legal defect found across ${required.length} capabilities and ${registry.declarations().length} declaration(s). On an empty register that means only that there is nothing to be wrong — every capability is separately reported as missing an authority.`,
+    now, failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'Each defect is its own finding because each needs a different correction: a missing authority needs somebody to find one, an expired one needs a renewal, a superseded one needs citations updated, a duplicate needs a deletion, and a conflict needs a lawyer.',
+  };
+}
+
+// What falls if a named instrument is withdrawn. The question a legal adviser actually asks, and
+// which nothing could answer before: the register knew what authorised what, and never the reverse.
+function legalImpact(registry, instrument, { now = 0, controls = [] } = {}) {
+  if (!instrument) throw new Error('a legal impact analysis must name the instrument being withdrawn');
+  const ir = require('../governance/institutional-resilience');
+  const ownership = require('../governance/ownership');
+  const rows = [];
+  for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES).sort()) {
+    const declarations = registry.declarations(capability);
+    const current = declarations.length ? declarations[declarations.length - 1] : null;
+    if (!current || current.instrument !== instrument) continue;
+    const spec = ir.CRITICAL_CAPABILITIES[capability];
+    const contexts = spec.contexts || [];
+    // Alternatives are earlier declarations citing a different instrument. A capability whose only
+    // recorded basis is the instrument being withdrawn has none.
+    const alternatives = declarations.filter((d) => d.instrument !== instrument).map((d) => d.instrument);
+    rows.push({
+      capability, constitutional: !!spec.constitutional, contexts,
+      institutions: [...new Set(contexts.map((c) => (ownership.OWNERSHIP[c] || {}).responsibleAuthority).filter(Boolean))].sort(),
+      currentState: registry.state(capability, { now, controls }).state,
+      alternatives: [...new Set(alternatives)],
+      // The finding that matters: nothing else recorded would permit this capability to continue.
+      strandedWithoutAlternative: alternatives.length === 0,
+    });
+  }
+  const stranded = rows.filter((r) => r.strandedWithoutAlternative);
+  const constitutional = rows.filter((r) => r.constitutional);
+  return {
+    instrument, capabilities: rows, count: rows.length,
+    strandedCapabilities: stranded.map((r) => r.capability),
+    constitutionalCapabilities: constitutional.map((r) => r.capability),
+    affectedContexts: [...new Set(rows.flatMap((r) => r.contexts))].sort(),
+    affectedInstitutions: [...new Set(rows.flatMap((r) => r.institutions))].sort(),
+    // Withdrawal is a legal act by a legislature or a regulator. This is what it would cost, not a
+    // recommendation about whether to do it.
+    impact: rows.length
+      ? `withdrawing '${instrument}' removes the recorded legal basis for ${rows.length} capability(ies), ${constitutional.length} of them constitutional, across ${[...new Set(rows.flatMap((r) => r.institutions))].length} institution(s). ${stranded.length} would be left with no recorded alternative.`
+      : `no capability currently rests on '${instrument}', so withdrawing it removes no recorded legal basis. That is not the same as it having no effect — this register only knows what has been declared to it.`,
+    now, informationalOnly: true, authorizes: false,
+    note: 'This says what would fall, not whether the instrument should be withdrawn. Withdrawal is an act of a legislature or a regulator, and no analysis here is an argument for or against one.',
+  };
+}
+
 module.exports = {
   LegalAuthorityRegistry, AUTHORITY_KINDS, AUTHORITY_ORDER, AUTHORITY_FIELDS, AUTHORITY_STATES,
+  LEGAL_DEFECTS, legalDependencyIntelligence, legalImpact,
 };

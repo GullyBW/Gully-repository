@@ -673,7 +673,234 @@ function crossGovernmentReadiness({ authorities = null, activity = null, exercis
   };
 }
 
+// --- Cross-government workflow validation (Phase 16, Part 8) ---------------------------------------
+//
+// Part 17 assessed a RELATIONSHIP between two institutions. Part 8 asks about the thing the
+// relationship exists to carry: a complete piece of work that crosses several of them and either
+// finishes or does not.
+//
+// A workflow is DERIVED, never listed: it is the delivery path of a critical capability — the
+// capability's own bounded context plus the contexts it declares a dependency on — with the
+// accountable institution resolved at each step. A capability whose path is renamed changes its
+// workflow automatically.
+//
+// The rule Part 8 states and this section enforces:
+//
+//   UNKNOWN COLLABORATION IS NEVER SUCCESSFUL COLLABORATION. A workflow whose execution nobody has
+//   recorded has an UNKNOWN completion, which is a separate state from a workflow that ran and
+//   failed and from one that ran and finished. Reading the absence of a record as a success is the
+//   single failure this part exists to prevent.
+const WORKFLOW_DIMENSIONS = {
+  workflowCompletion: {
+    asks: 'Has this workflow ever actually run from end to end?',
+    evidencedBy: 'a recorded governance act at every step, by somebody accountable for that step',
+    ifUnknown: 'Nobody knows whether the work can cross the institutions it has to cross.',
+  },
+  legalCompatibility: {
+    asks: 'Is every hand-off legally permitted?',
+    evidencedBy: 'a reviewed legal authority covering the capability the workflow delivers',
+    ifUnknown: 'The work crosses institutions and nothing states what permits it to.',
+  },
+  operationalCompatibility: {
+    asks: 'Can the steps actually run in the order the workflow needs?',
+    evidencedBy: 'each step\'s context declaring a dependency on the one before it',
+    ifUnknown: 'The sequence exists on a diagram and nothing says the systems support it.',
+  },
+  governanceCompatibility: {
+    asks: 'Do the institutions along the path agree about what may cross between them?',
+    evidencedBy: 'no governance conflict between consecutive steps held by different institutions',
+    ifUnknown: 'Each institution follows its own rules correctly and the hand-off breaches one of them.',
+  },
+  communicationEfficiency: {
+    asks: 'How many relays does a message need to cross the whole path?',
+    evidencedBy: 'the communication hops between consecutive institutions on the path',
+    ifUnknown: 'Nobody knows how long it takes to get a decision across the workflow.',
+  },
+  dependencyResilience: {
+    asks: 'If one institution on the path stops, does the workflow stop?',
+    evidencedBy: 'more than one institution able to carry each step, or a declared failover',
+    ifUnknown: 'One institution\'s bad week becomes a national capability outage.',
+  },
+};
+
+// The states a dimension can be in. `unknown` is deliberately NOT between failed and satisfied: it
+// is its own column, and it never counts as either.
+const WORKFLOW_STATES = {
+  unknown: { satisfied: false, examined: false, means: 'Nothing has been recorded either way. Unknown collaboration is never successful collaboration.' },
+  incompatible: { satisfied: false, examined: true, means: 'Examined, and something on the path actively prevents it.' },
+  partial: { satisfied: false, examined: true, means: 'Examined, and some of what this dimension needs is present.' },
+  satisfied: { satisfied: true, examined: true, means: 'Examined, and everything this dimension needs is recorded.' },
+};
+
+// The path a capability's delivery actually takes, derived from the architecture.
+function workflowPath(capability) {
+  const ir = require('./institutional-resilience');
+  const spec = ir.CRITICAL_CAPABILITIES[capability];
+  if (!spec) throw new Error(`unknown critical capability '${capability}'`);
+  const steps = [];
+  const seen = new Set();
+  for (const ctx of spec.contexts || []) {
+    // The capability's own context first, then everything it declares a dependency on. Deterministic
+    // and shallow on purpose: a transitive closure would make every workflow the whole estate.
+    for (const c of [ctx, ...(contextMap.describe(ctx).dependsOn || []).map((d) => d.context).sort()]) {
+      if (seen.has(c) || !ownership.OWNERSHIP[c]) continue;
+      seen.add(c);
+      steps.push({ context: c, institution: agencyOf(c), zone: contextMap.zoneGovernance(c).zone });
+    }
+  }
+  return steps;
+}
+
+function validateWorkflow(capability, { authorities = null, activity = null, exercises = null, controls = [], now = 0 } = {}) {
+  const ir = require('./institutional-resilience');
+  const spec = ir.CRITICAL_CAPABILITIES[capability];
+  const steps = workflowPath(capability);
+  const institutions = [...new Set(steps.map((s) => s.institution))];
+  const dimension = (id, state, detail, findings = []) => ({
+    dimension: id, ...WORKFLOW_DIMENSIONS[id], state, ...WORKFLOW_STATES[state], detail, findings,
+  });
+
+  // 1. Completion. Only answerable from a register of who actually did what, and it is empty.
+  let completion;
+  if (!activity) {
+    completion = dimension('workflowCompletion', 'unknown',
+      'no activity register was supplied — whether this workflow has ever run end to end is unknown, and unknown is not successful');
+  } else {
+    const acts = activity.acts ? activity.acts() : [];
+    const covered = steps.filter((s) => acts.some((a) => a.subsystem === s.context));
+    const state = covered.length === steps.length ? 'satisfied' : covered.length ? 'partial' : 'incompatible';
+    completion = dimension('workflowCompletion', state,
+      `${covered.length} of ${steps.length} step(s) have a recorded governance act`,
+      steps.filter((s) => !covered.includes(s)).map((s) => `no recorded act at '${s.context}' (${s.institution})`));
+  }
+
+  // 2. Legal compatibility — the capability's own authority, since that is what permits the whole path.
+  let legal;
+  if (!authorities) {
+    legal = dimension('legalCompatibility', 'unknown',
+      `no legal authority register was supplied — what permits '${capability}' to cross ${institutions.length} institution(s) is unknown`);
+  } else {
+    const state = authorities.state(capability, { now, controls });
+    legal = dimension('legalCompatibility', state.authorized ? 'satisfied' : state.state === 'unknown' ? 'unknown' : 'incompatible',
+      state.reason, state.authorized ? [] : [`'${capability}': ${state.reason}`]);
+  }
+
+  // 3. Operational compatibility — does each step actually depend on the one before it?
+  const breaks = [];
+  for (let i = 1; i < steps.length; i += 1) {
+    const prev = steps[i - 1], cur = steps[i];
+    const linked = (contextMap.describe(prev.context).dependsOn || []).some((d) => d.context === cur.context)
+      || (contextMap.describe(cur.context).dependsOn || []).some((d) => d.context === prev.context);
+    if (!linked) breaks.push(`'${prev.context}' and '${cur.context}' are consecutive on this path and neither declares a dependency on the other`);
+  }
+  const operational = dimension('operationalCompatibility',
+    steps.length < 2 ? 'unknown' : breaks.length ? 'partial' : 'satisfied',
+    steps.length < 2 ? 'the path has fewer than two steps, so there is no sequence to support'
+      : breaks.length ? `${breaks.length} consecutive pair(s) with no declared dependency`
+        : `all ${steps.length - 1} consecutive pair(s) are linked by a declared dependency`,
+    breaks);
+
+  // 4. Governance compatibility — between consecutive steps held by DIFFERENT institutions.
+  const conflicts = [];
+  for (let i = 1; i < steps.length; i += 1) {
+    if (steps[i - 1].institution === steps[i].institution) continue;
+    const g = governanceInteroperability(steps[i - 1].institution, steps[i].institution);
+    for (const f of g.findings) conflicts.push(`${steps[i - 1].context} → ${steps[i].context}: ${f}`);
+  }
+  const crossings = steps.slice(1).filter((s, i) => steps[i].institution !== s.institution).length;
+  const governance = dimension('governanceCompatibility',
+    crossings === 0 ? 'satisfied' : conflicts.length ? 'incompatible' : 'satisfied',
+    crossings === 0 ? 'every step is held by the same institution, so no rule has to reconcile with another'
+      : conflicts.length ? `${conflicts.length} conflict(s) across ${crossings} institutional crossing(s)`
+        : `${crossings} institutional crossing(s) and no recorded rule conflicts with another`,
+    conflicts);
+
+  // 5. Communication efficiency — relays needed to cross the whole path.
+  const hops = [];
+  let unreachable = 0;
+  for (let i = 1; i < steps.length; i += 1) {
+    if (steps[i - 1].institution === steps[i].institution) continue;
+    const c = communicationReadiness(steps[i - 1].institution, steps[i].institution);
+    if (c.state === 'blocked') unreachable += 1;
+    else hops.push(c.hops);
+  }
+  const totalHops = hops.reduce((a, b) => a + b, 0);
+  const communication = dimension('communicationEfficiency',
+    crossings === 0 ? 'satisfied' : unreachable ? 'incompatible' : hops.some((h) => h > 1) ? 'partial' : 'satisfied',
+    crossings === 0 ? 'no institutional crossing, so no message has to travel'
+      : unreachable ? `${unreachable} crossing(s) where the two institutions cannot reach each other at all`
+        : `${totalHops} relay(s) across ${crossings} institutional crossing(s)`,
+    unreachable ? [`${unreachable} crossing(s) on this workflow have no recorded communication path`] : []);
+
+  // 6. Dependency resilience — could anything else carry a step? Every step on this estate rests on
+  // exactly one institution, so the honest answer is 'partial' with the holders named, and it only
+  // becomes 'incompatible' when one institution holds the entire path.
+  const resilience = dimension('dependencyResilience',
+    steps.length < 2 ? 'unknown' : institutions.length === 1 ? 'incompatible' : 'partial',
+    steps.length < 2 ? 'the path has one step, so there is nothing to lose'
+      : institutions.length === 1 ? `every step is held by '${institutions[0]}' — one institution's bad week stops this workflow entirely`
+        : `${institutions.length} institution(s) hold ${steps.length} step(s); each step rests on exactly one of them, and no failover between institutions is declared`,
+    institutions.map((i) => `'${i}' holds ${steps.filter((s) => s.institution === i).length} step(s) that nothing else on this path can carry`));
+
+  const dimensions = [completion, legal, operational, governance, communication, resilience];
+  const unknown = dimensions.filter((d) => d.state === 'unknown');
+  const failing = dimensions.filter((d) => d.examined && !d.satisfied);
+  return {
+    capability, constitutional: !!spec.constitutional,
+    steps, stepCount: steps.length,
+    institutions, institutionCount: institutions.length,
+    zones: [...new Set(steps.map((s) => s.zone))].sort(),
+    crossesConstitutionalSeparation: new Set(steps.map((s) => s.zone)).size > 1,
+    dimensions,
+    unknownDimensions: unknown.map((d) => d.dimension),
+    failingDimensions: failing.map((d) => d.dimension),
+    findings: dimensions.flatMap((d) => d.findings),
+    // THE PART 8 RULE. Validated requires every dimension EXAMINED and satisfied; an unknown one
+    // leaves the workflow unvalidated rather than passing.
+    validated: dimensions.every((d) => d.satisfied),
+    examined: dimensions.every((d) => d.examined),
+    verdict: dimensions.every((d) => d.satisfied) ? 'validated'
+      : unknown.length ? 'unvalidated' : 'invalid',
+    basis: unknown.length
+      ? `${unknown.length} of ${dimensions.length} dimensions could not be examined at all. This workflow is UNVALIDATED — not failed, and certainly not successful.`
+      : failing.length ? `examined on all ${dimensions.length} dimensions; ${failing.length} prevent it: ${failing.map((d) => d.dimension).join(', ')}`
+        : `examined and satisfied on all ${dimensions.length} dimensions`,
+    now, informationalOnly: true, authorizes: false,
+  };
+}
+
+function workflowValidation({ authorities = null, activity = null, exercises = null, controls = [], now = 0 } = {}) {
+  const ir = require('./institutional-resilience');
+  const rows = Object.keys(ir.CRITICAL_CAPABILITIES).sort()
+    .map((c) => validateWorkflow(c, { authorities, activity, exercises, controls, now }));
+  const byDimension = Object.keys(WORKFLOW_DIMENSIONS).map((id) => {
+    const states = rows.map((r) => r.dimensions.find((d) => d.dimension === id).state);
+    return {
+      dimension: id, ...WORKFLOW_DIMENSIONS[id],
+      counts: Object.fromEntries(Object.keys(WORKFLOW_STATES).map((s) => [s, states.filter((x) => x === s).length])),
+    };
+  });
+  return {
+    workflows: rows, count: rows.length,
+    dimensions: byDimension, states: Object.entries(WORKFLOW_STATES).map(([state, s]) => ({ state, ...s })),
+    validated: rows.filter((r) => r.validated).map((r) => r.capability),
+    unvalidated: rows.filter((r) => r.verdict === 'unvalidated').map((r) => r.capability),
+    invalid: rows.filter((r) => r.verdict === 'invalid').map((r) => r.capability),
+    crossZoneWorkflows: rows.filter((r) => r.crossesConstitutionalSeparation).map((r) => r.capability),
+    // Counted apart at the top level too, so the headline cannot become "mostly invalid" when the
+    // truth is "mostly unexamined".
+    unvalidatedCount: rows.filter((r) => r.verdict === 'unvalidated').length,
+    invalidCount: rows.filter((r) => r.verdict === 'invalid').length,
+    validationRate: rows.length ? +(rows.filter((r) => r.validated).length / rows.length).toFixed(4) : null,
+    measurable: { workflowCompletion: activity !== null, legalCompatibility: authorities !== null },
+    findings: rows.flatMap((r) => r.findings),
+    informationalOnly: true, authorizes: false,
+    note: 'A workflow is the delivery path of a critical capability, derived from the architecture rather than listed. Unknown collaboration is never successful collaboration: a workflow nobody has recorded running is UNVALIDATED, which is a separate state from one that ran and failed.',
+  };
+}
+
 module.exports = {
+  WORKFLOW_DIMENSIONS, WORKFLOW_STATES, workflowPath, validateWorkflow, workflowValidation,
   COORDINATION_DIMENSIONS, READINESS_BANDS,
   agencies, agencyOf, informationSharing, approvalDependencies,
   communicationPath, demonstratedCoordination, pairReadiness, interAgencyRisks, collaborationReadiness,

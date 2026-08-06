@@ -8398,6 +8398,297 @@ module.exports = [
     if (later.authorizes !== false) v.push('the legal dependency graph claims authority');
   }),
 
+  fit('APP-FIT-LEGAL-DEPENDENCY-INTELLIGENCE', 'Five legal defects are each their own finding, and withdrawing an instrument names what it would strand', (v) => {
+    const la = require('../src/legislation/legal-authority');
+    const ir = require('../src/governance/institutional-resilience');
+    const DAY = 24 * 3600_000, YEAR = 365 * DAY, NOW = 400 * DAY;
+
+    // --- Five defects, each with its own correction --------------------------------------------
+    for (const required of ['missing-authority', 'conflicting-authority', 'expired-authority', 'superseded-authority', 'duplicated-authority']) {
+      if (!la.LEGAL_DEFECTS[required]) v.push(`legal defect '${required}' is not detected`);
+    }
+    if (Object.keys(la.LEGAL_DEFECTS).length !== 5) v.push('legal dependency intelligence does not carry exactly five defects');
+    for (const [id, d] of Object.entries(la.LEGAL_DEFECTS)) {
+      if (!d.means || !d.detectedBy || !d.ifIgnored) v.push(`legal defect '${id}' does not say what it means, how it is detected, or what ignoring it costs`);
+      if (!['critical', 'important'].includes(d.severity)) v.push(`legal defect '${id}' has no severity`);
+    }
+
+    // --- An empty register: every capability MISSING, and nothing else invented ----------------
+    const empty = new la.LegalAuthorityRegistry({ clock: () => NOW });
+    const blank = la.legalDependencyIntelligence(empty, { now: NOW });
+    if (blank.byDefect['missing-authority'].length !== Object.keys(ir.CRITICAL_CAPABILITIES).length) {
+      v.push('an empty register did not report every critical capability as missing an authority');
+    }
+    for (const defect of ['expired-authority', 'superseded-authority', 'duplicated-authority', 'conflicting-authority']) {
+      if (blank.byDefect[defect].length) v.push(`an empty register reported a '${defect}' finding, which cannot exist with no declarations`);
+    }
+    if (blank.clean) v.push('an empty register reported itself clean while every capability lacks an authority');
+    if (blank.authorizes !== false) v.push('the legal dependency intelligence report claims authority');
+
+    // --- Each defect is detectable ON ITS OWN, fed a crafted register --------------------------
+    const declare = (reg, capability, instrument, kind = 'legislation', expiresAt = NOW + 10 * YEAR) => reg.declare(capability, {
+      kind, instrument, approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 3650, expiresAt,
+      evidence: ['APP-FIT-LEGISLATIVE-IMPACT'], scope: 'the capability as declared', declaredBy: 'Legal Informatics Team', at: NOW - DAY,
+    });
+    const probe = (build) => {
+      const reg = new la.LegalAuthorityRegistry({ clock: () => NOW });
+      build(reg);
+      return la.legalDependencyIntelligence(reg, { now: NOW + 30 * DAY });
+    };
+    const expired = probe((r) => declare(r, 'evidence-custody', 'Act A', 'legislation', NOW + DAY));
+    if (!expired.byDefect['expired-authority'].includes('evidence-custody')) v.push('an expired declaration was not detected');
+    const duplicated = probe((r) => { declare(r, 'evidence-custody', 'Act A'); declare(r, 'evidence-custody', 'Act A'); });
+    if (!duplicated.byDefect['duplicated-authority'].includes('evidence-custody')) v.push('the same instrument declared twice for one capability was not detected');
+    if (duplicated.byDefect['superseded-authority'].includes('evidence-custody')) v.push('a re-declaration of the same instrument was reported as a supersession — the two need different corrections');
+    const superseded = probe((r) => { declare(r, 'evidence-custody', 'Act A'); declare(r, 'evidence-custody', 'Act B'); });
+    if (!superseded.byDefect['superseded-authority'].includes('evidence-custody')) v.push('a replaced instrument was not reported as superseded');
+    // An instrument cannot be two kinds of authority, because each is withdrawn a different way.
+    const conflicting = probe((r) => { declare(r, 'evidence-custody', 'Act A', 'constitutional'); declare(r, 'anonymous-reporting', 'Act A', 'policy'); });
+    if (!conflicting.byDefect['conflicting-authority'].length) v.push('one instrument declared as two different kinds was not detected');
+    // …and a capability quietly downgraded to a weaker basis is the same defect from the other side.
+    const downgraded = probe((r) => { declare(r, 'evidence-custody', 'Act A', 'constitutional'); declare(r, 'evidence-custody', 'Act B', 'policy'); });
+    if (!downgraded.findings.some((f) => f.downgrade)) v.push('a capability whose legal basis was downgraded to a weaker kind was not detected');
+
+    // --- THE CLEAN PATH: a well-formed register produces no defect beyond the missing ones -----
+    const clean = new la.LegalAuthorityRegistry({ clock: () => NOW });
+    for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) {
+      declare(clean, capability, `Instrument for ${capability}`);
+      clean.review(capability, { by: 'Attorney General Chambers', at: NOW });
+    }
+    const sound = la.legalDependencyIntelligence(clean, { now: NOW });
+    if (!sound.clean) v.push(`a well-formed register still reported defects: ${sound.findings.map((f) => f.defect).join(', ')}`);
+    if (sound.count !== 0) v.push('a well-formed register produced findings');
+
+    // --- Impact: what a withdrawal would strand -----------------------------------------------
+    let unnamed = false;
+    try { la.legalImpact(clean, null, { now: NOW }); } catch (_) { unnamed = true; }
+    if (!unnamed) v.push('a legal impact analysis was run without naming the instrument being withdrawn');
+    const impact = la.legalImpact(clean, 'Instrument for evidence-custody', { now: NOW });
+    if (impact.count !== 1) v.push('the impact analysis did not find the capability resting on the instrument');
+    if (!impact.strandedCapabilities.includes('evidence-custody')) v.push('a capability with no recorded alternative was not reported as stranded');
+    if (!impact.constitutionalCapabilities.includes('evidence-custody')) v.push('a constitutional capability was not named as constitutional in the impact analysis');
+    if (!impact.affectedInstitutions.length) v.push('the impact analysis named no affected institution');
+    // An instrument nothing rests on has no recorded impact, and the report says what that does and
+    // does not mean rather than reporting a clean bill of health.
+    const none = la.legalImpact(clean, 'An Act nobody cited', { now: NOW });
+    if (none.count !== 0) v.push('an uncited instrument was reported as supporting capabilities');
+    if (!/only knows what has been declared to it/.test(none.impact)) v.push('an uncited instrument was reported as having no effect rather than no RECORDED effect');
+    // A capability with a recorded alternative is not stranded.
+    const withAlternative = new la.LegalAuthorityRegistry({ clock: () => NOW });
+    declare(withAlternative, 'evidence-custody', 'Old Act');
+    declare(withAlternative, 'evidence-custody', 'New Act');
+    const alt = la.legalImpact(withAlternative, 'New Act', { now: NOW });
+    if (alt.strandedCapabilities.length) v.push('a capability with an earlier recorded instrument was reported as stranded');
+    if (!alt.capabilities[0].alternatives.includes('Old Act')) v.push('the recorded alternative was not named');
+    if (impact.authorizes !== false) v.push('the legal impact analysis claims authority');
+    if (!/not whether the instrument should be withdrawn/.test(impact.note)) v.push('the impact analysis does not state that it is not an argument for or against withdrawal');
+  }),
+
+  fit('APP-FIT-WORKFLOW-VALIDATION', 'An inter-agency workflow nobody has recorded running is unvalidated, never successful', (v) => {
+    const ca = require('../src/governance/cross-agency');
+    const ir = require('../src/governance/institutional-resilience');
+    const own = require('../src/governance/ownership');
+    const { LegalAuthorityRegistry } = require('../src/legislation/legal-authority');
+    const DAY = 24 * 3600_000, YEAR = 365 * DAY, NOW = 400 * DAY;
+
+    // --- Six dimensions, and unknown is its own state ------------------------------------------
+    for (const required of ['workflowCompletion', 'legalCompatibility', 'operationalCompatibility', 'governanceCompatibility', 'communicationEfficiency', 'dependencyResilience']) {
+      if (!ca.WORKFLOW_DIMENSIONS[required]) v.push(`workflow dimension '${required}' is not validated`);
+    }
+    if (Object.keys(ca.WORKFLOW_DIMENSIONS).length !== 6) v.push('workflow validation does not carry exactly six dimensions');
+    for (const [id, d] of Object.entries(ca.WORKFLOW_DIMENSIONS)) {
+      if (!d.asks || !d.asks.endsWith('?') || !d.evidencedBy || !d.ifUnknown) v.push(`workflow dimension '${id}' does not state its question, its evidence or what an unknown costs`);
+    }
+    // THE PART 8 RULE, in the state table: unknown is neither satisfied nor examined.
+    if (ca.WORKFLOW_STATES.unknown.satisfied || ca.WORKFLOW_STATES.unknown.examined) v.push('an unknown dimension counts as satisfied or as examined');
+    if (Object.entries(ca.WORKFLOW_STATES).filter(([, s]) => s.satisfied).map(([id]) => id).join(',') !== 'satisfied') {
+      v.push('a state other than "satisfied" counts as satisfying a dimension');
+    }
+
+    // --- The path is DERIVED from the architecture, never listed -------------------------------
+    const contextMap = require('../src/architecture/context-map');
+    for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) {
+      const steps = ca.workflowPath(capability);
+      if (!steps.length) v.push(`capability '${capability}' has no derived workflow path`);
+      for (const s of steps) {
+        if (!contextMap.ids().includes(s.context)) v.push(`workflow step '${s.context}' is not a bounded context`);
+        if (!s.institution) v.push(`workflow step '${s.context}' resolves to no accountable institution`);
+        if (!s.zone) v.push(`workflow step '${s.context}' has no declared constitutional zone`);
+      }
+      // The capability's own context must be the first step, or the path is describing something else.
+      if (steps[0].context !== (ir.CRITICAL_CAPABILITIES[capability].contexts || [])[0]) {
+        v.push(`the workflow for '${capability}' does not start at the capability's own context`);
+      }
+    }
+    let unknownCapability = false;
+    try { ca.workflowPath('a feeling'); } catch (_) { unknownCapability = true; }
+    if (!unknownCapability) v.push('a workflow path was derived for a capability that does not exist');
+
+    // --- With nothing supplied: UNVALIDATED, never validated and never invalid -----------------
+    const blind = ca.workflowValidation({});
+    if (blind.count !== Object.keys(ir.CRITICAL_CAPABILITIES).length) v.push('not every critical capability was validated as a workflow');
+    if (blind.validated.length) v.push('a workflow was validated with no activity register and no legal register');
+    if (blind.validationRate !== 0) v.push('an unvalidated estate did not report a rate of 0');
+    if (blind.unvalidatedCount !== blind.count) v.push('a workflow with unknown dimensions was reported as invalid rather than unvalidated');
+    for (const w of blind.workflows) {
+      if (w.verdict !== 'unvalidated') v.push(`workflow '${w.capability}' reported '${w.verdict}' with two dimensions unexaminable`);
+      if (!w.unknownDimensions.includes('workflowCompletion')) v.push(`workflow '${w.capability}' did not report completion as unknown with no activity register`);
+      if (!w.unknownDimensions.includes('legalCompatibility')) v.push(`workflow '${w.capability}' did not report legal compatibility as unknown with no legal register`);
+      if (w.examined) v.push(`workflow '${w.capability}' claimed to be fully examined with unknown dimensions`);
+      if (!/never successful/i.test(w.basis) && !/UNVALIDATED/.test(w.basis)) v.push(`workflow '${w.capability}' does not state that unknown is not success`);
+    }
+    if (blind.authorizes !== false) v.push('the workflow validation report claims authority');
+
+    // --- Completion becomes EXAMINED once a register exists, and partial is not satisfied ------
+    const activity = new own.ActivityRegister({ clock: () => NOW });
+    const withEmptyRegister = ca.workflowValidation({ activity, now: NOW });
+    const first = withEmptyRegister.workflows[0];
+    const completion = first.dimensions.find((d) => d.dimension === 'workflowCompletion');
+    if (completion.state === 'unknown') v.push('a supplied but empty activity register left completion unknown — somebody looked, and found nothing');
+    if (completion.satisfied) v.push('a workflow with no recorded act at any step was reported complete');
+    if (!completion.examined) v.push('a consulted activity register did not make completion an examined dimension');
+    if (withEmptyRegister.measurable.workflowCompletion !== true) v.push('supplying an activity register did not make completion measurable');
+
+    // --- THE SUCCESS PATH: every step acted on, and completion is satisfied --------------------
+    const full = new own.ActivityRegister({ clock: () => NOW });
+    const path = ca.workflowPath(first.capability);
+    for (const step of path) {
+      full.recordAct({ person: own.OWNERSHIP[step.context].operationalOwner, act: 'review', subsystem: step.context, at: NOW - DAY });
+    }
+    const acted = ca.validateWorkflow(first.capability, { activity: full, now: NOW });
+    const done = acted.dimensions.find((d) => d.dimension === 'workflowCompletion');
+    if (!done.satisfied) v.push(`a workflow with a recorded act at every step was not reported complete: ${done.detail}`);
+    if (done.findings.length) v.push('a complete workflow still named missing steps');
+
+    // --- Legal compatibility clears only on a REVIEWED authority ------------------------------
+    const authorities = new LegalAuthorityRegistry({ clock: () => NOW });
+    for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) {
+      authorities.declare(capability, {
+        kind: 'legislation', instrument: 'an instrument recorded by the institution',
+        approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 3650, expiresAt: NOW + 10 * YEAR,
+        evidence: ['APP-FIT-LEGISLATIVE-IMPACT'], scope: 'the capability as declared', declaredBy: 'Legal Informatics Team', at: NOW - DAY,
+      });
+    }
+    const declaredOnly = ca.validateWorkflow(first.capability, { authorities, now: NOW });
+    const legalDeclared = declaredOnly.dimensions.find((d) => d.dimension === 'legalCompatibility');
+    if (legalDeclared.satisfied) v.push('an unreviewed legal declaration satisfied legal compatibility');
+    if (legalDeclared.state === 'unknown') v.push('a recorded but unreviewed authority left legal compatibility unknown — those are different findings');
+    for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) authorities.review(capability, { by: 'Attorney General Chambers', at: NOW });
+    const reviewed = ca.validateWorkflow(first.capability, { authorities, now: NOW });
+    if (!reviewed.dimensions.find((d) => d.dimension === 'legalCompatibility').satisfied) {
+      v.push('a reviewed legal authority did not satisfy legal compatibility — the bar is unreachable');
+    }
+
+    // --- The derived dimensions actually discriminate on the real estate ----------------------
+    const derivedStates = new Set(blind.workflows.flatMap((w) => w.dimensions
+      .filter((d) => ['operationalCompatibility', 'governanceCompatibility', 'communicationEfficiency', 'dependencyResilience'].includes(d.dimension))
+      .map((d) => d.state)));
+    if (derivedStates.size < 2) v.push('every derived workflow dimension reported the same state — the checks do not discriminate');
+    // A workflow crossing institutions that cannot reach each other is a real finding, not a gap.
+    const unreachable = blind.workflows.filter((w) => w.dimensions.find((d) => d.dimension === 'communicationEfficiency').state === 'incompatible');
+    if (!unreachable.length) v.push('no workflow was found crossing institutions that cannot reach each other, on an estate whose governance graph is disconnected');
+    for (const w of unreachable) if (!w.findings.length) v.push(`workflow '${w.capability}' is communication-incompatible and names no finding`);
+    if (!blind.crossZoneWorkflows.length) v.push('no workflow was found crossing a constitutional separation');
+  }),
+
+  fit('APP-FIT-VALIDATION-WORKSHOP', 'An unresolved issue survives the close, and a corrective action with no owner or date blocks it', (v) => {
+    const inst = require('../src/assurance/institutional');
+
+    // --- Four outcome kinds, each stating what it must carry ----------------------------------
+    for (const required of ['finding', 'decision', 'unresolved-issue', 'corrective-action']) {
+      if (!inst.WORKSHOP_OUTCOMES[required]) v.push(`workshop outcome '${required}' is not recordable`);
+    }
+    if (Object.keys(inst.WORKSHOP_OUTCOMES).length !== 4) v.push('a validation workshop does not carry exactly four outcome kinds');
+    for (const [id, o] of Object.entries(inst.WORKSHOP_OUTCOMES)) {
+      if (!Array.isArray(o.mustHave) || !o.means) v.push(`workshop outcome '${id}' does not state what it must carry or what it means`);
+      // THE RULE, in the data: no outcome resolves the workshop by being recorded.
+      if (o.resolvesWorkshop) v.push(`workshop outcome '${id}' claims to resolve the workshop — recording an outcome is not resolving it`);
+    }
+    if (!inst.WORKSHOP_OUTCOMES['corrective-action'].mustHave.includes('owner')) v.push('a corrective action does not require an owner');
+    if (!inst.WORKSHOP_OUTCOMES['corrective-action'].mustHave.includes('dueAt')) v.push('a corrective action does not require a due date');
+
+    // --- Convening is refused without objectives, a facilitator, or a second participant -------
+    const reg = new inst.ValidationWorkshop({ clock: () => 0 });
+    const base = { subject: 'cross-agency readiness', objectives: ['confirm the escalation chain'], participants: ['A', 'B'], facilitator: 'Operations Review Board' };
+    for (const [what, override] of [
+      ['no subject', { subject: undefined }],
+      ['no facilitator', { facilitator: undefined }],
+      ['no declared objectives', { objectives: [] }],
+      // One person reviewing their own work is a review, not a validation.
+      ['one participant', { participants: ['A'] }],
+    ]) {
+      let refused = false;
+      try { reg.convene({ ...base, ...override }); } catch (_) { refused = true; }
+      if (!refused) v.push(`a validation workshop was convened with ${what}`);
+    }
+
+    const w = reg.convene({ ...base, objectives: ['confirm the escalation chain', 'agree who calls whom'], participants: ['A', 'B', 'C'], at: 0 });
+    // Each outcome kind refuses what it must carry.
+    for (const [what, args] of [
+      ['a finding with no detail', { outcome: 'finding' }],
+      ['a decision with nobody attributed', { outcome: 'decision', detail: 'agreed something' }],
+      ['a corrective action with no owner', { outcome: 'corrective-action', detail: 'fix it', dueAt: 100 }],
+      ['a corrective action with no due date', { outcome: 'corrective-action', detail: 'fix it', owner: 'OBS' }],
+      ['an unknown outcome kind', { outcome: 'a vibe', detail: 'x' }],
+    ]) {
+      let refused = false;
+      try { reg.record(w.id, args); } catch (_) { refused = true; }
+      if (!refused) v.push(`a workshop recorded ${what}`);
+    }
+    let undeclaredObjective = false;
+    try { reg.record(w.id, { outcome: 'finding', detail: 'x', objective: 'something nobody declared' }); } catch (_) { undeclaredObjective = true; }
+    if (!undeclaredObjective) v.push('an outcome cited an objective the workshop never declared');
+
+    reg.record(w.id, { outcome: 'finding', detail: 'the ISRB cluster shares no forum with the rest of government', objective: 'confirm the escalation chain' });
+    reg.record(w.id, { outcome: 'decision', detail: 'raise it at the next Oversight Board', by: 'Operations Review Board', objective: 'confirm the escalation chain' });
+    reg.record(w.id, { outcome: 'unresolved-issue', detail: 'nobody could say who chairs a joint incident' });
+    reg.record(w.id, { outcome: 'corrective-action', detail: 'add the ISRB to the Oversight Board agenda', owner: 'Oversight Board Secretariat', dueAt: 100 });
+
+    // --- A workshop cannot close over an action nobody is late for ----------------------------
+    // (The register refuses such an action at recording time, so the close guard is the second net.)
+    let unattributedClose = false;
+    try { reg.close(w.id, {}); } catch (e) { unattributedClose = !!e.failClosed; }
+    if (!unattributedClose) v.push('a validation workshop was closed by nobody');
+    reg.close(w.id, { by: 'Operations Review Board', at: 10 });
+    let recordedAfterClose = false;
+    try { reg.record(w.id, { outcome: 'finding', detail: 'thought of later' }); } catch (e) { recordedAfterClose = !!e.failClosed; }
+    if (!recordedAfterClose) v.push('an outcome was added after the workshop closed — the room never saw it');
+
+    // --- THE RULE: closing does not resolve anything ------------------------------------------
+    const afterClose = reg.report({ now: 200 });
+    const row = afterClose.workshops[0];
+    if (row.state !== 'closed') v.push('a closed workshop was not reported as closed');
+    if (row.finished) v.push('a workshop closed with an unresolved issue was reported as finished');
+    if (row.unresolvedIssues.length !== 1) v.push('an unresolved issue did not survive the close');
+    if (row.overdueActions.length !== 1) v.push('a corrective action past its due date was not reported as overdue');
+    if (!/does not resolve them/.test(row.reason)) v.push('a closed workshop with open issues does not say that closing did not resolve them');
+    // An objective nothing addressed is named, rather than assumed met by the workshop happening.
+    if (!row.objectivesUnaddressed.includes('agree who calls whom')) v.push('an objective no outcome cited was not reported as unaddressed');
+    if (!afterClose.unaddressedObjectives.length) v.push('the report does not carry unaddressed objectives');
+
+    // --- A follow-up review is by somebody OTHER than the facilitator -------------------------
+    let facilitatorReviewed = false;
+    try { reg.followUp(w.id, { reviewedBy: 'Operations Review Board' }); } catch (e) { facilitatorReviewed = !!e.failClosed; }
+    if (!facilitatorReviewed) v.push('the facilitator reviewed whether their own workshop\'s actions landed');
+    let reviewedBeforeClose = false;
+    const open = reg.convene({ ...base, at: 0 });
+    try { reg.followUp(open.id, { reviewedBy: 'Auditor' }); } catch (e) { reviewedBeforeClose = !!e.failClosed; }
+    if (!reviewedBeforeClose) v.push('a workshop that had not closed was followed up');
+
+    // --- THE SUCCESS PATH: a follow-up resolves the issue and the action ----------------------
+    reg.followUp(w.id, { reviewedBy: 'Auditor General', resolvedIndexes: [2, 3], at: 210 });
+    const finished = reg.report({ now: 300 });
+    if (finished.finished !== 1) v.push('a workshop whose issue and action were resolved by a follow-up was not reported as finished');
+    if (finished.unresolvedIssueCount !== 0) v.push('a resolved issue was still reported as unresolved');
+    if (finished.overdueActionCount !== 0) v.push('a resolved action was still reported as overdue');
+
+    // --- An empty register says what has not happened rather than reporting health ------------
+    const blank = new inst.ValidationWorkshop({ clock: () => 0 }).report({ now: 0 });
+    if (blank.count !== 0 || blank.measurable) v.push('a fresh workshop register is not empty');
+    if (!/never sat down and looked at how it actually works/.test(blank.basis)) v.push('an empty workshop register does not say what has not happened');
+    if (blank.authorizes !== false) v.push('the validation workshop report claims authority');
+  }),
+
   fit('APP-FIT-CONTROL-PERFORMANCE', 'Precision and recall are reported side by side and never combined, and an unobserved control has unknown performance', (v) => {
     const ce = require('../src/assurance/control-effectiveness');
     const MINUTE = 60_000, HOUR = 3600_000, DAY = 24 * HOUR;
