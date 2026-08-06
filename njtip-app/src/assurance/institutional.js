@@ -1334,10 +1334,28 @@ const EXPLANATION_HOPS = {
     resolvedFrom: 'the declared consistency stance for the bounded context',
     ifBroken: 'The context operates under a default nobody chose.',
   },
+  // --- Phase 17, Part 5 ---------------------------------------------------------------------------
+  //
+  // The hop the Phase 16 chain could not make. A rule can rest on a recorded decision and still have
+  // no legal basis: an ADR says who chose it, not what permits it. Placed between policy and ADR
+  // because that is the order the question is actually asked in — what permits this, and then who
+  // decided to do it that way.
+  'legal-authority': {
+    answers: 'What permits the institution to operate this capability at all?',
+    resolvedFrom: 'the legal authority register entry for the capability the owning context delivers',
+    ifBroken: 'A rule is enforced, decided and evidenced, and nothing says the institution is entitled to do it.',
+  },
   adr: {
     answers: 'Which recorded decision put that rule there?',
     resolvedFrom: 'the ADR the stance cites, verified to exist in docs/adr/',
     ifBroken: 'A rule is being enforced and nobody can say who decided it or why.',
+  },
+  // The second Phase 17 hop, and the one that changes what a chain MEANS. Everything above says the
+  // figure is derivable today. This asks whether it has ever been compared against what happened.
+  'historical-records': {
+    answers: 'Has this figure ever been observed over time, or is this the first time anybody looked?',
+    resolvedFrom: 'a recorded history for the panel, of at least two observations',
+    ifBroken: 'The figure has never been wrong — not because it is right, but because nothing has ever tested it.',
   },
   'source-record': {
     answers: 'Where is the record a reader can go and check?',
@@ -1345,7 +1363,10 @@ const EXPLANATION_HOPS = {
     ifBroken: 'The trail ends in a citation of something that is not there.',
   },
 };
-const EXPLANATION_ORDER = ['executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy', 'adr', 'source-record'];
+const EXPLANATION_ORDER = [
+  'executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy',
+  'legal-authority', 'adr', 'historical-records', 'source-record',
+];
 
 // The module a panel is derived from. `derivedFrom` is prose with a path in it, so the path is
 // extracted rather than assumed to be the whole string.
@@ -1355,7 +1376,7 @@ function sourceModuleOf(derivedFrom) {
 }
 
 // The chain for one executive panel. Every hop resolves or names what would resolve it.
-function explain(panel, { dashboard = null, readiness = null, evidence = null, controls = [], now = 0 } = {}) {
+function explain(panel, { dashboard = null, readiness = null, evidence = null, controls = [], authorities = null, history = null, now = 0 } = {}) {
   if (!EXECUTIVE_PANELS[panel]) throw new Error(`unknown executive panel '${panel}'`);
   const contextMap = require('../architecture/context-map');
   const multiRegion = require('../twin2/multi-region');
@@ -1421,7 +1442,25 @@ function explain(panel, { dashboard = null, readiness = null, evidence = null, c
         : 'no owning context, so no declared policy',
     stance && stance.declared ? [`${owner}: ${stance.model}`] : []);
 
-  // 6. The recorded decision behind the rule, verified to exist.
+  // 6. What permits the institution to run this at all. An ADR says who chose the rule; it does not
+  //    say the institution is entitled to operate the capability the rule governs.
+  const ir = require('../governance/institutional-resilience');
+  const capabilities = owner
+    ? Object.entries(ir.CRITICAL_CAPABILITIES).filter(([, c]) => (c.contexts || []).includes(owner)).map(([id]) => id)
+    : [];
+  const authorityStates = authorities && capabilities.length
+    ? capabilities.map((c) => ({ capability: c, ...authorities.state(c, { now, controls }) }))
+    : [];
+  // The hop resolves when the question has been ANSWERED, and "this context delivers no critical
+  // capability, so nothing attaches" is a real answer — but only if a register was actually
+  // consulted. With no register supplied nobody looked, and that is unresolved rather than fine.
+  hop('legal-authority', !!authorities && (capabilities.length === 0 || authorityStates.every((a) => a.authorized)),
+    !authorities ? 'no legal authority register was supplied, so what permits this capability to operate is unknown'
+      : !capabilities.length ? `the '${owner || 'unclaimed'}' context delivers no critical capability, so no legal authority attaches to it directly — checked against the register rather than assumed`
+        : authorityStates.map((a) => `${a.capability}: ${a.state}`).join('; '),
+    authorityStates.map((a) => a.capability));
+
+  // 7. The recorded decision behind the rule, verified to exist.
   const adrNumbers = adrGovernance.adrFiles().map((f) => Number(path.basename(f).slice(0, 4)));
   const cited = stance && stance.adr ? Number(String(stance.adr).replace(/\D/g, '')) : null;
   hop('adr', cited !== null && adrNumbers.includes(cited),
@@ -1430,7 +1469,17 @@ function explain(panel, { dashboard = null, readiness = null, evidence = null, c
         : `the stance cites ${stance.adr} and no such ADR exists`,
     cited !== null ? [stance.adr] : []);
 
-  // 7. The record a reader can actually go and open.
+  // 8. Whether this figure has ever been observed over time. Everything above establishes that the
+  //    figure is derivable TODAY; only this says whether anybody has ever checked it against what
+  //    actually happened.
+  const series = history && Array.isArray(history[panel]) ? history[panel].filter((x) => Number.isFinite(x)) : [];
+  hop('historical-records', series.length >= 2,
+    !history ? 'no history was supplied, so this figure has never been compared against anything'
+      : series.length >= 2 ? `${series.length} observation(s) recorded for '${panel}'`
+        : `'${panel}' has ${series.length} recorded observation(s); at least two are needed before it has ever been tested`,
+    series.length ? [`${panel}: ${series.length} observation(s)`] : []);
+
+  // 9. The record a reader can actually go and open.
   const exists = module ? fs.existsSync(path.join(ROOT, module)) : false;
   hop('source-record', exists,
     module ? (exists ? `${module} exists on disk` : `${module} is cited and does not exist`)
@@ -1456,8 +1505,8 @@ function explain(panel, { dashboard = null, readiness = null, evidence = null, c
 }
 
 // Part 4's report across every panel.
-function explainability({ dashboard = null, readiness = null, evidence = null, controls = [], now = 0 } = {}) {
-  const rows = Object.keys(EXECUTIVE_PANELS).sort().map((p) => explain(p, { dashboard, readiness, evidence, controls, now }));
+function explainability({ dashboard = null, readiness = null, evidence = null, controls = [], authorities = null, history = null, now = 0 } = {}) {
+  const rows = Object.keys(EXECUTIVE_PANELS).sort().map((p) => explain(p, { dashboard, readiness, evidence, controls, authorities, history, now }));
   const complete = rows.filter((r) => r.complete);
   const byHop = EXPLANATION_ORDER.map((h) => ({
     hop: h, ...EXPLANATION_HOPS[h],
@@ -1476,6 +1525,168 @@ function explainability({ dashboard = null, readiness = null, evidence = null, c
     everyValueExplainable: rows.length > 0 && complete.length === rows.length,
     now, informationalOnly: true, authorizes: false,
     note: 'Every hop is derived: the panel names its module, the context map claims the module, the readiness model owns the dimension, RACI owns the control, the context declares the stance, the stance cites the ADR, and the module is the record. Nothing here is a hand-kept mapping, so a panel that moves re-links itself. A chain is reported as broken AT its first failing hop, never as a percentage — a chain six-sevenths complete supports nothing.',
+  };
+}
+
+// --- Explanation trees (Phase 17, Part 5) ------------------------------------------------------------
+//
+// The same derivation, rendered so a reader can open one hop at a time instead of reading a
+// sentence with eight arrows in it.
+//
+// It is deliberately a VIEW of `explain`, not a second walk. Two renderings of one derivation cannot
+// disagree; two walks over the same question can, and the day they do, nobody will know which to
+// believe.
+function explanationTree(panel, options = {}) {
+  const chain = explain(panel, options);
+  // Built from the tail backwards, so each hop genuinely contains the ones below it.
+  let child = null;
+  for (const h of [...chain.hops].reverse()) {
+    child = {
+      hop: h.hop, answers: h.answers, resolved: h.resolved,
+      detail: h.detail, records: h.records,
+      ifBroken: h.resolved ? null : h.ifBroken,
+      resolvedFrom: h.resolvedFrom,
+      children: child ? [child] : [],
+      // The depth a reader has to open before the trail stops.
+      depthBelow: child ? child.depthBelow + 1 : 0,
+    };
+  }
+  return {
+    panel, question: chain.question, root: child,
+    depth: chain.hops.length,
+    complete: chain.complete, brokenAt: chain.brokenAt,
+    // How far down a reader gets before the trail stops. A tree that resolves eight of nine hops
+    // still ends somewhere, and this says where rather than how much.
+    navigableDepth: chain.resolvedHops.length,
+    consequence: chain.consequence,
+    informationalOnly: true, authorizes: false,
+    note: 'The tree is a view of the same derivation as the chain, not a second walk: two renderings of one derivation cannot disagree.',
+  };
+}
+
+// Part 5's completeness metrics, over the whole dashboard.
+//
+// The per-hop resolution rate is genuinely useful — "the legal-authority hop resolves for 20 of 22
+// panels" tells somebody exactly what to go and fix. The mean navigable depth is genuinely
+// dangerous, because a mean depth of 8.2 across chains that ALL stop before the last hop is 0%
+// explainable, and 8.2 looks like a pass. So it is reported, and it is reported with the sentence
+// that stops it being read on its own.
+function explainabilityCompleteness(options = {}) {
+  const report = explainability(options);
+  const byHop = EXPLANATION_ORDER.map((hop, index) => {
+    const resolved = report.panels.filter((p) => p.resolvedHops.includes(hop)).length;
+    return {
+      hop, position: index + 1, ...EXPLANATION_HOPS[hop],
+      resolved, panels: report.panels.length,
+      resolutionRate: report.panels.length ? +(resolved / report.panels.length).toFixed(4) : null,
+    };
+  });
+  const depths = report.panels.map((p) => p.resolvedHops.length);
+  const meanDepth = depths.length ? +(depths.reduce((a, b) => a + b, 0) / depths.length).toFixed(4) : null;
+  return {
+    ...report,
+    byHop,
+    meanNavigableDepth: meanDepth,
+    maxDepth: EXPLANATION_ORDER.length,
+    fullyExplainable: report.explainable.length,
+    depthDistribution: Object.fromEntries(
+      [...new Set(depths)].sort((a, b) => a - b).map((d) => [d, depths.filter((x) => x === d).length]),
+    ),
+    completenessBasis: `${report.explainable.length} of ${report.panels.length} chains resolve all ${EXPLANATION_ORDER.length} hops. Mean navigable depth is ${meanDepth} of ${EXPLANATION_ORDER.length} — read that alongside the chain count, never instead of it, because a chain that stops one hop short explains nothing end to end.`,
+  };
+}
+
+// --- Explainable readiness (Phase 17, Part 12) -------------------------------------------------------
+//
+// Part 13 of Phase 16 asked whether a readiness conclusion could be TRACED. Part 12 asks what a
+// reader needs in order to ARGUE with it, which is a longer list: how good the evidence is, how
+// confident it is, what it assumes, what it depends on, what is uncertain, and how it has moved.
+//
+// The facet that matters most is the last one, and it is the one nothing carried before:
+//
+//   A READINESS CONCLUSION WITH NO HISTORY HAS NEVER BEEN WRONG. Not because it is right — because
+//   nothing has ever compared it against what happened.
+const READINESS_EXPLANATION_FACETS = {
+  evidenceQuality: { asks: 'How good is the evidence behind this conclusion?', ifAbsent: 'The conclusion rests on evidence nobody has graded.' },
+  confidence: { asks: 'How confident is that evidence, and on what sample?', ifAbsent: 'A firm conclusion and a hunch look identical.' },
+  assumptions: { asks: 'What must be true for this conclusion to hold?', ifAbsent: 'The reasoning has premises and none can be disagreed with.' },
+  dependencies: { asks: 'Which other readiness dimensions does this one rest on?', ifAbsent: 'A dimension can be declared ready while what it depends on is not.' },
+  uncertainty: { asks: 'What is not known, and how much does it matter?', ifAbsent: 'Every conclusion has unknowns; one that lists none is concealing them.' },
+  historicalEvolution: { asks: 'How has this conclusion moved, and did anything verified support the move?', ifAbsent: 'A conclusion with no history has never been wrong, because nothing has ever tested it.' },
+};
+
+function explainableReadiness({
+  readiness = null, evidence = null, assumptions = null, controls = [],
+  history = {}, improvementEvidence = {}, now = 0,
+} = {}) {
+  const evidenceConfidence = require('./evidence-confidence');
+  const raci = require('../governance/raci');
+  const ran = [...new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)))].sort();
+  const ownership = raci.controlOwnership(ran).controls;
+
+  const dimensions = Object.entries(evidenceConfidence.READINESS_DIMENSIONS).map(([id, spec]) => {
+    const scored = readiness && Array.isArray(readiness.dimensions) ? readiness.dimensions.find((d) => d.dimension === id) : null;
+    const record = evidence ? evidence.get(`readiness:${id}`) : null;
+    const quality = evidence && record ? evidenceConfidence.evidenceQuality(evidence, `readiness:${id}`, { now }) : null;
+    const deps = evidenceConfidence.DIMENSION_DEPENDENCIES[id] || [];
+    // Assumptions bearing on the dimension's owning context, from the registry rather than a list.
+    const bearing = assumptions && typeof assumptions.report === 'function'
+      ? (assumptions.report({ now }).assumptions || []).filter((a) => a.context === spec.owner)
+      : [];
+    const supporting = ownership.filter((c) => c.context === spec.owner).map((c) => c.control);
+    const series = Array.isArray(history[id]) ? history[id] : [];
+    const trend = evidenceConfidence.verifiedImprovement({
+      subject: `readiness:${id}`, series, evidence: improvementEvidence[id] || [],
+    });
+
+    const facets = {
+      evidenceQuality: quality ? { present: true, value: quality.quality, weakest: quality.weakestDimension } : { present: false },
+      confidence: record && record.confidence !== undefined && record.confidence !== null
+        ? { present: true, value: record.confidence, source: record.source || null } : { present: false },
+      assumptions: bearing.length ? { present: true, count: bearing.length, assumptions: bearing.map((a) => a.id) } : { present: false },
+      dependencies: { present: true, count: deps.length, dependsOn: deps.map((d) => d.on), because: deps.map((d) => d.because) },
+      uncertainty: quality || scored
+        ? { present: true, unknowns: [
+          ...(quality && quality.quality < 1 ? [`evidence quality is ${quality.quality}, weakest at '${quality.weakestDimension}'`] : []),
+          ...(scored && !scored.ready ? [`the dimension is not ready: ${scored.detail || 'no detail recorded'}`] : []),
+          ...(supporting.length ? [] : ['no control that ran holds this dimension up']),
+        ] }
+        : { present: false },
+      historicalEvolution: series.length >= 2 ? { present: true, observations: series.length, trend } : { present: false },
+    };
+    const missingFacets = Object.entries(facets).filter(([, f]) => !f.present).map(([k]) => k);
+
+    return {
+      dimension: id, owner: spec.owner,
+      facets: Object.entries(facets).map(([facet, value]) => ({ facet, ...READINESS_EXPLANATION_FACETS[facet], ...value })),
+      missingFacets,
+      // A conclusion is explainable when a reader has everything they need to argue with it.
+      explainable: missingFacets.length === 0,
+      supportingControls: supporting,
+      trend,
+      // Not a score. A dimension carries what it is missing, because "explainability 0.67" tells
+      // nobody which two things to go and produce.
+      basis: missingFacets.length
+        ? `${missingFacets.length} of ${Object.keys(READINESS_EXPLANATION_FACETS).length} facets are absent: ${missingFacets.map((f) => `${f} — ${READINESS_EXPLANATION_FACETS[f].ifAbsent}`).join('; ')}`
+        : 'every facet a reader needs in order to argue with this conclusion is present',
+    };
+  });
+
+  const explainable = dimensions.filter((d) => d.explainable);
+  const unverified = dimensions.filter((d) => d.trend.violatesInvariant);
+  return {
+    dimensions, count: dimensions.length,
+    facets: Object.entries(READINESS_EXPLANATION_FACETS).map(([facet, f]) => ({ facet, ...f })),
+    explainable: explainable.map((d) => d.dimension),
+    unexplainable: dimensions.filter((d) => !d.explainable).map((d) => ({ dimension: d.dimension, missing: d.missingFacets })),
+    neverTested: dimensions.filter((d) => d.trend.state === 'unknown').map((d) => d.dimension),
+    unverifiedImprovements: unverified.map((d) => d.dimension),
+    everyImprovementVerified: unverified.length === 0,
+    everyConclusionExplainable: dimensions.length > 0 && explainable.length === dimensions.length,
+    explainabilityRate: dimensions.length ? +(explainable.length / dimensions.length).toFixed(4) : null,
+    basis: `${explainable.length} of ${dimensions.length} readiness conclusions expose all ${Object.keys(READINESS_EXPLANATION_FACETS).length} facets. ${dimensions.filter((d) => d.trend.state === 'unknown').length} have no recorded history at all, and a conclusion with no history has never been wrong because nothing has ever tested it.`,
+    now, informationalOnly: true, authorizes: false,
+    note: 'Tracing a conclusion says where it came from. Explaining it says what a reader needs in order to argue with it: how good the evidence is, how confident, what it assumes, what it depends on, what is uncertain, and whether the way it moved was ever supported by anything verified.',
   };
 }
 
@@ -2090,7 +2301,7 @@ module.exports = {
   TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,
   EVIDENCE_TYPES, ONBOARDING_STATES, EvidenceOnboarding,
   DATA_CLASSES, PROVENANCE_FIELDS,
-  EXPLANATION_HOPS, EXPLANATION_ORDER, sourceModuleOf, explain, explainability, readinessTraceability,
+  EXPLANATION_HOPS, EXPLANATION_ORDER, explanationTree, explainabilityCompleteness, READINESS_EXPLANATION_FACETS, explainableReadiness, sourceModuleOf, explain, explainability, readinessTraceability,
   CONNECTOR_KINDS, TRUST_LEVELS, TRUST_ORDER, INTEGRITY_STATES, FRESHNESS_STATES, SYNC_STATES,
   EvidenceConnectorRegistry, SOURCE_HEALTH_DIMENSIONS, SOURCE_HEALTH_STATES,
   SUSTAINABILITY_DIMENSIONS, institutionalSustainability,

@@ -4869,6 +4869,171 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-EXPLAINABILITY-INTELLIGENCE', 'The tree is a view of the walk, and a mean depth of eight across chains that all stop short is nothing explained', (v) => {
+    const inst = require('../src/assurance/institutional');
+
+    // --- The tree is a VIEW of the chain, so the two cannot disagree --------------------------
+    const options = { dashboard: null, readiness: null, evidence: null, controls: [], authorities: null, history: null, now: 0 };
+    for (const panel of Object.keys(inst.EXECUTIVE_PANELS)) {
+      const walk = inst.explain(panel, options);
+      const tree = inst.explanationTree(panel, options);
+      if (tree.complete !== walk.complete) v.push(`tree and chain disagree about whether '${panel}' is complete`);
+      if (tree.brokenAt !== walk.brokenAt) v.push(`tree and chain disagree about where '${panel}' breaks`);
+      if (tree.depth !== walk.hops.length) v.push(`the tree for '${panel}' has a different depth from the chain`);
+      if (tree.navigableDepth !== walk.resolvedHops.length) v.push(`the tree for '${panel}' reports a different navigable depth from the chain`);
+    }
+    // Each node genuinely contains the ones below it, so a reader cannot skip a hop.
+    const sample = inst.explanationTree('governanceMaturity', options);
+    const flattened = [];
+    for (let node = sample.root; node; node = node.children[0] || null) flattened.push(node.hop);
+    if (flattened.join(',') !== inst.EXPLANATION_ORDER.join(',')) v.push('the tree does not nest the hops in the order the chain walks them');
+    if (sample.root.depthBelow !== inst.EXPLANATION_ORDER.length - 1) v.push('the tree root does not contain every hop beneath it');
+    if (sample.authorizes !== false) v.push('the explanation tree claims authority');
+    // A resolved hop states no consequence; an unresolved one must.
+    for (let node = sample.root; node; node = node.children[0] || null) {
+      if (node.resolved && node.ifBroken !== null) v.push(`resolved hop '${node.hop}' still states what its break would cost`);
+      if (!node.resolved && !node.ifBroken) v.push(`broken hop '${node.hop}' does not say what it costs`);
+    }
+    let refused = false;
+    try { inst.explanationTree('nothing-at-all', options); } catch (e) { refused = true; }
+    if (!refused) v.push('a tree was built for a panel that does not exist');
+
+    // --- THE POINT OF PART 5: depth is reported and cannot be read on its own -----------------
+    const report = inst.explainabilityCompleteness(options);
+    if (report.maxDepth !== inst.EXPLANATION_ORDER.length) v.push('the completeness report does not state the full depth of the chain');
+    if (!/alongside the chain count, never instead of it/.test(report.completenessBasis)) {
+      v.push('the completeness basis does not say that mean depth must be read alongside the chain count — a mean of 8.2 across chains that all stop short is 0% explainable');
+    }
+    if (report.fullyExplainable !== report.explainable.length) v.push('the completeness report disagrees with the explainability report about how many chains are complete');
+    // On this estate nothing is explainable end to end, and the depth figure must not obscure it.
+    if (report.fullyExplainable !== 0) v.push('a chain reported itself complete with nothing supplied');
+    if (report.meanNavigableDepth === null) v.push('no mean navigable depth was computed across twenty-two panels');
+    if (report.meanNavigableDepth >= report.maxDepth) v.push('the mean navigable depth reached the full depth while no chain was complete');
+
+    // --- Per-hop resolution says what to go and fix ------------------------------------------
+    if (report.byHop.map((h) => h.hop).join(',') !== inst.EXPLANATION_ORDER.join(',')) v.push('the per-hop breakdown is not in chain order');
+    report.byHop.forEach((h, i) => {
+      if (h.position !== i + 1) v.push(`hop '${h.hop}' reports position ${h.position} at index ${i}`);
+      if (h.resolutionRate !== null && (h.resolutionRate < 0 || h.resolutionRate > 1)) v.push(`hop '${h.hop}' has a resolution rate outside [0,1]`);
+      if (h.resolved > h.panels) v.push(`hop '${h.hop}' resolved for more panels than exist`);
+    });
+    // The distribution must account for every panel, or a depth is being dropped somewhere.
+    const counted = Object.values(report.depthDistribution).reduce((a, b) => a + b, 0);
+    if (counted !== report.panels.length) v.push(`the depth distribution accounts for ${counted} of ${report.panels.length} panels`);
+
+    // --- The two Phase 17 hops can each break on their own -----------------------------------
+    // Both are checked on the panel the Phase 16 control uses for its success path.
+    const evidenceConfidence = require('../src/assurance/evidence-confidence');
+    const register = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+    for (const dimension of Object.keys(evidenceConfidence.READINESS_DIMENSIONS)) {
+      register.record({ id: `readiness:${dimension}`, source: 'executable-check', completeness: 1, verifiedAt: 0, detail: 'supplied for the success path' });
+    }
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const dashboard = { panels: [{ panel: 'documentationHealth', measured: true, value: 247, detail: '0 unresolved claims' }] };
+    const authorities = new (require('../src/legislation/legal-authority').LegalAuthorityRegistry)({ clock: () => 0 });
+    const base = { dashboard, evidence: register, controls, now: 0 };
+
+    // No legal authority register: the chain stops at 'legal-authority', not earlier and not later.
+    const noAuthority = inst.explain('documentationHealth', { ...base, authorities: null, history: { documentationHealth: [0.8, 0.9] } });
+    if (noAuthority.brokenAt !== 'legal-authority') v.push(`with no legal authority register the chain broke at '${noAuthority.brokenAt}' rather than at 'legal-authority'`);
+    // No history: the chain reaches the ADR and stops at 'historical-records'.
+    const noHistory = inst.explain('documentationHealth', { ...base, authorities, history: null });
+    if (noHistory.brokenAt !== 'historical-records') v.push(`with no history the chain broke at '${noHistory.brokenAt}' rather than at 'historical-records'`);
+    if (!/never been wrong/.test(inst.EXPLANATION_HOPS['historical-records'].ifBroken)) {
+      v.push('the historical-records hop does not say that a figure with no history has never been wrong because nothing has tested it');
+    }
+    // One observation is not a history.
+    const oneObservation = inst.explain('documentationHealth', { ...base, authorities, history: { documentationHealth: [0.8] } });
+    if (oneObservation.brokenAt !== 'historical-records') v.push('a single observation was accepted as a record of the figure having been tested');
+    // …and with both supplied the chain completes, so neither hop is unpassable.
+    const complete = inst.explain('documentationHealth', { ...base, authorities, history: { documentationHealth: [0.8, 0.9] } });
+    if (!complete.complete) v.push(`the nine-hop chain cannot be completed: it breaks at '${complete.brokenAt}' — a chain nothing can satisfy is not a control`);
+  }),
+
+  fit('APP-FIT-READINESS-EXPLAINABILITY', 'A readiness conclusion with no history has never been wrong, and six facets are never summed into a score', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const evidenceConfidence = require('../src/assurance/evidence-confidence');
+
+    // --- Six facets, each saying what its absence costs ---------------------------------------
+    if (Object.keys(inst.READINESS_EXPLANATION_FACETS).length !== 6) v.push('explainable readiness does not carry exactly six facets');
+    for (const required of ['evidenceQuality', 'confidence', 'assumptions', 'dependencies', 'uncertainty', 'historicalEvolution']) {
+      if (!inst.READINESS_EXPLANATION_FACETS[required]) v.push(`readiness explanation facet '${required}' is not exposed`);
+    }
+    for (const [id, f] of Object.entries(inst.READINESS_EXPLANATION_FACETS)) {
+      if (!f.asks || !f.asks.endsWith('?') || !f.ifAbsent) v.push(`facet '${id}' does not state its question or what its absence costs`);
+    }
+    // THE FACET THAT MATTERS MOST, and the sentence that is the whole reason it exists.
+    if (!/never been wrong/.test(inst.READINESS_EXPLANATION_FACETS.historicalEvolution.ifAbsent)) {
+      v.push('the historical-evolution facet does not say that a conclusion with no history has never been wrong because nothing has tested it');
+    }
+
+    // --- With nothing supplied, nothing is explainable and nothing is scored ------------------
+    const blind = inst.explainableReadiness({ now: 0 });
+    if (blind.count !== Object.keys(evidenceConfidence.READINESS_DIMENSIONS).length) v.push('explainable readiness does not cover every readiness dimension');
+    if (blind.everyConclusionExplainable) v.push('every conclusion reported itself explainable with nothing supplied');
+    if (blind.explainabilityRate !== 0) v.push('an unexplainable set of conclusions did not report a rate of 0');
+    if (blind.neverTested.length !== blind.count) v.push('a readiness conclusion reported a history with none supplied');
+    if (!/never been wrong because nothing has ever tested it/.test(blind.basis)) v.push('the basis does not say what an untested conclusion means');
+    if (blind.authorizes !== false) v.push('the explainable readiness report claims authority');
+    // A dimension carries WHAT IT IS MISSING, not a score. "Explainability 0.67" tells nobody which
+    // two things to go and produce.
+    for (const d of blind.dimensions) {
+      if (d.score !== undefined) v.push(`dimension '${d.dimension}' carries a facet score rather than the facets it is missing`);
+      if (!Array.isArray(d.missingFacets) || !d.missingFacets.length) v.push(`dimension '${d.dimension}' reports nothing missing with nothing supplied`);
+      if (d.facets.length !== 6) v.push(`dimension '${d.dimension}' does not expose all six facets`);
+      for (const f of d.facets) if (!f.ifAbsent) v.push(`facet '${f.facet}' on '${d.dimension}' does not carry what its absence costs`);
+    }
+
+    // --- Dependencies are always present, because the graph is structural ---------------------
+    // Every other facet needs something supplied; this one is derivable from the model itself, so a
+    // dimension that reports it missing would mean the dependency graph had gone away.
+    for (const d of blind.dimensions) {
+      if (d.missingFacets.includes('dependencies')) v.push(`dimension '${d.dimension}' cannot say what it depends on, though the dependency graph is structural`);
+      // …and the converse, which is the facet this part exists for: with no history supplied, the
+      // historical facet must be reported ABSENT. A dimension that presents an empty history as a
+      // present facet is a conclusion claiming to have been tested when nothing has tested it.
+      if (!d.missingFacets.includes('historicalEvolution')) {
+        v.push(`dimension '${d.dimension}' presents a historical evolution facet with no observations behind it — a conclusion with no history has never been wrong`);
+      }
+      const historical = d.facets.find((f) => f.facet === 'historicalEvolution');
+      if (historical.present) v.push(`dimension '${d.dimension}' reports its historical evolution as present with nothing recorded`);
+      if (historical.observations !== undefined) v.push(`dimension '${d.dimension}' reports an observation count for a history that does not exist`);
+    }
+
+    // --- Facets appear as they are supplied, so none of them is unreachable -------------------
+    const register = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+    for (const dimension of Object.keys(evidenceConfidence.READINESS_DIMENSIONS)) {
+      register.record({ id: `readiness:${dimension}`, source: 'executable-check', completeness: 1, verifiedAt: 0, detail: 'supplied' });
+    }
+    const withEvidence = inst.explainableReadiness({ evidence: register, now: 0 });
+    for (const d of withEvidence.dimensions) {
+      if (d.missingFacets.includes('evidenceQuality')) v.push(`dimension '${d.dimension}' still reports no evidence quality with a graded register supplied`);
+      if (d.missingFacets.includes('confidence')) v.push(`dimension '${d.dimension}' still reports no confidence with one recorded`);
+      if (d.missingFacets.includes('uncertainty')) v.push(`dimension '${d.dimension}' lists no unknowns even with evidence supplied — a conclusion listing none is concealing them`);
+    }
+
+    // --- THE PHASE 17 RULE, applied to readiness movement ------------------------------------
+    const dimension = Object.keys(evidenceConfidence.READINESS_DIMENSIONS)[0];
+    const rising = inst.explainableReadiness({ evidence: register, history: { [dimension]: [0.4, 0.9] }, now: 0 });
+    const row = rising.dimensions.find((d) => d.dimension === dimension);
+    if (row.trend.state !== 'unverified-improvement') v.push('a readiness conclusion that rose with nothing behind it was reported as progress');
+    if (row.missingFacets.includes('historicalEvolution')) v.push('a dimension with two observations still reported no history');
+    if (rising.everyImprovementVerified) v.push('an unsupported readiness rise satisfied the improvement invariant');
+    if (!rising.unverifiedImprovements.includes(dimension)) v.push('an unverified readiness rise was not named');
+    const supported = inst.explainableReadiness({
+      evidence: register, history: { [dimension]: [0.4, 0.9] },
+      improvementEvidence: { [dimension]: [{ kind: 'independent-verification', detail: 'an external assessment', by: 'Auditor General' }] },
+      now: 0,
+    });
+    if (supported.dimensions.find((d) => d.dimension === dimension).trend.state !== 'verified-improvement') {
+      v.push('a readiness rise confirmed independently was not reported as verified');
+    }
+    if (!supported.everyImprovementVerified) v.push('a verified readiness rise still violated the improvement invariant');
+  }),
+
   fit('APP-FIT-SOURCE-HEALTH', 'A source that has never run is unknown, not healthy and not broken — including one somebody verified', (v) => {
     const inst = require('../src/assurance/institutional');
     const DAY = 24 * 3600_000;
@@ -9439,13 +9604,15 @@ module.exports = [
       ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
     ];
 
-    // --- Seven hops, in order, each saying what it answers and what its break costs -----------
-    for (const required of ['executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy', 'adr', 'source-record']) {
+    // --- Nine hops, in order, each saying what it answers and what its break costs ------------
+    // Phase 17, Part 5 widened this from seven: a rule can rest on a recorded decision and still
+    // have no legal basis, and a figure can be derivable today and never once have been tested.
+    for (const required of ['executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy', 'legal-authority', 'adr', 'historical-records', 'source-record']) {
       if (!inst.EXPLANATION_HOPS[required]) v.push(`explainability hop '${required}' is not walked`);
     }
-    if (inst.EXPLANATION_ORDER.length !== 7) v.push('the explainability chain does not have exactly seven hops');
-    if (inst.EXPLANATION_ORDER.join(',') !== 'executive-metric,readiness-dimension,evidence,control,policy,adr,source-record') {
-      v.push('the explainability chain does not run metric → readiness → evidence → control → policy → ADR → source record');
+    if (inst.EXPLANATION_ORDER.length !== 9) v.push('the explainability chain does not have exactly nine hops');
+    if (inst.EXPLANATION_ORDER.join(',') !== 'executive-metric,readiness-dimension,evidence,control,policy,legal-authority,adr,historical-records,source-record') {
+      v.push('the explainability chain does not run metric → readiness → evidence → control → policy → legal authority → ADR → history → source record');
     }
     for (const [id, h] of Object.entries(inst.EXPLANATION_HOPS)) {
       if (!h.answers || !h.answers.endsWith('?') || !h.resolvedFrom || !h.ifBroken) v.push(`hop '${id}' does not state what it answers, what resolves it, or what its break costs`);
@@ -9474,7 +9641,7 @@ module.exports = [
       // Broken AT a hop, never a percentage — a chain six-sevenths complete supports nothing.
       if (p.brokenAt !== 'executive-metric') v.push(`panel '${p.panel}' broke at '${p.brokenAt}' rather than at the unmeasured figure itself`);
       if (!p.consequence || !p.whatWouldResolveIt) v.push(`a broken chain for '${p.panel}' does not say what it costs or what would resolve it`);
-      if (p.hops.length !== 7) v.push(`panel '${p.panel}' walked ${p.hops.length} hops`);
+      if (p.hops.length !== 9) v.push(`panel '${p.panel}' walked ${p.hops.length} hops`);
     }
     if (blind.authorizes !== false) v.push('the explainability report claims authority');
 
@@ -9486,7 +9653,11 @@ module.exports = [
       register.record({ id: `readiness:${dimension}`, source: 'executable-check', completeness: 1, verifiedAt: 0, detail: 'supplied for the success path' });
     }
     const dashboard = { panels: [{ panel: 'documentationHealth', measured: true, value: 247, detail: '0 unresolved claims' }] };
-    const good = inst.explain('documentationHealth', { dashboard, evidence: register, controls, now: 0 });
+    // Phase 17, Part 5 added two hops, so the success path has to supply two more things: a legal
+    // authority register that was actually consulted, and a recorded history for the figure.
+    const authorities = new (require('../src/legislation/legal-authority').LegalAuthorityRegistry)({ clock: () => 0 });
+    const history = { documentationHealth: [0.8, 0.9] };
+    const good = inst.explain('documentationHealth', { dashboard, evidence: register, controls, authorities, history, now: 0 });
     if (!good.complete) v.push(`a measured panel over a claimed module could not be explained: broke at '${good.brokenAt}' — ${good.hops.find((h) => !h.resolved).detail}`);
     if (good.brokenAt !== null) v.push('a complete chain still named a break');
     if (!good.context) v.push('a complete chain resolved no owning bounded context');
@@ -9494,10 +9665,10 @@ module.exports = [
 
     // --- …and each of the later hops can break ON ITS OWN ------------------------------------
     // No evidence register: the chain breaks at 'evidence', not earlier and not later.
-    const noEvidence = inst.explain('documentationHealth', { dashboard, evidence: null, controls, now: 0 });
+    const noEvidence = inst.explain('documentationHealth', { dashboard, evidence: null, controls, authorities, history, now: 0 });
     if (noEvidence.brokenAt !== 'evidence') v.push(`with no evidence register the chain broke at '${noEvidence.brokenAt}' rather than at 'evidence'`);
     // No controls ran: the chain breaks at 'control'.
-    const noControls = inst.explain('documentationHealth', { dashboard, evidence: register, controls: [], now: 0 });
+    const noControls = inst.explain('documentationHealth', { dashboard, evidence: register, controls: [], authorities, history, now: 0 });
     if (noControls.brokenAt !== 'control') v.push(`with no controls the chain broke at '${noControls.brokenAt}' rather than at 'control'`);
     // An unmeasured figure breaks at the first hop even when everything behind it resolves.
     const unmeasured = inst.explain('documentationHealth', { dashboard: { panels: [{ panel: 'documentationHealth', measured: false, detail: 'not assessed' }] }, evidence: register, controls, now: 0 });

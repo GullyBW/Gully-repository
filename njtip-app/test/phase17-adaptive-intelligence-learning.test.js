@@ -289,3 +289,155 @@ test('phase17: the estate availability trend obeys the improvement rule like eve
     evidence: [{ kind: 'recorded-act', detail: 'the feed was repaired and the change recorded', by: 'OCTO' }],
   }).availabilityTrend.state, 'verified-improvement');
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 5 — explanation trees. A view of the walk, never a second walk.
+// ---------------------------------------------------------------------------------------------
+
+const OPTIONS = { dashboard: null, readiness: null, evidence: null, controls: [], authorities: null, history: null, now: 0 };
+
+test('phase17: the explanation chain is nine hops and ends at a source record', () => {
+  assert.deepEqual(inst.EXPLANATION_ORDER, [
+    'executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy',
+    'legal-authority', 'adr', 'historical-records', 'source-record',
+  ]);
+  for (const [id, h] of Object.entries(inst.EXPLANATION_HOPS)) {
+    assert.ok(h.answers.endsWith('?'), `${id} states its question`);
+    assert.ok(h.resolvedFrom && h.ifBroken, `${id} states what resolves it and what its break costs`);
+  }
+  assert.match(inst.EXPLANATION_HOPS['historical-records'].ifBroken, /never been wrong/);
+});
+
+test('phase17: an explanation tree is a view of the walk, so the two can never disagree', () => {
+  for (const panel of Object.keys(inst.EXECUTIVE_PANELS)) {
+    const walk = inst.explain(panel, OPTIONS);
+    const tree = inst.explanationTree(panel, OPTIONS);
+    assert.equal(tree.complete, walk.complete, panel);
+    assert.equal(tree.brokenAt, walk.brokenAt, panel);
+    assert.equal(tree.depth, walk.hops.length, panel);
+    assert.equal(tree.navigableDepth, walk.resolvedHops.length, panel);
+  }
+});
+
+test('phase17: each tree node contains the ones below it, so a reader cannot skip a hop', () => {
+  const tree = inst.explanationTree('governanceMaturity', OPTIONS);
+  const flattened = [];
+  for (let node = tree.root; node; node = node.children[0] || null) flattened.push(node.hop);
+  assert.deepEqual(flattened, inst.EXPLANATION_ORDER);
+  assert.equal(tree.root.depthBelow, inst.EXPLANATION_ORDER.length - 1);
+  assert.equal(tree.authorizes, false);
+
+  // A resolved hop states no consequence; an unresolved one must.
+  for (let node = tree.root; node; node = node.children[0] || null) {
+    if (node.resolved) assert.equal(node.ifBroken, null, node.hop);
+    else assert.ok(node.ifBroken, node.hop);
+  }
+});
+
+test('phase17: mean navigable depth is reported with the sentence that stops it being read alone', () => {
+  const report = inst.explainabilityCompleteness(OPTIONS);
+  assert.equal(report.maxDepth, 9);
+  assert.equal(report.fullyExplainable, 0, 'nothing is explainable end to end with nothing supplied');
+  assert.ok(report.meanNavigableDepth > 0 && report.meanNavigableDepth < 9);
+  assert.match(report.completenessBasis, /alongside the chain count, never instead of it/);
+
+  // Per-hop resolution is the figure that says what to go and fix.
+  assert.deepEqual(report.byHop.map((h) => h.hop), inst.EXPLANATION_ORDER);
+  report.byHop.forEach((h, i) => {
+    assert.equal(h.position, i + 1);
+    assert.ok(h.resolutionRate >= 0 && h.resolutionRate <= 1, h.hop);
+    assert.ok(h.resolved <= h.panels, h.hop);
+  });
+  // The distribution accounts for every panel, or a depth is being dropped.
+  const counted = Object.values(report.depthDistribution).reduce((a, b) => a + b, 0);
+  assert.equal(counted, report.panels.length);
+});
+
+test('phase17: the two new hops each break on their own, and the nine-hop chain is completable', () => {
+  const evidenceConfidence = require('../src/assurance/evidence-confidence');
+  const register = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+  for (const dimension of Object.keys(evidenceConfidence.READINESS_DIMENSIONS)) {
+    register.record({ id: `readiness:${dimension}`, source: 'executable-check', completeness: 1, verifiedAt: 0, detail: 'supplied' });
+  }
+  const controls = [
+    ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+    ...require('../verification/app-fitness').map((f) => ({ id: f.id, pass: true })),
+  ];
+  const authorities = new (require('../src/legislation/legal-authority').LegalAuthorityRegistry)({ clock: () => 0 });
+  const base = {
+    dashboard: { panels: [{ panel: 'documentationHealth', measured: true, value: 247, detail: '0 unresolved claims' }] },
+    evidence: register, controls, authorities, history: { documentationHealth: [0.8, 0.9] }, now: 0,
+  };
+
+  assert.equal(inst.explain('documentationHealth', base).complete, true,
+    'a chain nothing can satisfy is not a control');
+  assert.equal(inst.explain('documentationHealth', { ...base, authorities: null }).brokenAt, 'legal-authority');
+  assert.equal(inst.explain('documentationHealth', { ...base, history: null }).brokenAt, 'historical-records');
+  assert.equal(inst.explain('documentationHealth', { ...base, history: { documentationHealth: [0.8] } }).brokenAt, 'historical-records',
+    'one observation is not a record of the figure having been tested');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 12 — explainable readiness. Six facets, never summed.
+// ---------------------------------------------------------------------------------------------
+
+test('phase17: six readiness facets, and the one that matters most says why', () => {
+  assert.equal(Object.keys(inst.READINESS_EXPLANATION_FACETS).length, 6);
+  for (const required of ['evidenceQuality', 'confidence', 'assumptions', 'dependencies', 'uncertainty', 'historicalEvolution']) {
+    const f = inst.READINESS_EXPLANATION_FACETS[required];
+    assert.ok(f, required);
+    assert.ok(f.asks.endsWith('?') && f.ifAbsent, required);
+  }
+  assert.match(inst.READINESS_EXPLANATION_FACETS.historicalEvolution.ifAbsent, /never been wrong/);
+});
+
+test('phase17: a dimension carries what it is missing, not a score', () => {
+  const blind = inst.explainableReadiness({ now: 0 });
+  assert.equal(blind.everyConclusionExplainable, false);
+  assert.equal(blind.explainabilityRate, 0);
+  assert.equal(blind.neverTested.length, blind.count);
+  assert.equal(blind.authorizes, false);
+  for (const d of blind.dimensions) {
+    assert.equal(d.score, undefined, `${d.dimension} carries no facet score`);
+    assert.ok(d.missingFacets.length > 0, d.dimension);
+    assert.equal(d.facets.length, 6, d.dimension);
+    // With no history supplied the historical facet must read as ABSENT.
+    assert.ok(d.missingFacets.includes('historicalEvolution'), d.dimension);
+    // Dependencies are structural, so they are always answerable.
+    assert.ok(!d.missingFacets.includes('dependencies'), d.dimension);
+  }
+  assert.match(blind.basis, /never been wrong because nothing has ever tested it/);
+});
+
+test('phase17: facets appear as they are supplied, so none of them is unreachable', () => {
+  const evidenceConfidence = require('../src/assurance/evidence-confidence');
+  const register = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+  for (const dimension of Object.keys(evidenceConfidence.READINESS_DIMENSIONS)) {
+    register.record({ id: `readiness:${dimension}`, source: 'executable-check', completeness: 1, verifiedAt: 0, detail: 'supplied' });
+  }
+  for (const d of inst.explainableReadiness({ evidence: register, now: 0 }).dimensions) {
+    assert.ok(!d.missingFacets.includes('evidenceQuality'), d.dimension);
+    assert.ok(!d.missingFacets.includes('confidence'), d.dimension);
+    assert.ok(!d.missingFacets.includes('uncertainty'), d.dimension);
+  }
+});
+
+test('phase17: a readiness conclusion that rose obeys the improvement invariant like every other trend', () => {
+  const evidenceConfidence = require('../src/assurance/evidence-confidence');
+  const dimension = Object.keys(evidenceConfidence.READINESS_DIMENSIONS)[0];
+
+  const rising = inst.explainableReadiness({ history: { [dimension]: [0.4, 0.9] }, now: 0 });
+  const row = rising.dimensions.find((d) => d.dimension === dimension);
+  assert.equal(row.trend.state, 'unverified-improvement');
+  assert.ok(!row.missingFacets.includes('historicalEvolution'), 'two observations are a history');
+  assert.equal(rising.everyImprovementVerified, false);
+  assert.ok(rising.unverifiedImprovements.includes(dimension));
+
+  const supported = inst.explainableReadiness({
+    history: { [dimension]: [0.4, 0.9] },
+    improvementEvidence: { [dimension]: [{ kind: 'independent-verification', detail: 'an external assessment', by: 'Auditor General' }] },
+    now: 0,
+  });
+  assert.equal(supported.dimensions.find((d) => d.dimension === dimension).trend.state, 'verified-improvement');
+  assert.equal(supported.everyImprovementVerified, true);
+});

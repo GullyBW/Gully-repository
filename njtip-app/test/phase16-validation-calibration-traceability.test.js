@@ -220,7 +220,13 @@ const fullEvidence = () => {
 };
 
 test('the explainability chain runs metric to source record, in that order', () => {
-  assert.deepStrictEqual(inst.EXPLANATION_ORDER, ['executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy', 'adr', 'source-record']);
+  // Phase 17, Part 5 widened this from seven hops to nine. A rule can rest on a recorded decision
+  // and still have no legal basis, and a figure can be derivable today and never once have been
+  // compared against what happened.
+  assert.deepStrictEqual(inst.EXPLANATION_ORDER, [
+    'executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy',
+    'legal-authority', 'adr', 'historical-records', 'source-record',
+  ]);
   for (const [id, h] of Object.entries(inst.EXPLANATION_HOPS)) {
     assert.ok(h.answers.endsWith('?'), id);
     assert.ok(h.resolvedFrom && h.ifBroken, id);
@@ -240,11 +246,17 @@ test('a chain is reported as broken AT the hop that broke, never as a percentage
   const controls = controlsAll();
   const dashboard = { panels: [{ panel: 'documentationHealth', measured: true, value: 247, detail: '0 unresolved claims' }] };
   const register = fullEvidence();
-  assert.strictEqual(inst.explain('documentationHealth', { dashboard, evidence: register, controls, now: 0 }).complete, true);
-  assert.strictEqual(inst.explain('documentationHealth', { dashboard, evidence: null, controls, now: 0 }).brokenAt, 'evidence');
-  assert.strictEqual(inst.explain('documentationHealth', { dashboard, evidence: register, controls: [], now: 0 }).brokenAt, 'control');
+  // The two hops Phase 17 added need two more things supplied before the chain can complete.
+  const authorities = new (require('../src/legislation/legal-authority').LegalAuthorityRegistry)({ clock: () => 0 });
+  const history = { documentationHealth: [0.8, 0.9] };
+  const full = { dashboard, evidence: register, controls, authorities, history, now: 0 };
+  assert.strictEqual(inst.explain('documentationHealth', full).complete, true);
+  assert.strictEqual(inst.explain('documentationHealth', { ...full, evidence: null }).brokenAt, 'evidence');
+  assert.strictEqual(inst.explain('documentationHealth', { ...full, controls: [] }).brokenAt, 'control');
+  assert.strictEqual(inst.explain('documentationHealth', { ...full, authorities: null }).brokenAt, 'legal-authority');
+  assert.strictEqual(inst.explain('documentationHealth', { ...full, history: null }).brokenAt, 'historical-records');
   const unmeasured = inst.explain('documentationHealth', {
-    dashboard: { panels: [{ panel: 'documentationHealth', measured: false, detail: 'not assessed' }] }, evidence: register, controls, now: 0,
+    ...full, dashboard: { panels: [{ panel: 'documentationHealth', measured: false, detail: 'not assessed' }] },
   });
   assert.strictEqual(unmeasured.brokenAt, 'executive-metric');
   assert.throws(() => inst.explain('a feeling', { controls }));
