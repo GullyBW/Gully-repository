@@ -253,4 +253,114 @@ function roadmap({ fitnessResults = [] } = {}) {
   };
 }
 
-module.exports = { ITEMS, WAVES, STATUSES, ids, describe, items, sequence, waves, progress, blockers, rollbackPlan, readiness, validate, roadmap };
+// --- Production transition framework (Phase 16, Part 15) -------------------------------------------
+//
+// The most dangerous section in this phase, and the reason it is written the way it is:
+//
+//   THESE ARE PLANNING ARTEFACTS. NOTHING HERE DEPLOYS ANYTHING, AND NOTHING HERE AUTHORIZES A
+//   DEPLOYMENT. `authorizes: false` on every output, no `execute`, no `cutover`, no `promote`, and
+//   the absence of those functions is checked by a fitness function rather than trusted.
+//
+// The platform has been synthetic-only for sixteen phases. A production transition framework is
+// exactly the artefact that could quietly stop being a plan, so every track states who owns it, what
+// only a human can close, and what would be true if somebody mistook the plan for the act.
+const TRANSITION_TRACKS = {
+  deploymentReadiness: {
+    owner: 'Operations Review Board',
+    plans: 'Environments, release process, rollback rehearsal and the gate that must be green before a cutover is proposed.',
+    humanOnly: 'The decision that a release may proceed.',
+    ifMistakenForTheAct: 'A rehearsal plan is read as a completed rehearsal, and the first real cutover is the first cutover.',
+  },
+  accreditation: {
+    owner: 'Information Security Review Board',
+    plans: 'The evidence package an accreditor would ask for, and which of it exists today.',
+    humanOnly: 'Accreditation itself, which is a decision by a body outside this platform.',
+    ifMistakenForTheAct: 'The platform believes it is accredited because it assembled the paperwork.',
+  },
+  identityIntegration: {
+    owner: 'National Identity Authority',
+    plans: 'Which synthetic identity adapters would be replaced, and what each real one must prove first.',
+    humanOnly: 'Trusting a real issuer.',
+    ifMistakenForTheAct: 'A synthetic trust anchor is left in place behind a real-looking configuration.',
+  },
+  operationalMonitoring: {
+    owner: 'Office of the Chief Technology Officer',
+    plans: 'What must be observable before anything runs unattended, and which signals do not exist yet.',
+    humanOnly: 'Declaring monitoring sufficient.',
+    ifMistakenForTheAct: 'The estate runs unattended against a monitoring plan rather than monitoring.',
+  },
+  disasterRecovery: {
+    owner: 'National Disaster Management Office',
+    plans: 'Recovery objectives, the restore procedure, and the rehearsal that would show it works.',
+    humanOnly: 'Accepting a recovery objective the institution cannot currently meet.',
+    ifMistakenForTheAct: 'A documented restore is counted as a rehearsed one. It is not.',
+  },
+  migrationPlanning: {
+    owner: 'Office of the Chief Architect',
+    plans: 'The wave sequence, dependencies and rollback for each component transition.',
+    humanOnly: 'Starting a wave.',
+    ifMistakenForTheAct: 'Components move in an order nobody approved.',
+  },
+  operationalSupport: {
+    owner: 'Ministry of Public Administration',
+    plans: 'Who is on call, what they are trained on, and the escalation that reaches an accountable authority.',
+    humanOnly: 'Staffing a rota.',
+    ifMistakenForTheAct: 'A rota exists on paper and nobody is actually reachable at 03:00.',
+  },
+  changeManagement: {
+    owner: 'Oversight Board',
+    plans: 'How a change is proposed, reviewed, recorded and reversed, and who may do each.',
+    humanOnly: 'Approving a change.',
+    ifMistakenForTheAct: 'Changes are made under a process that was drafted and never adopted.',
+  },
+};
+
+// What each track needs before it could even be proposed. Derived where the platform can derive it;
+// declared as a human item where it cannot, and never quietly satisfied by a report.
+const TRANSITION_STATES = {
+  unplanned: { ready: false, means: 'Nothing has been recorded for this track.' },
+  planned: { ready: false, means: 'A plan exists. Nothing has been rehearsed or evidenced.' },
+  evidenced: { ready: false, means: 'The platform can show evidence for what it is able to show. The human items remain open.' },
+  'human-decision-pending': { ready: false, means: 'Everything the platform can contribute is in place. What remains is a decision only a named human can take.' },
+};
+
+function productionTransitionPlan({ readinessAssessment = null, fitnessResults = [], recovery = null, rehearsals = null, now = 0 } = {}) {
+  const tracks = Object.entries(TRANSITION_TRACKS).map(([id, spec]) => {
+    // Evidence the platform genuinely holds for this track, and nothing more.
+    let evidence = [];
+    if (id === 'deploymentReadiness' && fitnessResults.length) evidence.push(`${fitnessResults.filter((r) => r.pass).length} of ${fitnessResults.length} controls hold on this build`);
+    if (id === 'migrationPlanning') evidence.push(`${ids().length} component transitions are sequenced with a rollback each`);
+    if (id === 'disasterRecovery' && rehearsals) {
+      const cov = rehearsals.coverage ? rehearsals.coverage({ now }) : null;
+      if (cov) evidence.push(cov.neverRehearsed.includes('disaster-recovery') ? 'the disaster-recovery rehearsal has never been run' : 'a disaster-recovery rehearsal has been run and closed');
+    }
+    if (id === 'accreditation' && readinessAssessment) evidence.push(`readiness model reports ${readinessAssessment.readyCount ?? 0} of ${readinessAssessment.dimensionCount ?? 0} dimensions ready`);
+    const state = !evidence.length ? 'unplanned' : 'planned';
+    return {
+      track: id, ...spec, evidence, state, ...TRANSITION_STATES[state],
+      // The point of the whole section, restated on every row so it cannot be read past.
+      isPlanOnly: true,
+      blockedByHumanDecision: spec.humanOnly,
+    };
+  });
+  return {
+    tracks, count: tracks.length,
+    states: Object.entries(TRANSITION_STATES).map(([state, s]) => ({ state, ...s })),
+    unplanned: tracks.filter((t) => t.state === 'unplanned').map((t) => t.track),
+    // No state in this framework is `ready`, deliberately. Readiness to deploy is not something a
+    // planning artefact can reach.
+    anyTrackReady: tracks.some((t) => t.ready),
+    humanDecisions: tracks.map((t) => ({ track: t.track, owner: t.owner, decision: t.humanOnly })),
+    deploymentPermitted: false,
+    authorizationStatus: 'NOT AUTHORIZED',
+    planOnly: true, executes: false, informationalOnly: true, authorizes: false,
+    basis: `${tracks.length} transition tracks, each naming its owner and the decision only a named human can take. ${tracks.filter((t) => t.state === 'unplanned').length} have no recorded evidence at all.`,
+    now,
+    note: 'These are PLANNING ARTEFACTS. Nothing here deploys anything and nothing here authorizes a deployment: there is no execute, no cutover and no promote, and the absence of those functions is checked by a fitness function rather than trusted. The platform remains synthetic-only.',
+  };
+}
+
+module.exports = {
+  ITEMS, WAVES, STATUSES, ids, describe, items, sequence, waves, progress, blockers, rollbackPlan, readiness, validate, roadmap,
+  TRANSITION_TRACKS, TRANSITION_STATES, productionTransitionPlan,
+};

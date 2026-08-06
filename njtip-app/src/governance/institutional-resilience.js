@@ -1175,6 +1175,21 @@ class ResilienceAcceptance {
     this._items.push(rec);
     return { ...rec };
   }
+  // Phase 16: accepting an untraceable conclusion. Same class, same discipline — a named authority,
+  // a rationale and an expiry — because a second acceptance framework would be a second place to
+  // forget to expire something.
+  acceptTraceability({ subject, by, rationale, expiresAt, at = null } = {}) {
+    if (!subject) throw new Error('accepting an untraceable conclusion must name what is being accepted');
+    if (!by || !rationale) { const e = new Error('accepting an untraceable conclusion requires a named authority and a rationale'); e.failClosed = true; throw e; }
+    if (!Number.isFinite(expiresAt)) { const e = new Error('an acceptance must expire — a permanent acceptance is a decision nobody revisits'); e.failClosed = true; throw e; }
+    if (!this._traceability) this._traceability = [];
+    const rec = { subject, by, rationale, expiresAt, at: at ?? this._clock() };
+    this._traceability.push(rec);
+    return { ...rec };
+  }
+  activeTraceability({ now = null } = {}) { const t = now ?? this._clock(); return (this._traceability || []).filter((a) => t < a.expiresAt).map((a) => ({ ...a })); }
+  expiredTraceability({ now = null } = {}) { const t = now ?? this._clock(); return (this._traceability || []).filter((a) => t >= a.expiresAt).map((a) => ({ ...a })); }
+
   active({ now = null } = {}) { const t = now ?? this._clock(); return this._items.filter((a) => t < a.expiresAt).map((a) => ({ ...a })); }
   expired({ now = null } = {}) { const t = now ?? this._clock(); return this._items.filter((a) => t >= a.expiresAt).map((a) => ({ ...a })); }
 

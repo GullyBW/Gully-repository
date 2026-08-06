@@ -516,6 +516,150 @@ function adaptiveGovernanceAnalytics({
   };
 }
 
+// --- Continuous architecture validation (Phase 16, Part 12) ----------------------------------------
+//
+// `detect()` finds drift in nine kinds and reports it as findings. Part 12 asks the question a
+// reviewer actually asks — is the architecture still the one that was approved? — and it needs one
+// thing `detect()` does not have: a recorded BASELINE to be different from.
+//
+// The rule Part 12 states and this enforces:
+//
+//   ARCHITECTURAL EVOLUTION IS REJECTED UNLESS IT IS DOCUMENTED. Not warned about, not counted:
+//   `assertNoUndocumentedEvolution` throws fail-closed. A checker that reports undocumented
+//   evolution and lets the build through is a checker that documents the drift rather than
+//   preventing it.
+//
+// Six properties, each mapped to the drift kinds that would falsify it, so there is no second
+// detector to keep in step with the first.
+const ARCHITECTURE_PROPERTIES = {
+  dependencyCorrectness: {
+    asks: 'Does every dependency the code makes appear in the architecture-of-record, and vice versa?',
+    falsifiedBy: ['coupling'], blocks: false,
+    ifViolated: 'Bounded contexts become boundaries on paper, one require() at a time.',
+  },
+  boundedContextIntegrity: {
+    asks: 'Does every source module belong to exactly one bounded context?',
+    falsifiedBy: ['module'], blocks: true,
+    ifViolated: 'Code exists that nobody is accountable for, and the architecture-of-record stops describing the system.',
+  },
+  ownershipConsistency: {
+    asks: 'Does every bounded context have an accountable authority, and every authority a context?',
+    falsifiedBy: ['ownership'], blocks: true,
+    ifViolated: 'A decision is taken about something with nobody answerable for it, so it cannot be challenged.',
+  },
+  documentationSynchronization: {
+    asks: 'Does every claim in the governed corpus still resolve against the implementation?',
+    falsifiedBy: ['documentation'], blocks: true,
+    ifViolated: 'An operator follows a procedure that no longer works, during the incident it was written for.',
+  },
+  adrCompliance: {
+    asks: 'Does every declared operating rule rest on a recorded decision, and does every ADR meet its schema?',
+    falsifiedBy: ['policy'], blocks: true,
+    ifViolated: 'The platform enforces rules nobody decided, and nobody can say why they are what they are.',
+  },
+  apiCompatibility: {
+    asks: 'Is every route the server serves published, and every published contract served?',
+    falsifiedBy: ['api'], blocks: false,
+    ifViolated: 'Integrators build against undocumented surfaces, which then cannot be changed.',
+  },
+};
+
+// A recorded architecture baseline. Not a snapshot the checker takes for itself — a baseline
+// somebody recorded, with the ADR that approved it, because a baseline the tool writes is a baseline
+// that agrees with whatever it finds.
+class ArchitectureBaseline {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._records = []; }
+
+  record({ version, contexts, modules, adr, recordedBy, at = null } = {}) {
+    if (!version) throw new Error('an architecture baseline must name the version it fixes');
+    if (!Number.isFinite(contexts) || !Number.isFinite(modules)) throw new Error('a baseline must record how many bounded contexts and modules it contains');
+    if (!adr) { const e = new Error('an architecture baseline must cite the decision that approved it — a baseline nobody approved is a snapshot'); e.failClosed = true; throw e; }
+    if (!recordedBy) { const e = new Error('an architecture baseline must name who recorded it'); e.failClosed = true; throw e; }
+    const rec = { version, contexts, modules, adr, recordedBy, at: at ?? this._clock() };
+    this._records.push(rec);
+    return { ...rec };
+  }
+  current() { return this._records.length ? { ...this._records[this._records.length - 1] } : null; }
+  history() { return this._records.map((r) => ({ ...r })); }
+}
+
+function continuousArchitectureValidation({ controls = [], assumptions = null, baseline = null, now = 0 } = {}) {
+  const drift = detect({ controls, assumptions });
+  const byKind = new Map();
+  for (const f of drift.findings || []) {
+    if (!byKind.has(f.kind)) byKind.set(f.kind, []);
+    byKind.get(f.kind).push(f);
+  }
+  const properties = Object.entries(ARCHITECTURE_PROPERTIES).map(([id, spec]) => {
+    const findings = spec.falsifiedBy.flatMap((k) => byKind.get(k) || []);
+    return {
+      property: id, ...spec,
+      findings: findings.map((f) => ({ kind: f.kind, direction: f.direction, detail: f.detail })),
+      violationCount: findings.length,
+      holds: findings.length === 0,
+      // A blocking property that fails stops the build; a non-blocking one is ratcheted.
+      blocksBuild: spec.blocks && findings.length > 0,
+    };
+  });
+
+  // Evolution against the recorded baseline. With no baseline, this is UNKNOWN — not compliant.
+  const current = baseline ? baseline.current() : null;
+  const actualContexts = contextMap.ids().length;
+  const actualModules = contextMap.sourceModules().length;
+  const evolution = !current
+    ? {
+      known: false, evolved: null, documented: null,
+      detail: 'no architecture baseline has been recorded, so nothing says what this architecture is supposed to be. Undocumented evolution is undetectable, which is not the same as absent.',
+    }
+    : {
+      known: true,
+      baseline: current,
+      evolved: current.contexts !== actualContexts || current.modules !== actualModules,
+      // Documented means the baseline itself cites an approving decision. An evolution beyond a
+      // baseline requires a NEW baseline citing a new decision.
+      documented: current.contexts === actualContexts && current.modules === actualModules,
+      detail: current.contexts !== actualContexts
+        ? `the architecture has ${actualContexts} bounded contexts and baseline ${current.version} (${current.adr}) records ${current.contexts} — a context was added or removed without a new approved baseline`
+        : current.modules !== actualModules
+          ? `the architecture has ${actualModules} claimed modules and baseline ${current.version} (${current.adr}) records ${current.modules} — modules moved without a new approved baseline`
+          : `the architecture matches baseline ${current.version}, approved by ${current.adr}`,
+    };
+
+  const violated = properties.filter((p) => !p.holds);
+  const blocking = properties.filter((p) => p.blocksBuild);
+  return {
+    properties, count: properties.length,
+    holds: violated.length === 0,
+    violated: violated.map((p) => p.property),
+    blocking: blocking.map((p) => p.property),
+    ratcheted: violated.filter((p) => !p.blocksBuild).map((p) => p.property),
+    evolution,
+    // THE PART 12 RULE, as a computed verdict rather than a promise.
+    undocumentedEvolution: evolution.known ? evolution.evolved && !evolution.documented : null,
+    rejectsBuild: blocking.length > 0 || (evolution.known && evolution.evolved && !evolution.documented),
+    driftFindings: (drift.findings || []).length,
+    basis: violated.length
+      ? `${violated.length} of ${properties.length} architecture properties do not hold; ${blocking.length} of them block the build.`
+      : evolution.known ? `all ${properties.length} architecture properties hold, and the architecture matches the recorded baseline.`
+        : `all ${properties.length} architecture properties hold. No baseline is recorded, so whether the architecture has evolved beyond what was approved is UNKNOWN.`,
+    now, failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'Each property is falsified by drift kinds the existing detector already finds, so there is no second detector to keep in step with the first. Architectural evolution beyond a recorded baseline is REJECTED rather than reported: a checker that logs undocumented evolution and lets the build through documents the drift instead of preventing it.',
+  };
+}
+
+// The gate. Exported so it can be fed a crafted validation that should be rejected.
+function assertNoUndocumentedEvolution(validation) {
+  const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
+  if (!validation) fail('nothing was supplied to validate');
+  if (validation.blocking && validation.blocking.length) {
+    fail(`architecture validation rejected the build: ${validation.blocking.join(', ')} do not hold`);
+  }
+  if (validation.undocumentedEvolution === true) {
+    fail(`the architecture has evolved beyond its recorded baseline with no new approved baseline: ${validation.evolution.detail}`);
+  }
+  return true;
+}
+
 // --- Forecast calibration (Phase 16, Part 3) -------------------------------------------------------
 //
 // Twelve forecast dimensions have been produced since Phase 14 and not one has ever been checked
@@ -724,5 +868,6 @@ module.exports = {
   DRIFT_KINDS, DRIFT_CLASSES, classOfKind, assertDistinctResponses,
   FORECAST_DIMENSIONS, forecastInterval, adaptiveGovernanceAnalytics,
   CALIBRATION_MEASURES, CALIBRATION_GRADES, CALIBRATION_MIN_OUTCOMES, ForecastRegister,
+  ARCHITECTURE_PROPERTIES, ArchitectureBaseline, continuousArchitectureValidation, assertNoUndocumentedEvolution,
   sourceFiles, moduleOwner, actualDependencies, detect, governanceAnalytics,
 };

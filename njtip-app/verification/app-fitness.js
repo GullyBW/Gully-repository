@@ -8398,6 +8398,280 @@ module.exports = [
     if (later.authorizes !== false) v.push('the legal dependency graph claims authority');
   }),
 
+  fit('APP-FIT-ARCHITECTURE-VALIDATION', 'Undocumented architectural evolution is rejected rather than reported, and no baseline means unknown rather than compliant', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const cm = require('../src/architecture/context-map');
+    const asm = require('../src/architecture/assumptions');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const assumptions = new asm.AssumptionRegistry({ clock: () => 0 });
+    asm.seedPlatformAssumptions(assumptions, { at: 0 });
+
+    // --- Six properties, each falsified by drift kinds the existing detector already finds ----
+    for (const required of ['dependencyCorrectness', 'boundedContextIntegrity', 'ownershipConsistency', 'documentationSynchronization', 'adrCompliance', 'apiCompatibility']) {
+      if (!dp.ARCHITECTURE_PROPERTIES[required]) v.push(`architecture property '${required}' is not verified`);
+    }
+    if (Object.keys(dp.ARCHITECTURE_PROPERTIES).length !== 6) v.push('continuous architecture validation does not carry exactly six properties');
+    for (const [id, p] of Object.entries(dp.ARCHITECTURE_PROPERTIES)) {
+      if (!p.asks || !p.asks.endsWith('?') || !p.ifViolated) v.push(`architecture property '${id}' does not state its question or what violating it costs`);
+      if (!Array.isArray(p.falsifiedBy) || !p.falsifiedBy.length) v.push(`architecture property '${id}' names no drift kind that would falsify it`);
+      // No second detector: every falsifying kind must be one the drift checker actually finds.
+      for (const kind of p.falsifiedBy) if (!dp.DRIFT_KINDS[kind]) v.push(`property '${id}' is falsified by '${kind}', which the drift detector does not check`);
+    }
+
+    // --- A baseline nobody approved is a snapshot -------------------------------------------
+    const baseline = new dp.ArchitectureBaseline({ clock: () => 0 });
+    for (const [what, args] of [
+      ['no version', { contexts: 30, modules: 100, adr: 'ADR-0004', recordedBy: 'ARB' }],
+      ['no context count', { version: 'v1.7', modules: 100, adr: 'ADR-0004', recordedBy: 'ARB' }],
+      ['no approving decision', { version: 'v1.7', contexts: 30, modules: 100, recordedBy: 'ARB' }],
+      ['nobody recording it', { version: 'v1.7', contexts: 30, modules: 100, adr: 'ADR-0004' }],
+    ]) {
+      let refused = false;
+      try { baseline.record(args); } catch (_) { refused = true; }
+      if (!refused) v.push(`an architecture baseline with ${what} was recorded`);
+    }
+
+    // --- With no baseline, evolution is UNKNOWN rather than compliant ------------------------
+    const noBaseline = dp.continuousArchitectureValidation({ controls, assumptions, now: 0 });
+    if (noBaseline.evolution.known) v.push('evolution was reported as known with no baseline recorded');
+    if (noBaseline.undocumentedEvolution !== null) v.push('a verdict on undocumented evolution was reached with nothing to compare against');
+    if (!/not the same as absent/.test(noBaseline.evolution.detail)) v.push('an unrecorded baseline does not say that undetectable evolution is not absent evolution');
+    if (noBaseline.count !== 6) v.push('the validation did not cover all six properties');
+    if (noBaseline.authorizes !== false) v.push('the architecture validation report claims authority');
+    // The real estate: coupling is ratcheted rather than blocking, so the build is not rejected.
+    if (noBaseline.rejectsBuild) v.push(`the current architecture is rejected by its own validation: ${noBaseline.blocking.join(', ')}`);
+    if (!noBaseline.ratcheted.includes('dependencyCorrectness')) v.push('source coupling was not reported as ratcheted rather than blocking');
+
+    // --- THE SUCCESS PATH: a matching baseline, and the gate passes --------------------------
+    const good = new dp.ArchitectureBaseline({ clock: () => 0 });
+    good.record({ version: 'v1.7', contexts: cm.ids().length, modules: cm.sourceModules().length, adr: 'ADR-0004', recordedBy: 'Architecture Review Board' });
+    const matching = dp.continuousArchitectureValidation({ controls, assumptions, baseline: good, now: 0 });
+    if (!matching.evolution.known) v.push('a recorded baseline did not make evolution knowable');
+    if (matching.evolution.evolved) v.push('an architecture matching its baseline was reported as evolved');
+    if (matching.undocumentedEvolution !== false) v.push('an architecture matching its approved baseline reported undocumented evolution');
+    if (!dp.assertNoUndocumentedEvolution(matching)) v.push('the gate rejected an architecture matching its approved baseline');
+
+    // --- …and the gate REJECTS, rather than reporting ---------------------------------------
+    const stale = new dp.ArchitectureBaseline({ clock: () => 0 });
+    stale.record({ version: 'v1.6', contexts: cm.ids().length - 2, modules: cm.sourceModules().length, adr: 'ADR-0004', recordedBy: 'Architecture Review Board' });
+    const drifted = dp.continuousArchitectureValidation({ controls, assumptions, baseline: stale, now: 0 });
+    if (!drifted.undocumentedEvolution) v.push('an architecture with more contexts than its approved baseline was not reported as undocumented evolution');
+    if (!drifted.rejectsBuild) v.push('undocumented evolution did not reject the build');
+    let rejected = false;
+    try { dp.assertNoUndocumentedEvolution(drifted); } catch (e) { rejected = !!e.failClosed; }
+    if (!rejected) v.push('the gate reported undocumented evolution and let the build through — that documents the drift rather than preventing it');
+    // A module count that moved is the same finding from the other side.
+    const movedModules = new dp.ArchitectureBaseline({ clock: () => 0 });
+    movedModules.record({ version: 'v1.7', contexts: cm.ids().length, modules: cm.sourceModules().length - 5, adr: 'ADR-0004', recordedBy: 'ARB' });
+    if (!dp.continuousArchitectureValidation({ controls, assumptions, baseline: movedModules, now: 0 }).undocumentedEvolution) {
+      v.push('modules moving without a new approved baseline was not reported as undocumented evolution');
+    }
+    // A blocking property that fails rejects the build even with a matching baseline.
+    let blockedByProperty = false;
+    try { dp.assertNoUndocumentedEvolution({ blocking: ['ownershipConsistency'], undocumentedEvolution: false }); } catch (e) { blockedByProperty = !!e.failClosed; }
+    if (!blockedByProperty) v.push('a failing blocking property did not reject the build');
+    let nothingSupplied = false;
+    try { dp.assertNoUndocumentedEvolution(null); } catch (e) { nothingSupplied = !!e.failClosed; }
+    if (!nothingSupplied) v.push('the gate passed with nothing supplied to validate');
+  }),
+
+  fit('APP-FIT-INSTITUTIONAL-PERFORMANCE', 'Six performance indicators are derived from reports, a supplied figure produces unmeasured, and nothing authorizes', (v) => {
+    const inst = require('../src/assurance/institutional');
+
+    for (const required of ['governanceEfficiency', 'operationalEffectiveness', 'organizationalMaturity', 'legalReadiness', 'documentationQuality', 'institutionalResilience']) {
+      if (!inst.PERFORMANCE_INDICATORS[required]) v.push(`performance indicator '${required}' is not measured`);
+    }
+    if (Object.keys(inst.PERFORMANCE_INDICATORS).length !== 6) v.push('institutional performance does not carry exactly six indicators');
+    for (const [id, i] of Object.entries(inst.PERFORMANCE_INDICATORS)) {
+      if (!i.asks || !i.asks.endsWith('?') || !i.derivedFrom || !i.ifUnmeasured) v.push(`performance indicator '${id}' does not state its question, its source or what not measuring it costs`);
+    }
+
+    // --- Nothing supplied: every indicator unmeasured, and unmeasured is not performing -------
+    const blind = inst.institutionalPerformance({});
+    if (blind.unmeasured.length !== 6) v.push('an unsourced institution did not report all six indicators as unmeasured');
+    if (blind.performing) v.push('an entirely unmeasured institution reported itself performing');
+    if (blind.measurable) v.push('an unsourced institution reported itself measurable');
+    for (const i of blind.indicators) {
+      if (i.value !== null || i.performing !== null) v.push(`indicator '${i.indicator}' produced a verdict with no source`);
+    }
+    if (blind.authorizationStatus !== 'NOT AUTHORIZED' || blind.authorizes !== false) v.push('institutional performance claims authority');
+
+    // --- THE PROHIBITION: a supplied figure produces unmeasured, never the figure -------------
+    const injected = inst.institutionalPerformance({ legalReadiness: 0.99, documentationQuality: 1, governanceEfficiency: 1, operationalEffectiveness: 1, organizationalMaturity: 'L4', institutionalResilience: 1 });
+    if (injected.measured.length) v.push('a hand-entered performance figure was accepted');
+    if (!injected.everyIndicatorDerived) v.push('an indicator is not marked as derived and non-enterable');
+    for (const i of injected.indicators) if (i.manualEntry !== false) v.push(`indicator '${i.indicator}' permits manual entry`);
+
+    // --- THE SUCCESS PATH: real reports produce measured, performing indicators ---------------
+    const green = {
+      optimization: { load: { approvalLoad: [{ overCapacity: false }, { overCapacity: false }] }, overCapacityAuthorities: [] },
+      controlPerformance: { measurable: true, meanDetectionRate: 0.95, degrading: [], basis: 'every observed control performs' },
+      capabilityMaturity: { organizationalLevel: 'L3', complete: true, basis: 'every domain assessed' },
+      legalAuthority: { authorized: ['a', 'b'], count: 2, complete: true, completenessBasis: '2 of 2 authorised' },
+      documentation: { sound: true, verification: { claims: 247, unresolvedCount: 0 } },
+      resilience: { holds: true, capabilities: [{ categoriesValidated: true }], violationCount: 0 },
+    };
+    const performing = inst.institutionalPerformance(green);
+    if (!performing.performing) v.push(`a fully evidenced institution was not performing: ${performing.underperforming.concat(performing.unmeasured).join(', ')}`);
+    if (performing.unmeasured.length) v.push('a fully sourced institution still had unmeasured indicators');
+    if (performing.authorizationStatus !== 'NOT AUTHORIZED') v.push('six performing indicators produced an authorization');
+
+    // --- Each indicator can fail ON ITS OWN, so none is decoration ----------------------------
+    for (const [indicator, broken] of [
+      ['governanceEfficiency', { optimization: { load: { approvalLoad: [{ overCapacity: true }] }, overCapacityAuthorities: ['Oversight Board'] } }],
+      ['operationalEffectiveness', { controlPerformance: { measurable: true, meanDetectionRate: 0.3, degrading: ['APP-FIT-X'], basis: 'degrading' } }],
+      ['organizationalMaturity', { capabilityMaturity: { organizationalLevel: 'L1', complete: false, basis: 'four domains unknown' } }],
+      ['legalReadiness', { legalAuthority: { authorized: [], count: 5, complete: false, completenessBasis: '0 of 5' } }],
+      ['documentationQuality', { documentation: { sound: false, verification: { claims: 247, unresolvedCount: 9 } } }],
+      ['institutionalResilience', { resilience: { holds: false, capabilities: [{ categoriesValidated: false }], violationCount: 3 } }],
+    ]) {
+      const r = inst.institutionalPerformance({ ...green, ...broken });
+      if (!r.underperforming.includes(indicator)) v.push(`performance indicator '${indicator}' cannot fail — a control nothing can fail is decoration`);
+      if (r.performing) v.push(`an institution underperforming on '${indicator}' still reported itself performing`);
+    }
+    // An unmeasured indicator is excluded from the basis rather than counted as performing.
+    const partial = inst.institutionalPerformance({ documentation: green.documentation });
+    if (partial.performing) v.push('an institution with one measured indicator reported itself performing');
+    if (!/excluded rather than counted as performing/.test(partial.basis)) v.push('the basis does not say that unmeasured indicators are excluded');
+  }),
+
+  fit('APP-FIT-TRACEABILITY-INVARIANT', 'No executive conclusion, readiness assessment, recommendation, forecast or decision exists without a complete evidence-backed traceability chain', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const ir = require('../src/governance/institutional-resilience');
+    const DAY = 24 * 3600_000;
+
+    // --- Five subjects, ten areas, each naming what would trace it --------------------------
+    for (const required of ['executive-conclusion', 'readiness-assessment', 'governance-recommendation', 'institutional-forecast', 'operational-decision']) {
+      if (!inst.TRACEABILITY_SUBJECTS[required]) v.push(`traceability subject '${required}' is not evaluated`);
+    }
+    if (Object.keys(inst.TRACEABILITY_SUBJECTS).length !== 5) v.push('the invariant does not carry exactly five subjects');
+    for (const [id, s] of Object.entries(inst.TRACEABILITY_SUBJECTS)) {
+      if (!s.produces || !s.tracedBy || !s.ifUntraced) v.push(`traceability subject '${id}' does not say what produces it, what traces it, or what an untraced one costs`);
+    }
+    for (const required of ['architecture', 'governance', 'documentation', 'legalAuthority', 'evidence', 'operationalReadiness', 'institutionalResilience', 'executiveIntelligence', 'organizationalCapability', 'digitalTwinSimulations']) {
+      if (!inst.TRACEABILITY_AREAS[required]) v.push(`the invariant is not evaluated across '${required}'`);
+    }
+    if (Object.keys(inst.TRACEABILITY_AREAS).length !== 10) v.push('the invariant is not evaluated across exactly ten areas');
+
+    // --- Nothing supplied: every subject and area UNKNOWN, and the invariant blocks -----------
+    const blind = inst.evaluateTraceabilityInvariant({});
+    if (blind.holds) v.push('the traceability invariant held with nothing supplied to evaluate it against');
+    if (!blind.blocksInstitutionalReadiness) v.push('an unheld traceability invariant did not block institutional readiness');
+    if (blind.violationCount !== 15) v.push(`${blind.violationCount} violations reported with nothing supplied, expected 5 subjects + 10 areas`);
+    // Counted apart: nobody looked is not the same as we looked and it does not trace.
+    if (blind.unknownViolations !== blind.violationCount) v.push('an unexamined violation was counted as an examined one');
+    if (blind.tracedViolations !== 0) v.push('a traced violation was reported with nothing supplied');
+    for (const s of blind.subjects) {
+      if (s.holds) v.push(`subject '${s.subject}' reported traced with no source`);
+      if (!s.unknown) v.push(`subject '${s.subject}' was reported as examined with no source`);
+    }
+    if (blind.authorizes !== false) v.push('the traceability invariant report claims authority');
+    if (!/about CONCLUSIONS, not capabilities/.test(blind.note)) v.push('the invariant does not distinguish itself from the capability invariant');
+
+    // --- Each subject can be traced ON ITS OWN ----------------------------------------------
+    const traced = {
+      explainability: { everyValueExplainable: true, explainable: ['a'], count: 1, weakestHop: { hop: 'evidence' } },
+      traceability: { everyConclusionTraceable: true, basis: 'every dimension traces' },
+      decisions: { everyPackageAdvisory: true, count: 1, packages: [{ supportingEvidence: ['x'], affectedControls: ['y'] }] },
+      calibration: { measurable: true, basis: 'scored' },
+      decisionMemory: { unevaluated: [] },
+      areas: Object.fromEntries(Object.keys(inst.TRACEABILITY_AREAS).map((a) => [a, true])),
+    };
+    const full = inst.evaluateTraceabilityInvariant(traced);
+    if (!full.holds) v.push(`a fully traceable estate did not satisfy the invariant: ${full.violations.map((x) => x.subject || x.area).join(', ')}`);
+    if (full.blocksInstitutionalReadiness) v.push('a fully traceable estate still blocked institutional readiness');
+    for (const [subject, broken] of [
+      ['executive-conclusion', { explainability: { everyValueExplainable: false, explainable: [], count: 22, weakestHop: { hop: 'executive-metric' } } }],
+      ['readiness-assessment', { traceability: { everyConclusionTraceable: false, basis: 'a dimension does not trace' } }],
+      ['governance-recommendation', { decisions: { everyPackageAdvisory: true, count: 1, packages: [{ supportingEvidence: [], affectedControls: [] }] } }],
+      ['institutional-forecast', { calibration: { measurable: false, basis: 'nothing scored' } }],
+      ['operational-decision', { decisionMemory: { unevaluated: ['DEC-0001'] } }],
+    ]) {
+      const r = inst.evaluateTraceabilityInvariant({ ...traced, ...broken });
+      if (r.holds) v.push(`the invariant held with '${subject}' untraceable`);
+      const row = r.subjects.find((s) => s.subject === subject);
+      if (row.holds) v.push(`subject '${subject}' cannot fail — a clause nothing can fail is decoration`);
+      // Examined and failing, NOT unknown: somebody looked.
+      if (row.unknown) v.push(`subject '${subject}' was reported unknown when a source was supplied and found wanting`);
+    }
+    // An area that was examined and does not trace is a violation, and is counted as examined.
+    const badArea = inst.evaluateTraceabilityInvariant({ ...traced, areas: { ...traced.areas, legalAuthority: false } });
+    if (badArea.holds) v.push('the invariant held with an area that does not trace');
+    if (badArea.tracedViolations !== 1) v.push('an examined failing area was not counted apart from an unexamined one');
+
+    // --- Acceptance: attributed, time-bound, and it expires on its own ------------------------
+    const acceptances = new ir.ResilienceAcceptance({ clock: () => 0 });
+    for (const [what, args] of [
+      ['nothing named', { by: 'Oversight Board', rationale: 'r', expiresAt: DAY }],
+      ['no authority', { subject: 'executive-conclusion', rationale: 'r', expiresAt: DAY }],
+      ['no rationale', { subject: 'executive-conclusion', by: 'Oversight Board', expiresAt: DAY }],
+      ['no expiry', { subject: 'executive-conclusion', by: 'Oversight Board', rationale: 'r' }],
+    ]) {
+      let refused = false;
+      try { acceptances.acceptTraceability(args); } catch (_) { refused = true; }
+      if (!refused) v.push(`an untraceable conclusion was accepted with ${what}`);
+    }
+    acceptances.acceptTraceability({ subject: 'executive-conclusion', by: 'Oversight Board', rationale: 'the dashboard is unmeasured on a freshly composed platform', expiresAt: 30 * DAY });
+    const accepted = inst.traceabilityInvariantReport({ acceptances, now: 0 });
+    if (!accepted.accepted.some((a) => a.subject === 'executive-conclusion')) v.push('an accepted subject was still reported as unaccepted');
+    if (!accepted.blocksInstitutionalReadiness) v.push('an estate with fourteen unaccepted violations did not block readiness');
+    const later = inst.traceabilityInvariantReport({ acceptances, now: 60 * DAY });
+    if (later.accepted.length) v.push('an expired acceptance still covered a violation');
+    if (!later.expiredAcceptances.length) v.push('an expired acceptance was not reported as expired');
+    // A fully traceable estate with no acceptances at all does not block.
+    const clean = inst.traceabilityInvariantReport({ ...traced, now: 0 });
+    if (clean.blocksInstitutionalReadiness) v.push('a fully traceable estate blocked readiness with nothing to accept');
+  }),
+
+  fit('APP-FIT-PRODUCTION-TRANSITION', 'The production transition framework plans and never executes, and no track can reach ready', (v) => {
+    const migration = require('../src/migration/roadmap');
+
+    // --- Eight tracks, each naming an owner and what only a human can close -------------------
+    for (const required of ['deploymentReadiness', 'accreditation', 'identityIntegration', 'operationalMonitoring', 'disasterRecovery', 'migrationPlanning', 'operationalSupport', 'changeManagement']) {
+      if (!migration.TRANSITION_TRACKS[required]) v.push(`production transition track '${required}' is not planned`);
+    }
+    if (Object.keys(migration.TRANSITION_TRACKS).length !== 8) v.push('the production transition framework does not carry exactly eight tracks');
+    for (const [id, t] of Object.entries(migration.TRANSITION_TRACKS)) {
+      if (!t.owner || !t.plans || !t.humanOnly || !t.ifMistakenForTheAct) v.push(`transition track '${id}' does not name its owner, its plan, its human decision, or what mistaking the plan for the act would cost`);
+    }
+    // THE RULE, in the state table: no state in this framework is ready.
+    if (Object.values(migration.TRANSITION_STATES).some((s) => s.ready)) {
+      v.push('a production transition state counts as ready — readiness to deploy is not something a planning artefact can reach');
+    }
+
+    // --- THE ABSENCE THAT MATTERS: there is no way to execute anything -----------------------
+    for (const forbidden of ['execute', 'cutover', 'promote', 'deploy', 'goLive']) {
+      if (typeof migration[forbidden] === 'function') v.push(`the migration module exposes '${forbidden}' — the production transition framework must plan and never act`);
+    }
+
+    const plan = migration.productionTransitionPlan({ fitnessResults: [{ id: 'A', pass: true }] });
+    if (plan.count !== 8) v.push('the plan did not cover all eight tracks');
+    if (plan.anyTrackReady) v.push('a transition track reported itself ready');
+    if (plan.deploymentPermitted !== false) v.push('the production transition plan permitted a deployment');
+    if (plan.executes !== false || plan.planOnly !== true) v.push('the plan does not declare itself plan-only and non-executing');
+    if (plan.authorizationStatus !== 'NOT AUTHORIZED' || plan.authorizes !== false) v.push('the production transition plan claims authority');
+    for (const t of plan.tracks) {
+      if (!t.isPlanOnly) v.push(`transition track '${t.track}' is not marked plan-only`);
+      if (t.ready) v.push(`transition track '${t.track}' reported itself ready`);
+      if (!t.blockedByHumanDecision) v.push(`transition track '${t.track}' names no decision that only a human can take`);
+    }
+    if (plan.humanDecisions.length !== 8) v.push('not every track carries its human decision to the summary');
+    // Every human decision is owned by a named institution.
+    const own = require('../src/governance/ownership');
+    const institutions = new Set(own.subsystems().flatMap((s) => [own.OWNERSHIP[s].responsibleAuthority, own.OWNERSHIP[s].approvingAuthority]));
+    for (const d of plan.humanDecisions) {
+      if (!institutions.has(d.owner)) v.push(`transition track '${d.track}' is owned by '${d.owner}', which is not an institution in the accountability record`);
+    }
+    // Evidence is only what the platform genuinely holds; an unevidenced track says so.
+    const bare = migration.productionTransitionPlan({});
+    if (!bare.unplanned.length) v.push('a plan with no evidence supplied reported every track as planned');
+    if (!/PLANNING ARTEFACTS/.test(bare.note)) v.push('the plan does not state that it is a planning artefact');
+  }),
+
   fit('APP-FIT-LEGAL-DEPENDENCY-INTELLIGENCE', 'Five legal defects are each their own finding, and withdrawing an instrument names what it would strand', (v) => {
     const la = require('../src/legislation/legal-authority');
     const ir = require('../src/governance/institutional-resilience');

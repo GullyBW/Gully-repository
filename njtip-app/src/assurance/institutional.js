@@ -1328,6 +1328,228 @@ function readinessTraceability({ readiness = null, evidence = null, controls = [
   };
 }
 
+// --- Institutional performance intelligence (Phase 16, Part 14) -----------------------------------
+//
+// Twenty-two panels answer "is this domain sound". Part 14 asks a different question a board asks and
+// nothing here answered: is the institution PERFORMING — and it is a different question because a
+// domain can be sound and going nowhere.
+//
+// Six indicators, and the constraint that has held since Phase 1 and is checked here rather than
+// promised:
+//
+//   MANUAL EXECUTIVE METRICS REMAIN PROHIBITED. There is no parameter in this function that accepts
+//   a figure. Every indicator is a function of a report, and supplying a number instead of a report
+//   produces `unmeasured`, not the number.
+const PERFORMANCE_INDICATORS = {
+  governanceEfficiency: {
+    asks: 'Is governance producing decisions, or queuing them?',
+    derivedFrom: 'src/governance/optimization.js — review load against declared capacity',
+    ifUnmeasured: 'Nobody can tell a board that decides from one that meets.',
+  },
+  operationalEffectiveness: {
+    asks: 'Do the controls actually catch what they are for?',
+    derivedFrom: 'src/assurance/control-effectiveness.js — observed detection rate',
+    ifUnmeasured: 'A green build stands in for operational evidence.',
+  },
+  organizationalMaturity: {
+    asks: 'How capable is the institution across its seven domains?',
+    derivedFrom: 'src/governance/ownership.js (capabilityMaturity)',
+    ifUnmeasured: 'Capability is asserted rather than assessed.',
+  },
+  legalReadiness: {
+    asks: 'Can the institution say what permits each capability to operate?',
+    derivedFrom: 'src/legislation/legal-authority.js',
+    ifUnmeasured: 'Lawfulness is assumed from the absence of a challenge.',
+  },
+  documentationQuality: {
+    asks: 'Does the governed corpus still describe the implementation?',
+    derivedFrom: 'src/architecture/documentation-assurance.js',
+    ifUnmeasured: 'An operator follows a procedure nobody has checked.',
+  },
+  institutionalResilience: {
+    asks: 'Does every critical capability have a validated alternative?',
+    derivedFrom: 'src/governance/institutional-resilience.js',
+    ifUnmeasured: 'A single person, document or instrument can stop a constitutional capability and nothing says so.',
+  },
+};
+
+function institutionalPerformance(sources = {}) {
+  const g = (fn) => { try { const r = fn(); return r === undefined ? null : r; } catch (_) { return null; } };
+  const indicator = (id, value, performing, detail) => ({
+    indicator: id, ...PERFORMANCE_INDICATORS[id],
+    // A raw number supplied instead of a report produces `unmeasured`, never the number.
+    measured: value !== null && value !== undefined,
+    value: value ?? null,
+    performing: value === null || value === undefined ? null : performing,
+    detail: detail || `not measured — ${PERFORMANCE_INDICATORS[id].ifUnmeasured}`,
+    derived: true, manualEntry: false,
+  });
+
+  const indicators = [
+    indicator('governanceEfficiency',
+      g(() => sources.optimization && sources.optimization.load && sources.optimization.load.approvalLoad.length
+        ? +(sources.optimization.load.approvalLoad.filter((r) => !r.overCapacity).length / sources.optimization.load.approvalLoad.length).toFixed(4) : null),
+      g(() => sources.optimization && sources.optimization.overCapacityAuthorities.length === 0),
+      g(() => sources.optimization && `${sources.optimization.overCapacityAuthorities.length} authority(ies) owe more reviews than they can perform`)),
+    indicator('operationalEffectiveness',
+      g(() => sources.controlPerformance && sources.controlPerformance.measurable ? sources.controlPerformance.meanDetectionRate : null),
+      g(() => sources.controlPerformance && sources.controlPerformance.measurable && sources.controlPerformance.degrading.length === 0),
+      g(() => sources.controlPerformance && sources.controlPerformance.basis)),
+    indicator('organizationalMaturity',
+      g(() => sources.capabilityMaturity && sources.capabilityMaturity.organizationalLevel !== 'unknown' ? sources.capabilityMaturity.organizationalLevel : null),
+      g(() => sources.capabilityMaturity && sources.capabilityMaturity.complete),
+      g(() => sources.capabilityMaturity && sources.capabilityMaturity.basis)),
+    indicator('legalReadiness',
+      g(() => sources.legalAuthority ? +(sources.legalAuthority.authorized.length / Math.max(1, sources.legalAuthority.count)).toFixed(4) : null),
+      g(() => sources.legalAuthority && sources.legalAuthority.complete),
+      g(() => sources.legalAuthority && sources.legalAuthority.completenessBasis)),
+    indicator('documentationQuality',
+      g(() => sources.documentation && sources.documentation.verification
+        ? +((sources.documentation.verification.claims - sources.documentation.verification.unresolvedCount) / Math.max(1, sources.documentation.verification.claims)).toFixed(4) : null),
+      g(() => sources.documentation && sources.documentation.sound),
+      g(() => sources.documentation && `${sources.documentation.verification.unresolvedCount} of ${sources.documentation.verification.claims} claims do not resolve`)),
+    indicator('institutionalResilience',
+      g(() => sources.resilience && Array.isArray(sources.resilience.capabilities)
+        ? +(sources.resilience.capabilities.filter((c) => c.categoriesValidated).length / Math.max(1, sources.resilience.capabilities.length)).toFixed(4) : null),
+      g(() => sources.resilience && sources.resilience.holds),
+      g(() => sources.resilience && `${sources.resilience.violationCount} capability(ies) rest on a single dependency`)),
+  ];
+
+  const measured = indicators.filter((i) => i.measured);
+  const underperforming = indicators.filter((i) => i.performing === false);
+  return {
+    indicators, count: indicators.length,
+    catalogue: Object.entries(PERFORMANCE_INDICATORS).map(([indicator, i]) => ({ indicator, ...i })),
+    measured: measured.map((i) => i.indicator),
+    unmeasured: indicators.filter((i) => !i.measured).map((i) => i.indicator),
+    underperforming: underperforming.map((i) => i.indicator),
+    // Weakest link, and an unmeasured indicator is not a performing one.
+    performing: indicators.every((i) => i.performing === true),
+    everyIndicatorDerived: indicators.every((i) => i.derived === true && i.manualEntry === false),
+    measurable: measured.length > 0,
+    basis: measured.length
+      ? `${measured.length} of ${indicators.length} performance indicators are measured; ${underperforming.length} are underperforming. The ${indicators.length - measured.length} unmeasured are excluded rather than counted as performing.`
+      : 'No performance indicator has a source. The institution\'s performance is unmeasured, which is not the same as poor and not the same as adequate.',
+    authorizationStatus: 'NOT AUTHORIZED',
+    informationalOnly: true, authorizes: false,
+    note: 'Manual executive metrics remain prohibited. There is no parameter here that accepts a figure: every indicator is a function of a report, and supplying a number instead of a report produces "unmeasured" rather than the number.',
+  };
+}
+
+// --- The Phase 16 global invariant ---------------------------------------------------------------
+//
+//   No executive conclusion, readiness assessment, governance recommendation, institutional
+//   forecast, or operational decision shall exist without a complete, explainable, evidence-backed
+//   traceability chain.
+//
+// The six-clause invariant asks whether a CAPABILITY is sound. This one asks whether a CONCLUSION is
+// answerable — and it is a different question, because a platform can be entirely sound and still
+// produce figures nobody can trace.
+//
+// The rule that makes it a gate rather than a report:
+//
+//   AN UNTRACEABLE CONCLUSION BLOCKS READINESS UNTIL SOMEBODY EITHER TRACES IT OR ACCEPTS IT ON THE
+//   RECORD, with a rationale and an expiry. There is no third option, and in particular there is no
+//   option where the conclusion keeps being published while nobody can say what it rests on.
+const TRACEABILITY_SUBJECTS = {
+  'executive-conclusion': { produces: 'the twenty-two executive panels', tracedBy: 'the seven-hop explainability chain', ifUntraced: 'A board acts on a figure whose provenance is a code comment.' },
+  'readiness-assessment': { produces: 'the ten readiness dimensions', tracedBy: 'bidirectional readiness traceability', ifUntraced: 'Readiness is asserted and nobody can say from what.' },
+  'governance-recommendation': { produces: 'optimization recommendations and decision packages', tracedBy: 'the evidence and affected controls each names', ifUntraced: 'Advice is followed and nobody can reconstruct why it was given.' },
+  'institutional-forecast': { produces: 'the twelve governance forecasts', tracedBy: 'a recorded forecast scored against an observed outcome', ifUntraced: 'A prediction is quoted as a fact and nothing ever checks it.' },
+  'operational-decision': { produces: 'recorded governance decisions', tracedBy: 'the decision memory and the ledger behind it', ifUntraced: 'A decision exists with no recoverable basis, so it cannot be challenged or repeated.' },
+};
+
+// The ten areas Phase 16 requires this evaluated across. Each names the source that would answer it.
+const TRACEABILITY_AREAS = {
+  architecture: 'src/architecture/drift-prevention.js (continuousArchitectureValidation)',
+  governance: 'src/governance/raci.js and src/governance/ownership.js',
+  documentation: 'src/architecture/documentation-assurance.js',
+  legalAuthority: 'src/legislation/legal-authority.js',
+  evidence: 'src/assurance/evidence-confidence.js (EvidenceRegister)',
+  operationalReadiness: 'src/assurance/evidence-confidence.js (readinessModel)',
+  institutionalResilience: 'src/governance/institutional-resilience.js',
+  executiveIntelligence: 'src/assurance/institutional.js (explainability)',
+  organizationalCapability: 'src/governance/ownership.js (capabilityMaturity)',
+  digitalTwinSimulations: 'src/twin2/operations-twin.js (calibrationReport)',
+};
+
+function evaluateTraceabilityInvariant(sources = {}) {
+  const g = (fn) => { try { const r = fn(); return r === undefined ? null : r; } catch (_) { return null; } };
+  const subject = (id, traced, detail) => ({
+    subject: id, ...TRACEABILITY_SUBJECTS[id],
+    traced: traced === null ? null : !!traced,
+    unknown: traced === null,
+    holds: traced === true,
+    detail: detail || `no source was supplied to trace this from — ${TRACEABILITY_SUBJECTS[id].ifUntraced}`,
+  });
+
+  const subjects = [
+    subject('executive-conclusion',
+      g(() => sources.explainability ? sources.explainability.everyValueExplainable : null),
+      g(() => sources.explainability && `${sources.explainability.explainable.length} of ${sources.explainability.count} executive values are explainable end to end; the chain most often breaks at '${sources.explainability.weakestHop.hop}'`)),
+    subject('readiness-assessment',
+      g(() => sources.traceability ? sources.traceability.everyConclusionTraceable : null),
+      g(() => sources.traceability && sources.traceability.basis)),
+    subject('governance-recommendation',
+      g(() => sources.decisions ? sources.decisions.everyPackageAdvisory && sources.decisions.packages.every((p) => p.supportingEvidence.length && p.affectedControls.length) : null),
+      g(() => sources.decisions && `${sources.decisions.count} decision package(s), each carrying supporting evidence and affected controls`)),
+    subject('institutional-forecast',
+      g(() => sources.calibration ? sources.calibration.measurable : null),
+      g(() => sources.calibration && sources.calibration.basis)),
+    subject('operational-decision',
+      g(() => sources.decisionMemory ? (sources.decisionMemory.unevaluated || []).length === 0 : null),
+      g(() => sources.decisionMemory && `${(sources.decisionMemory.unevaluated || []).length} decision(s) have never been evaluated against what actually happened`)),
+  ];
+
+  // The ten areas. An area with no source is UNKNOWN — the same discipline as everywhere else.
+  const areas = Object.entries(TRACEABILITY_AREAS).map(([area, derivedFrom]) => {
+    const supplied = sources.areas && sources.areas[area] !== undefined && sources.areas[area] !== null;
+    return {
+      area, derivedFrom,
+      evaluated: supplied,
+      holds: supplied ? !!sources.areas[area] : null,
+      reason: supplied ? (sources.areas[area] ? 'traceable' : 'a conclusion in this area cannot be traced to what it rests on')
+        : 'no source was supplied for this area, so whether its conclusions are traceable is unknown',
+    };
+  });
+
+  const violations = [
+    ...subjects.filter((s) => !s.holds).map((s) => ({ subject: s.subject, area: null, unknown: s.unknown, reason: s.detail, ifUntraced: s.ifUntraced })),
+    ...areas.filter((a) => a.holds !== true).map((a) => ({ subject: null, area: a.area, unknown: !a.evaluated, reason: a.reason, ifUntraced: 'A whole area of the platform produces conclusions nobody can trace.' })),
+  ];
+  return {
+    statement: 'No executive conclusion, readiness assessment, governance recommendation, institutional forecast, or operational decision shall exist without a complete, explainable, evidence-backed traceability chain.',
+    subjects, subjectCount: subjects.length,
+    areas, areaCount: areas.length,
+    violations, violationCount: violations.length,
+    // Counted apart, as everywhere: nobody looked is not the same as we looked and it does not trace.
+    unknownViolations: violations.filter((v) => v.unknown).length,
+    tracedViolations: violations.filter((v) => !v.unknown).length,
+    holds: violations.length === 0,
+    blocksInstitutionalReadiness: violations.length > 0,
+    failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'This invariant is about CONCLUSIONS, not capabilities: a platform can be entirely sound and still produce figures nobody can trace. An untraceable conclusion blocks readiness until somebody traces it or accepts it on the record with a rationale and an expiry — there is no option where it keeps being published while nobody can say what it rests on.',
+  };
+}
+
+// The report, with acceptances applied. Uses the same acceptance discipline as the capability
+// invariant — a named authority, a rationale and an expiry — through the same register class.
+function traceabilityInvariantReport({ acceptances = null, now = 0, ...sources } = {}) {
+  const evaluation = evaluateTraceabilityInvariant(sources);
+  const active = acceptances && acceptances.activeTraceability ? acceptances.activeTraceability({ now }) : [];
+  const expired = acceptances && acceptances.expiredTraceability ? acceptances.expiredTraceability({ now }) : [];
+  const covered = (v) => active.some((a) => a.subject === (v.subject || v.area));
+  const unaccepted = evaluation.violations.filter((v) => !covered(v));
+  return {
+    ...evaluation,
+    acceptances: active, expiredAcceptances: expired,
+    accepted: evaluation.violations.filter(covered),
+    unaccepted,
+    blocksInstitutionalReadiness: unaccepted.length > 0,
+    now,
+  };
+}
+
 // --- Part 15: the executive dashboard ------------------------------------------------------------
 //
 // Every panel is derived. There is no path here that accepts a figure.
@@ -1638,6 +1860,8 @@ module.exports = {
   GOVERNANCE_STATES, governanceState, governanceCompleteness,
   LEARNING_STAGES, institutionalLearning,
   WORKSHOP_OUTCOMES, WORKSHOP_STATES, ValidationWorkshop,
+  PERFORMANCE_INDICATORS, institutionalPerformance,
+  TRACEABILITY_SUBJECTS, TRACEABILITY_AREAS, evaluateTraceabilityInvariant, traceabilityInvariantReport,
   TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,
   EVIDENCE_TYPES, ONBOARDING_STATES, EvidenceOnboarding,
   DATA_CLASSES, PROVENANCE_FIELDS,
