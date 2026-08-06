@@ -835,6 +835,201 @@ class ForecastRegister {
     };
   }
 
+  // --- Error decomposition (Phase 17, Part 3) -----------------------------------------------------
+  //
+  // `calibration()` reports mean absolute error and bias. Both are real, and together they still
+  // cannot answer the question a modeller actually needs answered:
+  //
+  //   IS THIS MODEL WRONG IN A DIRECTION, OR JUST NOISY?
+  //
+  // Those need opposite repairs. A biased model is systematically off and can be corrected by
+  // shifting it. A noisy model is right on average and useless on any single occasion, and shifting
+  // it does nothing. Mean absolute error is the same for both, which is why it has to be split.
+  errorDecomposition(dimension) {
+    if (!FORECAST_DIMENSIONS[dimension]) throw new Error(`unknown forecast dimension '${dimension}'`);
+    const scored = this.scored(dimension).sort((a, b) => a.at - b.at);
+    const round = (x) => (x === null ? null : +x.toFixed(4));
+
+    if (scored.length < CALIBRATION_MIN_OUTCOMES) {
+      return {
+        dimension, measurable: false,
+        outcomes: scored.length, required: CALIBRATION_MIN_OUTCOMES,
+        bias: null, variance: null, biasShare: null, dominant: 'unknown',
+        // The distinction Part 3 turns on, stated where it will be read.
+        reason: scored.length
+          ? `${scored.length} of ${CALIBRATION_MIN_OUTCOMES} outcomes — too few to separate a model that leans from one that wobbles. This is UNKNOWN, not inaccurate.`
+          : 'no forecast in this dimension has been scored, so nothing is known about how it is wrong — which is not the same as it being wrong',
+      };
+    }
+    const errors = scored.map((f) => f.outcome.error);
+    const bias = errors.reduce((a, b) => a + b, 0) / errors.length;
+    // Variance about the model's own mean error: what is left once the systematic part is removed.
+    const variance = errors.reduce((a, e) => a + ((e - bias) ** 2), 0) / errors.length;
+    const biasSquared = bias ** 2;
+    const total = biasSquared + variance;
+    const biasShare = total > 0 ? biasSquared / total : null;
+    const dominant = biasShare === null ? 'neither' : biasShare >= 0.5 ? 'bias' : 'variance';
+
+    return {
+      dimension, measurable: true, outcomes: scored.length, required: CALIBRATION_MIN_OUTCOMES,
+      bias: round(bias), variance: round(variance), biasSquared: round(biasSquared),
+      totalSquaredError: round(total),
+      biasShare: round(biasShare),
+      dominant,
+      // Named rather than left in the arithmetic, because the two need different people.
+      repair: dominant === 'bias'
+        ? 'The model leans in a direction. It can be corrected by shifting it, and the shift is a modelling decision somebody has to take.'
+        : dominant === 'variance'
+          ? 'The model is right on average and unreliable on any single occasion. Shifting it changes nothing; it needs better inputs or a wider interval.'
+          : 'The model has no measurable error at all across these outcomes.',
+      reason: `bias ${round(bias)} and variance ${round(variance)} over ${scored.length} outcome(s); ${dominant === 'neither' ? 'neither dominates' : `${dominant} accounts for ${Math.round((dominant === 'bias' ? biasShare : 1 - biasShare) * 100)}% of the squared error`}`,
+    };
+  }
+
+  // --- Forecast learning (Phase 17, Part 3) -------------------------------------------------------
+  //
+  // Whether the model is getting better, by the Phase 17 rule. The trap this exists to avoid:
+  //
+  //   A MODEL THAT GOT LUCKIER IS NOT A MODEL THAT GOT BETTER. Accuracy over a recent window can
+  //   rise while the systematic error is untouched, and a dashboard reporting only the window will
+  //   call that an improvement. So the bias is compared across the same two halves, and a rise in
+  //   accuracy alongside a persistent bias is named as exactly that.
+  learning(dimension, { now = null } = {}) {
+    const evidenceConfidence = require('../assurance/evidence-confidence');
+    const t = now ?? this._clock();
+    if (!FORECAST_DIMENSIONS[dimension]) throw new Error(`unknown forecast dimension '${dimension}'`);
+    const scored = this.scored(dimension).sort((a, b) => a.at - b.at);
+    const round = (x) => (x === null ? null : +x.toFixed(4));
+    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+
+    // Two comparable halves. Anything less and there is nothing to compare against anything.
+    const need = 2 * CALIBRATION_MIN_OUTCOMES;
+    if (scored.length < need) {
+      return {
+        dimension, measurable: false, outcomes: scored.length, required: need,
+        accuracyTrend: evidenceConfidence.verifiedImprovement({ subject: `forecast accuracy: ${dimension}`, series: [] }),
+        biasPersists: null, earlier: null, later: null,
+        reason: `${scored.length} of ${need} outcomes — a model needs two comparable halves before anything can be said about it learning. This is UNKNOWN, not a model that failed to improve.`,
+        now: t, informationalOnly: true, authorizes: false,
+      };
+    }
+
+    const half = Math.floor(scored.length / 2);
+    const halves = [scored.slice(0, half), scored.slice(half)];
+    const [earlier, later] = halves.map((h) => ({
+      outcomes: h.length,
+      accuracy: round(h.filter((f) => f.outcome.withinInterval).length / h.length),
+      meanAbsoluteError: round(mean(h.map((f) => f.outcome.absoluteError))),
+      bias: round(mean(h.map((f) => f.outcome.error))),
+    }));
+
+    // A model rebuild is a measurement change: the later half is about a different model, so a rise
+    // across the boundary is explained by the rebuild rather than supported by it.
+    const madeBy = [...new Set(scored.map((f) => f.madeBy))];
+    const modelChanged = madeBy.length > 1;
+
+    const accuracyTrend = evidenceConfidence.verifiedImprovement({
+      subject: `forecast accuracy: ${dimension}`,
+      series: [earlier.accuracy, later.accuracy],
+      evidence: modelChanged
+        ? [{ kind: 'measurement-change', detail: `the forecasts were produced by ${madeBy.length} different models (${madeBy.join(', ')}), so the two halves are not about the same thing` }]
+        : [],
+    });
+
+    // THE FINDING. Accuracy up, systematic error unchanged: luckier, not better.
+    const biasPersists = Math.abs(later.bias) >= Math.abs(earlier.bias) - 0.02;
+
+    return {
+      dimension, measurable: true, outcomes: scored.length, required: need,
+      earlier, later,
+      accuracyImprovement: round(later.accuracy - earlier.accuracy),
+      errorImprovement: round(earlier.meanAbsoluteError - later.meanAbsoluteError),
+      accuracyTrend,
+      biasPersists,
+      modelChanged, models: madeBy,
+      reason: accuracyTrend.improved && biasPersists
+        ? `accuracy rose from ${earlier.accuracy} to ${later.accuracy} while the systematic bias held at ${later.bias} — this is a model that got LUCKIER, not one that got better`
+        : accuracyTrend.improved
+          ? `accuracy rose from ${earlier.accuracy} to ${later.accuracy} and the bias fell from ${earlier.bias} to ${later.bias}`
+          : `accuracy moved from ${earlier.accuracy} to ${later.accuracy}; ${accuracyTrend.reason}`,
+      now: t, informationalOnly: true, authorizes: false,
+    };
+  }
+
+  // --- Confidence recalibration (Phase 17, Part 3) ------------------------------------------------
+  //
+  // What the interval SHOULD be, derived from the errors actually observed rather than from the
+  // observation count. Offered as a recommendation and never applied, for one reason:
+  //
+  //   NARROWING AN INTERVAL IS A CLAIM THAT THE MODEL IS BETTER. Applying that automatically would
+  //   let a quiet run of luck tighten the band the platform reports its own predictions with — which
+  //   is the platform improving its own confidence in itself with nobody deciding to.
+  recalibration(dimension) {
+    if (!FORECAST_DIMENSIONS[dimension]) throw new Error(`unknown forecast dimension '${dimension}'`);
+    const scored = this.scored(dimension);
+    const round = (x) => (x === null ? null : +x.toFixed(4));
+    if (scored.length < CALIBRATION_MIN_OUTCOMES) {
+      return {
+        dimension, measurable: false, outcomes: scored.length, required: CALIBRATION_MIN_OUTCOMES,
+        currentHalfWidth: null, recommendedHalfWidth: null, direction: 'unknown',
+        applied: false, requiresHumanApproval: true, approvedBy: null,
+        reason: `${scored.length} of ${CALIBRATION_MIN_OUTCOMES} outcomes — there is nothing to recalibrate against. An interval nobody has tested stays as it is.`,
+      };
+    }
+    const widths = scored.filter((f) => Array.isArray(f.interval)).map((f) => (f.interval[1] - f.interval[0]) / 2);
+    const currentHalfWidth = widths.length ? round(widths.reduce((a, b) => a + b, 0) / widths.length) : null;
+    // The band that would have contained the observed errors. Derived from what happened.
+    const recommendedHalfWidth = round(Math.max(...scored.map((f) => f.outcome.absoluteError)));
+    const direction = currentHalfWidth === null ? 'unknown'
+      : recommendedHalfWidth > currentHalfWidth ? 'widen'
+        : recommendedHalfWidth < currentHalfWidth ? 'narrow' : 'unchanged';
+
+    return {
+      dimension, measurable: true, outcomes: scored.length, required: CALIBRATION_MIN_OUTCOMES,
+      currentHalfWidth, recommendedHalfWidth, direction,
+      // Constants. Nothing in this function computes them.
+      applied: false, requiresHumanApproval: true, approvedBy: null,
+      caution: direction === 'narrow'
+        ? 'Narrowing is a claim that the model is better. It must not be applied on the strength of a quiet run: check the error decomposition and the learning report first.'
+        : direction === 'widen'
+          ? 'The observed errors fell outside the band this dimension has been reporting. Widening is the honest response and it makes every past forecast look weaker, which is the point.'
+          : 'The band matches the observed errors.',
+      reason: `over ${scored.length} outcome(s) the largest absolute error was ${recommendedHalfWidth}${currentHalfWidth === null ? '; no forecast recorded an interval to compare it against' : `, against a mean recorded half-width of ${currentHalfWidth}`}`,
+    };
+  }
+
+  // Part 3's learning dashboard, over every dimension.
+  learningReport({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = Object.keys(FORECAST_DIMENSIONS).map((d) => ({
+      ...this.learning(d, { now: t }),
+      decomposition: this.errorDecomposition(d),
+      recalibration: this.recalibration(d),
+    }));
+    const measured = rows.filter((r) => r.measurable);
+    const unverified = rows.filter((r) => r.accuracyTrend && r.accuracyTrend.violatesInvariant);
+    return {
+      dimensions: rows, count: rows.length,
+      measurable: measured.length > 0,
+      // Three separate populations, never merged. This is the Part 3 discipline.
+      unknown: rows.filter((r) => !r.measurable).map((r) => r.dimension),
+      improving: rows.filter((r) => r.accuracyTrend && r.accuracyTrend.state === 'verified-improvement').map((r) => r.dimension),
+      unverifiedImprovements: unverified.map((r) => r.dimension),
+      luckyNotBetter: measured.filter((r) => r.accuracyTrend.improved && r.biasPersists).map((r) => r.dimension),
+      biasDominated: rows.filter((r) => r.decomposition.dominant === 'bias').map((r) => r.dimension),
+      varianceDominated: rows.filter((r) => r.decomposition.dominant === 'variance').map((r) => r.dimension),
+      needWidening: rows.filter((r) => r.recalibration.direction === 'widen').map((r) => r.dimension),
+      everyImprovementVerified: unverified.length === 0,
+      // Nothing here is applied, ever.
+      recalibrationsApplied: 0,
+      basis: measured.length
+        ? `${measured.length} of ${rows.length} dimension(s) have two comparable halves of scored outcomes. ${rows.length - measured.length} are UNKNOWN — which is not the same as a model that failed to improve.`
+        : `No forecast dimension has been scored enough times to have two comparable halves. Forecast learning across all ${rows.length} dimensions is UNKNOWN, and an unknown prediction is not an inaccurate one: this needs somebody to record outcomes, not somebody to fix a model.`,
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'An unknown prediction is not an inaccurate prediction, and the two are counted separately everywhere here. A rise in accuracy alongside an unchanged systematic bias is reported as a model that got luckier rather than better. Recalibration is recommended and never applied: narrowing an interval is a claim the model has improved, and the platform does not get to make that claim about itself.',
+    };
+  }
+
   // The Part 3 dashboard, over every declared dimension.
   report({ now = null } = {}) {
     const t = now ?? this._clock();

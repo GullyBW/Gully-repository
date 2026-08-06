@@ -441,3 +441,197 @@ test('phase17: a readiness conclusion that rose obeys the improvement invariant 
   assert.equal(supported.dimensions.find((d) => d.dimension === dimension).trend.state, 'verified-improvement');
   assert.equal(supported.everyImprovementVerified, true);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 3 — adaptive forecast intelligence. Unknown predictions stay distinct from inaccurate ones.
+// ---------------------------------------------------------------------------------------------
+
+const dp = require('../src/architecture/drift-prevention');
+
+function scoredRegister(rows, madeBy = () => 'model-A') {
+  const reg = new dp.ForecastRegister({ clock: () => 0 });
+  rows.forEach((r, i) => {
+    const f = reg.record('auditReadiness', {
+      point: r.point, interval: r.interval, constrained: true, horizonDays: 1, madeBy: madeBy(i), at: i * 10 * DAY,
+    });
+    reg.recordOutcome(f.id, { observed: r.observed, observedBy: 'Operations Review Board', at: i * 10 * DAY + 2 * DAY });
+  });
+  return reg;
+}
+
+test('phase17: an unknown forecast dimension is not an inaccurate one', () => {
+  const empty = new dp.ForecastRegister({ clock: () => 0 });
+  const report = empty.learningReport({ now: 0 });
+  assert.equal(report.measurable, false);
+  assert.equal(report.unknown.length, report.count);
+  assert.deepEqual(report.unverifiedImprovements, []);
+  assert.equal(report.everyImprovementVerified, true);
+  assert.equal(report.authorizes, false);
+  assert.match(report.note, /unknown prediction is not an inaccurate prediction/);
+
+  const decomposition = empty.errorDecomposition('auditReadiness');
+  assert.equal(decomposition.measurable, false);
+  assert.equal(decomposition.dominant, 'unknown');
+  assert.match(decomposition.reason, /not the same as it being wrong/);
+});
+
+test('phase17: accuracy up with the bias unchanged is a model that got luckier, not better', () => {
+  // Five forecasts biased +0.2 with a band too narrow to contain it, then five with the SAME bias
+  // and a band wide enough that they land inside. Accuracy 0 → 1; the model has not improved.
+  const lucky = scoredRegister([
+    ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })),
+    ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.4, 1.0], observed: 0.5 })),
+  ]);
+  const learned = lucky.learning('auditReadiness', { now: 200 * DAY });
+  assert.equal(learned.measurable, true);
+  assert.equal(learned.earlier.accuracy, 0);
+  assert.equal(learned.later.accuracy, 1);
+  assert.equal(learned.earlier.bias, learned.later.bias, 'the systematic error did not move');
+  assert.equal(learned.biasPersists, true);
+  assert.match(learned.reason, /LUCKIER, not one that got better/);
+  // The rise is real, so it still registers — as unverified, not as nothing.
+  assert.equal(learned.accuracyTrend.state, 'unverified-improvement');
+  assert.ok(lucky.learningReport({ now: 200 * DAY }).luckyNotBetter.includes('auditReadiness'));
+});
+
+test('phase17: a model whose bias genuinely fell is not accused of luck', () => {
+  const better = scoredRegister([
+    ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })),
+    ...Array.from({ length: 5 }, () => ({ point: 0.5, interval: [0.45, 0.55], observed: 0.5 })),
+  ]);
+  assert.equal(better.learning('auditReadiness', { now: 200 * DAY }).biasPersists, false);
+  assert.deepEqual(better.learningReport({ now: 200 * DAY }).luckyNotBetter, []);
+});
+
+test('phase17: a rebuilt model makes the two halves incomparable', () => {
+  const rebuilt = scoredRegister([
+    ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })),
+    ...Array.from({ length: 5 }, () => ({ point: 0.5, interval: [0.45, 0.55], observed: 0.5 })),
+  ], (i) => (i < 5 ? 'model-A' : 'model-B'));
+  const across = rebuilt.learning('auditReadiness', { now: 200 * DAY });
+  assert.equal(across.modelChanged, true);
+  assert.equal(across.accuracyTrend.verified, false);
+  assert.equal(across.accuracyTrend.measurementChanges.length, 1);
+});
+
+test('phase17: error decomposition separates a model that leans from one that wobbles', () => {
+  const leaning = scoredRegister(Array.from({ length: 10 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })))
+    .errorDecomposition('auditReadiness');
+  assert.equal(leaning.dominant, 'bias');
+  assert.equal(leaning.variance, 0);
+  assert.match(leaning.repair, /shifting it/);
+
+  const wobbling = scoredRegister(Array.from({ length: 10 }, (_, i) => ({
+    point: 0.5, interval: [0.45, 0.55], observed: i % 2 === 0 ? 0.3 : 0.7,
+  }))).errorDecomposition('auditReadiness');
+  assert.equal(wobbling.dominant, 'variance');
+  assert.ok(Math.abs(wobbling.bias) < 0.01, 'a noisy model is right on average');
+  assert.match(wobbling.repair, /Shifting it changes nothing/);
+});
+
+test('phase17: recalibration is recommended and never applied', () => {
+  const lucky = scoredRegister([
+    ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })),
+    ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.4, 1.0], observed: 0.5 })),
+  ]);
+  const widen = lucky.recalibration('auditReadiness');
+  assert.equal(widen.applied, false);
+  assert.equal(widen.requiresHumanApproval, true);
+  assert.equal(widen.approvedBy, null);
+  assert.equal(widen.direction, 'widen');
+  assert.match(widen.caution, /makes every past forecast look weaker, which is the point/);
+  assert.equal(lucky.learningReport({ now: 200 * DAY }).recalibrationsApplied, 0);
+
+  const narrow = scoredRegister(Array.from({ length: 6 }, () => ({ point: 0.5, interval: [0.0, 1.0], observed: 0.5 })))
+    .recalibration('auditReadiness');
+  assert.equal(narrow.direction, 'narrow');
+  assert.match(narrow.caution, /must not be applied on the strength of a quiet run/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 4 — digital twin learning. Confidence rises only on verified operational evidence.
+// ---------------------------------------------------------------------------------------------
+
+const twin2 = require('../src/twin2/operations-twin');
+const SCENARIO = Object.keys(twin2.SCENARIOS)[0];
+
+function validatedTwin(rows) {
+  const t = new twin2.OperationsTwin({ clock: () => 0 });
+  rows.forEach((r, i) => t.recordValidation(SCENARIO, {
+    predicted: true, observed: r.observed, by: 'Operations Review Board', at: i * DAY,
+    ...(r.evidence ? { evidence: r.evidence } : {}),
+    ...(r.reviewEveryDays ? { reviewEveryDays: r.reviewEveryDays } : {}),
+  }));
+  return t;
+}
+
+test('phase17: a twin nobody has compared against reality is unknown, not a twin that failed to improve', () => {
+  const report = new twin2.OperationsTwin({ clock: () => 0 }).learningReport({ now: 0 });
+  assert.equal(report.measurable, false);
+  assert.equal(report.unknown.length, report.count);
+  assert.equal(report.totalObservations, 0, 'the twin ships with no fabricated validation history');
+  assert.equal(report.authorizes, false);
+  assert.match(report.basis, /UNKNOWN/);
+});
+
+test('phase17: an agreement rise with nothing recorded behind it may not raise simulation confidence', () => {
+  const opinion = validatedTwin([
+    ...Array.from({ length: 3 }, () => ({ observed: false })),
+    ...Array.from({ length: 3 }, () => ({ observed: true })),
+  ]);
+  const learning = opinion.scenarioLearning(SCENARIO, { now: 100 * DAY });
+  assert.equal(learning.earlier.agreementRate, 0);
+  assert.equal(learning.later.agreementRate, 1);
+  assert.equal(learning.agreementTrend.state, 'unverified-improvement');
+  assert.notEqual(learning.confidenceAdjustment.direction, 'may-increase');
+  assert.equal(learning.verifiedObservations, 0);
+  assert.match(learning.confidenceAdjustment.because, /opinion about the simulation is not a test of it/);
+});
+
+test('phase17: the same rise backed by recorded operational outcomes may raise confidence', () => {
+  const evidenced = validatedTwin([
+    ...Array.from({ length: 3 }, () => ({ observed: false, evidence: ['INC-2026-001'], reviewEveryDays: 365 })),
+    ...Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-2026-002'], reviewEveryDays: 365 })),
+  ]);
+  const learning = evidenced.scenarioLearning(SCENARIO, { now: 100 * DAY });
+  assert.equal(learning.agreementTrend.state, 'verified-improvement');
+  assert.equal(learning.confidenceAdjustment.direction, 'may-increase', 'a rule nothing can satisfy is not a rule');
+  assert.equal(learning.verifiedObservations, 6);
+  // …and it is still only a recommendation.
+  assert.equal(learning.confidenceAdjustment.applied, false);
+  assert.equal(learning.confidenceAdjustment.approvedBy, null);
+  assert.equal(evidenced.learningReport({ now: 100 * DAY }).adjustmentsApplied, 0);
+});
+
+test('phase17: review schedules are tracked, and an unscheduled review is counted rather than assumed current', () => {
+  const unscheduled = validatedTwin(Array.from({ length: 6 }, () => ({ observed: true, evidence: ['INC-1'] })));
+  assert.equal(unscheduled.scenarioLearning(SCENARIO, { now: 100 * DAY }).unscheduledReviews, 6);
+
+  const stale = validatedTwin(Array.from({ length: 6 }, () => ({ observed: true, evidence: ['INC-1'], reviewEveryDays: 30 })));
+  assert.equal(stale.scenarioLearning(SCENARIO, { now: 400 * DAY }).overdueReviews.length, 6);
+  assert.equal(stale.scenarioLearning(SCENARIO, { now: 10 * DAY }).overdueReviews.length, 0);
+});
+
+test('phase17: every validation is stamped with the model that produced it', () => {
+  const t = validatedTwin(Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-1'] })));
+  const history = t.validationHistory(SCENARIO);
+  assert.ok(history.every((h) => h.modelDigest), 'a comparison against a different model is evidence about a different twin');
+  assert.equal([...new Set(history.map((h) => h.modelDigest))].length, 1);
+  // Two twins over different evidence are different models, so a rebuild is detectable at all.
+  assert.notEqual(new twin2.OperationsTwin({ evidenceIds: ['EV-EXTRA'], clock: () => 0 }).digest(), t.digest());
+});
+
+test('phase17: the Phase 16 validation API still works unchanged', () => {
+  // Backward compatibility: no evidence, no review schedule, and a quantitative magnitude.
+  const t = new twin2.OperationsTwin({ clock: () => 0 });
+  const rec = t.recordValidation(SCENARIO, {
+    predicted: true, observed: true, by: 'ORB', at: 0, predictedValue: 10, observedValue: 12,
+  });
+  assert.equal(rec.calibrationError, 2);
+  assert.equal(rec.verified, false, 'a validation with no evidence is recorded, and recorded as unverified');
+  assert.equal(rec.reviewDueAt, null);
+  assert.throws(
+    () => t.recordValidation(SCENARIO, { predicted: true, observed: true, by: 'ORB', at: 0, predictedValue: 5 }),
+    (e) => e.failClosed === true,
+  );
+});

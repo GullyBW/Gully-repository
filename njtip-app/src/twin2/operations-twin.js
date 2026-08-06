@@ -359,7 +359,13 @@ class OperationsTwin {
   // Record what a simulation predicted against what was actually observed. Append-only, attributed
   // and NEVER seeded: fabricating a calibration history would make every confidence figure below a
   // lie, and it is the single cheapest way to make this whole framework worthless.
-  recordValidation(scenario, { predicted, observed, by, at = null, note = null, predictedValue = null, observedValue = null } = {}) {
+  recordValidation(scenario, {
+    predicted, observed, by, at = null, note = null, predictedValue = null, observedValue = null,
+    // Phase 17, Part 4. Both optional, so every existing caller keeps working — but a validation
+    // with no evidence is recorded as UNVERIFIED, and an unverified validation can never raise the
+    // twin's confidence in itself. The API is unchanged; the discipline is new.
+    evidence = [], reviewEveryDays = null,
+  } = {}) {
     if (!SCENARIOS[scenario]) throw new Error(`unknown scenario '${scenario}'`);
     if (typeof predicted !== 'boolean' || typeof observed !== 'boolean') throw new Error('a validation must record what was predicted and what was observed, as booleans');
     if (!by) { const e = new Error('a simulation validation must name who compared it against reality'); e.failClosed = true; throw e; }
@@ -373,12 +379,24 @@ class OperationsTwin {
     if (predictedValue !== null && (!Number.isFinite(predictedValue) || !Number.isFinite(observedValue))) {
       throw new Error('predicted and observed values must be numbers on the same scale');
     }
+    if (reviewEveryDays !== null && (!Number.isFinite(reviewEveryDays) || reviewEveryDays <= 0)) {
+      throw new Error('a validation review schedule must be a positive number of days');
+    }
+    if (!Array.isArray(evidence)) throw new Error('validation evidence must be a list of records that back the observation');
     if (!this._validations.has(scenario)) this._validations.set(scenario, []);
+    const recordedAt = at ?? this._clock();
     const rec = {
-      scenario, predicted, observed, agreed: predicted === observed, by, at: at ?? this._clock(), note,
+      scenario, predicted, observed, agreed: predicted === observed, by, at: recordedAt, note,
       predictedValue, observedValue,
       calibrationError: predictedValue === null ? null : +Math.abs(predictedValue - observedValue).toFixed(4),
       signedError: predictedValue === null ? null : +(predictedValue - observedValue).toFixed(4),
+      // Phase 17, Part 4. What backs the observation, and when somebody must look again.
+      evidence: [...evidence],
+      // The distinction the whole part rests on. Somebody saying the simulation was right is not
+      // the same as a record of what actually happened, and only the second may raise confidence.
+      verified: evidence.length > 0,
+      reviewEveryDays,
+      reviewDueAt: reviewEveryDays === null ? null : recordedAt + reviewEveryDays * 24 * 3600_000,
       // THE STAMP THAT MAKES THIS HONEST. Calibration evidence is about the model that produced it.
       // The twin freezes its model at construction, so a comparison recorded against a different
       // model is evidence about a different twin, and this is the only thing that can tell.
@@ -407,6 +425,131 @@ class OperationsTwin {
       scenario, state, observations: history.length, window: recent.length, agreementRate: rate,
       ...CALIBRATION_STATES[state],
       reason: `${agreed} of the last ${recent.length} comparisons agreed with the observed outcome`,
+    };
+  }
+
+  // --- Twin learning (Phase 17, Part 4) ------------------------------------------------------------
+  //
+  // Whether a scenario's simulation is getting better at predicting reality. There is exactly one
+  // rule, and everything below exists to enforce it:
+  //
+  //   SIMULATION CONFIDENCE MAY ONLY INCREASE THROUGH VERIFIED OPERATIONAL EVIDENCE.
+  //
+  // Three things can raise a scenario's agreement rate and only one of them is the twin getting
+  // better. Somebody may record agreements without any record of what happened — that is an opinion
+  // about the simulation, not a test of it. The MODEL may have been rebuilt, in which case the later
+  // observations are about a different twin and the comparison is between two different things.
+  // Or the twin genuinely predicted what was then observed and recorded, which is the only case that
+  // counts.
+  //
+  // The model digest stamped on every validation is what makes the second case detectable at all.
+  scenarioLearning(scenario, { now = null } = {}) {
+    const evidenceConfidence = require('../assurance/evidence-confidence');
+    const t = now ?? this._clock();
+    if (!SCENARIOS[scenario]) throw new Error(`unknown scenario '${scenario}'`);
+    const history = this.validationHistory(scenario).sort((a, b) => a.at - b.at);
+    const round = (x) => (x === null ? null : +x.toFixed(4));
+    const need = 2 * CALIBRATION_MIN_OBSERVATIONS;
+
+    const verified = history.filter((v) => v.verified);
+    const unverified = history.filter((v) => !v.verified);
+    const overdue = history.filter((v) => v.reviewDueAt !== null && t > v.reviewDueAt);
+    const unscheduled = history.filter((v) => v.reviewDueAt === null);
+
+    if (history.length < need) {
+      return {
+        scenario, measurable: false, observations: history.length, required: need,
+        verifiedObservations: verified.length, unverifiedObservations: unverified.length,
+        agreementTrend: evidenceConfidence.verifiedImprovement({ subject: `simulation agreement: ${scenario}`, series: [] }),
+        modelRebuilt: null, confidenceAdjustment: null,
+        overdueReviews: overdue.map((v) => v.at), unscheduledReviews: unscheduled.length,
+        reason: `${history.length} of ${need} comparisons — a simulation needs two comparable halves before anything can be said about it learning. This is UNKNOWN, not a twin that failed to improve.`,
+        now: t, informationalOnly: true, authorizes: false,
+      };
+    }
+
+    const half = Math.floor(history.length / 2);
+    const halves = [history.slice(0, half), history.slice(half)];
+    const [earlier, later] = halves.map((h) => ({
+      observations: h.length,
+      agreementRate: round(h.filter((v) => v.agreed).length / h.length),
+      verified: h.filter((v) => v.verified).length,
+      meanCalibrationError: (() => {
+        const errs = h.filter((v) => v.calibrationError !== null).map((v) => v.calibrationError);
+        return errs.length ? round(errs.reduce((a, b) => a + b, 0) / errs.length) : null;
+      })(),
+    }));
+
+    // A rebuilt model makes the two halves incomparable. The digest stamp is the only thing that
+    // could ever have detected this.
+    const digests = [...new Set(history.map((v) => v.modelDigest))];
+    const modelRebuilt = digests.length > 1;
+
+    // What may support a rise: the observations in the LATER half that carry evidence. An
+    // observation somebody recorded with nothing behind it supports nothing.
+    const supporting = later.verified > 0
+      ? [{ kind: 'observed-outcome', detail: `${later.verified} of ${later.observations} comparison(s) in the later half carry recorded operational evidence`, by: 'twin validation register' }]
+      : [];
+    const explaining = modelRebuilt
+      ? [{ kind: 'measurement-change', detail: `the model was rebuilt during this history (${digests.length} distinct digests), so the two halves are simulations of different systems` }]
+      : [];
+
+    const agreementTrend = evidenceConfidence.verifiedImprovement({
+      subject: `simulation agreement: ${scenario}`,
+      series: [earlier.agreementRate, later.agreementRate],
+      evidence: [...supporting, ...explaining],
+    });
+
+    // THE RULE, computed. Confidence may rise only on a verified improvement.
+    const mayRaiseConfidence = agreementTrend.state === 'verified-improvement' && !modelRebuilt;
+    return {
+      scenario, measurable: true, observations: history.length, required: need,
+      verifiedObservations: verified.length, unverifiedObservations: unverified.length,
+      earlier, later,
+      agreementTrend,
+      modelRebuilt, modelDigests: digests.length,
+      // A recommendation, never applied. `confidence()` derives its own figure from the six
+      // dimensions and nothing here writes to it.
+      confidenceAdjustment: {
+        direction: mayRaiseConfidence ? 'may-increase' : agreementTrend.state === 'regressed' ? 'must-decrease' : 'unchanged',
+        applied: false, requiresHumanApproval: true, approvedBy: null,
+        because: mayRaiseConfidence
+          ? `agreement rose from ${earlier.agreementRate} to ${later.agreementRate}, supported by ${later.verified} recorded operational outcome(s)`
+          : modelRebuilt ? 'the model was rebuilt, so the improvement is in a different simulation and cannot raise confidence in this one'
+            : agreementTrend.state === 'unverified-improvement' ? 'agreement rose and no comparison in the later half carries recorded evidence — an opinion about the simulation is not a test of it'
+              : agreementTrend.reason,
+      },
+      overdueReviews: overdue.map((v) => v.at), unscheduledReviews: unscheduled.length,
+      reason: agreementTrend.reason,
+      now: t, informationalOnly: true, authorizes: false,
+    };
+  }
+
+  // Part 4's learning dashboard, across every scenario.
+  learningReport({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = Object.keys(SCENARIOS).map((s) => this.scenarioLearning(s, { now: t }));
+    const measured = rows.filter((r) => r.measurable);
+    const unverified = rows.filter((r) => r.agreementTrend.violatesInvariant);
+    return {
+      scenarios: rows, count: rows.length,
+      measurable: measured.length > 0,
+      unknown: rows.filter((r) => !r.measurable).map((r) => r.scenario),
+      improving: rows.filter((r) => r.agreementTrend.state === 'verified-improvement').map((r) => r.scenario),
+      unverifiedImprovements: unverified.map((r) => r.scenario),
+      rebuiltModels: rows.filter((r) => r.modelRebuilt).map((r) => r.scenario),
+      mayRaiseConfidence: measured.filter((r) => r.confidenceAdjustment.direction === 'may-increase').map((r) => r.scenario),
+      everyImprovementVerified: unverified.length === 0,
+      // Constants. Nothing in this module applies an adjustment.
+      adjustmentsApplied: 0,
+      totalObservations: rows.reduce((a, r) => a + r.observations, 0),
+      verifiedObservations: rows.reduce((a, r) => a + r.verifiedObservations, 0),
+      overdueReviewCount: rows.reduce((a, r) => a + r.overdueReviews.length, 0),
+      basis: measured.length
+        ? `${measured.length} of ${rows.length} scenario(s) have two comparable halves of validations. ${rows.length - measured.length} are UNKNOWN — a simulation nobody has compared is not one that failed to improve.`
+        : `No scenario has been validated enough times to have two comparable halves. Twin learning across all ${rows.length} scenarios is UNKNOWN, and this needs somebody to compare simulations against real outcomes rather than somebody to fix a model.`,
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'Simulation confidence may only increase through verified operational evidence. An agreement somebody recorded with nothing behind it is an opinion about the simulation rather than a test of it, and a model that was rebuilt mid-history produces two halves that are simulations of different systems. Every confidence adjustment is a recommendation; nothing here applies one.',
     };
   }
 

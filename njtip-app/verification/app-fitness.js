@@ -4869,6 +4869,240 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-FORECAST-LEARNING', 'A model that got luckier is not a model that got better, and an unknown prediction is not an inaccurate one', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const DAY = 24 * 3600_000;
+    const build = (dimension, rows, madeBy = () => 'model-A') => {
+      const reg = new dp.ForecastRegister({ clock: () => 0 });
+      rows.forEach((r, i) => {
+        const f = reg.record(dimension, { point: r.point, interval: r.interval, constrained: true, horizonDays: 1, madeBy: madeBy(i), at: i * 10 * DAY });
+        reg.recordOutcome(f.id, { observed: r.observed, observedBy: 'Operations Review Board', at: i * 10 * DAY + 2 * DAY });
+      });
+      return reg;
+    };
+
+    // --- UNKNOWN IS NOT INACCURATE. Counted separately everywhere -----------------------------
+    const empty = new dp.ForecastRegister({ clock: () => 0 });
+    const blank = empty.learningReport({ now: 0 });
+    if (blank.measurable) v.push('a register with no scored forecast reported measurable learning');
+    if (blank.unknown.length !== blank.count) v.push('an unscored dimension was not reported as unknown');
+    if (blank.unverifiedImprovements.length) v.push('an unscored dimension was reported as having improved unverifiably');
+    if (!blank.everyImprovementVerified) v.push('an empty register reported an improvement violation it could not have found');
+    if (!/not the same as an inaccurate one|not an inaccurate one/.test(blank.note + blank.basis)) {
+      v.push('the learning report does not say that an unknown prediction is not an inaccurate one');
+    }
+    if (blank.authorizes !== false) v.push('the forecast learning report claims authority');
+    const unscored = empty.errorDecomposition('auditReadiness');
+    if (unscored.measurable) v.push('error was decomposed with no outcome recorded');
+    if (unscored.dominant !== 'unknown') v.push(`an unscored dimension reported its error as '${unscored.dominant}' rather than unknown`);
+    if (!/not the same as it being wrong/.test(unscored.reason)) v.push('a dimension with no scored forecast does not say that knowing nothing is not the same as being wrong');
+    // …and the same distinction on the other branch: some outcomes, but too few to separate a
+    // model that leans from one that wobbles.
+    const thinReg = new dp.ForecastRegister({ clock: () => 0 });
+    for (let i = 0; i < 2; i += 1) {
+      const f = thinReg.record('auditReadiness', { point: 0.5, interval: [0.4, 0.6], constrained: true, horizonDays: 1, madeBy: 'model-A', at: i * 10 * DAY });
+      thinReg.recordOutcome(f.id, { observed: 0.5, observedBy: 'Operations Review Board', at: i * 10 * DAY + 2 * DAY });
+    }
+    const thinDecomposition = thinReg.errorDecomposition('auditReadiness');
+    if (thinDecomposition.measurable) v.push('two outcomes were enough to decompose the error');
+    if (thinDecomposition.dominant !== 'unknown') v.push('a dimension with too few outcomes named a dominant error kind');
+    if (!/UNKNOWN, not inaccurate/.test(thinDecomposition.reason)) v.push('a thinly scored decomposition does not distinguish unknown from inaccurate');
+
+    // --- THE POINT OF PART 3: accuracy up, systematic bias unchanged --------------------------
+    // Five forecasts biased +0.2 with a narrow band (all miss), then five with the SAME bias and a
+    // band wide enough to contain it (all hit). Accuracy 0 → 1 and the model has not improved.
+    const lucky = build('auditReadiness', [
+      ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })),
+      ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.4, 1.0], observed: 0.5 })),
+    ]);
+    const learned = lucky.learning('auditReadiness', { now: 200 * DAY });
+    if (!learned.measurable) v.push('ten scored outcomes did not produce two comparable halves');
+    if (learned.earlier.accuracy !== 0 || learned.later.accuracy !== 1) v.push('the crafted accuracy rise was not measured');
+    if (!learned.biasPersists) v.push('a bias that held at 0.2 across both halves was not reported as persisting');
+    if (!/LUCKIER, not one that got better/.test(learned.reason)) {
+      v.push('a rise in accuracy alongside an unchanged bias was not named as a model that got luckier rather than better');
+    }
+    if (!lucky.learningReport({ now: 200 * DAY }).luckyNotBetter.includes('auditReadiness')) {
+      v.push('the learning dashboard does not name the dimensions that got luckier rather than better');
+    }
+    // The rise is real, so the trend must still register it — as UNVERIFIED, not as nothing.
+    if (learned.accuracyTrend.state !== 'unverified-improvement') v.push(`a rise with nothing verified behind it was reported as '${learned.accuracyTrend.state}'`);
+
+    // --- …and a model that genuinely improved is not accused of luck --------------------------
+    // Bias falls from +0.2 to 0 and accuracy rises. This must NOT be flagged.
+    const better = build('auditReadiness', [
+      ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })),
+      ...Array.from({ length: 5 }, () => ({ point: 0.5, interval: [0.45, 0.55], observed: 0.5 })),
+    ]);
+    const genuine = better.learning('auditReadiness', { now: 200 * DAY });
+    if (genuine.biasPersists) v.push('a model whose bias fell from 0.2 to 0 was accused of persisting bias — the finding fires on a model that genuinely improved');
+    if (better.learningReport({ now: 200 * DAY }).luckyNotBetter.includes('auditReadiness')) {
+      v.push('a genuinely improved model was named as having got luckier');
+    }
+
+    // --- A rebuilt model makes the halves incomparable ----------------------------------------
+    const rebuilt = build('auditReadiness', [
+      ...Array.from({ length: 5 }, () => ({ point: 0.7, interval: [0.65, 0.75], observed: 0.5 })),
+      ...Array.from({ length: 5 }, () => ({ point: 0.5, interval: [0.45, 0.55], observed: 0.5 })),
+    ], (i) => (i < 5 ? 'model-A' : 'model-B'));
+    const across = rebuilt.learning('auditReadiness', { now: 200 * DAY });
+    if (!across.modelChanged) v.push('two different models across the history were not detected');
+    if (across.accuracyTrend.verified) v.push('a rise across a model rebuild was reported as verified — the two halves are about different models');
+    if (!across.accuracyTrend.measurementChanges.length) v.push('a model rebuild was not recorded as what explains the rise');
+
+    // --- Error decomposition separates a model that leans from one that wobbles ---------------
+    const leaning = lucky.errorDecomposition('auditReadiness');
+    if (leaning.dominant !== 'bias') v.push(`a consistently biased model decomposed as '${leaning.dominant}'`);
+    if (leaning.variance !== 0) v.push('a model with identical errors reported non-zero variance');
+    if (!/shifting it/.test(leaning.repair)) v.push('a bias-dominated decomposition does not say that shifting the model is the repair');
+    // A noisy model: same mean error, errors alternating either side. Different repair entirely.
+    const noisy = build('auditReadiness', Array.from({ length: 10 }, (_, i) => ({
+      point: 0.5, interval: [0.45, 0.55], observed: i % 2 === 0 ? 0.3 : 0.7,
+    })));
+    const wobble = noisy.errorDecomposition('auditReadiness');
+    if (wobble.dominant !== 'variance') v.push(`a model with alternating errors decomposed as '${wobble.dominant}' rather than variance`);
+    if (!/Shifting it changes nothing/.test(wobble.repair)) v.push('a variance-dominated decomposition does not say that shifting the model changes nothing');
+    if (Math.abs(wobble.bias) > 0.01) v.push('a model right on average reported a systematic bias');
+
+    // --- Recalibration is recommended and NEVER applied ---------------------------------------
+    for (const reg of [lucky, noisy, empty]) {
+      const rc = reg.recalibration('auditReadiness');
+      if (rc.applied !== false) v.push('a recalibration was applied — narrowing an interval is a claim the model improved, and the platform does not get to make that claim about itself');
+      if (rc.requiresHumanApproval !== true) v.push('a recalibration did not require human approval');
+      if (rc.approvedBy !== null) v.push('a recalibration arrived pre-approved');
+    }
+    if (lucky.learningReport({ now: 200 * DAY }).recalibrationsApplied !== 0) v.push('the learning dashboard reported an applied recalibration');
+    // The observed errors fell outside the band, so the honest recommendation is to widen.
+    const widen = lucky.recalibration('auditReadiness');
+    if (widen.direction !== 'widen') v.push(`a dimension whose errors exceeded its band recommended '${widen.direction}' rather than widening`);
+    if (!/makes every past forecast look weaker, which is the point/.test(widen.caution)) {
+      v.push('a widening recommendation does not say that it makes past forecasts look weaker');
+    }
+    // …and a narrowing recommendation carries the warning that it must not be taken on a lucky run.
+    const tight = build('auditReadiness', Array.from({ length: 6 }, () => ({ point: 0.5, interval: [0.0, 1.0], observed: 0.5 })));
+    const narrow = tight.recalibration('auditReadiness');
+    if (narrow.direction !== 'narrow') v.push('a dimension whose errors were far inside its band did not recommend narrowing');
+    if (!/must not be applied on the strength of a quiet run/.test(narrow.caution)) {
+      v.push('a narrowing recommendation does not warn that it must not be taken on a quiet run');
+    }
+
+    // --- Fewer than two halves is unknown, not "failed to improve" ----------------------------
+    const thin = build('auditReadiness', Array.from({ length: 4 }, () => ({ point: 0.5, interval: [0.4, 0.6], observed: 0.5 })));
+    const tooFew = thin.learning('auditReadiness', { now: 200 * DAY });
+    if (tooFew.measurable) v.push('four outcomes produced two comparable halves');
+    if (tooFew.biasPersists !== null) v.push('a bias verdict was reached with too few outcomes to compare');
+    if (!/UNKNOWN, not a model that failed to improve/.test(tooFew.reason)) {
+      v.push('a dimension with too few outcomes does not say it is unknown rather than unimproved');
+    }
+  }),
+
+  fit('APP-FIT-TWIN-LEARNING', 'Simulation confidence may only rise on verified operational evidence, and a rebuilt model is a different twin', (v) => {
+    const twin2 = require('../src/twin2/operations-twin');
+    const DAY = 24 * 3600_000;
+    const scenario = Object.keys(twin2.SCENARIOS)[0];
+    const build = (rows) => {
+      const t = new twin2.OperationsTwin({ clock: () => 0 });
+      rows.forEach((r, i) => t.recordValidation(scenario, {
+        predicted: true, observed: r.observed, by: 'Operations Review Board', at: i * DAY,
+        ...(r.evidence ? { evidence: r.evidence } : {}),
+        ...(r.reviewEveryDays ? { reviewEveryDays: r.reviewEveryDays } : {}),
+      }));
+      return t;
+    };
+
+    // --- Unknown is not a twin that failed to improve -----------------------------------------
+    const fresh = new twin2.OperationsTwin({ clock: () => 0 });
+    const blank = fresh.learningReport({ now: 0 });
+    if (blank.measurable) v.push('a twin with no validation reported measurable learning');
+    if (blank.unknown.length !== blank.count) v.push('an unvalidated scenario was not reported as unknown');
+    if (blank.totalObservations !== 0) v.push('the twin ships with a fabricated validation history');
+    if (!/UNKNOWN/.test(blank.basis)) v.push('an unvalidated twin does not say its learning is unknown');
+    if (blank.authorizes !== false) v.push('the twin learning report claims authority');
+
+    // --- THE RULE: a rise with no recorded evidence may not raise confidence ------------------
+    const opinion = build([
+      ...Array.from({ length: 3 }, () => ({ observed: false })),
+      ...Array.from({ length: 3 }, () => ({ observed: true })),
+    ]);
+    const unverified = opinion.scenarioLearning(scenario, { now: 100 * DAY });
+    if (!unverified.measurable) v.push('six validations did not produce two comparable halves');
+    if (unverified.earlier.agreementRate !== 0 || unverified.later.agreementRate !== 1) v.push('the crafted agreement rise was not measured');
+    if (unverified.agreementTrend.state !== 'unverified-improvement') v.push('an agreement rise with nothing recorded behind it was reported as progress');
+    if (unverified.confidenceAdjustment.direction === 'may-increase') {
+      v.push('simulation confidence was permitted to rise on validations carrying no operational evidence — an opinion about the simulation is not a test of it');
+    }
+    if (!/opinion about the simulation is not a test of it/.test(unverified.confidenceAdjustment.because)) {
+      v.push('the confidence adjustment does not say why an unevidenced agreement cannot raise confidence');
+    }
+    if (unverified.verifiedObservations !== 0) v.push('validations with no evidence were counted as verified');
+
+    // --- …and the same rise WITH recorded evidence may -----------------------------------------
+    const evidenced = build([
+      ...Array.from({ length: 3 }, () => ({ observed: false, evidence: ['INC-2026-001'], reviewEveryDays: 365 })),
+      ...Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-2026-002'], reviewEveryDays: 365 })),
+    ]);
+    const verified = evidenced.scenarioLearning(scenario, { now: 100 * DAY });
+    if (verified.agreementTrend.state !== 'verified-improvement') v.push('a rise backed by recorded operational outcomes was not reported as verified');
+    if (verified.confidenceAdjustment.direction !== 'may-increase') {
+      v.push('a verified improvement did not permit confidence to increase — a rule nothing can satisfy is not a rule');
+    }
+    if (verified.verifiedObservations !== 6) v.push('validations carrying evidence were not counted as verified');
+
+    // --- A rebuilt model makes the two halves different twins ---------------------------------
+    // The digest is stamped at construction, so a second twin over the same scenario is a rebuild.
+    const first = build([
+      ...Array.from({ length: 3 }, () => ({ observed: false, evidence: ['INC-1'] })),
+      ...Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-2'] })),
+    ]);
+    const other = new twin2.OperationsTwin({ evidenceIds: ['EV-EXTRA'], clock: () => 0 });
+    if (other.digest() === first.digest()) v.push('two twins built over different evidence produced the same model digest, so a rebuild could never be detected');
+    // Splice a validation stamped with the other model's digest into the history and re-derive.
+    const spliced = new twin2.OperationsTwin({ clock: () => 0 });
+    for (let i = 0; i < 3; i += 1) spliced.recordValidation(scenario, { predicted: true, observed: false, by: 'ORB', at: i * DAY, evidence: ['INC-1'] });
+    for (let i = 3; i < 6; i += 1) spliced.recordValidation(scenario, { predicted: true, observed: true, by: 'ORB', at: i * DAY, evidence: ['INC-2'] });
+    const history = spliced.validationHistory(scenario);
+    if (!history.every((h) => h.modelDigest)) v.push('a validation was recorded without stamping the model that produced it');
+    if ([...new Set(history.map((h) => h.modelDigest))].length !== 1) v.push('one twin produced validations under more than one digest');
+
+    // --- A validation with half a magnitude is still refused ----------------------------------
+    let refused = false;
+    try { fresh.recordValidation(scenario, { predicted: true, observed: true, by: 'ORB', at: 0, predictedValue: 5 }); } catch (e) { refused = !!e.failClosed; }
+    if (!refused) v.push('a predicted value with nothing to compare it against was accepted');
+    // …and an unattributed one.
+    let unattributed = false;
+    try { fresh.recordValidation(scenario, { predicted: true, observed: true, at: 0 }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('a validation was recorded with nobody named as having compared it against reality');
+
+    // --- Review schedules: an unscheduled review is counted, not assumed current --------------
+    const unscheduled = build([
+      ...Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-1'] })),
+      ...Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-2'] })),
+    ]);
+    if (unscheduled.scenarioLearning(scenario, { now: 100 * DAY }).unscheduledReviews !== 6) {
+      v.push('validations with no review schedule were not counted — a calibration nobody has to revisit is one that silently ages');
+    }
+    const stale = build([
+      ...Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-1'], reviewEveryDays: 30 })),
+      ...Array.from({ length: 3 }, () => ({ observed: true, evidence: ['INC-2'], reviewEveryDays: 30 })),
+    ]);
+    if (stale.scenarioLearning(scenario, { now: 400 * DAY }).overdueReviews.length !== 6) {
+      v.push('validations past their review date were not reported as overdue');
+    }
+    if (stale.scenarioLearning(scenario, { now: 10 * DAY }).overdueReviews.length !== 0) {
+      v.push('validations inside their review window were reported as overdue');
+    }
+
+    // --- Nothing is ever applied --------------------------------------------------------------
+    const report = evidenced.learningReport({ now: 100 * DAY });
+    if (report.adjustmentsApplied !== 0) v.push('the twin learning dashboard reported an applied confidence adjustment');
+    for (const row of report.scenarios) {
+      if (row.confidenceAdjustment && (row.confidenceAdjustment.applied !== false || row.confidenceAdjustment.approvedBy !== null)) {
+        v.push(`scenario '${row.scenario}' carries an applied or pre-approved confidence adjustment`);
+      }
+    }
+    if (!report.mayRaiseConfidence.includes(scenario)) v.push('a scenario with a verified improvement was not named as permitted to raise confidence');
+  }),
+
   fit('APP-FIT-EXPLAINABILITY-INTELLIGENCE', 'The tree is a view of the walk, and a mean depth of eight across chains that all stop short is nothing explained', (v) => {
     const inst = require('../src/assurance/institutional');
 
