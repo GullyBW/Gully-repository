@@ -463,6 +463,25 @@ function createApp(overrides = {}) {
   // holds, so there is nothing to seed and nothing that could be seeded wrongly.
   const optimization = require('./governance/optimization');
   const crossAgency = require('./governance/cross-agency');
+  // Phase 15. Two registers, both EMPTY, and both for reasons the phase turns on.
+  //
+  // The legal authority registry ships with NO statutory claims. Declaring that a particular Act
+  // authorises a particular capability is a legal assertion about the Republic, not something this
+  // repository can derive — and a plausible-looking statute name in a governed register is worse
+  // than an empty one, because everybody downstream would believe it. So every critical capability
+  // currently reports its legal basis as UNKNOWN, which is the truth.
+  //
+  // The control observation register is empty because nothing has watched a control work. Every
+  // control on this platform runs and passes on every build; not one has a single observation of it
+  // catching the thing it was written for. Seeding one would turn a green build into evidence of
+  // operational effectiveness, which is precisely the confusion Part 3 exists to prevent.
+  legislation.legalAuthority = new (require('./legislation/legal-authority').LegalAuthorityRegistry)({ clock: () => Date.now() });
+  const controlEffectiveness = require('./assurance/control-effectiveness');
+  const controlObservations = new controlEffectiveness.ControlObservationRegister({ clock: () => Date.now() });
+  // Phase 15, Parts 8 & 13: trust evidence and governed evidence onboarding. Also empty — no
+  // external body has assessed this platform, and no evidence has been submitted for landing.
+  const trustEvidence = new institutional.TrustEvidenceRegister({ clock: () => Date.now() });
+  const evidenceOnboarding = new institutional.EvidenceOnboarding({ clock: () => Date.now() });
   // Phase 14, Part 4: compliance transition exceptions. Empty — no board has granted one, and a
   // pre-granted exception would be a governance decision nobody took.
   legislation.transitionExceptions = new (require('./legislation/compliance-intelligence').TransitionExceptions)({ clock: () => Date.now() });
@@ -687,7 +706,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, optimization, crossAgency, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, optimization, crossAgency, controlEffectiveness, controlObservations, trustEvidence, evidenceOnboarding, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

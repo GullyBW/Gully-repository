@@ -21,6 +21,15 @@ const CREDS = {
 };
 
 function bearer(req) { const m = (req.headers.authorization || '').match(/^Bearer\s+(.+)$/i); return m ? m[1] : null; }
+// The live control results, in the shape every governance report expects. Read fresh on each
+// request: a cached gate result is a claim about a build that may no longer be the one running.
+function fitness() { return [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); }
+// Knowledge continuity from the ownership registers. These start empty, so this reports an estate
+// nobody has been recorded operating — which is the truth of a freshly composed platform.
+function knowledgeContinuity(app) {
+  const o = require('./governance/ownership');
+  return o.knowledgeContinuity({ availability: o.availabilityRegister, activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() });
+}
 function err(status, msg) { const e = new Error(msg); e.status = status; return e; }
 
 async function route(app, req, url, body) {
@@ -272,6 +281,70 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/assurance/readiness-model') { requireRole('admin'); return json(200, app.assurance.readiness()); }
   if (method === 'GET' && p === '/api/assurance/evidence-confidence') { requireRole('admin'); const reg = app.assurance.evidenceRegister(); return json(200, { evidence: reg.all(), aggregate: reg.aggregate(), method: app.assurance.confidence.CONFIDENCE_METHOD, sourceKinds: app.assurance.confidence.SOURCE_KINDS }); }
   if (method === 'GET' && p === '/api/assurance/engineering-metrics') { requireRole('admin'); return json(200, { metrics: app.assurance.engineeringMetrics(), maturity: app.assurance.engineeringMaturity() }); }
+  // --- Phase 15: legal authority, control effectiveness, institutional intelligence ---------------
+  // Every one of these is read-only except the three that record a HUMAN act: declaring a legal
+  // authority, reviewing one, and recording an observation of a control doing its job. None of the
+  // three can be performed by the platform, which is why they are POSTs by a named person.
+  if (method === 'GET' && p === '/api/legislation/legal-authority') { requireRole('oversight-board'); const f = fitness(); return json(200, app.legislation.legalAuthority.report({ controls: f, now: Date.now() })); }
+  if (method === 'POST' && p === '/api/legislation/legal-authority') { const u = requireRole('oversight-board'); return json(201, app.legislation.legalAuthority.declare((body && body.capability), { ...(body || {}), declaredBy: (body && body.declaredBy) || u.principal })); }
+  if (method === 'POST' && (m = p.match(/^\/api\/legislation\/legal-authority\/([^/]+)\/review$/))) { requireRole('oversight-board'); return json(200, app.legislation.legalAuthority.review(dec(m[1]), { by: body && body.by, stillStands: body ? body.stillStands !== false : true, note: body && body.note, at: Date.now() })); }
+  if (method === 'GET' && p === '/api/assurance/control-effectiveness') { requireRole('admin'); const f = fitness(); return json(200, app.controlEffectiveness.effectivenessDashboard({ register: app.controlObservations, controls: f, now: Date.now() })); }
+  if (method === 'GET' && (m = p.match(/^\/api\/assurance\/control-effectiveness\/([^/]+)$/))) { requireRole('admin'); return json(200, app.controlEffectiveness.controlEffectiveness(dec(m[1]), { register: app.controlObservations, now: Date.now() })); }
+  if (method === 'POST' && p === '/api/assurance/control-observations') { const u = requireRole('admin'); return json(201, app.controlObservations.record((body && body.control), { ...(body || {}), observedBy: (body && body.observedBy) || u.principal })); }
+  if (method === 'GET' && p === '/api/architecture/assumption-maturity') { requireRole('admin'); const f = fitness(); return json(200, app.assumptions.maturityReport({ controls: f, now: Date.now() })); }
+  if (method === 'GET' && p === '/api/architecture/zone-governance') { requireRole('admin'); return json(200, { zones: [...app.architecture.ZONES], contexts: app.architecture.zoneGovernanceAll(), properties: app.architecture.ZONE_PROPERTIES }); }
+  if (method === 'GET' && p === '/api/governance/cross-government') { requireRole('oversight-board'); const o = require('./governance/ownership'); const f = fitness(); return json(200, app.crossAgency.crossGovernmentReadiness({ authorities: app.legislation.legalAuthority, exercises: o.exercises, activity: o.activity, controls: f, now: Date.now() })); }
+  if (method === 'GET' && p === '/api/governance/dependency-intelligence') { requireRole('oversight-board'); const f = fitness(); const continuity = knowledgeContinuity(app); return json(200, app.institutionalResilience.dependencyIntelligence(app.institutionalResilience.evaluate({ continuity, controls: f }))); }
+  if (method === 'GET' && p === '/api/governance/global-invariant') {
+    requireRole('oversight-board');
+    const o = require('./governance/ownership');
+    const f = fitness();
+    return json(200, app.institutionalResilience.globalInvariantReport({
+      assumptions: app.assumptions, continuity: knowledgeContinuity(app), controls: f,
+      authorities: app.legislation.legalAuthority, observations: app.controlObservations,
+      acceptances: o.resilienceAcceptances, now: Date.now(),
+    }));
+  }
+  if (method === 'GET' && p === '/api/assurance/sustainability') {
+    requireRole('oversight-board');
+    const f = fitness();
+    const o = require('./governance/ownership');
+    const continuity = knowledgeContinuity(app);
+    return json(200, app.institutional.institutionalSustainability({
+      optimization: app.optimization.governanceOptimization({ controls: f, now: Date.now() }),
+      continuity,
+      documentation: require('./architecture/documentation-assurance').report({ controls: f }),
+      assumptionMaturity: app.assumptions.maturityReport({ controls: f, now: Date.now() }),
+      resilience: app.institutionalResilience.evaluate({ continuity, controls: f }),
+      legalAuthority: app.legislation.legalAuthority.report({ controls: f, now: Date.now() }),
+    }));
+  }
+  if (method === 'GET' && p === '/api/assurance/decision-support') {
+    requireRole('oversight-board');
+    const f = fitness();
+    return json(200, app.institutional.decisionSupport({
+      legalAuthority: app.legislation.legalAuthority.report({ controls: f, now: Date.now() }),
+      assumptionMaturity: app.assumptions.maturityReport({ controls: f, now: Date.now() }),
+      controlEffectiveness: app.controlEffectiveness.effectivenessDashboard({ register: app.controlObservations, controls: f, now: Date.now() }),
+    }));
+  }
+  if (method === 'GET' && p === '/api/assurance/trust-evidence') { requireRole('oversight-board'); const f = fitness(); return json(200, app.institutional.trustEvidence({ register: app.trustEvidence, controls: f, now: Date.now() })); }
+  if (method === 'GET' && p === '/api/assurance/evidence-onboarding') { requireRole('admin'); return json(200, app.evidenceOnboarding.auditTrail()); }
+  if (method === 'GET' && p === '/api/graph/legal-dependencies') { requireRole('oversight-board'); const f = fitness(); return json(200, require('./graph/enterprise-graph').legalDependencyGraph({ authorities: app.legislation.legalAuthority, controls: f, now: Date.now() })); }
+  if (method === 'GET' && p === '/api/governance/adaptive-forecasts') {
+    requireRole('admin');
+    const f = fitness();
+    const o = require('./governance/ownership');
+    return json(200, require('./architecture/drift-prevention').adaptiveGovernanceAnalytics({
+      controls: f,
+      optimization: app.optimization.governanceOptimization({ controls: f, now: Date.now() }),
+      assumptionMaturity: app.assumptions.maturityReport({ controls: f, now: Date.now() }),
+      documentation: require('./architecture/documentation-assurance').report({ controls: f }),
+      resilience: app.institutionalResilience.evaluate({ continuity: knowledgeContinuity(app), controls: f }),
+      learning: app.institutional.institutionalLearning({ improvements: app.improvements, now: Date.now() }),
+      now: Date.now(),
+    }));
+  }
   // --- Phase 10: zero trust, threat model, formal policy verification ---
   if (method === 'GET' && p === '/api/security/zero-trust') { requireRole('admin'); return json(200, { architecture: app.iam.zeroTrust.architecture(), policyVersion: app.iam.zeroTrust.pap.version(), policies: app.iam.zeroTrust.pap.registry(), workloads: app.iam.zeroTrust.workloads.list(), boundaries: app.iam.zeroTrust.boundaries.flows() }); }
   if (method === 'POST' && p === '/api/security/zero-trust/decide') { requireRole('admin'); return json(200, app.iam.zeroTrust.pdp.decide(body.request || {})); }

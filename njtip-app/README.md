@@ -16,9 +16,9 @@ quality gate.
 
 ```bash
 cd njtip-app
-npm test                     # 332 tests
+npm test                     # 953 tests
 npm start                    # serve the app + UI at http://localhost:8087
-npm run twin                 # combined gate: 100 invariants (14 twin + 77 app + 9 infrastructure)
+npm run twin                 # combined gate: 175 invariants (14 twin + 152 app + 9 infrastructure)
 npm run assurance            # 16 assurance domains → signed deployment authorization package
 npm run production-readiness # …plus the six items only a named human can close
 npm run chaos                # resilience: load/stress/spike/soak/recovery + 7 fault injections
@@ -34,31 +34,35 @@ docker build -f njtip-app/Dockerfile -t njtip-app . && docker run -p 8087:8087 n
 ls deploy/k8s/ deploy/pilot/
 ```
 
-> **v1.14 — adaptive governance, strategic decision support & advanced institutional resilience.** The
+> **v1.15 — institutional intelligence, legal authority assurance & adaptive governance.** The
 > architecture stays **frozen** at [Baseline v1.7](./docs/ARCHITECTURE-BASELINE-v1.7.md)
-> ([ADR-0009](./docs/adr/0009-adaptive-governance-and-the-four-clause-invariant.md)).
-> Phase 13 asked whether the institution could survive losing one of anything. Phase 14 asks the
-> harder question — *a capability can pass that test and still be fragile* — and widens the invariant
-> to four clauses: **no critical institutional capability may depend upon an unvalidated assumption,
-> an unverified dependency, an undocumented governance relationship, or a single point of
-> organizational failure**. It does not hold, which is again the point; `evidence-custody` satisfies
-> all four under evidenced conditions, so the bar is reachable rather than decorative.
-> Also: an [assumption dependency graph](./docs/assumptions.md) where invalidating one belief cascades
-> to everything necessarily resting on it — and where ASM-0006 turns out to carry seven of the nine;
-> [six-dimension twin confidence](./docs/operations-twin.md) derived rather than assigned;
-> [temporal mission impact](./docs/business-observability.md) across five horizons, where unknown
-> impact never becomes no impact; [diagram assurance](./docs/documentation-assurance.md) in which
-> every node and arrow must resolve against the implementation;
-> [strategic scenario planning](./docs/strategic-planning.md) for funding cuts, restructures,
-> legislation and emergencies; [governance optimization](./docs/adaptive-governance.md) that may never
-> reduce the distinct authorities in a decision; [capacity planning](./docs/adaptive-governance.md)
-> that returns `null` rather than a plausible number; [cross-agency coordination](./docs/adaptive-governance.md)
-> across 27 derived institutions where a declared relationship is never a working one;
-> [institutional learning](./docs/strategic-planning.md) that distinguishes correcting from learning;
-> and [public trust indicators](./docs/business-observability.md) that state on every row that they do
-> **not** measure trust — because the people whose trust matters most are the ones who considered
-> reporting and decided not to, and nothing here can reach them.
-> Combined gate: **161 invariants**, 874 tests. Full summary: [`docs/strategic-planning.md`](./docs/strategic-planning.md) ·
+> ([ADR-0010](./docs/adr/0010-institutional-intelligence-legal-authority-and-the-six-clause-invariant.md)).
+> Phase 14 widened the invariant to four clauses and recorded two debts it could not close. Phase 15
+> closes one, replaces the other with an honest one, and finds a third nobody had seen: **a control
+> that runs and passes is not a control that works.** The invariant is now six clauses — *no critical
+> institutional capability may depend upon an unverified assumption, an undocumented legal authority,
+> an ineffective detecting control, an undeclared constitutional relationship, or a single point of
+> organizational failure*. It does not hold, which is again the point; `evidence-custody` satisfies
+> all six under evidenced conditions, so the bar is reachable rather than decorative.
+> The [legal authority register](./docs/legal-authority.md) ships **empty of statutory claims** —
+> declaring that an Act authorises a capability is a legal assertion about the Republic, and a
+> plausible-looking statute name in a governed register is worse than an empty one, so every critical
+> capability reports UNKNOWN and the [legal dependency graph](./docs/legal-authority.md) is blocked at
+> the first hop. [Control effectiveness](./docs/institutional-intelligence.md) measures seven
+> dimensions against declared thresholds and reports `effectivenessRate: null` over all 175 controls,
+> because not one has a single observation of it catching anything.
+> Also: [constitutional zone governance](./docs/institutional-intelligence.md) for all 30 bounded
+> contexts, enforced as a startup gate; [cross-government readiness](./docs/institutional-intelligence.md)
+> over five aspects aggregated to the weakest link, which found the Information Security Review Board
+> cluster **disconnected from the governance graph** — six institutions holding identity, cryptography
+> and incident response that share no forum with any other institution at any distance;
+> [institutional sustainability](./docs/institutional-intelligence.md) over seven dimensions each
+> carrying its own horizon; [executive decision packages](./docs/institutional-intelligence.md) that
+> conclude with a constant string nothing computes; an [assumption maturity model](./docs/assumptions.md)
+> A0–A5 where the estate sits at A2 with a nine-item verification backlog; and six workload forecasts
+> that stay `null` until the capacity record that feeds them arrives.
+> Combined gate: **175 invariants**, 953 tests. Full summary: [`docs/institutional-intelligence.md`](./docs/institutional-intelligence.md) ·
+> v1.14: [`docs/strategic-planning.md`](./docs/strategic-planning.md) ·
 > v1.13: [`docs/institutional-assurance.md`](./docs/institutional-assurance.md) ·
 > v1.12: [`docs/predictive-governance.md`](./docs/predictive-governance.md) ·
 > v1.11: [`docs/adaptive-assurance.md`](./docs/adaptive-assurance.md) ·

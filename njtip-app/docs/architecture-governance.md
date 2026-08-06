@@ -22,6 +22,7 @@ without a demonstrated, implementation-driven need.
 | [0007](./adr/0007-session-consistency-and-adr-review-lifecycle.md) | Session-scoped consistency, and the ADR review lifecycle | Accepted | Read-your-writes / monotonic-reads stances; ADR governance schema applied from 0007 onward |
 | [0008](./adr/0008-institutional-assurance-and-the-single-dependency-invariant.md) | Institutional assurance, and the single-dependency invariant | Accepted | The global invariant that no critical capability may rest on a single person, process, document or system |
 | [0009](./adr/0009-adaptive-governance-and-the-four-clause-invariant.md) | Adaptive governance, strategic decision support, and the four-clause invariant | Accepted | Widens the invariant to unvalidated assumptions, unverified dependencies and undocumented governance relationships; governs optimization, forecasting and public-trust reporting |
+| [0010](./adr/0010-institutional-intelligence-legal-authority-and-the-six-clause-invariant.md) | Institutional intelligence, legal authority assurance, and the six-clause invariant | Accepted | Widens the invariant to undocumented legal authority and ineffective detecting controls; records the constitutional zone of all 30 contexts; governs decision packages, control effectiveness and cross-government readiness |
 | [template](./adr/000-template.md) | ADR template | — | Required format for every new decision |
 
 **Schema, in four tiers.** Each ADR is validated against the standard that was in force when it was
