@@ -684,7 +684,152 @@ function model() {
   };
 }
 
+// --- Organizational capability maturity (Phase 16, Part 11) ----------------------------------------
+//
+// Knowledge continuity answers "can the institution survive losing a person". Part 11 asks the wider
+// question the platform has never put in one place: how CAPABLE is this institution, across the
+// seven domains it actually has to be capable in?
+//
+// Every level is DERIVED from a report the platform already produces, and the rule that keeps this
+// from being a self-graded scorecard:
+//
+//   A DOMAIN WITH NO SOURCE IS UNKNOWN, AND UNKNOWN IS NOT LEVEL ZERO. Level zero means somebody
+//   looked and found nothing in place. Unknown means nobody looked, and the two need different
+//   people. An institution that scores itself 0 on a domain it never assessed has invented a
+//   finding; one that scores itself 3 has invented a capability.
+const CAPABILITY_DOMAINS = {
+  governance: { asks: 'Can the institution decide, and is every decision answerable to somebody?', derivedFrom: 'the ownership record and the RACI governance maturity level' },
+  operations: { asks: 'Can it run the estate and recover it?', derivedFrom: 'the operational readiness dimensions' },
+  security: { asks: 'Is the posture verified rather than asserted?', derivedFrom: 'the security readiness dimension and the threat register' },
+  resilience: { asks: 'Does every critical capability have a validated alternative?', derivedFrom: 'institutional resilience' },
+  compliance: { asks: 'Is every obligation reconciled against a control that holds?', derivedFrom: 'compliance intelligence' },
+  legalReadiness: { asks: 'Can it say what permits each capability to operate?', derivedFrom: 'the legal authority register' },
+  organizationalContinuity: { asks: 'Could every accountable post change hands without a capability stopping?', derivedFrom: 'knowledge continuity' },
+};
+
+// Five levels, weakest first. `unknown` sits outside the scale on purpose: it is not a level.
+const CAPABILITY_LEVELS = {
+  L0: { rank: 0, name: 'Absent', means: 'Assessed, and nothing is in place.' },
+  L1: { rank: 1, name: 'Declared', means: 'Assessed, and something is written down. Nothing checks it.' },
+  L2: { rank: 2, name: 'Checked', means: 'An executable control checks it on every build.' },
+  L3: { rank: 3, name: 'Evidenced', means: 'Checked, and the institution has recorded evidence of it working.' },
+  L4: { rank: 4, name: 'Continuously assured', means: 'Evidenced, and the evidence is refreshed on a schedule that would catch it lapsing.' },
+};
+const CAPABILITY_ORDER = ['L0', 'L1', 'L2', 'L3', 'L4'];
+
+// Assess one domain from whatever source was supplied. `null` in, unknown out — never a zero.
+function capabilityMaturity(sources = {}) {
+  const g = (fn) => { try { const r = fn(); return r === undefined ? null : r; } catch (_) { return null; } };
+  const domain = (id, level, detail) => ({
+    domain: id, ...CAPABILITY_DOMAINS[id],
+    level: level || 'unknown',
+    ...(level ? CAPABILITY_LEVELS[level] : { rank: null, name: 'Unknown', means: 'No source was supplied. Nobody has assessed this domain, which is not the same as assessing it and finding nothing.' }),
+    assessed: !!level,
+    detail: detail || 'no source supplied — unknown, which is not level zero',
+    derived: true,
+  });
+
+  const domains = [
+    domain('governance',
+      g(() => { const m = sources.governanceMaturity; if (!m || !Number.isFinite(m.level)) return null; return CAPABILITY_ORDER[Math.max(0, Math.min(4, m.level - 1))]; }),
+      g(() => sources.governanceMaturity && `governance maturity level ${sources.governanceMaturity.level} of 5`)),
+    domain('operations',
+      g(() => { const r = sources.readiness; if (!r || !Array.isArray(r.dimensions)) return null; return r.allDimensionsReady ? 'L3' : r.dimensions.some((d) => d.ready) ? 'L2' : 'L1'; }),
+      g(() => sources.readiness && `${sources.readiness.readyCount}/${sources.readiness.dimensionCount} readiness dimensions ready`)),
+    domain('security',
+      g(() => { const r = sources.readiness; if (!r || !Array.isArray(r.dimensions)) return null; const d = r.dimensions.find((x) => x.dimension === 'security'); if (!d) return null; return d.ready ? 'L3' : d.status === 'no-evidence' ? 'L1' : 'L2'; }),
+      g(() => { const d = (sources.readiness.dimensions || []).find((x) => x.dimension === 'security'); return d && `security readiness is '${d.status}'`; })),
+    domain('resilience',
+      g(() => { const r = sources.resilience; if (!r) return null; return r.holds ? 'L3' : Array.isArray(r.capabilities) && r.capabilities.length ? 'L2' : 'L1'; }),
+      g(() => sources.resilience && `${sources.resilience.violationCount} capability(ies) rest on a single dependency`)),
+    domain('compliance',
+      g(() => { const c = sources.compliance; if (!c) return null; return c.reconciliation && c.reconciliation.sound ? 'L3' : 'L2'; }),
+      g(() => sources.compliance && `compliance rate ${sources.compliance.complianceRate}`)),
+    domain('legalReadiness',
+      g(() => { const l = sources.legalAuthority; if (!l) return null; return l.complete ? 'L3' : l.declared && l.declared.length ? 'L1' : 'L0'; }),
+      g(() => sources.legalAuthority && `${sources.legalAuthority.authorized.length} of ${sources.legalAuthority.count} capabilities have a reviewed legal basis`)),
+    domain('organizationalContinuity',
+      g(() => { const c = sources.continuity; if (!c) return null; return c.sound ? 'L3' : Number.isFinite(c.minimumBusFactor) ? 'L2' : 'L1'; }),
+      g(() => sources.continuity && `minimum bus factor ${sources.continuity.minimumBusFactor}`)),
+  ];
+
+  const assessed = domains.filter((d) => d.assessed);
+  // Weakest link, as everywhere. An institution is as capable as its least capable domain, and an
+  // unassessed domain does not get to be the strongest by not being looked at.
+  const weakest = assessed.length
+    ? assessed.slice().sort((a, b) => a.rank - b.rank || a.domain.localeCompare(b.domain))[0]
+    : null;
+  return {
+    domains, count: domains.length,
+    catalogue: Object.entries(CAPABILITY_DOMAINS).map(([domain, d]) => ({ domain, ...d })),
+    levels: CAPABILITY_ORDER.map((id) => ({ level: id, ...CAPABILITY_LEVELS[id] })),
+    unknown: domains.filter((d) => !d.assessed).map((d) => d.domain),
+    assessedCount: assessed.length,
+    // The institution's level is the weakest ASSESSED domain, and the report says how many were not
+    // assessed at all rather than folding them in either direction.
+    organizationalLevel: weakest ? weakest.level : 'unknown',
+    weakestDomain: weakest ? weakest.domain : null,
+    complete: domains.every((d) => d.assessed),
+    everyLevelDerived: domains.every((d) => d.derived === true),
+    basis: assessed.length
+      ? `the institution is at ${weakest.level} (${weakest.name}), the level of its weakest ASSESSED domain '${weakest.domain}'. ${domains.length - assessed.length} domain(s) were not assessed at all and are UNKNOWN rather than counted at either end.`
+      : 'No capability domain has a source to assess it from. The institution\'s maturity is unknown, which is not the same as absent.',
+    informationalOnly: true, authorizes: false,
+    note: 'Every level is derived from a report the platform already produces. A domain with no source is UNKNOWN, and unknown is not level zero: level zero means somebody looked and found nothing, unknown means nobody looked, and the two need different people.',
+  };
+}
+
+// How the maturity has moved. Snapshots are supplied by the caller — this module owns no store, and
+// inventing a history would invent the improvement.
+function maturityEvolution(snapshots = []) {
+  if (!Array.isArray(snapshots) || snapshots.length < 2) {
+    return {
+      snapshots: snapshots.length, direction: 'unknown', measurable: false,
+      reason: 'fewer than two snapshots — a direction needs at least two, and one reading is not a trend',
+      informationalOnly: true, authorizes: false,
+    };
+  }
+  const rankOf = (level) => (CAPABILITY_LEVELS[level] ? CAPABILITY_LEVELS[level].rank : null);
+  const series = snapshots.map((s) => ({ level: s.organizationalLevel, rank: rankOf(s.organizationalLevel), assessed: s.assessedCount }));
+  const measured = series.filter((s) => s.rank !== null);
+  if (measured.length < 2) {
+    return {
+      snapshots: snapshots.length, series, direction: 'unknown', measurable: false,
+      reason: 'fewer than two snapshots carry an assessed level — an unknown level is not a rank of zero, so no direction can be derived',
+      informationalOnly: true, authorizes: false,
+    };
+  }
+  const delta = measured[measured.length - 1].rank - measured[0].rank;
+  // Coverage moves independently of level, and a rise in coverage that lowers the level is progress
+  // being reported as regression. Both are carried.
+  const coverageDelta = series[series.length - 1].assessed - series[0].assessed;
+  const byDomain = Object.keys(CAPABILITY_DOMAINS).map((id) => {
+    const levels = snapshots.map((s) => (s.domains || []).find((d) => d.domain === id)).filter(Boolean);
+    const ranks = levels.map((d) => (d.assessed ? d.rank : null)).filter((r) => r !== null);
+    return {
+      domain: id,
+      from: levels.length ? levels[0].level : 'unknown', to: levels.length ? levels[levels.length - 1].level : 'unknown',
+      direction: ranks.length < 2 ? 'unknown' : ranks[ranks.length - 1] > ranks[0] ? 'improving' : ranks[ranks.length - 1] < ranks[0] ? 'regressing' : 'steady',
+    };
+  });
+  return {
+    snapshots: snapshots.length, series, byDomain,
+    delta, coverageDelta,
+    direction: delta > 0 ? 'improving' : delta < 0 ? 'regressing' : 'steady',
+    measurable: true,
+    // Said plainly, because it is the most common way a maturity trend is misread.
+    coverageNote: coverageDelta > 0 && delta < 0
+      ? `The level fell while assessed coverage rose by ${coverageDelta} domain(s). Assessing a domain that was previously unknown can only lower the weakest-link level; that is the assessment working, not the institution regressing.`
+      : null,
+    regressing: byDomain.filter((d) => d.direction === 'regressing').map((d) => d.domain),
+    improving: byDomain.filter((d) => d.direction === 'improving').map((d) => d.domain),
+    reason: `organizational level moved ${measured[0].level} → ${measured[measured.length - 1].level} across ${snapshots.length} snapshot(s)`,
+    informationalOnly: true, authorizes: false,
+  };
+}
+
 module.exports = {
+  CAPABILITY_DOMAINS, CAPABILITY_LEVELS, CAPABILITY_ORDER, capabilityMaturity, maturityEvolution,
   OWNERSHIP, BOARDS, ROLES, DEPUTY_ROLES, DEPUTY_RULE, DEPUTY_OVERRIDES, REVIEW_CADENCE_DAYS,
   subsystems, describe, boards, escalationPath, accountabilityFor, validate, model,
   deputyOf, deputies, AvailabilityRegister, successionPlan, reviewSchedule,

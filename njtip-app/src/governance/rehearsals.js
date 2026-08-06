@@ -237,6 +237,226 @@ class RehearsalRegister {
       failClosed: true, authorizes: false,
     };
   }
+
+  // --- Part 7: the conditions a run was held under -----------------------------------------------
+  //
+  // Recorded at SCHEDULE time or not at all, and this is the point: a facilitator who can set
+  // `unannounced: true` after seeing the result can make any drill look like whatever they need.
+  declareConditions(runId, { announced, faultsInjected = false, liveSystems = false, by, at = null } = {}) {
+    const run = this._runs.get(runId);
+    if (!run) throw new Error('unknown rehearsal run: ' + runId);
+    if (run.closed) { const e = new Error(`${runId} is closed — the conditions a run was held under cannot be declared after the result is known`); e.failClosed = true; throw e; }
+    if (run.conditions) { const e = new Error(`${runId} already has declared conditions — restating them after the run has begun is how a tabletop becomes an unannounced drill`); e.failClosed = true; throw e; }
+    if (typeof announced !== 'boolean') { const e = new Error('a rehearsal must state whether the participants were told it was coming — that is the single largest determinant of what it tests'); e.failClosed = true; throw e; }
+    if (!by) { const e = new Error('declaring the conditions of a rehearsal requires a named human'); e.failClosed = true; throw e; }
+    // DERIVED, not chosen. The facilitator states the facts; the band follows from them.
+    const band = !announced ? 'unannounced' : liveSystems ? 'live' : faultsInjected ? 'simulated' : 'tabletop';
+    run.conditions = { announced, faultsInjected, liveSystems, by, at: at ?? this._clock(), realism: band };
+    return { ...run.conditions };
+  }
+
+  // A facilitator's judgement on the two qualities the platform genuinely cannot derive. Attributed,
+  // and refused after close for the same reason observations are.
+  assess(runId, { coordinationQuality, communicationEffectiveness, by, note = null, at = null } = {}) {
+    const run = this._runs.get(runId);
+    if (!run) throw new Error('unknown rehearsal run: ' + runId);
+    if (run.closed) { const e = new Error(`${runId} is closed — an assessment added afterwards is one that can be made to fit the outcome`); e.failClosed = true; throw e; }
+    if (!by) { const e = new Error('an exercise assessment requires a named assessor'); e.failClosed = true; throw e; }
+    const bands = ['poor', 'adequate', 'good'];
+    for (const [field, value] of [['coordinationQuality', coordinationQuality], ['communicationEffectiveness', communicationEffectiveness]]) {
+      if (!bands.includes(value)) throw new Error(`'${field}' must be one of ${bands.join(', ')} — a numeric score would imply a precision a human judgement does not have`);
+    }
+    run.assessment = { coordinationQuality, communicationEffectiveness, by, note, at: at ?? this._clock() };
+    return { ...run.assessment };
+  }
+
+  // A lesson. Requires an owner: a lesson nobody owns is an observation.
+  recordLesson(runId, { lesson, owner, by, at = null } = {}) {
+    const run = this._runs.get(runId);
+    if (!run) throw new Error('unknown rehearsal run: ' + runId);
+    if (!lesson) throw new Error('a lesson must say what was learned');
+    if (!owner) { const e = new Error('a lesson must name who owns acting on it — a lesson nobody owns is an observation'); e.failClosed = true; throw e; }
+    if (!by) { const e = new Error('a lesson must name who recorded it'); e.failClosed = true; throw e; }
+    if (!run.lessons) run.lessons = [];
+    run.lessons.push({ lesson, owner, by, at: at ?? this._clock() });
+    return { ...run.lessons[run.lessons.length - 1] };
+  }
+
+  // The seven qualities for one closed run. Every one states whether it was derived or assessed, and
+  // an unassessed quality is `unknown` rather than absent.
+  exerciseIntelligence(runId) {
+    const run = this._runs.get(runId);
+    if (!run) throw new Error('unknown rehearsal run: ' + runId);
+    const after = run.closed ? this.afterAction(runId) : null;
+    const quality = (id, value, known, detail) => ({
+      quality: id, ...EXERCISE_QUALITIES[id],
+      value: known ? value : null, known,
+      detail: known ? detail : `not assessed — ${EXERCISE_QUALITIES[id].ifUnknown}`,
+    });
+
+    const acted = new Set(run.observations.map((o) => o.by));
+    const participated = run.participants.filter((p) => acted.has(p));
+    const stepsSeen = new Set(run.observations.map((o) => o.step));
+    const lessons = run.lessons || [];
+    const conditions = run.conditions || null;
+
+    const qualities = [
+      quality('realism', conditions ? conditions.realism : null, !!conditions,
+        conditions ? `${conditions.realism}: ${REALISM_BANDS[conditions.realism].means}` : null),
+      quality('objectiveCompletion', +(stepsSeen.size / run.requiredSteps.length).toFixed(4), run.observations.length > 0,
+        `${stepsSeen.size} of ${run.requiredSteps.length} required steps were observed`),
+      quality('participantPerformance', run.participants.length ? +(participated.length / run.participants.length).toFixed(4) : null, run.observations.length > 0,
+        `${participated.length} of ${run.participants.length} declared participants recorded an action`),
+      quality('coordinationQuality', run.assessment ? run.assessment.coordinationQuality : null, !!run.assessment,
+        run.assessment ? `assessed '${run.assessment.coordinationQuality}' by ${run.assessment.by}` : null),
+      quality('communicationEffectiveness', run.assessment ? run.assessment.communicationEffectiveness : null, !!run.assessment,
+        run.assessment ? `assessed '${run.assessment.communicationEffectiveness}' by ${run.assessment.by}` : null),
+      quality('recoveryEffectiveness', after ? after.passed : null, !!after,
+        after ? (after.passed ? 'every expectation recorded beforehand was met' : `unmet: ${after.unmetExpectations.map((u) => u.expectation).join(', ')}`) : null),
+      quality('lessonsLearned', lessons.length, run.closed,
+        lessons.length ? `${lessons.length} lesson(s), each with a named owner` : 'no lesson was recorded — either the rehearsal found nothing or nobody wrote it down, and those are different'),
+    ];
+    const unknown = qualities.filter((q) => !q.known);
+    return {
+      run: runId, rehearsal: run.rehearsal, closed: run.closed,
+      qualities, unknownQualities: unknown.map((q) => q.quality),
+      conditions, assessment: run.assessment || null, lessons,
+      // An unassessed quality is not a good one, so a run is only fully characterised when all seven
+      // are known — and that is the figure the maturity model below reads.
+      fullyCharacterised: unknown.length === 0,
+      basis: unknown.length
+        ? `${qualities.length - unknown.length} of ${qualities.length} qualities are known; ${unknown.map((q) => q.quality).join(', ')} were never assessed and are UNKNOWN rather than assumed adequate`
+        : 'all seven qualities are known for this run',
+      informationalOnly: true, authorizes: false,
+    };
+  }
+
+  // Longitudinal exercise maturity, derived from the whole history. This is the figure that says
+  // whether the institution's rehearsing is improving, which passing every drill never does.
+  exerciseMaturity({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const closed = this.runs().filter((r) => r.closed);
+    const intel = closed.map((r) => this.exerciseIntelligence(r.id));
+    const cov = this.coverage({ now: t });
+    const assessed = intel.filter((i) => i.assessment);
+    const beyondTabletop = intel.filter((i) => i.conditions && REALISM_BANDS[i.conditions.realism].rank > 0);
+    const withOwnedLessons = intel.filter((i) => i.lessons.length > 0);
+
+    // Derived, and each level requires everything below it — a level reached by skipping is not a
+    // level, it is a coincidence.
+    let level = 'E0';
+    if (closed.length) level = 'E1';
+    if (level === 'E1' && assessed.length) level = 'E2';
+    if (level === 'E2' && beyondTabletop.length) level = 'E3';
+    if (level === 'E3' && withOwnedLessons.length && cov.neverRehearsed.length === 0) level = 'E4';
+
+    const realismCounts = Object.fromEntries(Object.keys(REALISM_BANDS).map((b) => [b, intel.filter((i) => i.conditions && i.conditions.realism === b).length]));
+    return {
+      level, ...EXERCISE_MATURITY_LEVELS[level],
+      levels: EXERCISE_MATURITY_ORDER.map((id) => ({ level: id, ...EXERCISE_MATURITY_LEVELS[id] })),
+      qualities: Object.entries(EXERCISE_QUALITIES).map(([quality, q]) => ({ quality, ...q })),
+      realismBands: Object.entries(REALISM_BANDS).map(([band, b]) => ({ band, ...b, runs: realismCounts[band] })),
+      runs: closed.length, assessedRuns: assessed.length,
+      beyondTabletop: beyondTabletop.length, runsWithLessons: withOwnedLessons.length,
+      neverRehearsed: cov.neverRehearsed,
+      fullyCharacterised: intel.filter((i) => i.fullyCharacterised).length,
+      // What the NEXT level costs, so the figure is actionable rather than a grade.
+      nextLevel: level === 'E4' ? null : EXERCISE_MATURITY_ORDER[EXERCISE_MATURITY_ORDER.indexOf(level) + 1],
+      toReachNext: level === 'E0' ? 'close a rehearsal'
+        : level === 'E1' ? 'have a facilitator assess coordination and communication on a run'
+          : level === 'E2' ? 'run one rehearsal beyond a tabletop — inject a fault, involve a live system, or do not announce it'
+            : level === 'E3' ? `record an owned lesson, and rehearse the ${cov.neverRehearsed.length} scenario(s) never run: ${cov.neverRehearsed.join(', ')}`
+              : null,
+      measurable: closed.length > 0,
+      basis: closed.length
+        ? `${closed.length} closed rehearsal(s); ${assessed.length} assessed, ${beyondTabletop.length} beyond a tabletop, ${withOwnedLessons.length} producing an owned lesson.`
+        : 'No rehearsal has been closed. Exercise maturity is E0, and the cheapest way to pass every rehearsal is to run none.',
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'Realism is derived from the conditions rather than assessed by the facilitator: an announced, scheduled walkthrough is a tabletop whatever anybody scores it. An unassessed quality is UNKNOWN, not adequate — the cheapest way to pass every rehearsal is to run easier rehearsals, and this figure is what makes that visible.',
+    };
+  }
 }
 
-module.exports = { RehearsalRegister, REHEARSALS };
+// --- Operational exercise intelligence (Phase 16, Part 7) ------------------------------------------
+//
+// The after-action report answers one question: did the run meet the expectations recorded before it
+// began. That is the right question and it is not enough to tell an institution whether its
+// rehearsing is getting better, because the cheapest way to pass every rehearsal is to run easier
+// rehearsals.
+//
+// So seven qualities, and the one that keeps the rest honest:
+//
+//   REALISM IS DERIVED FROM THE CONDITIONS, NOT ASSESSED BY THE FACILITATOR. An announced, scheduled
+//   walkthrough against no live system is a tabletop, whatever anybody scores it. The facilitator can
+//   grade coordination and communication — those genuinely need a human judgement — but they cannot
+//   grade how real their own exercise was.
+//
+// And the rule every quality obeys:
+//
+//   AN UNASSESSED QUALITY IS UNKNOWN, NOT GOOD. A rehearsal whose coordination nobody graded has
+//   unknown coordination, and an exercise maturity computed as though unknown meant fine is the
+//   reason drills stop finding anything.
+const EXERCISE_QUALITIES = {
+  realism: {
+    derived: true,
+    asks: 'How close were the conditions to a real incident?',
+    from: 'whether the run was announced, whether faults were injected, and whether live systems were involved',
+    ifUnknown: 'Nobody can tell a rehearsal that would have caught something from one that could not.',
+  },
+  objectiveCompletion: {
+    derived: true,
+    asks: 'Were the documented steps actually completed, in order?',
+    from: 'the observations recorded against the required steps',
+    ifUnknown: 'A rehearsal that stopped halfway reads the same as one that finished.',
+  },
+  participantPerformance: {
+    derived: true,
+    asks: 'Did the people who were supposed to act actually act?',
+    from: 'the share of declared participants who recorded at least one observation',
+    ifUnknown: 'A rehearsal attended by a list of names is indistinguishable from one people took part in.',
+  },
+  coordinationQuality: {
+    derived: false,
+    asks: 'Did the people involved work as one, or in parallel?',
+    from: 'a facilitator assessment — this genuinely needs a human judgement and the platform cannot derive it',
+    ifUnknown: 'The failure mode that shows up in a real incident is the one nobody graded.',
+  },
+  communicationEffectiveness: {
+    derived: false,
+    asks: 'Did the right people learn the right thing in time?',
+    from: 'a facilitator assessment',
+    ifUnknown: 'Communication is the thing that fails first and is measured last.',
+  },
+  recoveryEffectiveness: {
+    derived: true,
+    asks: 'Was the thing actually restored, within the expectation recorded beforehand?',
+    from: 'the after-action report\'s expectation outcomes',
+    ifUnknown: 'A rehearsal can be declared successful without anything having been recovered.',
+  },
+  lessonsLearned: {
+    derived: true,
+    asks: 'Did the run produce anything anybody has to act on?',
+    from: 'recorded lessons, each with an owner',
+    ifUnknown: 'A rehearsal that produced no lesson either found nothing or nobody wrote it down, and those are different.',
+  },
+};
+
+// Realism bands, derived from conditions rather than graded. Ordered weakest first.
+const REALISM_BANDS = {
+  tabletop: { rank: 0, means: 'Announced, scheduled, discussed. Tests whether people know the plan.' },
+  simulated: { rank: 1, means: 'Faults were injected against a model or a non-production system.' },
+  live: { rank: 2, means: 'Live systems were involved, still announced.' },
+  unannounced: { rank: 3, means: 'Nobody was told it was coming. The only kind that tests what people actually do.' },
+};
+
+// Longitudinal exercise maturity. Derived from the history, never assessed.
+const EXERCISE_MATURITY_LEVELS = {
+  E0: { rank: 0, name: 'Unexercised', means: 'No rehearsal has been run and closed.' },
+  E1: { rank: 1, name: 'Rehearsed', means: 'Rehearsals happen. Nothing says whether they are realistic or whether they produce anything.' },
+  E2: { rank: 2, name: 'Assessed', means: 'Rehearsals are graded on coordination and communication by a facilitator.' },
+  E3: { rank: 3, name: 'Realistic', means: 'At least one rehearsal has gone beyond a tabletop against live or injected conditions.' },
+  E4: { rank: 4, name: 'Learning', means: 'Rehearsals produce owned lessons, and the estate rehearses everything in the catalogue.' },
+};
+const EXERCISE_MATURITY_ORDER = ['E0', 'E1', 'E2', 'E3', 'E4'];
+
+module.exports = { RehearsalRegister, REHEARSALS, EXERCISE_QUALITIES, REALISM_BANDS, EXERCISE_MATURITY_LEVELS, EXERCISE_MATURITY_ORDER };

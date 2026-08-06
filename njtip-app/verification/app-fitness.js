@@ -8398,6 +8398,270 @@ module.exports = [
     if (later.authorizes !== false) v.push('the legal dependency graph claims authority');
   }),
 
+  fit('APP-FIT-CONTROL-PERFORMANCE', 'Precision and recall are reported side by side and never combined, and an unobserved control has unknown performance', (v) => {
+    const ce = require('../src/assurance/control-effectiveness');
+    const MINUTE = 60_000, HOUR = 3600_000, DAY = 24 * HOUR;
+
+    // --- Nine measures, each with a formula and a stated cost of not knowing it -------------
+    for (const required of ['detectionRate', 'precision', 'recall', 'falsePositives', 'falseNegatives', 'meanTimeToDetect', 'meanTimeToAcknowledge', 'meanTimeToRespond', 'meanTimeToRecover']) {
+      if (!ce.PERFORMANCE_MEASURES[required]) v.push(`performance measure '${required}' is not computed`);
+    }
+    if (Object.keys(ce.PERFORMANCE_MEASURES).length !== 9) v.push('control performance does not carry exactly nine measures');
+    for (const [id, m] of Object.entries(ce.PERFORMANCE_MEASURES)) {
+      if (!m.asks || !m.asks.endsWith('?') || !m.formula || !m.ifUnknown) v.push(`performance measure '${id}' does not state its question, formula or what not knowing it costs`);
+      if (typeof m.higherIsBetter !== 'boolean') v.push(`performance measure '${id}' does not say which direction is better`);
+    }
+
+    // --- An unobserved control has UNKNOWN performance, not zero ----------------------------
+    const empty = new ce.ControlObservationRegister({ clock: () => 0 });
+    const none = ce.controlPerformance('APP-FIT-NOTHING', { register: empty, now: 0 });
+    if (none.measured) v.push('a control with no observations reported measured performance');
+    if (none.unknownMeasures.length !== 9) v.push('an unobserved control did not report all nine measures as unknown');
+    for (const m of none.measures) {
+      // A detection rate of 0 over no observations reads as a control that catches nothing.
+      if (m.value !== null) v.push(`measure '${m.measure}' produced a figure with no observations`);
+    }
+    if (!/not the same as poor/.test(none.basis)) v.push('an unobserved control does not say that unknown is distinct from poor');
+    if (none.authorizes !== false) v.push('the control performance report claims authority');
+
+    // --- THE RULE: precision and recall are never combined ----------------------------------
+    const reg = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 10; i += 1) {
+      const t = i * 10 * DAY;
+      if (i < 7) reg.record('C', { outcome: 'true-positive', occurredAt: t, detectedAt: t + 5 * MINUTE, acknowledgedAt: t + 20 * MINUTE, acknowledgedBy: 'Duty Officer', remediatedAt: t + 2 * HOUR, recoveredAt: t + 3 * HOUR, observedBy: 'ORB' });
+      else if (i < 9) reg.record('C', { outcome: 'false-negative', occurredAt: t, observedBy: 'ORB' });
+      else reg.record('C', { outcome: 'false-positive', occurredAt: t, detectedAt: t + MINUTE, acknowledgedAt: t + 2 * MINUTE, acknowledgedBy: 'Duty Officer', observedBy: 'ORB' });
+    }
+    const perf = ce.controlPerformance('C', { register: reg, now: 0 });
+    if (perf.precisionRecall.combined !== false) v.push('precision and recall were combined into a single score');
+    if (!/hide which/.test(perf.precisionRecall.whyNotCombined)) v.push('the report does not say why precision and recall are not combined');
+    // Seven true positives, one false positive → precision 7/8. Seven of nine real → recall 7/9.
+    const value = (id) => perf.measures.find((m) => m.measure === id).value;
+    if (value('precision') !== 0.875) v.push(`precision computed as ${value('precision')}, expected 0.875`);
+    if (value('recall') !== +(7 / 9).toFixed(4)) v.push(`recall computed as ${value('recall')}, expected ${+(7 / 9).toFixed(4)}`);
+    if (value('falseNegatives') !== 2) v.push('false negatives were not counted');
+    if (value('meanTimeToDetect') !== 5 * MINUTE) v.push('mean time to detect was not computed from the true positives');
+    // Recovery is not remediation. A control whose fix landed at +2h and whose capability came back
+    // at +3h has a mean time to recover of 3h, and reporting 2h would report the wrong thing.
+    if (value('meanTimeToRecover') !== 3 * HOUR) v.push(`mean time to recover computed as ${value('meanTimeToRecover')}, expected ${3 * HOUR} — recovery is not remediation`);
+    if (value('meanTimeToRespond') === value('meanTimeToRecover')) v.push('mean time to respond and mean time to recover produced the same figure, so one of them is not being measured');
+
+    // --- Detection rate counts an unavailable control as a miss -----------------------------
+    const down = new ce.ControlObservationRegister({ clock: () => 0 });
+    down.record('D', { outcome: 'true-positive', occurredAt: 0, detectedAt: MINUTE, observedBy: 'ORB' });
+    down.record('D', { outcome: 'unavailable', occurredAt: DAY, observedBy: 'ORB' });
+    const withDown = ce.controlPerformance('D', { register: down, now: 0 });
+    if (withDown.measures.find((m) => m.measure === 'detectionRate').value !== 0.5) {
+      v.push('a control that was not running when the condition arose was not counted as a miss');
+    }
+
+    // --- A mean over too few observations is INDICATIVE, not a measurement -------------------
+    const thin = new ce.ControlObservationRegister({ clock: () => 0 });
+    thin.record('E', { outcome: 'true-positive', occurredAt: 0, detectedAt: MINUTE, observedBy: 'ORB' });
+    const thinPerf = ce.controlPerformance('E', { register: thin, now: 0 });
+    if (!thinPerf.indicativeMeasures.includes('meanTimeToDetect')) v.push('a mean over one observation was reported as a measurement rather than as indicative');
+    if (!thinPerf.measured) v.push('a control with one observation reported nothing measured at all');
+
+    // --- Trends need two MEASURED periods; an empty period is not a period scoring zero ------
+    if (ce.performanceTrend('C', { register: reg, periods: [0], now: 0 }).measurable) v.push('a trend was computed over one period boundary');
+    const trend = ce.performanceTrend('C', { register: reg, periods: [0, 50 * DAY, 100 * DAY], now: 0 });
+    if (!trend.measurable) v.push('a trend over two populated periods was not measurable');
+    if (trend.direction !== 'degrading') v.push(`a control whose detection rate fell from 1 to 0.5 reported '${trend.direction}'`);
+    const emptyPeriods = ce.performanceTrend('C', { register: reg, periods: [500 * DAY, 600 * DAY, 700 * DAY], now: 0 });
+    if (emptyPeriods.measurable) v.push('a trend was computed over periods containing no observations');
+    if (!/not a period scoring zero/.test(emptyPeriods.reason)) v.push('an empty period was not distinguished from a period scoring zero');
+
+    // --- The estate dashboard excludes unobserved controls rather than counting them ---------
+    const dash = ce.performanceDashboard({ register: reg, controls: ['C', 'APP-FIT-NOTHING'], periods: [0, 50 * DAY, 100 * DAY], now: 0 });
+    if (dash.count !== 2) v.push('the performance dashboard did not cover every supplied control');
+    if (!dash.unmeasured.includes('APP-FIT-NOTHING')) v.push('an unobserved control was not reported as unmeasured');
+    if (dash.measuredControls.length !== 1) v.push('an unobserved control was counted as measured');
+    if (!dash.degrading.includes('C')) v.push('a degrading control was not named');
+    // …and with nothing observed at all, the dashboard says so rather than reporting a rate.
+    const blank = ce.performanceDashboard({ register: empty, controls: ['A', 'B'], now: 0 });
+    if (blank.measurable) v.push('a dashboard over unobserved controls reported itself measurable');
+    if (blank.meanDetectionRate !== null) v.push('a mean detection rate was computed over controls nobody has observed');
+  }),
+
+  fit('APP-FIT-EXERCISE-INTELLIGENCE', 'Realism is derived from the conditions rather than graded, and an unassessed exercise quality is unknown rather than adequate', (v) => {
+    const { RehearsalRegister, REHEARSALS, EXERCISE_QUALITIES, REALISM_BANDS, EXERCISE_MATURITY_ORDER } = require('../src/governance/rehearsals');
+
+    // --- Seven qualities, each saying whether it is derived or assessed ----------------------
+    for (const required of ['realism', 'objectiveCompletion', 'participantPerformance', 'coordinationQuality', 'communicationEffectiveness', 'recoveryEffectiveness', 'lessonsLearned']) {
+      if (!EXERCISE_QUALITIES[required]) v.push(`exercise quality '${required}' is not measured`);
+    }
+    if (Object.keys(EXERCISE_QUALITIES).length !== 7) v.push('exercise intelligence does not carry exactly seven qualities');
+    for (const [id, q] of Object.entries(EXERCISE_QUALITIES)) {
+      if (!q.asks || !q.asks.endsWith('?') || !q.from || !q.ifUnknown) v.push(`exercise quality '${id}' does not state its question, its source or what not knowing it costs`);
+      if (typeof q.derived !== 'boolean') v.push(`exercise quality '${id}' does not say whether it is derived or assessed`);
+    }
+    // THE RULE: realism is derived. A facilitator cannot grade how real their own exercise was.
+    if (!EXERCISE_QUALITIES.realism.derived) v.push('realism is assessed rather than derived — a facilitator cannot grade how real their own exercise was');
+    if (EXERCISE_QUALITIES.coordinationQuality.derived || EXERCISE_QUALITIES.communicationEffectiveness.derived) {
+      v.push('a quality that genuinely needs a human judgement was claimed to be derived');
+    }
+    if (REALISM_BANDS.tabletop.rank !== 0 || REALISM_BANDS.unannounced.rank !== 3) v.push('the realism bands do not run from tabletop to unannounced');
+
+    // --- Nothing rehearsed: E0, and it says the cheapest way to pass is to run none ----------
+    const empty = new RehearsalRegister({ clock: () => 0 });
+    const e0 = empty.exerciseMaturity({ now: 0 });
+    if (e0.level !== 'E0') v.push(`an unexercised estate reported maturity '${e0.level}'`);
+    if (e0.measurable) v.push('an unexercised estate reported itself measurable');
+    if (e0.nextLevel !== 'E1' || !e0.toReachNext) v.push('the maturity report does not say what the next level costs');
+    if (e0.authorizes !== false) v.push('the exercise maturity report claims authority');
+
+    // --- Conditions are declared BEFORE the result is known ---------------------------------
+    const reg = new RehearsalRegister({ clock: () => 0 });
+    const id = 'incident-escalation';
+    const run = reg.schedule({ rehearsal: id, facilitator: 'Operations Review Board', participants: ['A', 'B'], at: 0 });
+    let noAnnounced = false;
+    try { reg.declareConditions(run.id, { by: 'ORB' }); } catch (e) { noAnnounced = !!e.failClosed; }
+    if (!noAnnounced) v.push('a rehearsal declared conditions without stating whether participants were told it was coming');
+    let unattributed = false;
+    try { reg.declareConditions(run.id, { announced: true }); } catch (e) { unattributed = !!e.failClosed; }
+    if (!unattributed) v.push('rehearsal conditions were declared by nobody');
+
+    // Realism follows from the facts, never from a choice.
+    for (const [facts, expected] of [
+      [{ announced: true, faultsInjected: false, liveSystems: false }, 'tabletop'],
+      [{ announced: true, faultsInjected: true, liveSystems: false }, 'simulated'],
+      [{ announced: true, faultsInjected: true, liveSystems: true }, 'live'],
+      [{ announced: false, faultsInjected: false, liveSystems: false }, 'unannounced'],
+    ]) {
+      const probe = new RehearsalRegister({ clock: () => 0 });
+      const r = probe.schedule({ rehearsal: id, facilitator: 'ORB', participants: ['A'], at: 0 });
+      const c = probe.declareConditions(r.id, { ...facts, by: 'ORB' });
+      if (c.realism !== expected) v.push(`conditions ${JSON.stringify(facts)} derived realism '${c.realism}', expected '${expected}'`);
+    }
+    // Conditions cannot be restated once set, which is how a tabletop becomes an unannounced drill.
+    reg.declareConditions(run.id, { announced: false, faultsInjected: true, liveSystems: true, by: 'ORB' });
+    let restated = false;
+    try { reg.declareConditions(run.id, { announced: true, by: 'ORB' }); } catch (e) { restated = !!e.failClosed; }
+    if (!restated) v.push('the conditions of a rehearsal were restated after it began');
+
+    // --- An unassessed quality is UNKNOWN, not adequate --------------------------------------
+    const bare = new RehearsalRegister({ clock: () => 0 });
+    const bareRun = bare.schedule({ rehearsal: id, facilitator: 'ORB', participants: ['A'], at: 0 });
+    for (const step of REHEARSALS[id].steps) bare.observe(bareRun.id, { step, at: 1000, by: 'A' });
+    bare.close(bareRun.id, { by: 'ORB', at: 2000 });
+    const unassessed = bare.exerciseIntelligence(bareRun.id);
+    if (unassessed.fullyCharacterised) v.push('a run with no declared conditions and no assessment was fully characterised');
+    for (const quality of ['realism', 'coordinationQuality', 'communicationEffectiveness']) {
+      const q = unassessed.qualities.find((x) => x.quality === quality);
+      if (q.known) v.push(`quality '${quality}' was known with nothing recorded for it`);
+      if (q.value !== null) v.push(`quality '${quality}' produced a value with nothing recorded for it`);
+    }
+    if (!/UNKNOWN rather than assumed adequate/.test(unassessed.basis)) v.push('an unassessed run does not say that unknown is distinct from adequate');
+
+    // --- An assessment is a band, and only after the run, never after close ------------------
+    let numericScore = false;
+    try { reg.assess(run.id, { coordinationQuality: 0.9, communicationEffectiveness: 'good', by: 'ORB' }); } catch (_) { numericScore = true; }
+    if (!numericScore) v.push('an exercise was assessed with a numeric score, which implies a precision a human judgement does not have');
+    reg.assess(run.id, { coordinationQuality: 'good', communicationEffectiveness: 'adequate', by: 'ORB' });
+    let ownerless = false;
+    try { reg.recordLesson(run.id, { lesson: 'something', by: 'ORB' }); } catch (e) { ownerless = !!e.failClosed; }
+    if (!ownerless) v.push('a lesson was recorded with nobody owning acting on it');
+    reg.recordLesson(run.id, { lesson: 'the paging list was stale', owner: 'Platform Security Operations', by: 'ORB' });
+    for (const step of REHEARSALS[id].steps) reg.observe(run.id, { step, at: 1000, by: 'A' });
+    reg.close(run.id, { by: 'ORB', at: 2000 });
+    let assessedAfterClose = false;
+    try { reg.assess(run.id, { coordinationQuality: 'good', communicationEffectiveness: 'good', by: 'ORB' }); } catch (e) { assessedAfterClose = !!e.failClosed; }
+    if (!assessedAfterClose) v.push('a rehearsal was assessed after it closed — an assessment added afterwards can be made to fit the outcome');
+
+    // --- THE SUCCESS PATH: a fully characterised run, and the maturity it earns --------------
+    const full = reg.exerciseIntelligence(run.id);
+    if (!full.fullyCharacterised) v.push(`a fully recorded run was not fully characterised: ${full.unknownQualities.join(', ')}`);
+    if (full.qualities.find((q) => q.quality === 'realism').value !== 'unannounced') v.push('an unannounced live drill was not reported as unannounced');
+    if (full.qualities.find((q) => q.quality === 'participantPerformance').value !== 0.5) v.push('participant performance did not derive from who actually acted');
+    const mature = reg.exerciseMaturity({ now: 0 });
+    if (mature.level !== 'E3') v.push(`one realistic, assessed, lesson-producing run reached '${mature.level}' rather than E3 — E4 also requires the catalogue to be covered`);
+    if (!mature.toReachNext || !/never run/.test(mature.toReachNext)) v.push('E3 does not say that the uncovered catalogue is what blocks E4');
+    if (!mature.measurable) v.push('an estate with a closed rehearsal reported itself unmeasurable');
+    // Every level requires everything below it: a level reached by skipping is a coincidence.
+    if (EXERCISE_MATURITY_ORDER.join(',') !== 'E0,E1,E2,E3,E4') v.push('the exercise maturity scale is not E0 through E4');
+    const skipped = new RehearsalRegister({ clock: () => 0 });
+    const sRun = skipped.schedule({ rehearsal: id, facilitator: 'ORB', participants: ['A'], at: 0 });
+    skipped.declareConditions(sRun.id, { announced: false, by: 'ORB' });
+    skipped.recordLesson(sRun.id, { lesson: 'x', owner: 'A', by: 'ORB' });
+    for (const step of REHEARSALS[id].steps) skipped.observe(sRun.id, { step, at: 1, by: 'A' });
+    skipped.close(sRun.id, { by: 'ORB', at: 2 });
+    if (skipped.exerciseMaturity({ now: 0 }).level !== 'E1') {
+      v.push('a realistic run with lessons but no facilitator assessment skipped past E2');
+    }
+  }),
+
+  fit('APP-FIT-CAPABILITY-MATURITY', 'A capability domain with no source is unknown rather than level zero, and the institution is as capable as its weakest assessed domain', (v) => {
+    const own = require('../src/governance/ownership');
+
+    // --- Seven domains, five levels, and unknown outside the scale ---------------------------
+    for (const required of ['governance', 'operations', 'security', 'resilience', 'compliance', 'legalReadiness', 'organizationalContinuity']) {
+      if (!own.CAPABILITY_DOMAINS[required]) v.push(`capability domain '${required}' is not assessed`);
+    }
+    if (Object.keys(own.CAPABILITY_DOMAINS).length !== 7) v.push('capability maturity does not carry exactly seven domains');
+    for (const [id, d] of Object.entries(own.CAPABILITY_DOMAINS)) {
+      if (!d.asks || !d.asks.endsWith('?') || !d.derivedFrom) v.push(`capability domain '${id}' does not state its question or where it is derived from`);
+    }
+    if (own.CAPABILITY_ORDER.join(',') !== 'L0,L1,L2,L3,L4') v.push('the capability scale is not L0 through L4');
+    if (own.CAPABILITY_LEVELS.unknown) v.push('"unknown" was declared as a capability level — it is not a level, it is the absence of one');
+
+    // --- Nothing supplied: every domain UNKNOWN, and unknown is not L0 -----------------------
+    const blind = own.capabilityMaturity({});
+    if (blind.organizationalLevel !== 'unknown') v.push(`an unassessed institution reported level '${blind.organizationalLevel}'`);
+    if (blind.unknown.length !== 7) v.push('an unassessed institution did not report all seven domains as unknown');
+    if (blind.complete) v.push('an unassessed institution reported a complete assessment');
+    for (const d of blind.domains) {
+      if (d.assessed) v.push(`domain '${d.domain}' reported itself assessed with no source`);
+      if (d.rank !== null) v.push(`domain '${d.domain}' was given a rank with no source — unknown is not level zero`);
+      if (!d.derived) v.push(`domain '${d.domain}' is not marked as derived`);
+    }
+    if (!blind.everyLevelDerived) v.push('a capability level is not derived');
+    if (blind.authorizes !== false) v.push('the capability maturity report claims authority');
+
+    // --- Level zero is a FINDING, and reachable: assessed and nothing in place ---------------
+    const nothingInPlace = own.capabilityMaturity({ legalAuthority: { complete: false, authorized: [], count: 5, declared: [] } });
+    if (nothingInPlace.organizationalLevel !== 'L0') v.push('a domain assessed and found empty did not report L0');
+    if (nothingInPlace.weakestDomain !== 'legalReadiness') v.push('the weakest assessed domain was not named');
+    if (nothingInPlace.unknown.length !== 6) v.push('assessing one domain did not leave the other six unknown');
+    if (nothingInPlace.complete) v.push('an institution with one assessed domain reported a complete assessment');
+
+    // --- THE SUCCESS PATH: every domain assessed, and the weakest link decides ---------------
+    const green = {
+      governanceMaturity: { level: 5 },
+      readiness: { allDimensionsReady: true, readyCount: 10, dimensionCount: 10, dimensions: [{ dimension: 'security', ready: true, status: 'ready' }] },
+      resilience: { holds: true, capabilities: [{}], violationCount: 0 },
+      compliance: { reconciliation: { sound: true }, complianceRate: 1 },
+      legalAuthority: { complete: true, authorized: ['a'], count: 1, declared: ['a'] },
+      continuity: { sound: true, minimumBusFactor: 2 },
+    };
+    const full = own.capabilityMaturity(green);
+    if (!full.complete) v.push(`a fully sourced assessment left domains unknown: ${full.unknown.join(', ')}`);
+    if (full.organizationalLevel === 'unknown') v.push('a fully sourced assessment produced no organizational level');
+    // Weakest link, never the mean: one weak domain drags the institution to its level.
+    const weakened = own.capabilityMaturity({ ...green, resilience: { holds: false, capabilities: [], violationCount: 3 } });
+    if (weakened.weakestDomain !== 'resilience') v.push('a single weak domain did not become the weakest link');
+    const rankOf = (r) => own.CAPABILITY_LEVELS[r.organizationalLevel].rank;
+    if (!(rankOf(weakened) < rankOf(full))) v.push('weakening one domain did not lower the organizational level — that is a mean, not a weakest link');
+
+    // --- Evolution needs two snapshots carrying an assessed level ---------------------------
+    if (own.maturityEvolution([full]).measurable) v.push('a direction was derived from one snapshot');
+    if (own.maturityEvolution([blind, blind]).measurable) v.push('a direction was derived from two snapshots that carry no assessed level');
+    const up = own.maturityEvolution([weakened, full]);
+    if (!up.measurable || up.direction !== 'improving') v.push('a rising organizational level was not reported as improving');
+    if (!up.improving.includes('resilience')) v.push('the domain that improved was not named');
+    const down = own.maturityEvolution([full, weakened]);
+    if (down.direction !== 'regressing') v.push('a falling organizational level was not reported as regressing');
+    if (!down.regressing.includes('resilience')) v.push('the domain that regressed was not named');
+
+    // --- Assessing a previously unknown domain can only lower the level, and it says so ------
+    // This is the most common way a maturity trend is misread, so it is called out by name.
+    const oneDomain = own.capabilityMaturity({ governanceMaturity: { level: 5 } });
+    const thenWeak = own.capabilityMaturity({ governanceMaturity: { level: 5 }, legalAuthority: { complete: false, authorized: [], count: 5, declared: [] } });
+    const widened = own.maturityEvolution([oneDomain, thenWeak]);
+    if (widened.coverageDelta <= 0) v.push('widening the assessment did not raise the assessed-coverage figure');
+    if (widened.direction !== 'regressing') v.push('assessing a weak domain for the first time did not lower the weakest-link level');
+    if (!widened.coverageNote) v.push('a level that fell only because coverage widened was reported as regression with no note saying so');
+  }),
+
   fit('APP-FIT-EXPLAINABILITY', 'Every executive value walks seven derived hops to a source record, and a broken chain is reported at the hop that broke', (v) => {
     const inst = require('../src/assurance/institutional');
     const evidenceConfidence = require('../src/assurance/evidence-confidence');

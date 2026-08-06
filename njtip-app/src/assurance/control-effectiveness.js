@@ -102,6 +102,10 @@ class ControlObservationRegister {
   // unattributed observation of a control's performance is a rumour about a control.
   record(control, {
     outcome, occurredAt, detectedAt = null, acknowledgedAt = null, remediatedAt = null,
+    // Phase 16, Part 5. Distinct from `remediatedAt` on purpose: remediation is when the fix was
+    // applied, recovery is when the affected capability was actually back. Conflating them reports
+    // the moment an engineer finished typing as the moment a citizen could file a report again.
+    recoveredAt = null,
     acknowledgedBy = null, observedBy, note = null,
   } = {}) {
     if (!control) throw new Error('an observation must name the control it is about');
@@ -120,8 +124,9 @@ class ControlObservationRegister {
     if (Number.isFinite(remediatedAt) && !Number.isFinite(acknowledgedAt)) {
       throw new Error('a condition cannot be remediated before it was acknowledged; if it was, record the acknowledgement');
     }
+    if (Number.isFinite(recoveredAt) && recoveredAt < occurredAt) throw new Error('a capability cannot have recovered before the condition arose');
     const rec = {
-      control, outcome, occurredAt, detectedAt, acknowledgedAt, remediatedAt,
+      control, outcome, occurredAt, detectedAt, acknowledgedAt, remediatedAt, recoveredAt,
       acknowledgedBy, observedBy, note, at: this._clock(),
       detectionLatency: Number.isFinite(detectedAt) ? detectedAt - occurredAt : null,
       acknowledgementLatency: Number.isFinite(acknowledgedAt) && Number.isFinite(detectedAt) ? acknowledgedAt - detectedAt : null,
@@ -230,7 +235,196 @@ function effectivenessDashboard({ register = null, controls = [], now = 0 } = {}
   };
 }
 
+// --- Control performance intelligence (Phase 16, Part 5) -------------------------------------------
+//
+// The seven dimensions above answer "is this control effective enough to rely on". Part 5 asks the
+// operational question underneath: how well does it actually perform, in the vocabulary the people
+// who run it already use — detection rate, precision, recall, and the four mean times.
+//
+// Two things this section is careful about, because both are the standard way these numbers lie:
+//
+//   PRECISION AND RECALL ARE DIFFERENT QUESTIONS AND ARE NEVER COMBINED. Precision asks "when it
+//   fires, is it right"; recall asks "when it matters, does it fire". A control can be perfect at
+//   one and useless at the other, and an F-score would hide exactly which.
+//
+//   A MEAN TIME OVER A SINGLE OBSERVATION IS NOT A MEAN. Every figure carries its sample size, and
+//   a figure resting on fewer than the declared floor is marked as indicative rather than reported
+//   as a measurement.
+const PERFORMANCE_MEASURES = {
+  detectionRate: {
+    asks: 'Of the conditions that actually occurred, what share did this control detect?',
+    formula: 'true positives ÷ (true positives + false negatives + unavailable)',
+    ifUnknown: 'Nothing says whether the control catches what it exists to catch.',
+    higherIsBetter: true,
+  },
+  precision: {
+    asks: 'When it fires, how often is there really something there?',
+    formula: 'true positives ÷ (true positives + false positives)',
+    ifUnknown: 'Nothing says whether people are right to act on it.',
+    higherIsBetter: true,
+  },
+  recall: {
+    asks: 'Of the real conditions, how many did it not miss?',
+    formula: 'true positives ÷ (true positives + false negatives)',
+    ifUnknown: 'The misses are invisible, and the misses are the failure the control exists to prevent.',
+    higherIsBetter: true,
+  },
+  falsePositives: { asks: 'How many times did it fire at nothing?', formula: 'count of false-positive observations', ifUnknown: 'Alert fatigue is unmeasurable.', higherIsBetter: false },
+  falseNegatives: { asks: 'How many real conditions did it stay silent for?', formula: 'count of false-negative observations', ifUnknown: 'The most important number about a control is unknown.', higherIsBetter: false },
+  meanTimeToDetect: { asks: 'How long from the condition arising to the control firing?', formula: 'mean(detectedAt − occurredAt) over true positives', ifUnknown: 'Nothing says whether detection is timely enough to matter.', higherIsBetter: false },
+  meanTimeToAcknowledge: { asks: 'How long from firing to a human taking it?', formula: 'mean(acknowledgedAt − detectedAt) over fired observations', ifUnknown: 'A control nobody picks up is indistinguishable from one that never fired.', higherIsBetter: false },
+  meanTimeToRespond: { asks: 'How long from a human taking it to the fix being applied?', formula: 'mean(remediatedAt − acknowledgedAt)', ifUnknown: 'Nothing separates a slow detection from a slow response.', higherIsBetter: false },
+  meanTimeToRecover: {
+    asks: 'How long from the condition arising to the affected capability being back?',
+    formula: 'mean(recoveredAt − occurredAt)',
+    ifUnknown: 'The only figure a citizen would recognise — how long the service was actually degraded — is unknown.',
+    higherIsBetter: false,
+  },
+};
+
+// Below this, a figure is a reading rather than a measurement. Declared, and the same floor the
+// evidence-confidence module uses for an indicative estimate.
+const PERFORMANCE_MIN_SAMPLES = 3;
+
+function controlPerformance(control, { register = null, now = 0 } = {}) {
+  const observations = register ? register.observations(control) : [];
+  const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const round = (x) => (x === null || x === undefined ? null : +Number(x).toFixed(4));
+
+  const truePositives = observations.filter((o) => o.outcome === 'true-positive');
+  const falsePositives = observations.filter((o) => o.outcome === 'false-positive');
+  const falseNegatives = observations.filter((o) => o.outcome === 'false-negative');
+  const unavailable = observations.filter((o) => o.outcome === 'unavailable');
+  const real = observations.filter((o) => OUTCOMES[o.outcome].real);
+  const fired = observations.filter((o) => OUTCOMES[o.outcome].fired);
+
+  const measure = (id, value, samples, detail = null) => ({
+    measure: id, ...PERFORMANCE_MEASURES[id],
+    value: round(value), samples,
+    // A mean over one observation is not a mean, and a rate over two is a coin toss.
+    measured: value !== null && value !== undefined,
+    indicative: value !== null && value !== undefined && samples < PERFORMANCE_MIN_SAMPLES,
+    detail: detail || (value === null || value === undefined
+      ? `no observation supports a ${id} figure — ${PERFORMANCE_MEASURES[id].ifUnknown}`
+      : `over ${samples} observation(s)`),
+  });
+
+  // Detection rate counts `unavailable` as a miss: a control that was not running when the
+  // condition arose did not detect it, whatever the reason.
+  const detectable = truePositives.length + falseNegatives.length + unavailable.length;
+  const recallable = truePositives.length + falseNegatives.length;
+  const ackLatencies = fired.map((o) => o.acknowledgementLatency).filter((x) => x !== null);
+  const respondLatencies = observations.map((o) => o.remediationLatency).filter((x) => x !== null);
+  const recoverLatencies = observations
+    .filter((o) => Number.isFinite(o.recoveredAt) && Number.isFinite(o.occurredAt))
+    .map((o) => o.recoveredAt - o.occurredAt);
+
+  const measures = [
+    measure('detectionRate', detectable ? truePositives.length / detectable : null, detectable),
+    measure('precision', fired.length ? truePositives.length / fired.length : null, fired.length),
+    measure('recall', recallable ? truePositives.length / recallable : null, recallable),
+    measure('falsePositives', observations.length ? falsePositives.length : null, observations.length),
+    measure('falseNegatives', observations.length ? falseNegatives.length : null, observations.length),
+    measure('meanTimeToDetect', mean(truePositives.map((o) => o.detectionLatency).filter((x) => x !== null)), truePositives.filter((o) => o.detectionLatency !== null).length),
+    measure('meanTimeToAcknowledge', mean(ackLatencies), ackLatencies.length),
+    measure('meanTimeToRespond', mean(respondLatencies), respondLatencies.length),
+    measure('meanTimeToRecover', mean(recoverLatencies), recoverLatencies.length),
+  ];
+  const measured = measures.filter((m) => m.measured);
+  return {
+    control, measures, observations: observations.length,
+    measured: measured.length > 0,
+    unknownMeasures: measures.filter((m) => !m.measured).map((m) => m.measure),
+    indicativeMeasures: measures.filter((m) => m.indicative).map((m) => m.measure),
+    // Precision and recall are reported side by side and never combined into one score.
+    precisionRecall: {
+      precision: measures.find((m) => m.measure === 'precision').value,
+      recall: measures.find((m) => m.measure === 'recall').value,
+      combined: false,
+      whyNotCombined: 'Precision asks "when it fires, is it right"; recall asks "when it matters, does it fire". A control can be perfect at one and useless at the other, and a single score would hide which.',
+    },
+    basis: observations.length
+      ? `${measured.length} of ${measures.length} measures computed over ${observations.length} observation(s); ${measures.filter((m) => m.indicative).length} rest on fewer than ${PERFORMANCE_MIN_SAMPLES} samples and are indicative rather than measured`
+      : `no observation exists for '${control}'. Its performance is unknown — which is not the same as poor, and not the same as the green build the control produces on every run.`,
+    now, informationalOnly: true, authorizes: false,
+  };
+}
+
+// Historical trend. Periods are supplied by the caller as [from, to) boundaries: this module owns no
+// clock and no calendar, and inventing a period boundary would invent the trend.
+function performanceTrend(control, { register = null, periods = [], now = 0 } = {}) {
+  if (!Array.isArray(periods) || periods.length < 2) {
+    return {
+      control, periods: [], trend: null, direction: 'unknown', measurable: false,
+      reason: 'fewer than two periods were supplied — a trend needs at least two, and one observation window is a reading',
+      now, informationalOnly: true, authorizes: false,
+    };
+  }
+  const all = register ? register.observations(control) : [];
+  const rows = periods.slice(0, -1).map((from, i) => {
+    const to = periods[i + 1];
+    const window = all.filter((o) => o.occurredAt >= from && o.occurredAt < to);
+    const tp = window.filter((o) => o.outcome === 'true-positive').length;
+    const real = window.filter((o) => OUTCOMES[o.outcome].real).length;
+    return {
+      from, to, observations: window.length,
+      detectionRate: real ? +(tp / real).toFixed(4) : null,
+      // A period with no observations is not a period with a detection rate of zero.
+      measured: window.length > 0,
+    };
+  });
+  const measured = rows.filter((r) => r.measured && r.detectionRate !== null);
+  if (measured.length < 2) {
+    return {
+      control, periods: rows, trend: null, direction: 'unknown', measurable: false,
+      reason: `${measured.length} of ${rows.length} period(s) contain observations — a direction needs at least two measured periods, and a period with nothing in it is not a period scoring zero`,
+      now, informationalOnly: true, authorizes: false,
+    };
+  }
+  const first = measured[0].detectionRate;
+  const last = measured[measured.length - 1].detectionRate;
+  const delta = +(last - first).toFixed(4);
+  return {
+    control, periods: rows, measuredPeriods: measured.length,
+    trend: delta,
+    direction: delta > 0.05 ? 'improving' : delta < -0.05 ? 'degrading' : 'steady',
+    measurable: true,
+    reason: `detection rate moved ${first} → ${last} across ${measured.length} measured period(s)`,
+    now, informationalOnly: true, authorizes: false,
+  };
+}
+
+// The Part 5 dashboard over the whole estate.
+function performanceDashboard({ register = null, controls = [], periods = [], now = 0 } = {}) {
+  const ids = [...new Set([...(controls || []).map((c) => (typeof c === 'string' ? c : c.id)), ...(register ? register.controls() : [])])].sort();
+  const rows = ids.map((id) => controlPerformance(id, { register, now }));
+  const measured = rows.filter((r) => r.measured);
+  const trends = measured.map((r) => performanceTrend(r.control, { register, periods, now }));
+  return {
+    controls: rows, count: rows.length,
+    measures: Object.entries(PERFORMANCE_MEASURES).map(([measure, m]) => ({ measure, ...m })),
+    minimumSamples: PERFORMANCE_MIN_SAMPLES,
+    measuredControls: measured.map((r) => r.control),
+    unmeasured: rows.filter((r) => !r.measured).map((r) => r.control),
+    trends: trends.filter((t) => t.measurable),
+    degrading: trends.filter((t) => t.direction === 'degrading').map((t) => t.control),
+    // Over observed controls only. A rate that counted unobserved controls would be a rate over
+    // nothing, dressed as a rate over everything.
+    meanDetectionRate: measured.length
+      ? +(measured.map((r) => r.measures.find((m) => m.measure === 'detectionRate').value).filter((x) => x !== null)
+        .reduce((a, b, _, arr) => a + b / arr.length, 0)).toFixed(4)
+      : null,
+    measurable: measured.length > 0,
+    basis: measured.length
+      ? `${measured.length} of ${rows.length} controls have performance observations. The other ${rows.length - measured.length} are excluded from every figure rather than counted as performing.`
+      : `No control has a single performance observation. All ${rows.length} run and pass on every build, and how well any of them actually performs is unknown.`,
+    now, failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'Precision and recall are reported side by side and never combined: a control can be perfect at one and useless at the other, and a single score hides which. A mean over fewer than three observations is marked indicative rather than reported as a measurement.',
+  };
+}
+
 module.exports = {
   EFFECTIVENESS_DIMENSIONS, EFFECTIVENESS_STATES, THRESHOLDS, OUTCOMES,
   ControlObservationRegister, controlEffectiveness, effectivenessDashboard,
+  PERFORMANCE_MEASURES, PERFORMANCE_MIN_SAMPLES, controlPerformance, performanceTrend, performanceDashboard,
 };
