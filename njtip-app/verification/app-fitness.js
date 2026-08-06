@@ -4869,6 +4869,143 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-ADVANCED-CONTROL-ANALYTICS', 'Detection coverage is computed over the controls that ran, not over the ones somebody watched', (v) => {
+    const ce = require('../src/assurance/control-effectiveness');
+    const DAY = 24 * 3600_000, MINUTE = 60_000;
+
+    for (const required of ['detectionCoverage', 'operationalStability']) {
+      const m = ce.ADVANCED_MEASURES[required];
+      if (!m) { v.push(`advanced control measure '${required}' is not computed`); continue; }
+      if (!m.asks || !m.asks.endsWith('?') || !m.formula || !m.ifUnknown) v.push(`advanced measure '${required}' does not state its question, formula or what not knowing it costs`);
+      if (typeof m.higherIsBetter !== 'boolean') v.push(`advanced measure '${required}' does not say which direction is better`);
+    }
+
+    // --- THE POINT OF PART 6: coverage is over the estate, not the watched subset -------------
+    const reg = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 12; i += 1) {
+      reg.record('C', { outcome: i % 4 === 0 ? 'false-negative' : 'true-positive', occurredAt: i * 10 * DAY, detectedAt: i % 4 === 0 ? null : i * 10 * DAY + MINUTE, observedBy: 'ORB' });
+    }
+    const partial = ce.longTermPerformance({ register: reg, controls: ['C', 'D', 'E', 'F'], periods: [0, 40 * DAY, 80 * DAY, 120 * DAY], now: 0 });
+    if (partial.detectionCoverage !== 0.25) v.push(`detection coverage computed as ${partial.detectionCoverage}, expected 0.25 over one watched control in four that ran`);
+    if (partial.observedCount !== 1 || partial.count !== 4) v.push('the report does not distinguish the observed controls from the controls that ran');
+    if (!/not over the estate/.test(partial.coverageBasis)) v.push('the coverage basis does not say that recall is computed over the watched subset');
+    if (partial.authorizes !== false) v.push('the long-term performance report claims authority');
+    // A perfect-looking recall over one watched control must not read as a healthy estate.
+    const recall = partial.controls[0].performance.measures.find((m) => m.measure === 'recall').value;
+    if (recall === null) v.push('the watched control produced no recall figure, so the counterexample does not exercise the point');
+    else if (partial.detectionCoverage >= recall) v.push('coverage did not come out below recall, so the figure that qualifies recall is not doing its job');
+
+    // --- Stability needs two MEASURED periods, and a swinging control is named ---------------
+    const noPeriods = ce.longTermPerformance({ register: reg, controls: ['C'], periods: [], now: 0 });
+    if (noPeriods.controls[0].operationalStability !== null) v.push('a stability figure was computed with no periods supplied');
+    if (noPeriods.controls[0].stabilityMeasurable) v.push('a control with no periods reported stability as measurable');
+    const swing = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 4; i += 1) swing.record('S', { outcome: 'true-positive', occurredAt: i * DAY, detectedAt: i * DAY + MINUTE, observedBy: 'ORB' });
+    for (let i = 0; i < 4; i += 1) swing.record('S', { outcome: 'false-negative', occurredAt: 100 * DAY + i * DAY, observedBy: 'ORB' });
+    const volatile = ce.longTermPerformance({ register: swing, controls: ['S'], periods: [0, 50 * DAY, 150 * DAY], now: 0 });
+    if (!volatile.volatile.includes('S')) v.push('a control that went from perfect detection to none was not reported as volatile');
+    // …and a steady control is not called volatile, or the finding fires on everything.
+    const steadyReg = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 8; i += 1) steadyReg.record('T', { outcome: 'true-positive', occurredAt: i * 20 * DAY, detectedAt: i * 20 * DAY + MINUTE, observedBy: 'ORB' });
+    if (ce.longTermPerformance({ register: steadyReg, controls: ['T'], periods: [0, 80 * DAY, 160 * DAY], now: 0 }).volatile.length) {
+      v.push('a control that performed identically in both periods was reported as volatile');
+    }
+
+    // --- The estate detection trend obeys the Phase 17 improvement rule ---------------------
+    const rising = new ce.ControlObservationRegister({ clock: () => 0 });
+    for (let i = 0; i < 4; i += 1) rising.record('R', { outcome: 'false-negative', occurredAt: i * DAY, observedBy: 'ORB' });
+    for (let i = 0; i < 4; i += 1) rising.record('R', { outcome: 'true-positive', occurredAt: 100 * DAY + i * DAY, detectedAt: 100 * DAY + i * DAY + MINUTE, observedBy: 'ORB' });
+    const periods = [0, 50 * DAY, 150 * DAY];
+    const unverified = ce.longTermPerformance({ register: rising, controls: ['R'], periods, now: 0 });
+    if (unverified.detectionTrend.state !== 'unverified-improvement') v.push('a rising estate detection rate with nothing behind it was reported as progress');
+    if (unverified.everyImprovementVerified) v.push('an unsupported detection rise satisfied the improvement invariant');
+    const supported = ce.longTermPerformance({
+      register: rising, controls: ['R'], periods,
+      improvementEvidence: [{ kind: 'recorded-act', detail: 'the detector was rebuilt and the change was reviewed', by: 'ORB' }], now: 0,
+    });
+    if (supported.detectionTrend.state !== 'verified-improvement') v.push('a rise supported by a recorded act was not reported as verified');
+
+    // --- An unobserved estate says so rather than reporting figures over nothing -------------
+    const blank = ce.longTermPerformance({ register: new ce.ControlObservationRegister({ clock: () => 0 }), controls: ['A', 'B'], now: 0 });
+    if (blank.measurable) v.push('an unobserved estate reported itself measurable');
+    if (blank.detectionCoverage !== 0) v.push('an estate where nothing is watched did not report a coverage of 0');
+    if (!/computed over nothing/.test(blank.basis)) v.push('an unobserved estate does not say that its other figures would be computed over nothing');
+  }),
+
+  fit('APP-FIT-VALIDATION-INTELLIGENCE', 'A finding raised twice is the institution not learning, and the six measures are never summed', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const own = require('../src/governance/ownership');
+
+    for (const required of ['correctiveActionCompletion', 'lessonAdoption', 'policyUpdates', 'trainingOutcomes', 'operationalImprovements', 'recurringFindings']) {
+      if (!inst.LEARNING_EFFECTIVENESS_MEASURES[required]) v.push(`learning effectiveness measure '${required}' is not tracked`);
+    }
+    if (Object.keys(inst.LEARNING_EFFECTIVENESS_MEASURES).length !== 6) v.push('organizational learning effectiveness does not carry exactly six measures');
+    for (const [id, m] of Object.entries(inst.LEARNING_EFFECTIVENESS_MEASURES)) {
+      if (!m.asks || !m.asks.endsWith('?') || !m.ifUnknown) v.push(`learning measure '${id}' does not state its question or what an unknown means`);
+    }
+
+    // --- No workshop: nothing can have been learned from one ---------------------------------
+    const empty = new inst.ValidationWorkshop({ clock: () => 0 }).learningEffectiveness({ now: 0 });
+    if (empty.measurable) v.push('an estate with no workshop reported learning effectiveness as measurable');
+    if (!/nothing can have been learned/.test(empty.basis)) v.push('an empty workshop register does not say why nothing can have been learned');
+    if (empty.authorizes !== false) v.push('the learning effectiveness report claims authority');
+
+    // --- THE FINDING PART 7 EXISTS FOR: the same finding raised twice ------------------------
+    const reg = new inst.ValidationWorkshop({ clock: () => 0 });
+    const hold = (subject, finding) => {
+      const w = reg.convene({ subject, objectives: ['o'], participants: ['A', 'B'], facilitator: 'Operations Review Board', at: 0 });
+      reg.record(w.id, { outcome: 'finding', detail: finding });
+      reg.record(w.id, { outcome: 'decision', detail: `raise ${subject}`, by: 'ORB' });
+      reg.record(w.id, { outcome: 'corrective-action', detail: `fix ${subject}`, owner: 'Oversight Board Secretariat', dueAt: 100 });
+      reg.close(w.id, { by: 'Operations Review Board', at: 10 });
+      return w;
+    };
+    const first = hold('first review', 'the ISRB cluster shares no forum with the rest of government');
+    // Same finding, differently spaced and cased — the normalisation must still catch it.
+    hold('second review', '  The ISRB cluster   shares no forum with the rest of government ');
+    const recurring = reg.learningEffectiveness({ now: 100 });
+    if (recurring.recurringFindings.length !== 1) v.push(`${recurring.recurringFindings.length} recurring findings detected, expected the one raised in both workshops`);
+    else {
+      if (recurring.recurringFindings[0].times !== 2) v.push('a finding raised in two workshops was not counted twice');
+      if (recurring.recurringFindings[0].workshops.length !== 2) v.push('a recurring finding does not name the workshops that raised it');
+    }
+    if (!/not learning/.test(recurring.note)) v.push('the report does not say what a recurring finding means');
+    // A finding raised once is not recurring, or the measure fires on every workshop.
+    hold('third review', 'something nobody had said before');
+    if (reg.learningEffectiveness({ now: 100 }).recurringFindings.length !== 1) v.push('a finding raised once was counted as recurring');
+
+    // --- The six are never summed ------------------------------------------------------------
+    if (recurring.scored !== false) v.push('the six learning measures were summed into a score');
+    // Completion is derived from CONFIRMED actions, not from closed workshops.
+    if (recurring.measures.find((m) => m.measure === 'correctiveActionCompletion').value !== 0) {
+      v.push('corrective action completion counted actions nobody confirmed — closing a workshop does not complete an action');
+    }
+    reg.followUp(first.id, { reviewedBy: 'Auditor General', resolvedIndexes: [2], at: 20 });
+    if (!(reg.learningEffectiveness({ now: 100 }).measures.find((m) => m.measure === 'correctiveActionCompletion').value > 0)) {
+      v.push('a confirmed corrective action did not raise the completion figure');
+    }
+
+    // --- Activity is measured AFTER the last close, because earlier activity was not caused
+    //     by the workshop --------------------------------------------------------------------
+    const training = new own.TrainingRegister({ clock: () => 0 });
+    const person = own.OWNERSHIP[own.subsystems()[0]].operationalOwner;
+    const courses = Object.values(own.REQUIRED_TRAINING)[0];
+    training.recordCompletion({ person, course: courses[0], at: 5, by: 'Registrar' });
+    const before = reg.learningEffectiveness({ training, now: 100 });
+    if (before.measures.find((m) => m.measure === 'trainingOutcomes').value !== 0) {
+      v.push('a training completion that predates the workshop was counted as caused by it');
+    }
+    training.recordCompletion({ person, course: courses[1] || Object.values(own.REQUIRED_TRAINING)[1][0], at: 50, by: 'Registrar' });
+    if (reg.learningEffectiveness({ training, now: 100 }).measures.find((m) => m.measure === 'trainingOutcomes').value !== 1) {
+      v.push('a training completion after the workshop was not counted');
+    }
+    // An unsupplied register leaves its measure unknown rather than zero.
+    if (!before.unmeasured.includes('operationalImprovements')) v.push('an unsupplied activity register did not leave its measure unknown');
+    if (before.measures.find((m) => m.measure === 'operationalImprovements').value !== null) {
+      v.push('an unsupplied register produced a measure value rather than null');
+    }
+  }),
+
   fit('APP-FIT-FORECAST-LEARNING', 'A model that got luckier is not a model that got better, and an unknown prediction is not an inaccurate one', (v) => {
     const dp = require('../src/architecture/drift-prevention');
     const DAY = 24 * 3600_000;

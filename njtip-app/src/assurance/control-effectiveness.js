@@ -423,8 +423,103 @@ function performanceDashboard({ register = null, controls = [], periods = [], no
   };
 }
 
+// --- Advanced control analytics (Phase 17, Part 6) ---------------------------------------------------
+//
+// The nine measures above are all about a control that SOMEBODY IS WATCHING. Part 6 adds the two
+// figures that are about the estate rather than about any one control, and the first exists because
+// of a specific way a dashboard lies:
+//
+//   PERFECT RECALL ACROSS ONE WATCHED CONTROL IN FOUR IS NOT A HEALTHY ESTATE. Recall is computed
+//   over the controls somebody observed. Read alone it says "detection is at 100%", when what
+//   happened is that three controls ran unwatched and nobody knows what they missed. So coverage is
+//   computed over the controls that RAN, and it is reported beside recall as the figure that
+//   qualifies it.
+//
+// The second is about time. A control that alternates between catching everything and catching
+// nothing has a fine mean and is not one anybody should rely on.
+const ADVANCED_MEASURES = {
+  detectionCoverage: {
+    asks: 'Of the controls that ran, what share has anybody actually observed performing?',
+    formula: 'observed controls ÷ controls that ran',
+    ifUnknown: 'A recall figure over the watched few is read as a statement about the estate.',
+    higherIsBetter: true,
+  },
+  operationalStability: {
+    asks: 'Does this control perform consistently over time, or does it swing?',
+    formula: 'mean absolute change in detection rate between consecutive measured periods',
+    ifUnknown: 'A control that alternates between catching everything and nothing has a fine average.',
+    higherIsBetter: false,
+  },
+};
+
+// Above this swing between periods, a control is volatile rather than merely varying.
+const VOLATILITY_THRESHOLD = 0.2;
+
+function longTermPerformance({
+  register = null, controls = [], periods = [], improvementEvidence = [], now = 0,
+} = {}) {
+  const evidenceConfidence = require('./evidence-confidence');
+  const round = (x) => (x === null ? null : +x.toFixed(4));
+  // Everything that RAN — the estate — not just what somebody watched.
+  const ids = [...new Set([...(controls || []).map((c) => (typeof c === 'string' ? c : c.id)), ...(register ? register.controls() : [])])].sort();
+  const observed = new Set(register ? register.controls().filter((c) => register.observations(c).length) : []);
+
+  const rows = ids.filter((id) => observed.has(id)).map((id) => {
+    const trend = performanceTrend(id, { register, periods, now });
+    const measured = trend.periods.filter((p) => p.measured && p.detectionRate !== null);
+    // Stability needs two MEASURED periods. With none supplied it is null, never perfect.
+    const steps = measured.slice(1).map((p, i) => Math.abs(p.detectionRate - measured[i].detectionRate));
+    const operationalStability = steps.length ? round(steps.reduce((a, b) => a + b, 0) / steps.length) : null;
+    return {
+      control: id,
+      performance: controlPerformance(id, { register, now }),
+      trend,
+      operationalStability,
+      stabilityMeasurable: steps.length > 0,
+      volatile: operationalStability !== null && operationalStability > VOLATILITY_THRESHOLD,
+      measuredPeriods: measured.length,
+    };
+  });
+
+  // THE FIGURE THAT QUALIFIES RECALL. Over the estate, not over the watched subset.
+  const detectionCoverage = ids.length ? round(ids.filter((id) => observed.has(id)).length / ids.length) : null;
+
+  // The estate detection rate across periods, judged by the Phase 17 rule.
+  const estatePeriods = periods.slice(0, -1).map((from, i) => {
+    const to = periods[i + 1];
+    const window = ids.flatMap((id) => (register ? register.observations(id) : [])).filter((o) => o.occurredAt >= from && o.occurredAt < to);
+    const tp = window.filter((o) => o.outcome === 'true-positive').length;
+    const real = window.filter((o) => OUTCOMES[o.outcome].real).length;
+    return real ? round(tp / real) : null;
+  }).filter((x) => x !== null);
+  const detectionTrend = evidenceConfidence.verifiedImprovement({
+    subject: 'estate detection rate', series: estatePeriods, evidence: improvementEvidence,
+  });
+
+  const degrading = rows.filter((r) => r.trend.direction === 'degrading').map((r) => r.control);
+  return {
+    controls: rows, count: ids.length, observedCount: rows.length,
+    measures: Object.entries(ADVANCED_MEASURES).map(([measure, m]) => ({ measure, ...m })),
+    detectionCoverage,
+    coverageBasis: `${rows.length} of ${ids.length} control(s) that ran have a performance observation. Recall and precision are computed over those ${rows.length}, not over the estate — coverage is the figure that says so.`,
+    volatile: rows.filter((r) => r.volatile).map((r) => r.control),
+    degrading,
+    unstable: rows.filter((r) => !r.stabilityMeasurable).map((r) => r.control),
+    detectionTrend,
+    everyImprovementVerified: !detectionTrend.violatesInvariant,
+    volatilityThreshold: VOLATILITY_THRESHOLD,
+    measurable: rows.length > 0,
+    basis: rows.length
+      ? `${rows.length} observed control(s); detection coverage ${detectionCoverage}. ${rows.filter((r) => r.volatile).length} swing by more than ${VOLATILITY_THRESHOLD} between periods.`
+      : `No control has a performance observation. Detection coverage is ${detectionCoverage}, and every other figure here would be computed over nothing.`,
+    now, failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'Detection coverage is computed over the controls that RAN, not over the ones somebody watched. Perfect recall across one watched control in four is not a healthy estate, and coverage is reported beside recall as the figure that says so. A rise in the estate detection rate with nothing verified behind it is an unverified improvement rather than progress.',
+  };
+}
+
 module.exports = {
   EFFECTIVENESS_DIMENSIONS, EFFECTIVENESS_STATES, THRESHOLDS, OUTCOMES,
   ControlObservationRegister, controlEffectiveness, effectivenessDashboard,
   PERFORMANCE_MEASURES, PERFORMANCE_MIN_SAMPLES, controlPerformance, performanceTrend, performanceDashboard,
+  ADVANCED_MEASURES, VOLATILITY_THRESHOLD, longTermPerformance,
 };

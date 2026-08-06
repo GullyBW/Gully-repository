@@ -436,6 +436,36 @@ const WORKSHOP_OUTCOMES = {
 
 const WORKSHOP_STATES = ['convened', 'closed'];
 
+// The six things Part 17 asks a validation programme to measure about itself. Each says what its
+// absence means, because five of the six can be raised simply by holding more workshops — and the
+// sixth cannot be raised at all except by actually fixing something.
+const LEARNING_EFFECTIVENESS_MEASURES = {
+  correctiveActionCompletion: {
+    asks: 'What share of the actions people committed to has anybody confirmed was done?',
+    ifUnknown: 'A closed workshop reads as a finished one, and a list of commitments reads as a list of changes.',
+  },
+  lessonAdoption: {
+    asks: 'What share of distinct findings were raised once and never needed raising again?',
+    ifUnknown: 'Nothing separates an institution that fixed something from one that stopped mentioning it.',
+  },
+  policyUpdates: {
+    asks: 'How many recorded decisions followed the last workshop?',
+    ifUnknown: 'Whether the validation programme changes any rule is unknown.',
+  },
+  trainingOutcomes: {
+    asks: 'How many people completed training after the last workshop closed?',
+    ifUnknown: 'A finding about people not knowing something cannot be shown to have been addressed.',
+  },
+  operationalImprovements: {
+    asks: 'How much recorded governance activity followed the last workshop?',
+    ifUnknown: 'The workshop may have changed what people do, and nothing would show it.',
+  },
+  recurringFindings: {
+    asks: 'How many findings have been raised in more than one workshop?',
+    ifUnknown: 'The institution can rediscover the same problem indefinitely and call each discovery progress.',
+  },
+};
+
 class ValidationWorkshop {
   constructor({ clock = () => 0 } = {}) { this._clock = clock; this._workshops = new Map(); this._seq = 0; }
 
@@ -509,6 +539,106 @@ class ValidationWorkshop {
   workshop(id) { const w = this._workshops.get(id); return w ? JSON.parse(JSON.stringify(w)) : null; }
 
   // The Part 6 report. Every category is counted separately; nothing is summed into a score.
+  // --- Validation intelligence (Phase 17, Part 7) -------------------------------------------------
+  //
+  // `report()` says what each workshop produced. Part 7 asks whether any of it CHANGED anything —
+  // and the measure that answers it is not one of the flattering ones:
+  //
+  //   THE SAME FINDING RAISED IN TWO WORKSHOPS IS THE INSTITUTION NOT LEARNING. Everything else here
+  //   counts activity, and activity is what an institution produces when it is busy rather than when
+  //   it is improving. A recurring finding is the one figure that cannot be raised by working harder.
+  //
+  // Findings are matched by normalising the text — lowercased, whitespace collapsed — so the same
+  // observation written twice by two different people is still caught. Deliberately crude: a matcher
+  // clever enough to be sure would be one nobody could argue with.
+  //
+  // The six are never summed. They have different units and different owners, and a single
+  // "learning effectiveness score" would let a good training figure hide a recurring finding.
+  learningEffectiveness({ training = null, exercises = null, activity = null, adrs = null, now = null } = {}) {
+    const t = now ?? this._clock();
+    const all = this.workshops();
+    const closed = all.filter((w) => w.state === 'closed');
+
+    if (!all.length) {
+      return {
+        measurable: false, workshops: 0,
+        measures: Object.entries(LEARNING_EFFECTIVENESS_MEASURES).map(([measure, m]) => ({ measure, ...m, value: null, measured: false })),
+        recurringFindings: [], unmeasured: Object.keys(LEARNING_EFFECTIVENESS_MEASURES),
+        scored: false,
+        basis: 'no validation workshop has ever been held, so nothing can have been learned from one — which is not the same as an institution that fails to learn',
+        now: t, informationalOnly: true, authorizes: false,
+        note: 'The six measures are never summed. A recurring finding is the one figure here that cannot be raised by working harder.',
+      };
+    }
+
+    // THE MEASURE PART 7 EXISTS FOR.
+    const normalise = (s) => String(s).toLowerCase().replace(/\s+/g, ' ').trim();
+    const byText = new Map();
+    for (const w of all) {
+      for (const o of w.outcomes.filter((x) => x.outcome === 'finding')) {
+        const key = normalise(o.detail);
+        if (!byText.has(key)) byText.set(key, { finding: o.detail, workshops: [], times: 0 });
+        const entry = byText.get(key);
+        entry.times += 1;
+        if (!entry.workshops.includes(w.id)) entry.workshops.push(w.id);
+      }
+    }
+    const recurringFindings = [...byText.values()].filter((f) => f.workshops.length > 1)
+      .sort((a, b) => b.times - a.times || a.finding.localeCompare(b.finding));
+
+    // Everything caused by a workshop is measured AFTER the last one closed. Activity that predates
+    // a workshop was not caused by it, and counting it would let an institution take credit for
+    // things it did before it met.
+    const lastClose = closed.length ? Math.max(...closed.map((w) => w.closedAt ?? w.convenedAt)) : null;
+    const after = (records, atOf) => (lastClose === null ? [] : records.filter((r) => atOf(r) > lastClose));
+
+    const actions = all.flatMap((w) => w.outcomes.filter((o) => o.outcome === 'corrective-action'));
+    const confirmed = actions.filter((a) => a.resolved);
+
+    // Each measure carries whether it could be measured at all. An unsupplied register leaves its
+    // measure UNKNOWN, never zero.
+    const rows = [];
+    const measure = (id, value, measured, detail) => {
+      rows.push({ measure: id, ...LEARNING_EFFECTIVENESS_MEASURES[id], value: measured ? value : null, measured, detail });
+    };
+    measure('correctiveActionCompletion',
+      actions.length ? +(confirmed.length / actions.length).toFixed(4) : null, actions.length > 0,
+      `${confirmed.length} of ${actions.length} corrective action(s) confirmed by a follow-up review — closing a workshop does not complete an action`);
+    measure('lessonAdoption',
+      recurringFindings.length === 0 && byText.size > 0 ? 1 : byText.size ? +(1 - (recurringFindings.length / byText.size)).toFixed(4) : null,
+      byText.size > 0,
+      `${byText.size - recurringFindings.length} of ${byText.size} distinct finding(s) were raised once and not again`);
+    measure('policyUpdates',
+      adrs ? after(adrs, (a) => a.at ?? 0).length : null, adrs !== null,
+      adrs ? `${after(adrs, (a) => a.at ?? 0).length} recorded decision(s) after the last workshop closed` : 'no ADR register was supplied');
+    measure('trainingOutcomes',
+      training ? after(training.completions ? training.completions() : [], (c) => c.at ?? 0).length : null, training !== null,
+      training ? 'training completions recorded after the last workshop closed' : 'no training register was supplied');
+    measure('operationalImprovements',
+      activity ? after(activity.acts ? activity.acts() : [], (a) => a.at ?? 0).length : null, activity !== null,
+      activity ? 'governance acts recorded after the last workshop closed' : 'no activity register was supplied');
+    measure('recurringFindings', recurringFindings.length, true,
+      recurringFindings.length
+        ? `${recurringFindings.length} finding(s) raised in more than one workshop`
+        : 'no finding has been raised in more than one workshop');
+
+    const unmeasured = rows.filter((r) => !r.measured).map((r) => r.measure);
+    return {
+      measurable: true, workshops: all.length, closedWorkshops: closed.length,
+      measures: rows,
+      recurringFindings,
+      unmeasured,
+      // Constant. Six measures with different units and different owners are never summed.
+      scored: false,
+      lastWorkshopClosedAt: lastClose,
+      basis: `${all.length} workshop(s), ${closed.length} closed. ${recurringFindings.length} finding(s) raised more than once. ${unmeasured.length} measure(s) had no register supplied and are unknown rather than zero.`,
+      note: recurringFindings.length
+        ? 'A finding raised in more than one workshop is the institution not learning: the observation was made, recorded, and made again. Everything else here counts activity, which is what an institution produces when it is busy rather than when it is improving.'
+        : 'The six measures are never summed — a single score would let a good training figure hide a recurring finding. Everything attributed to a workshop is measured after it closed, because activity that predates a workshop was not caused by it.',
+      now: t, informationalOnly: true, authorizes: false,
+    };
+  }
+
   report({ now = null } = {}) {
     const t = now ?? this._clock();
     const rows = this.workshops().map((w) => {
@@ -2295,7 +2425,7 @@ module.exports = {
   ImprovementLoop, executiveGovernanceIntelligence, institutionalAssurance,
   GOVERNANCE_STATES, governanceState, governanceCompleteness,
   LEARNING_STAGES, institutionalLearning,
-  WORKSHOP_OUTCOMES, WORKSHOP_STATES, ValidationWorkshop,
+  WORKSHOP_OUTCOMES, WORKSHOP_STATES, LEARNING_EFFECTIVENESS_MEASURES, ValidationWorkshop,
   PERFORMANCE_INDICATORS, institutionalPerformance,
   TRACEABILITY_SUBJECTS, TRACEABILITY_AREAS, evaluateTraceabilityInvariant, traceabilityInvariantReport,
   TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,

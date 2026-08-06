@@ -635,3 +635,131 @@ test('phase17: the Phase 16 validation API still works unchanged', () => {
     (e) => e.failClosed === true,
   );
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 6 — control performance intelligence. Recall over the watched few is not the estate.
+// ---------------------------------------------------------------------------------------------
+
+const ce = require('../src/assurance/control-effectiveness');
+const MINUTE = 60_000;
+
+test('phase17: detection coverage is computed over the controls that ran, not the watched subset', () => {
+  const reg = new ce.ControlObservationRegister({ clock: () => 0 });
+  for (let i = 0; i < 12; i += 1) {
+    reg.record('C', {
+      outcome: i % 4 === 0 ? 'false-negative' : 'true-positive',
+      occurredAt: i * 10 * DAY,
+      detectedAt: i % 4 === 0 ? null : i * 10 * DAY + MINUTE,
+      observedBy: 'ORB',
+    });
+  }
+  const report = ce.longTermPerformance({ register: reg, controls: ['C', 'D', 'E', 'F'], periods: [0, 40 * DAY, 80 * DAY, 120 * DAY], now: 0 });
+  assert.equal(report.detectionCoverage, 0.25);
+  assert.equal(report.observedCount, 1);
+  assert.equal(report.count, 4);
+  assert.match(report.coverageBasis, /not over the estate/);
+
+  const recall = report.controls[0].performance.measures.find((m) => m.measure === 'recall').value;
+  assert.ok(report.detectionCoverage < recall, 'coverage qualifies recall rather than repeating it');
+  assert.equal(report.authorizes, false);
+});
+
+test('phase17: operational stability needs two measured periods, and a swinging control is named', () => {
+  const swing = new ce.ControlObservationRegister({ clock: () => 0 });
+  for (let i = 0; i < 4; i += 1) swing.record('S', { outcome: 'true-positive', occurredAt: i * DAY, detectedAt: i * DAY + MINUTE, observedBy: 'ORB' });
+  for (let i = 0; i < 4; i += 1) swing.record('S', { outcome: 'false-negative', occurredAt: 100 * DAY + i * DAY, observedBy: 'ORB' });
+  assert.ok(ce.longTermPerformance({ register: swing, controls: ['S'], periods: [0, 50 * DAY, 150 * DAY], now: 0 }).volatile.includes('S'));
+
+  const noPeriods = ce.longTermPerformance({ register: swing, controls: ['S'], periods: [], now: 0 });
+  assert.equal(noPeriods.controls[0].operationalStability, null, 'no periods produces null, never perfect');
+  assert.equal(noPeriods.controls[0].stabilityMeasurable, false);
+
+  // A steady control is not volatile, or the finding fires on everything.
+  const steady = new ce.ControlObservationRegister({ clock: () => 0 });
+  for (let i = 0; i < 8; i += 1) steady.record('T', { outcome: 'true-positive', occurredAt: i * 20 * DAY, detectedAt: i * 20 * DAY + MINUTE, observedBy: 'ORB' });
+  assert.deepEqual(ce.longTermPerformance({ register: steady, controls: ['T'], periods: [0, 80 * DAY, 160 * DAY], now: 0 }).volatile, []);
+});
+
+test('phase17: a rising estate detection rate is unverified until something is recorded behind it', () => {
+  const rising = new ce.ControlObservationRegister({ clock: () => 0 });
+  for (let i = 0; i < 4; i += 1) rising.record('R', { outcome: 'false-negative', occurredAt: i * DAY, observedBy: 'ORB' });
+  for (let i = 0; i < 4; i += 1) rising.record('R', { outcome: 'true-positive', occurredAt: 100 * DAY + i * DAY, detectedAt: 100 * DAY + i * DAY + MINUTE, observedBy: 'ORB' });
+
+  const periods = [0, 50 * DAY, 150 * DAY];
+  assert.equal(ce.longTermPerformance({ register: rising, controls: ['R'], periods, now: 0 }).detectionTrend.state, 'unverified-improvement');
+  assert.equal(ce.longTermPerformance({
+    register: rising, controls: ['R'], periods,
+    improvementEvidence: [{ kind: 'recorded-act', detail: 'the detector was rebuilt and reviewed', by: 'ORB' }], now: 0,
+  }).detectionTrend.state, 'verified-improvement');
+});
+
+test('phase17: an estate nobody has watched says its figures would be computed over nothing', () => {
+  const blank = ce.longTermPerformance({ register: new ce.ControlObservationRegister({ clock: () => 0 }), controls: ['A', 'B'], now: 0 });
+  assert.equal(blank.measurable, false);
+  assert.equal(blank.detectionCoverage, 0);
+  assert.match(blank.basis, /computed over nothing/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 7 — validation intelligence. A finding raised twice is the institution not learning.
+// ---------------------------------------------------------------------------------------------
+
+const own = require('../src/governance/ownership');
+
+function holdWorkshop(reg, subject, finding) {
+  const w = reg.convene({ subject, objectives: ['o'], participants: ['A', 'B'], facilitator: 'Operations Review Board', at: 0 });
+  reg.record(w.id, { outcome: 'finding', detail: finding });
+  reg.record(w.id, { outcome: 'decision', detail: `raise ${subject}`, by: 'ORB' });
+  reg.record(w.id, { outcome: 'corrective-action', detail: `fix ${subject}`, owner: 'Oversight Board Secretariat', dueAt: 100 });
+  reg.close(w.id, { by: 'Operations Review Board', at: 10 });
+  return w;
+}
+
+test('phase17: the same finding raised in two workshops is detected through normalised text', () => {
+  const reg = new inst.ValidationWorkshop({ clock: () => 0 });
+  holdWorkshop(reg, 'first review', 'the ISRB cluster shares no forum with the rest of government');
+  holdWorkshop(reg, 'second review', '  The ISRB cluster   shares no forum with the rest of government ');
+  holdWorkshop(reg, 'third review', 'something nobody had said before');
+
+  const report = reg.learningEffectiveness({ now: 100 });
+  assert.equal(report.recurringFindings.length, 1, 'a finding raised once is not recurring');
+  assert.equal(report.recurringFindings[0].times, 2);
+  assert.equal(report.recurringFindings[0].workshops.length, 2);
+  assert.match(report.note, /not learning/);
+  assert.equal(report.scored, false, 'six measures with different units are never summed');
+});
+
+test('phase17: completion counts confirmed actions, not closed workshops', () => {
+  const reg = new inst.ValidationWorkshop({ clock: () => 0 });
+  const first = holdWorkshop(reg, 'review', 'a finding');
+  assert.equal(reg.learningEffectiveness({ now: 100 }).measures.find((m) => m.measure === 'correctiveActionCompletion').value, 0,
+    'closing a workshop does not complete an action');
+  reg.followUp(first.id, { reviewedBy: 'Auditor General', resolvedIndexes: [2], at: 20 });
+  assert.ok(reg.learningEffectiveness({ now: 100 }).measures.find((m) => m.measure === 'correctiveActionCompletion').value > 0);
+});
+
+test('phase17: learning effectiveness counts only activity that came after the workshop claiming it', () => {
+  const reg = new inst.ValidationWorkshop({ clock: () => 0 });
+  holdWorkshop(reg, 'review', 'a finding');
+  const training = new own.TrainingRegister({ clock: () => 0 });
+  const person = own.OWNERSHIP[own.subsystems()[0]].operationalOwner;
+  const courses = Object.values(own.REQUIRED_TRAINING)[0];
+
+  training.recordCompletion({ person, course: courses[0], at: 5, by: 'Registrar' });
+  const before = reg.learningEffectiveness({ training, now: 100 });
+  assert.equal(before.measures.find((m) => m.measure === 'trainingOutcomes').value, 0,
+    'a completion that predates the workshop was not caused by it');
+  assert.ok(before.unmeasured.includes('operationalImprovements'));
+  assert.equal(before.measures.find((m) => m.measure === 'operationalImprovements').value, null,
+    'an unsupplied register leaves its measure unknown, not zero');
+
+  training.recordCompletion({ person, course: courses[1] || Object.values(own.REQUIRED_TRAINING)[1][0], at: 50, by: 'Registrar' });
+  assert.equal(reg.learningEffectiveness({ training, now: 100 }).measures.find((m) => m.measure === 'trainingOutcomes').value, 1);
+});
+
+test('phase17: with no workshop held, nothing can have been learned from one', () => {
+  const report = new inst.ValidationWorkshop({ clock: () => 0 }).learningEffectiveness({ now: 0 });
+  assert.equal(report.measurable, false);
+  assert.match(report.basis, /nothing can have been learned/);
+  assert.equal(report.authorizes, false);
+});
