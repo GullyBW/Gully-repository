@@ -917,6 +917,269 @@ class EvidenceConnectorRegistry {
   }
 }
 
+// --- Executive explainability (Phase 16, Part 4) & readiness evidence chains (Part 13) -----------
+//
+// Twenty-two executive panels and ten readiness dimensions, every one of them derived and none of
+// them EXPLAINABLE. A board member reading "documentation health: 247" can see the number is
+// derived — `manualEntry: false` says so — and cannot see what it is derived FROM without reading
+// the source. A figure whose provenance is a code comment is a figure nobody can challenge.
+//
+// So every executive value walks a chain of seven hops, and the discipline is:
+//
+//   A CHAIN IS ONLY AS GOOD AS ITS FIRST BREAK. It is reported as broken AT the hop that failed,
+//   with what would resolve it — not as a percentage complete, because a chain that is six-sevenths
+//   complete supports exactly nothing.
+//
+// Every hop is DERIVED. The panel names the module it comes from; the context map says which bounded
+// context claims that module; the readiness model says which dimensions that context owns; RACI says
+// which controls that context is accountable for; the consistency stance says what policy the context
+// declares; the stance cites an ADR; and the module is the source record. Nothing in this section is
+// a hand-kept mapping table, so a panel that moves to another module re-links itself.
+const EXPLANATION_HOPS = {
+  'executive-metric': {
+    answers: 'What is the figure, and is it measured at all?',
+    resolvedFrom: 'the executive panel and its declared source module',
+    ifBroken: 'The dashboard shows a number nothing produced.',
+  },
+  'readiness-dimension': {
+    answers: 'Which readiness conclusion does this figure bear on?',
+    resolvedFrom: 'the readiness dimensions owned by the bounded context that claims the panel\'s source module',
+    ifBroken: 'The metric changes nothing. It is a number on a dashboard that no decision depends on.',
+  },
+  evidence: {
+    answers: 'What evidence supports that readiness dimension, and how confident is it?',
+    resolvedFrom: 'the evidence register entry for the dimension',
+    ifBroken: 'A readiness conclusion rests on nothing anybody recorded.',
+  },
+  control: {
+    answers: 'Which executable controls actually enforce it?',
+    resolvedFrom: 'the RACI control ownership matrix for the owning context, intersected with the controls that ran',
+    ifBroken: 'The evidence is a statement rather than a check. Nothing would fail if it stopped being true.',
+  },
+  policy: {
+    answers: 'What operating rule does the context declare?',
+    resolvedFrom: 'the declared consistency stance for the bounded context',
+    ifBroken: 'The context operates under a default nobody chose.',
+  },
+  adr: {
+    answers: 'Which recorded decision put that rule there?',
+    resolvedFrom: 'the ADR the stance cites, verified to exist in docs/adr/',
+    ifBroken: 'A rule is being enforced and nobody can say who decided it or why.',
+  },
+  'source-record': {
+    answers: 'Where is the record a reader can go and check?',
+    resolvedFrom: 'the source module the panel declares, verified to exist on disk',
+    ifBroken: 'The trail ends in a citation of something that is not there.',
+  },
+};
+const EXPLANATION_ORDER = ['executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy', 'adr', 'source-record'];
+
+// The module a panel is derived from. `derivedFrom` is prose with a path in it, so the path is
+// extracted rather than assumed to be the whole string.
+function sourceModuleOf(derivedFrom) {
+  const m = String(derivedFrom || '').match(/src\/[A-Za-z0-9/_-]+\.js/);
+  return m ? m[0] : null;
+}
+
+// The chain for one executive panel. Every hop resolves or names what would resolve it.
+function explain(panel, { dashboard = null, readiness = null, evidence = null, controls = [], now = 0 } = {}) {
+  if (!EXECUTIVE_PANELS[panel]) throw new Error(`unknown executive panel '${panel}'`);
+  const contextMap = require('../architecture/context-map');
+  const multiRegion = require('../twin2/multi-region');
+  const adrGovernance = require('../architecture/adr-governance');
+  const evidenceConfidence = require('./evidence-confidence');
+  const raci = require('../governance/raci');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const ROOT = path.join(__dirname, '..', '..');
+
+  const spec = EXECUTIVE_PANELS[panel];
+  const module = sourceModuleOf(spec.derivedFrom);
+  const owner = module ? (contextMap.moduleOwnership().owner || {})[module] || null : null;
+  const hops = [];
+  const hop = (id, resolved, detail, records = []) => {
+    hops.push({ hop: id, ...EXPLANATION_HOPS[id], resolved, detail, records });
+    return resolved;
+  };
+
+  // 1. The metric itself.
+  const row = dashboard && Array.isArray(dashboard.panels) ? dashboard.panels.find((p) => p.panel === panel) : null;
+  hop('executive-metric', !!(row && row.measured),
+    row ? (row.measured ? `'${panel}' = ${JSON.stringify(row.value)} (${row.detail})` : `'${panel}' is unmeasured — ${row.detail}`)
+      : 'no executive dashboard was supplied, so the figure itself is unknown',
+    row ? [`${spec.derivedFrom}`] : []);
+
+  // 2. Which readiness conclusion it bears on. Derived through the context that claims the module.
+  const dimensions = Object.entries(evidenceConfidence.READINESS_DIMENSIONS)
+    .filter(([, d]) => owner && d.owner === owner).map(([id]) => id);
+  hop('readiness-dimension', dimensions.length > 0,
+    dimensions.length ? `'${module}' is claimed by the '${owner}' context, which owns readiness dimension(s): ${dimensions.join(', ')}`
+      : owner ? `'${module}' is claimed by the '${owner}' context, which owns no readiness dimension — this metric bears on no readiness conclusion`
+        : `no bounded context claims '${module || spec.derivedFrom}', so nothing connects this metric to a readiness conclusion`,
+    dimensions);
+
+  // 3. The evidence behind those dimensions.
+  const evidenceRows = dimensions.map((d) => {
+    const rec = evidence ? evidence.get(`readiness:${d}`) : null;
+    return { dimension: d, present: !!(rec && rec.completeness > 0), source: rec ? rec.source : null, confidence: rec ? rec.confidence : null };
+  });
+  hop('evidence', evidenceRows.length > 0 && evidenceRows.every((e) => e.present),
+    evidenceRows.length
+      ? evidenceRows.map((e) => `${e.dimension}: ${e.present ? `${e.source}, confidence ${e.confidence}` : 'absent'}`).join('; ')
+      : 'no readiness dimension to carry evidence for',
+    evidenceRows.map((e) => `readiness:${e.dimension}`));
+
+  // 4. The controls that enforce it, intersected with what actually ran.
+  const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+  const owned = owner
+    ? raci.controlOwnership([...ran]).controls.filter((c) => c.context === owner).map((c) => c.control)
+    : [];
+  hop('control', owned.length > 0,
+    owned.length ? `${owned.length} control(s) owned by '${owner}' ran on this build`
+      : owner ? `no control that ran is owned by the '${owner}' context — the evidence is a statement rather than a check`
+        : 'no owning context, so no control can be attributed',
+    owned);
+
+  // 5. The declared operating rule for that context.
+  const stance = owner ? (multiRegion.contextConsistency().find((s) => s.context === owner) || null) : null;
+  hop('policy', !!(stance && stance.declared),
+    stance && stance.declared ? `'${owner}' declares '${stance.model}' consistency: ${stance.rationale}`
+      : owner ? `'${owner}' declares no consistency stance, so it operates under a default nobody chose`
+        : 'no owning context, so no declared policy',
+    stance && stance.declared ? [`${owner}: ${stance.model}`] : []);
+
+  // 6. The recorded decision behind the rule, verified to exist.
+  const adrNumbers = adrGovernance.adrFiles().map((f) => Number(path.basename(f).slice(0, 4)));
+  const cited = stance && stance.adr ? Number(String(stance.adr).replace(/\D/g, '')) : null;
+  hop('adr', cited !== null && adrNumbers.includes(cited),
+    cited === null ? 'the declared stance cites no recorded decision'
+      : adrNumbers.includes(cited) ? `${stance.adr} exists in docs/adr/`
+        : `the stance cites ${stance.adr} and no such ADR exists`,
+    cited !== null ? [stance.adr] : []);
+
+  // 7. The record a reader can actually go and open.
+  const exists = module ? fs.existsSync(path.join(ROOT, module)) : false;
+  hop('source-record', exists,
+    module ? (exists ? `${module} exists on disk` : `${module} is cited and does not exist`)
+      : `'${spec.derivedFrom}' names no source module a reader could open`,
+    module ? [module] : []);
+
+  // THE RULE: broken AT the first failing hop, never a percentage.
+  const firstBreak = hops.find((h) => !h.resolved) || null;
+  return {
+    panel, question: spec.question, derivedFrom: spec.derivedFrom, module, context: owner,
+    hops, hopCount: hops.length,
+    complete: !firstBreak,
+    brokenAt: firstBreak ? firstBreak.hop : null,
+    // What it costs, in the words of the hop that broke, rather than as a generic failure.
+    consequence: firstBreak ? firstBreak.ifBroken : null,
+    whatWouldResolveIt: firstBreak ? firstBreak.resolvedFrom : null,
+    resolvedHops: hops.filter((h) => h.resolved).map((h) => h.hop),
+    explanation: firstBreak
+      ? `'${panel}' cannot be fully explained: the chain breaks at '${firstBreak.hop}' — ${firstBreak.detail}`
+      : `'${panel}' is explainable end to end: ${hops.map((h) => h.detail).join(' → ')}`,
+    now, informationalOnly: true, authorizes: false,
+  };
+}
+
+// Part 4's report across every panel.
+function explainability({ dashboard = null, readiness = null, evidence = null, controls = [], now = 0 } = {}) {
+  const rows = Object.keys(EXECUTIVE_PANELS).sort().map((p) => explain(p, { dashboard, readiness, evidence, controls, now }));
+  const complete = rows.filter((r) => r.complete);
+  const byHop = EXPLANATION_ORDER.map((h) => ({
+    hop: h, ...EXPLANATION_HOPS[h],
+    breaksHere: rows.filter((r) => r.brokenAt === h).map((r) => r.panel),
+  }));
+  return {
+    panels: rows, count: rows.length,
+    hops: byHop, chain: [...EXPLANATION_ORDER],
+    explainable: complete.map((r) => r.panel),
+    unexplainable: rows.filter((r) => !r.complete).map((r) => ({ panel: r.panel, brokenAt: r.brokenAt, consequence: r.consequence })),
+    // Where the chain most often breaks. This says what to fix about the platform's explainability
+    // rather than about any one panel.
+    weakestHop: byHop.slice().sort((a, b) => b.breaksHere.length - a.breaksHere.length || a.hop.localeCompare(b.hop))[0] || null,
+    explainabilityRate: rows.length ? +(complete.length / rows.length).toFixed(4) : null,
+    // THE PART 4 RULE, computed rather than promised.
+    everyValueExplainable: rows.length > 0 && complete.length === rows.length,
+    now, informationalOnly: true, authorizes: false,
+    note: 'Every hop is derived: the panel names its module, the context map claims the module, the readiness model owns the dimension, RACI owns the control, the context declares the stance, the stance cites the ADR, and the module is the record. Nothing here is a hand-kept mapping, so a panel that moves re-links itself. A chain is reported as broken AT its first failing hop, never as a percentage — a chain six-sevenths complete supports nothing.',
+  };
+}
+
+// --- Part 13: bidirectional readiness traceability ------------------------------------------------
+//
+// Part 4 walks forward from a figure. Part 13 asks the question that catches the other failure:
+//
+//   Readiness → Evidence: what does this conclusion rest on?
+//   Evidence  → Readiness: what does this control actually hold up?
+//
+// The second direction is the one nothing has ever asked, and it finds the controls that support no
+// readiness conclusion at all. A control nothing depends on is not necessarily wrong — but nobody
+// should discover during an audit that a third of the suite holds nothing up.
+function readinessTraceability({ readiness = null, evidence = null, controls = [], now = 0 } = {}) {
+  const evidenceConfidence = require('./evidence-confidence');
+  const raci = require('../governance/raci');
+  const ran = [...new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)))].sort();
+  const ownership = raci.controlOwnership(ran).controls;
+  const contextOf = Object.fromEntries(ownership.map((c) => [c.control, c.context]));
+
+  // Readiness → Evidence.
+  const forward = Object.entries(evidenceConfidence.READINESS_DIMENSIONS).map(([dimension, d]) => {
+    const rec = evidence ? evidence.get(`readiness:${dimension}`) : null;
+    const supporting = ran.filter((c) => contextOf[c] === d.owner);
+    const scored = readiness && Array.isArray(readiness.dimensions) ? readiness.dimensions.find((x) => x.dimension === dimension) : null;
+    const chain = [
+      { link: 'readiness-dimension', resolved: true, detail: d.title },
+      { link: 'evidence', resolved: !!(rec && rec.completeness > 0), detail: rec ? `${rec.source}, completeness ${rec.completeness}` : `no evidence record for '${d.evidence}'` },
+      { link: 'control', resolved: supporting.length > 0, detail: supporting.length ? `${supporting.length} control(s) owned by '${d.owner}'` : `no control that ran is owned by '${d.owner}'` },
+    ];
+    const broken = chain.find((l) => !l.resolved) || null;
+    return {
+      dimension, title: d.title, owner: d.owner, evidenceKey: d.evidence,
+      status: scored ? scored.status : 'unknown', ready: scored ? scored.ready : null,
+      supportingControls: supporting, chain,
+      traceable: !broken, brokenAt: broken ? broken.link : null,
+      reason: broken ? `'${dimension}' cannot be traced to what supports it: ${broken.detail}` : `'${dimension}' traces to ${supporting.length} control(s) through recorded evidence`,
+    };
+  });
+
+  // Evidence → Readiness. Every control that ran, and what it holds up.
+  const owners = new Set(Object.values(evidenceConfidence.READINESS_DIMENSIONS).map((d) => d.owner));
+  const reverse = ran.map((control) => {
+    const context = contextOf[control] || null;
+    const supports = Object.entries(evidenceConfidence.READINESS_DIMENSIONS)
+      .filter(([, d]) => context && d.owner === context).map(([id]) => id);
+    return {
+      control, context, supports,
+      // Not an error. A finding: a control holding nothing up is one nobody would miss.
+      supportsReadiness: supports.length > 0,
+      reason: !context ? 'this control has no owning bounded context'
+        : supports.length ? `supports ${supports.join(', ')} through the '${context}' context`
+          : `owned by '${context}', which owns no readiness dimension — this control holds up no readiness conclusion`,
+    };
+  });
+
+  const untraceable = forward.filter((f) => !f.traceable);
+  const orphanControls = reverse.filter((r) => !r.supportsReadiness);
+  return {
+    readinessToEvidence: forward, evidenceToReadiness: reverse,
+    dimensionCount: forward.length, controlCount: reverse.length,
+    traceable: forward.filter((f) => f.traceable).map((f) => f.dimension),
+    untraceable: untraceable.map((f) => ({ dimension: f.dimension, brokenAt: f.brokenAt, reason: f.reason })),
+    orphanControls: orphanControls.map((r) => r.control),
+    orphanContexts: [...new Set(orphanControls.map((r) => r.context).filter(Boolean))].sort(),
+    readinessOwningContexts: [...owners].sort(),
+    // THE PART 13 RULE, computed in both directions rather than promised in one.
+    bidirectional: true,
+    everyConclusionTraceable: forward.length > 0 && untraceable.length === 0,
+    traceabilityRate: forward.length ? +(forward.filter((f) => f.traceable).length / forward.length).toFixed(4) : null,
+    orphanRate: reverse.length ? +(orphanControls.length / reverse.length).toFixed(4) : null,
+    basis: `${forward.length - untraceable.length} of ${forward.length} readiness dimensions trace to the evidence and controls behind them. In the other direction, ${orphanControls.length} of ${reverse.length} controls that ran hold up no readiness conclusion — not an error, but not something anybody should discover during an audit.`,
+    now, informationalOnly: true, authorizes: false,
+    note: 'Traceability is checked in both directions. Forward answers "what does this conclusion rest on"; backward answers "what does this control actually hold up", and only the backward direction finds a suite that has grown past what any readiness conclusion depends on.',
+  };
+}
+
 // --- Part 15: the executive dashboard ------------------------------------------------------------
 //
 // Every panel is derived. There is no path here that accepts a figure.
@@ -1229,6 +1492,7 @@ module.exports = {
   TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,
   EVIDENCE_TYPES, ONBOARDING_STATES, EvidenceOnboarding,
   DATA_CLASSES, PROVENANCE_FIELDS,
+  EXPLANATION_HOPS, EXPLANATION_ORDER, sourceModuleOf, explain, explainability, readinessTraceability,
   CONNECTOR_KINDS, TRUST_LEVELS, TRUST_ORDER, INTEGRITY_STATES, FRESHNESS_STATES, SYNC_STATES,
   EvidenceConnectorRegistry,
   SUSTAINABILITY_DIMENSIONS, institutionalSustainability,

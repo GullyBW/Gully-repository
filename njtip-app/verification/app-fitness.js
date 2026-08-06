@@ -8398,6 +8398,160 @@ module.exports = [
     if (later.authorizes !== false) v.push('the legal dependency graph claims authority');
   }),
 
+  fit('APP-FIT-EXPLAINABILITY', 'Every executive value walks seven derived hops to a source record, and a broken chain is reported at the hop that broke', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const evidenceConfidence = require('../src/assurance/evidence-confidence');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Seven hops, in order, each saying what it answers and what its break costs -----------
+    for (const required of ['executive-metric', 'readiness-dimension', 'evidence', 'control', 'policy', 'adr', 'source-record']) {
+      if (!inst.EXPLANATION_HOPS[required]) v.push(`explainability hop '${required}' is not walked`);
+    }
+    if (inst.EXPLANATION_ORDER.length !== 7) v.push('the explainability chain does not have exactly seven hops');
+    if (inst.EXPLANATION_ORDER.join(',') !== 'executive-metric,readiness-dimension,evidence,control,policy,adr,source-record') {
+      v.push('the explainability chain does not run metric → readiness → evidence → control → policy → ADR → source record');
+    }
+    for (const [id, h] of Object.entries(inst.EXPLANATION_HOPS)) {
+      if (!h.answers || !h.answers.endsWith('?') || !h.resolvedFrom || !h.ifBroken) v.push(`hop '${id}' does not state what it answers, what resolves it, or what its break costs`);
+    }
+
+    // --- Every hop is DERIVED. The module path is extracted, not assumed ---------------------
+    if (inst.sourceModuleOf('src/architecture/documentation-assurance.js') !== 'src/architecture/documentation-assurance.js') v.push('a bare module path was not extracted');
+    if (inst.sourceModuleOf('src/governance/ownership.js (knowledgeContinuity)') !== 'src/governance/ownership.js') v.push('a module path inside prose was not extracted');
+    if (inst.sourceModuleOf('somewhere in the codebase') !== null) v.push('a derivedFrom naming no module resolved to one anyway');
+    // Every panel names a module a bounded context actually claims, or the whole chain is fiction.
+    const contextMap = require('../src/architecture/context-map');
+    const owners = contextMap.moduleOwnership().owner || {};
+    for (const [panel, spec] of Object.entries(inst.EXECUTIVE_PANELS)) {
+      const module = inst.sourceModuleOf(spec.derivedFrom);
+      if (!module) v.push(`panel '${panel}' names no source module a reader could open`);
+      else if (!owners[module]) v.push(`panel '${panel}' is derived from '${module}', which no bounded context claims`);
+    }
+
+    // --- With nothing supplied, every chain breaks at the FIRST hop, and says so --------------
+    const blind = inst.explainability({ controls: [], now: 0 });
+    if (blind.count !== Object.keys(inst.EXECUTIVE_PANELS).length) v.push('the explainability report does not cover every executive panel');
+    if (blind.everyValueExplainable) v.push('every value reported itself explainable with no dashboard, evidence or controls supplied');
+    if (blind.explainabilityRate !== 0) v.push('an unexplainable estate did not report a rate of 0');
+    for (const p of blind.panels) {
+      if (p.complete) v.push(`panel '${p.panel}' reported a complete chain with nothing supplied`);
+      // Broken AT a hop, never a percentage — a chain six-sevenths complete supports nothing.
+      if (p.brokenAt !== 'executive-metric') v.push(`panel '${p.panel}' broke at '${p.brokenAt}' rather than at the unmeasured figure itself`);
+      if (!p.consequence || !p.whatWouldResolveIt) v.push(`a broken chain for '${p.panel}' does not say what it costs or what would resolve it`);
+      if (p.hops.length !== 7) v.push(`panel '${p.panel}' walked ${p.hops.length} hops`);
+    }
+    if (blind.authorizes !== false) v.push('the explainability report claims authority');
+
+    // --- THE SUCCESS PATH: a measured panel explains end to end ------------------------------
+    // `documentationHealth` is derived from a module the assurance context claims, and that context
+    // owns a readiness dimension, controls, a consistency stance and a recorded decision.
+    const register = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+    for (const dimension of Object.keys(evidenceConfidence.READINESS_DIMENSIONS)) {
+      register.record({ id: `readiness:${dimension}`, source: 'executable-check', completeness: 1, verifiedAt: 0, detail: 'supplied for the success path' });
+    }
+    const dashboard = { panels: [{ panel: 'documentationHealth', measured: true, value: 247, detail: '0 unresolved claims' }] };
+    const good = inst.explain('documentationHealth', { dashboard, evidence: register, controls, now: 0 });
+    if (!good.complete) v.push(`a measured panel over a claimed module could not be explained: broke at '${good.brokenAt}' — ${good.hops.find((h) => !h.resolved).detail}`);
+    if (good.brokenAt !== null) v.push('a complete chain still named a break');
+    if (!good.context) v.push('a complete chain resolved no owning bounded context');
+    if (!/explainable end to end/.test(good.explanation)) v.push('a complete chain does not state that it is explainable end to end');
+
+    // --- …and each of the later hops can break ON ITS OWN ------------------------------------
+    // No evidence register: the chain breaks at 'evidence', not earlier and not later.
+    const noEvidence = inst.explain('documentationHealth', { dashboard, evidence: null, controls, now: 0 });
+    if (noEvidence.brokenAt !== 'evidence') v.push(`with no evidence register the chain broke at '${noEvidence.brokenAt}' rather than at 'evidence'`);
+    // No controls ran: the chain breaks at 'control'.
+    const noControls = inst.explain('documentationHealth', { dashboard, evidence: register, controls: [], now: 0 });
+    if (noControls.brokenAt !== 'control') v.push(`with no controls the chain broke at '${noControls.brokenAt}' rather than at 'control'`);
+    // An unmeasured figure breaks at the first hop even when everything behind it resolves.
+    const unmeasured = inst.explain('documentationHealth', { dashboard: { panels: [{ panel: 'documentationHealth', measured: false, detail: 'not assessed' }] }, evidence: register, controls, now: 0 });
+    if (unmeasured.brokenAt !== 'executive-metric') v.push('an unmeasured figure with a sound chain behind it was reported explainable');
+    // An unknown panel is refused rather than explained.
+    let unknownPanel = false;
+    try { inst.explain('a feeling', { controls }); } catch (_) { unknownPanel = true; }
+    if (!unknownPanel) v.push('a panel the dashboard does not carry was explained anyway');
+
+    // --- The report names WHERE the chain most often breaks ---------------------------------
+    if (!blind.weakestHop || !blind.weakestHop.hop) v.push('the report does not name the hop the chain most often breaks at');
+    if (blind.weakestHop.breaksHere.length !== blind.count) v.push('the weakest hop does not account for every broken chain');
+  }),
+
+  fit('APP-FIT-READINESS-TRACEABILITY', 'Readiness traces to its evidence and evidence traces back to readiness, and a control that holds nothing up is named', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const evidenceConfidence = require('../src/assurance/evidence-confidence');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Nothing supplied: no conclusion is traceable, and none is silently assumed ----------
+    const blind = inst.readinessTraceability({ controls: [], now: 0 });
+    if (!blind.bidirectional) v.push('traceability was not checked in both directions');
+    if (blind.dimensionCount !== Object.keys(evidenceConfidence.READINESS_DIMENSIONS).length) v.push('not every readiness dimension was traced');
+    if (blind.everyConclusionTraceable) v.push('every conclusion was traceable with no evidence and no controls');
+    if (blind.traceabilityRate !== 0) v.push('an untraceable estate did not report a rate of 0');
+    for (const f of blind.readinessToEvidence) {
+      if (f.traceable) v.push(`dimension '${f.dimension}' traced to evidence that was not supplied`);
+      if (f.brokenAt !== 'evidence') v.push(`dimension '${f.dimension}' broke at '${f.brokenAt}' rather than at the missing evidence`);
+      if (!f.reason) v.push(`an untraceable dimension '${f.dimension}' states no reason`);
+    }
+    if (blind.controlCount !== 0) v.push('controls were traced when none ran');
+    if (blind.authorizes !== false) v.push('the traceability report claims authority');
+
+    // --- THE SUCCESS PATH: full evidence makes every conclusion traceable --------------------
+    const register = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+    for (const dimension of Object.keys(evidenceConfidence.READINESS_DIMENSIONS)) {
+      register.record({ id: `readiness:${dimension}`, source: 'executable-check', completeness: 1, verifiedAt: 0, detail: 'supplied for the success path' });
+    }
+    const traced = inst.readinessTraceability({ evidence: register, controls, now: 0 });
+    if (!traced.everyConclusionTraceable) v.push(`a fully evidenced estate had untraceable conclusions: ${traced.untraceable.map((u) => `${u.dimension}@${u.brokenAt}`).join(', ')}`);
+    if (traced.traceabilityRate !== 1) v.push('a fully evidenced estate did not report a traceability rate of 1');
+    for (const f of traced.readinessToEvidence) {
+      if (!f.supportingControls.length) v.push(`dimension '${f.dimension}' traced to no supporting control`);
+      if (f.chain.length !== 3) v.push(`the forward chain for '${f.dimension}' is not three links`);
+    }
+
+    // --- …and each forward link can break on its own ----------------------------------------
+    const partial = new evidenceConfidence.EvidenceRegister({ clock: () => 0 });
+    for (const dimension of Object.keys(evidenceConfidence.READINESS_DIMENSIONS)) {
+      // `absent` with completeness 0 is how the platform records evidence that was looked for and
+      // not found, as distinct from a dimension nobody asked about.
+      register.get(`readiness:${dimension}`);
+      partial.record({ id: `readiness:${dimension}`, source: 'absent', completeness: 0, verifiedAt: null, detail: 'looked for and not found' });
+    }
+    const noEvidence = inst.readinessTraceability({ evidence: partial, controls, now: 0 });
+    if (noEvidence.everyConclusionTraceable) v.push('dimensions whose evidence was recorded as absent were still traceable');
+    if (!noEvidence.untraceable.every((u) => u.brokenAt === 'evidence')) v.push('an absent evidence record broke the chain somewhere other than at evidence');
+    // No controls: the chain breaks at 'control' rather than at evidence.
+    const noControls = inst.readinessTraceability({ evidence: register, controls: [], now: 0 });
+    if (!noControls.untraceable.every((u) => u.brokenAt === 'control')) v.push('a dimension with evidence and no controls broke somewhere other than at control');
+
+    // --- THE BACKWARD DIRECTION: a control that holds nothing up is named --------------------
+    // This is the direction nothing else asks, and on the real estate it finds a large minority.
+    if (!traced.evidenceToReadiness.length) v.push('no control was traced backward to what it holds up');
+    for (const r of traced.evidenceToReadiness) {
+      if (!r.reason) v.push(`control '${r.control}' states no reason for what it does or does not support`);
+      if (r.supportsReadiness && !r.supports.length) v.push(`control '${r.control}' claims to support readiness and names no dimension`);
+    }
+    if (!traced.orphanControls.length) {
+      v.push('no control was found that holds up no readiness conclusion — on an estate of 178 controls across 30 contexts, ten of which own a readiness dimension, that cannot be right');
+    }
+    if (traced.orphanRate === null || traced.orphanRate <= 0) v.push('the orphan rate was not computed');
+    // An orphan is a finding, not an error: it must not make the estate untraceable.
+    if (traced.orphanControls.length && !traced.everyConclusionTraceable) v.push('orphan controls were treated as a traceability failure rather than as a finding');
+    if (!traced.orphanContexts.length) v.push('the contexts owning orphan controls were not named');
+    // Every orphan really is owned by a context that owns no readiness dimension.
+    const readinessOwners = new Set(traced.readinessOwningContexts);
+    for (const r of traced.evidenceToReadiness.filter((x) => !x.supportsReadiness)) {
+      if (r.context && readinessOwners.has(r.context)) v.push(`control '${r.control}' was called an orphan and its context '${r.context}' does own a readiness dimension`);
+    }
+  }),
+
   fit('APP-FIT-FORECAST-CALIBRATION', 'A forecast nobody scored has an unknown accuracy, not a poor one, and confidence rises only on observed outcomes', (v) => {
     const dp = require('../src/architecture/drift-prevention');
     const DAY = 24 * 3600_000;
