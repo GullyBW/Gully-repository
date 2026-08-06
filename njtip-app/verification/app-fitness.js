@@ -4869,6 +4869,209 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-SOURCE-HEALTH', 'A source that has never run is unknown, not healthy and not broken — including one somebody verified', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const DAY = 24 * 3600_000;
+    const declare = (reg, id, ov = {}) => reg.declare(id, {
+      kind: 'audit-system', owner: 'Registrar of the High Court', sourceSystem: 'Case Registry',
+      integrity: 'signed', trustLevel: 'declared', freshnessRequirementDays: 7,
+      declaredBy: 'Registrar of the High Court', at: 0, ...ov,
+    });
+
+    // --- Seven dimensions, each saying what not knowing it costs ------------------------------
+    if (Object.keys(inst.SOURCE_HEALTH_DIMENSIONS).length !== 7) v.push('source health does not carry exactly seven dimensions');
+    for (const required of ['availability', 'freshness', 'synchronizationLatency', 'provenanceConfidence', 'historicalReliability', 'trustEvolution', 'verificationHistory']) {
+      if (!inst.SOURCE_HEALTH_DIMENSIONS[required]) v.push(`source health dimension '${required}' is not measured`);
+    }
+    for (const [id, d] of Object.entries(inst.SOURCE_HEALTH_DIMENSIONS)) {
+      if (!d.asks || !d.asks.endsWith('?') || !d.ifUnknown) v.push(`source health dimension '${id}' does not state its question or what not knowing it costs`);
+    }
+    if (inst.SOURCE_HEALTH_STATES.unknown.examined !== false) v.push('unknown source health was marked as examined');
+    if (!/not examined is not unhealthy/i.test(inst.SOURCE_HEALTH_STATES.unknown.means)) v.push('the unknown health state does not say it is distinct from unhealthy');
+
+    // --- THE POINT OF PART 2, in both directions ----------------------------------------------
+    const reg = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+    declare(reg, 'CN-UNRUN');
+    const unrun = reg.health('CN-UNRUN', { now: 30 * DAY });
+    if (unrun.state !== 'unknown') v.push(`a source that has never synchronized reported health '${unrun.state}' — nobody has run it, so nothing is known about how it is doing`);
+    if (unrun.behaviourObserved !== false) v.push('a source with no synchronization reported observed behaviour');
+    // Its declaration findings must still be visible — unknown health does not hide a real gap.
+    if (!unrun.failing.includes('verificationHistory')) v.push('an unverified source hid that fact behind an unknown health verdict');
+
+    // …and the counterexample that catches a health verdict derived from the declaration alone.
+    declare(reg, 'CN-VERIFIED');
+    reg.verify('CN-VERIFIED', { by: 'Auditor General', independent: true, at: 0 });
+    if (reg.health('CN-VERIFIED', { now: 0 }).state !== 'unknown') {
+      v.push('an independently verified source that has never once run was called healthy — health is about how a source is doing, and it has not done anything');
+    }
+    // Once it actually runs and is fresh, it can reach healthy.
+    reg.recordSync('CN-VERIFIED', { outcome: 'synchronized', records: 5, newestRecordAt: 0, latencyMs: 50, by: 'scheduler', at: 0 });
+    if (reg.health('CN-VERIFIED', { now: 0 }).state !== 'healthy') v.push('a verified source that ran, arrived fresh and did not fail was not reported as healthy — so healthy is unreachable and the state is decoration');
+
+    // --- Reliability: unknown is not zero -----------------------------------------------------
+    const bare = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+    declare(bare, 'CN-1');
+    const r = bare.reliability('CN-1', { now: 30 * DAY });
+    if (r.measurable) v.push('a connector with no synchronization reported measurable reliability');
+    if (r.successRate !== null) v.push(`a never-synchronized connector reported a success rate of ${r.successRate} — that is UNKNOWN, not zero`);
+    if (r.failureCount !== null || r.stalePeriods !== null) v.push('a never-synchronized connector reported failure or staleness counts');
+    if (!/UNKNOWN, not zero/.test(r.reason)) v.push('the reliability report does not say that an unrun feed is unknown rather than always-failing');
+
+    // --- Reliability is derived from the records, against the source's OWN requirement ---------
+    bare.recordSync('CN-1', { outcome: 'synchronized', records: 10, newestRecordAt: 0, latencyMs: 100, by: 'scheduler', at: 0 });
+    bare.recordSync('CN-1', { outcome: 'synchronized', records: 10, newestRecordAt: 30 * DAY, latencyMs: 300, by: 'scheduler', at: 30 * DAY });
+    bare.recordSync('CN-1', { outcome: 'failed', errors: ['refused'], by: 'scheduler', at: 31 * DAY });
+    const r2 = bare.reliability('CN-1', { now: 32 * DAY });
+    if (!r2.measurable) v.push('a connector with three synchronizations reported unmeasurable reliability');
+    if (r2.failureCount !== 1) v.push('the recorded failure was not counted');
+    if (r2.meanLatencyMs !== 200 || r2.latencySamples !== 2) v.push('latency was not averaged over the synchronizations that timed themselves, with the sample count stated');
+    if (r2.successRate !== 0.6667) v.push(`success rate computed as ${r2.successRate} over two successes in three`);
+    // A 30-day gap against a 7-day requirement is stale; against a 90-day requirement it is not.
+    if (r2.stalePeriods < 1) v.push('a 30-day gap against a 7-day freshness requirement was not counted as a stale period');
+    const slow = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+    declare(slow, 'CN-SLOW', { freshnessRequirementDays: 90 });
+    slow.recordSync('CN-SLOW', { outcome: 'synchronized', records: 1, newestRecordAt: 0, by: 'scheduler', at: 0 });
+    slow.recordSync('CN-SLOW', { outcome: 'synchronized', records: 1, newestRecordAt: 30 * DAY, by: 'scheduler', at: 30 * DAY });
+    if (slow.reliability('CN-SLOW', { now: 30 * DAY }).stalePeriods !== 0) {
+      v.push('a 30-day gap was called stale against a 90-day requirement — staleness must come from the source\'s own cadence, not a uniform threshold');
+    }
+    // A latency nobody recorded is unknown, never zero.
+    if (slow.reliability('CN-SLOW', { now: 30 * DAY }).meanLatencyMs !== null) v.push('a connector whose synchronizations recorded no latency reported one anyway');
+
+    // --- An integrity failure on a path with no integrity control is a contradiction -----------
+    declare(bare, 'CN-OPEN', { integrity: 'unprotected' });
+    let refused = false;
+    try { bare.recordSync('CN-OPEN', { outcome: 'synchronized', records: 1, newestRecordAt: 0, integrityFailures: 1, by: 'scheduler', at: 0 }); } catch (e) { refused = !!e.failClosed; }
+    if (!refused) v.push('an integrity failure was recorded against a path that declares no integrity control — there is nothing there that could have failed');
+    // …and one on a protected path is recorded and is not a rate.
+    bare.recordSync('CN-1', { outcome: 'synchronized', records: 1, newestRecordAt: 32 * DAY, integrityFailures: 1, by: 'scheduler', at: 32 * DAY });
+    if (!bare.reliability('CN-1', { now: 32 * DAY }).integrityCompromised) v.push('a recorded integrity failure did not mark the connector as compromised');
+
+    // --- The estate dashboard ships empty and says so -----------------------------------------
+    const empty = new inst.EvidenceConnectorRegistry({ clock: () => 0 }).healthDashboard({ now: 0 });
+    if (empty.count !== 0) v.push('the connector register ships with a fabricated source');
+    if (empty.measurable) v.push('an empty connector register reported itself measurable');
+    if (empty.healthRate !== null) v.push('a health rate was computed over no sources');
+    if (!/not-applicable-and-stated/.test(empty.basis)) v.push('an empty register does not say why it is empty on a synthetic platform');
+    if (empty.authorizes !== false) v.push('the source health dashboard claims authority');
+
+    // --- A dashboard of unknowns is not a dashboard of failures --------------------------------
+    const unknowns = new inst.EvidenceConnectorRegistry({ clock: () => 0 });
+    declare(unknowns, 'A'); declare(unknowns, 'B');
+    const dash = unknowns.healthDashboard({ now: 0 });
+    if (dash.unhealthy.length) v.push('sources nobody has run were reported as unhealthy');
+    if (dash.unknown.length !== 2) v.push('two unrun sources were not both reported as unknown');
+    if (dash.healthRate !== null) v.push('a health rate was computed over zero measured sources — that is unknown, not zero');
+    if (dash.neverSynchronized.length !== 2) v.push('the dashboard does not name the sources that have never run');
+
+    // --- The estate availability trend obeys the Phase 17 improvement rule ---------------------
+    if (dash.availabilityTrend.state !== 'unknown') v.push('an availability trend was derived with no history supplied');
+    if (unknowns.healthDashboard({ now: 0, history: [0.3, 0.9] }).availabilityTrend.state !== 'unverified-improvement') {
+      v.push('a rising source availability with nothing behind it was reported as progress');
+    }
+    if (unknowns.healthDashboard({ now: 0, history: [0.3, 0.9], evidence: [{ kind: 'recorded-act', detail: 'the feed was repaired', by: 'OCTO' }] }).availabilityTrend.state !== 'verified-improvement') {
+      v.push('a rise supported by a recorded act was not reported as verified');
+    }
+  }),
+
+  fit('APP-FIT-VERIFIED-IMPROVEMENT', 'A governance figure that rose with nothing verified behind it is a finding, not good news', (v) => {
+    const ec = require('../src/assurance/evidence-confidence');
+
+    // --- Five states, and the three that are NOT the same as each other ------------------------
+    for (const required of ['unknown', 'regressed', 'steady', 'unverified-improvement', 'verified-improvement']) {
+      if (!ec.IMPROVEMENT_STATES[required]) v.push(`improvement state '${required}' is not defined`);
+      if (ec.IMPROVEMENT_STATES[required] && !ec.IMPROVEMENT_STATES[required].means) v.push(`improvement state '${required}' does not say what it means`);
+    }
+    if (Object.keys(ec.IMPROVEMENT_STATES).length !== 5) v.push('the improvement taxonomy does not carry exactly five states');
+    // Only ONE state violates the invariant. A regression is a different problem and must not block
+    // on this one, or the invariant becomes "nothing may ever get worse" and stops meaning anything.
+    const violating = Object.entries(ec.IMPROVEMENT_STATES).filter(([, s]) => s.violatesInvariant).map(([id]) => id);
+    if (violating.length !== 1 || violating[0] !== 'unverified-improvement') {
+      v.push(`${violating.length} state(s) violate the improvement invariant (${violating.join(', ')}) — exactly one should, and it is the unverified rise`);
+    }
+    if (ec.IMPROVEMENT_STATES.unknown.improved !== false || ec.IMPROVEMENT_STATES.unknown.verified !== false) v.push('an unknown trend was recorded as improved or verified');
+
+    // --- What supports a rise, and what merely explains one -----------------------------------
+    for (const [kind, k] of Object.entries(ec.IMPROVEMENT_EVIDENCE_KINDS)) {
+      if (typeof k.independent !== 'boolean' || !k.means) v.push(`improvement evidence kind '${kind}' does not say whether it is independent or what it means`);
+    }
+    if (ec.IMPROVEMENT_EVIDENCE_KINDS['self-assessment'].independent !== false) v.push('a self-assessment was treated as independent evidence — it is the claim under examination, not evidence for it');
+    if (ec.IMPROVEMENT_EVIDENCE_KINDS['measurement-change'].independent !== false) v.push('a measurement change was treated as evidence that something improved');
+    if (!/opposite of supporting it/.test(ec.IMPROVEMENT_EVIDENCE_KINDS['measurement-change'].means)) {
+      v.push('the measurement-change kind does not say that it explains a rise rather than supporting it');
+    }
+
+    // --- THE POINT: an unsupported rise, and the same rise supported --------------------------
+    const bare = ec.verifiedImprovement({ subject: 'detection rate', series: [0.4, 0.9] });
+    if (bare.state !== 'unverified-improvement') v.push(`a rise with nothing behind it was reported as '${bare.state}'`);
+    if (bare.violatesInvariant !== true) v.push('an unverified rise did not violate the improvement invariant');
+    if (!/NOTHING independently verified/.test(bare.reason)) v.push('an unverified rise does not say plainly that nothing supports it');
+    for (const kind of ['observed-outcome', 'independent-verification', 'recorded-act']) {
+      const supported = ec.verifiedImprovement({ subject: 'detection rate', series: [0.4, 0.9], evidence: [{ kind, detail: 'd', by: 'Auditor General' }] });
+      if (supported.state !== 'verified-improvement') v.push(`a rise supported by '${kind}' was not reported as verified`);
+      if (supported.violatesInvariant !== false) v.push(`a rise supported by '${kind}' still violated the invariant`);
+    }
+    // …and the two kinds that must NOT verify anything.
+    for (const kind of ['self-assessment', 'measurement-change']) {
+      const notVerified = ec.verifiedImprovement({ subject: 'detection rate', series: [0.4, 0.9], evidence: [{ kind, detail: 'd', by: 'the owning team' }] });
+      if (notVerified.state !== 'unverified-improvement') v.push(`'${kind}' verified a rise — it explains one at best`);
+    }
+
+    // --- The three quiet states, none of which blocks -----------------------------------------
+    if (ec.verifiedImprovement({ subject: 'x', series: [0.5] }).state !== 'unknown') v.push('one observation produced a direction');
+    if (ec.verifiedImprovement({ subject: 'x', series: [] }).state !== 'unknown') v.push('no observation produced a direction');
+    if (ec.verifiedImprovement({ subject: 'x', series: [0.50, 0.51] }).state !== 'steady') v.push('a move inside the tolerance was reported as a direction');
+    if (ec.verifiedImprovement({ subject: 'x', series: [0.9, 0.4] }).state !== 'regressed') v.push('a fall was not reported as a regression');
+    for (const series of [[0.5], [0.50, 0.51], [0.9, 0.4]]) {
+      if (ec.verifiedImprovement({ subject: 'x', series }).violatesInvariant) v.push(`a series of ${JSON.stringify(series)} blocked on the improvement invariant, which is about unearned credit`);
+    }
+    // Direction follows the declared sense: a falling latency is an improvement.
+    const latency = ec.verifiedImprovement({ subject: 'latency', series: [900, 200], higherIsBetter: false });
+    if (latency.improved !== true || latency.state !== 'unverified-improvement') v.push('a falling figure with higherIsBetter false was not read as a rise');
+
+    // --- The report aggregates to the weakest link, never to the mean -------------------------
+    const report = ec.improvementReport({
+      trends: [
+        { subject: 'a', series: [0.1, 0.9], evidence: [{ kind: 'observed-outcome', detail: 'd', by: 'x' }] },
+        { subject: 'b', series: [0.1, 0.9] },
+      ],
+      now: 0,
+    });
+    if (report.violationCount !== 1) v.push('one unverified rise among two was not counted as a violation');
+    if (report.everyImprovementVerified) v.push('a set containing an unverified rise satisfied the invariant — this aggregates to the weakest link, not the mean');
+    if (report.authorizes !== false) v.push('the improvement report claims authority');
+    const empty = ec.improvementReport({ trends: [], now: 0 });
+    if (!/nothing has improved or regressed as far as this report knows/.test(empty.basis)) v.push('an empty improvement report does not say why it is empty');
+    if (!empty.everyImprovementVerified) v.push('an empty report reported a violation it could not have found');
+
+    // --- Part 16: a shrinking corpus explains a quality rise ---------------------------------
+    const dimension = Object.keys(ec.QUALITY_DIMENSIONS)[0];
+    const shrunk = ec.evidenceQualityEvolution({
+      snapshots: [{ count: 100, byDimension: { [dimension]: 0.4 } }, { count: 20, byDimension: { [dimension]: 0.9 } }],
+      now: 0,
+    });
+    if (shrunk.corpusShrank !== true) v.push('a corpus that fell from 100 to 20 items was not reported as having shrunk');
+    if (shrunk.corpusGrowth !== -80) v.push('corpus growth was not derived from the snapshot sizes');
+    if (!shrunk.unverifiedImprovements.includes(dimension)) v.push('a quality rise alongside a shrinking corpus was reported as progress');
+    const row = shrunk.dimensions.find((d) => d.dimension === dimension);
+    if (!/the corpus shrank from 100 to 20/.test(row.trend.reason)) v.push('the trend does not name the shrinking corpus as what explains the rise');
+    if (shrunk.everyImprovementVerified) v.push('a corpus that shrank while quality rose satisfied the improvement invariant');
+    // A corpus that did NOT shrink is still unverified, but for the ordinary reason.
+    const steadyCorpus = ec.evidenceQualityEvolution({
+      snapshots: [{ count: 100, byDimension: { [dimension]: 0.4 } }, { count: 100, byDimension: { [dimension]: 0.9 } }],
+      now: 0,
+    });
+    if (steadyCorpus.corpusShrank !== false) v.push('a corpus that held its size was reported as shrinking');
+    if (/corpus shrank/.test(steadyCorpus.dimensions.find((d) => d.dimension === dimension).trend.reason)) {
+      v.push('a steady corpus was blamed for a rise it did not cause');
+    }
+    // One snapshot is not a trend.
+    const single = ec.evidenceQualityEvolution({ snapshots: [{ count: 10, byDimension: { [dimension]: 0.5 } }], now: 0 });
+    if (single.measurable) v.push('one evidence snapshot produced a measurable quality trend');
+    if (single.corpusShrank !== null) v.push('one snapshot produced a verdict about the corpus changing size');
+    if (single.authorizes !== false) v.push('the evidence quality evolution report claims authority');
+  }),
+
   fit('APP-FIT-EVIDENCE-QUALITY', 'Evidence quality is its weakest dimension, and agreement from the same source kind is not corroboration', (v) => {
     const ec = require('../src/assurance/evidence-confidence');
     for (const required of ['completeness', 'freshness', 'provenance', 'integrity', 'reproducibility', 'corroboration', 'independence', 'historical-consistency']) {

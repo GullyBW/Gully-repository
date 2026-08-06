@@ -927,6 +927,54 @@ const SYNC_STATES = {
 
 const DAY_MS = 24 * 3600_000;
 
+// --- Evidence source health (Phase 17, Part 2) -------------------------------------------------------
+//
+// The connector register above says what each source IS. Part 2 asks how each one is DOING, across
+// seven dimensions — and the reason it takes seven is that a source can fail in ways that look
+// identical from a single number: a feed that is running but stale, one that is fresh but
+// unverified, one that is verified but was verified four years ago.
+//
+// Every dimension states what not knowing it costs, because "unmeasured" is the state most of these
+// will be in on a platform with no real sources, and a dimension that cannot say why its absence
+// matters is a dimension nobody will ever go and fill in.
+const SOURCE_HEALTH_DIMENSIONS = {
+  availability: {
+    asks: 'Does this source answer when it is asked?',
+    ifUnknown: 'A feed that stopped and a feed nobody has run look identical.',
+  },
+  freshness: {
+    asks: 'Is what arrived recent enough to mean anything, by this source\'s own requirement?',
+    ifUnknown: 'Evidence that was true once is cited as though it were true now.',
+  },
+  synchronizationLatency: {
+    asks: 'How long does this source take to answer?',
+    ifUnknown: 'A source that is degrading slowly does so invisibly until it stops.',
+  },
+  provenanceConfidence: {
+    asks: 'How far has anybody gone toward establishing that this source is what it says it is?',
+    ifUnknown: 'Evidence is inherited at face value from something nobody assessed.',
+  },
+  historicalReliability: {
+    asks: 'Has this source been dependable over time, or dependable today?',
+    ifUnknown: 'A source that fails one week in four reads the same as one that has never failed.',
+  },
+  trustEvolution: {
+    asks: 'Is the assessment of this source current, or was it made once and never revisited?',
+    ifUnknown: 'A verification with no expiry is a verification nobody ever has to redo.',
+  },
+  verificationHistory: {
+    asks: 'Has an independent party ever examined this source at all?',
+    ifUnknown: 'A self-attested source and an independently verified one are cited the same way.',
+  },
+};
+
+// Three states, and the middle one is the whole point.
+const SOURCE_HEALTH_STATES = {
+  unknown: { healthy: false, examined: false, means: 'Nothing about this source could be measured. Not examined is not unhealthy — nobody has looked.' },
+  unhealthy: { healthy: false, examined: true, means: 'Examined, and at least one measured dimension is failing.' },
+  healthy: { healthy: true, examined: true, means: 'Examined, and every dimension that could be measured is sound.' },
+};
+
 class EvidenceConnectorRegistry {
   constructor({ clock = () => 0 } = {}) { this._clock = clock; this._connectors = new Map(); this._syncs = new Map(); }
 
@@ -980,7 +1028,13 @@ class EvidenceConnectorRegistry {
 
   // Record a synchronization. Attributed and counted; an unattributed sync is a claim that something
   // ran.
-  recordSync(id, { outcome, records = 0, newestRecordAt = null, errors = [], by, at = null } = {}) {
+  recordSync(id, {
+    outcome, records = 0, newestRecordAt = null, errors = [], by, at = null,
+    // Phase 17, Part 2. Optional, because a synchronization that did not time itself is still a
+    // synchronization — but a latency nobody recorded is unknown, never zero, and the reliability
+    // report says how many samples it actually had.
+    latencyMs = null, retries = 0, integrityFailures = 0,
+  } = {}) {
     const c = this._connectors.get(id);
     if (!c) throw new Error('unknown connector: ' + id);
     if (!['synchronized', 'degraded', 'failed'].includes(outcome)) throw new Error(`unknown sync outcome '${outcome}'`);
@@ -989,7 +1043,16 @@ class EvidenceConnectorRegistry {
       const e = new Error('a successful synchronization must record the timestamp of the newest record it brought — without it freshness is unknowable');
       e.failClosed = true; throw e;
     }
-    const rec = { connector: id, outcome, records, newestRecordAt, errors: [...errors], by, at: at ?? this._clock() };
+    if (latencyMs !== null && (!Number.isFinite(latencyMs) || latencyMs < 0)) throw new Error('a synchronization latency must be a non-negative number of milliseconds');
+    if (!Number.isInteger(retries) || retries < 0) throw new Error('a retry count must be a non-negative integer');
+    if (!Number.isInteger(integrityFailures) || integrityFailures < 0) throw new Error('an integrity failure count must be a non-negative integer');
+    // An integrity failure on a path declared to have no integrity control is a contradiction: there
+    // is nothing there that could have failed, so the claim is refused rather than recorded.
+    if (integrityFailures > 0 && !INTEGRITY_STATES[c.integrity].intact) {
+      const e = new Error(`'${id}' declares integrity '${c.integrity}', so nothing checks what arrives and no integrity failure could have been detected`);
+      e.failClosed = true; throw e;
+    }
+    const rec = { connector: id, outcome, records, newestRecordAt, errors: [...errors], latencyMs, retries, integrityFailures, by, at: at ?? this._clock() };
     if (!this._syncs.has(id)) this._syncs.set(id, []);
     this._syncs.get(id).push(rec);
     return { ...rec };
@@ -997,6 +1060,168 @@ class EvidenceConnectorRegistry {
 
   connectors() { return [...this._connectors.values()].map((c) => ({ ...c })).sort((a, b) => a.id.localeCompare(b.id)); }
   syncs(id) { return (this._syncs.get(id) || []).map((s) => ({ ...s })); }
+
+  // --- Part 2 (Phase 17): connector reliability over time ------------------------------------------
+  //
+  // `state()` answers "can I believe this source right now". Part 2 asks the question that only
+  // appears over time: is this feed getting better or worse — and the rule that keeps it honest is
+  // the one every rate in this platform obeys:
+  //
+  //   A CONNECTOR WITH NO SYNCHRONIZATION HISTORY HAS UNKNOWN RELIABILITY, NOT ZERO. A feed nobody
+  //   has run is not a feed that always fails, and reporting it as 0% would put the wrong repair on
+  //   somebody's desk.
+  reliability(id, { now = null, window = null } = {}) {
+    const t = now ?? this._clock();
+    const c = this._connectors.get(id);
+    if (!c) throw new Error('unknown connector: ' + id);
+    const all = (this._syncs.get(id) || []).slice().sort((a, b) => a.at - b.at);
+    const syncs = window === null ? all : all.filter((s) => s.at >= t - window);
+
+    if (!syncs.length) {
+      return {
+        connector: id, measurable: false, samples: 0,
+        successRate: null, failureCount: null, retryCount: null, integrityFailures: null,
+        meanLatencyMs: null, latencySamples: 0, stalePeriods: null, integrityCompromised: false,
+        reason: `'${id}' has no recorded synchronization in this window, so its reliability is UNKNOWN, not zero — a feed nobody has run is not a feed that always fails`,
+        window, now: t,
+      };
+    }
+
+    const succeeded = syncs.filter((s) => s.outcome === 'synchronized');
+    const failed = syncs.filter((s) => s.outcome === 'failed');
+    const timed = syncs.filter((s) => Number.isFinite(s.latencyMs));
+    const integrityFailures = syncs.reduce((a, s) => a + (s.integrityFailures || 0), 0);
+
+    // A stale period is a gap between synchronizations longer than the connector's OWN declared
+    // freshness requirement. Derived from the connector, never from a uniform threshold: a feed that
+    // must be daily and one that must be quarterly do not go stale at the same rate.
+    const requirement = c.freshnessRequirementDays * DAY_MS;
+    let stalePeriods = 0;
+    for (let i = 1; i < syncs.length; i += 1) {
+      if (syncs[i].at - syncs[i - 1].at > requirement) stalePeriods += 1;
+    }
+    if (t - syncs[syncs.length - 1].at > requirement) stalePeriods += 1;
+
+    return {
+      connector: id, measurable: true, samples: syncs.length,
+      successRate: +(succeeded.length / syncs.length).toFixed(4),
+      failureCount: failed.length,
+      retryCount: syncs.reduce((a, s) => a + (s.retries || 0), 0),
+      integrityFailures,
+      // Over the syncs that TIMED themselves, with the sample count stated beside it. A mean over
+      // three of forty synchronizations is a mean over three.
+      meanLatencyMs: timed.length ? Math.round(timed.reduce((a, s) => a + s.latencyMs, 0) / timed.length) : null,
+      latencySamples: timed.length,
+      stalePeriods,
+      // One integrity failure is not a rate. It means something arrived that was not what was sent.
+      integrityCompromised: integrityFailures > 0,
+      freshnessRequirementDays: c.freshnessRequirementDays,
+      reason: `${succeeded.length} of ${syncs.length} synchronization(s) succeeded; ${stalePeriods} gap(s) exceeded this connector's own ${c.freshnessRequirementDays}-day freshness requirement`,
+      window, now: t,
+    };
+  }
+
+  // The health of one source across the seven dimensions Part 2 asks for.
+  health(id, { now = null, verificationsExpireAfterDays = 365 } = {}) {
+    const t = now ?? this._clock();
+    const c = this._connectors.get(id);
+    if (!c) throw new Error('unknown connector: ' + id);
+    const r = this.reliability(id, { now: t });
+    const s = this.state(id, { now: t });
+
+    const dimension = (id2, value, healthy, detail) => ({
+      dimension: id2, ...SOURCE_HEALTH_DIMENSIONS[id2],
+      value, healthy, measured: value !== null, detail,
+    });
+
+    // A verification with no expiry is a verification that never has to be redone.
+    const verifiedAt = c.verification ? c.verification.at : null;
+    const verificationAge = verifiedAt === null ? null : t - verifiedAt;
+    const verificationCurrent = verificationAge !== null && verificationAge <= verificationsExpireAfterDays * DAY_MS;
+
+    const dimensions = [
+      dimension('availability', r.measurable ? r.successRate : null, r.measurable ? r.successRate === 1 : null,
+        r.measurable ? r.reason : 'never synchronized, so availability is unknown rather than zero'),
+      dimension('freshness', s.freshness === 'unknown' ? null : (s.freshness === 'fresh' ? 1 : 0), s.freshness === 'fresh' ? true : s.freshness === 'unknown' ? null : false,
+        `freshness is '${s.freshness}'`),
+      dimension('synchronizationLatency', r.meanLatencyMs, r.meanLatencyMs === null ? null : true,
+        r.latencySamples ? `mean ${r.meanLatencyMs}ms over ${r.latencySamples} timed synchronization(s)` : 'no synchronization recorded a latency, so it is unknown rather than fast'),
+      dimension('provenanceConfidence', TRUST_LEVELS[c.trustLevel].rank / 3, TRUST_LEVELS[c.trustLevel].verifiable,
+        `trust level is '${c.trustLevel}' — ${TRUST_LEVELS[c.trustLevel].means}`),
+      dimension('historicalReliability', r.measurable ? r.successRate : null, r.measurable ? r.stalePeriods === 0 && r.failureCount === 0 : null,
+        r.measurable ? `${r.failureCount} failure(s) and ${r.stalePeriods} stale period(s) on record` : 'no history exists to be reliable or unreliable'),
+      dimension('trustEvolution', verifiedAt === null ? null : (verificationCurrent ? 1 : 0), verifiedAt === null ? null : verificationCurrent,
+        verifiedAt === null ? 'nothing has ever verified this source, so its trust has no history to have evolved'
+          : verificationCurrent ? `verified by ${c.verification.by} within the last ${verificationsExpireAfterDays} days`
+            : `the last verification by ${c.verification.by} is older than ${verificationsExpireAfterDays} days — a verification with no expiry is one nobody has to redo`),
+      dimension('verificationHistory', c.verification ? 1 : 0, !!c.verification,
+        c.verification ? `verified by ${c.verification.by}${c.verification.independent ? ', independently' : ''}` : 'no independent verification is recorded'),
+    ];
+
+    // THE RULE, and it has two halves.
+    //
+    // First: unknown is neither healthy nor unhealthy. A source nobody has examined is not a source
+    // known to be broken, and a dashboard that paints both red teaches everybody that red means
+    // nothing.
+    //
+    // Second, and the one that is easy to get wrong: HEALTH IS ABOUT HOW A SOURCE IS DOING, and a
+    // source that has never synchronized has not done anything. Four of the seven dimensions are
+    // about behaviour and are unmeasurable until it runs; the other three are known the moment it is
+    // declared. Deriving a verdict from the declaration alone would call an independently verified
+    // feed that has never once run HEALTHY — which is the single most misleading thing this
+    // dashboard could say. So a source with no synchronization history is `unknown`, and its
+    // declaration findings are still listed in `failing` so nothing is hidden by that.
+    const measured = dimensions.filter((d) => d.healthy !== null);
+    const behaviourObserved = r.measurable;
+    const state = !behaviourObserved || !measured.length ? 'unknown'
+      : measured.every((d) => d.healthy) ? 'healthy' : 'unhealthy';
+
+    return {
+      connector: id, owner: c.owner, sourceSystem: c.sourceSystem,
+      state, ...SOURCE_HEALTH_STATES[state],
+      dimensions,
+      behaviourObserved,
+      unmeasured: dimensions.filter((d) => d.healthy === null).map((d) => d.dimension),
+      // Reported whatever the state. A never-run source that is also unverified has two separate
+      // repairs waiting on it, and both are named.
+      failing: dimensions.filter((d) => d.healthy === false).map((d) => d.dimension),
+      basis: !behaviourObserved
+        ? `'${id}' has never synchronized, so its health is UNKNOWN: four of the seven dimensions are about behaviour and it has not behaved yet. ${dimensions.filter((d) => d.healthy === false).length} declaration-level finding(s) are listed separately and still need work.`
+        : `${measured.filter((d) => d.healthy).length} of ${measured.length} MEASURED dimension(s) are healthy; ${dimensions.length - measured.length} could not be measured and are excluded rather than counted as failing`,
+      now: t, informationalOnly: true, authorizes: false,
+    };
+  }
+
+  healthDashboard({ now = null, history = [], evidence = [] } = {}) {
+    const t = now ?? this._clock();
+    const evidenceConfidence = require('./evidence-confidence');
+    const rows = this.connectors().map((c) => ({ ...this.health(c.id, { now: t }), reliability: this.reliability(c.id, { now: t }) }));
+    const measured = rows.filter((r) => r.state !== 'unknown');
+    // A trend over the whole estate's availability, judged by the same rule as every other trend in
+    // Phase 17: a rise nobody can support is not an improvement.
+    const trend = evidenceConfidence.verifiedImprovement({
+      subject: 'evidence source availability', series: history, evidence,
+    });
+    return {
+      sources: rows, count: rows.length,
+      dimensions: Object.entries(SOURCE_HEALTH_DIMENSIONS).map(([dimension, d]) => ({ dimension, ...d })),
+      states: Object.entries(SOURCE_HEALTH_STATES).map(([state, s]) => ({ state, ...s })),
+      healthy: rows.filter((r) => r.state === 'healthy').map((r) => r.connector),
+      unhealthy: rows.filter((r) => r.state === 'unhealthy').map((r) => r.connector),
+      unknown: rows.filter((r) => r.state === 'unknown').map((r) => r.connector),
+      integrityCompromised: rows.filter((r) => r.reliability.integrityCompromised).map((r) => r.connector),
+      neverSynchronized: rows.filter((r) => !r.reliability.measurable).map((r) => r.connector),
+      // Over measured sources only. A rate that counted the unexamined would be a rate over nothing.
+      healthRate: measured.length ? +(rows.filter((r) => r.state === 'healthy').length / measured.length).toFixed(4) : null,
+      measurable: measured.length > 0,
+      availabilityTrend: trend,
+      basis: rows.length
+        ? `${rows.filter((r) => r.state === 'healthy').length} of ${measured.length} MEASURED source(s) are healthy. ${rows.length - measured.length} have unknown health and are excluded rather than counted as unhealthy.`
+        : 'No evidence source is declared. This platform is offline and synthetic; source health is not unknown-and-worrying, it is not-applicable-and-stated.',
+      now: t, failClosed: true, informationalOnly: true, authorizes: false,
+      note: 'Unknown source health is not unhealthy: a source nobody has run is not a broken source, and a dashboard that paints both red teaches everybody that red means nothing. An availability rise with nothing verified behind it is reported as an unverified improvement rather than as progress.',
+    };
+  }
 
   // The state of one connector, derived. Nothing here is declared except what the declaration said.
   state(id, { now = null } = {}) {
@@ -1867,7 +2092,7 @@ module.exports = {
   DATA_CLASSES, PROVENANCE_FIELDS,
   EXPLANATION_HOPS, EXPLANATION_ORDER, sourceModuleOf, explain, explainability, readinessTraceability,
   CONNECTOR_KINDS, TRUST_LEVELS, TRUST_ORDER, INTEGRITY_STATES, FRESHNESS_STATES, SYNC_STATES,
-  EvidenceConnectorRegistry,
+  EvidenceConnectorRegistry, SOURCE_HEALTH_DIMENSIONS, SOURCE_HEALTH_STATES,
   SUSTAINABILITY_DIMENSIONS, institutionalSustainability,
   DECISION_PACKAGE_FIELDS, HUMAN_AUTHORIZATION_REQUIRED, assertAdvisory, decisionPackage, decisionSupport,
 };

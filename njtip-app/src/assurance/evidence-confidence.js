@@ -966,7 +966,196 @@ function confidenceEvolution({ subject, snapshots = [] } = {}) {
   };
 }
 
+// --- Verified improvement (Phase 17, Part 1) --------------------------------------------------------
+//
+// The primitive the rest of Phase 17 is built on, and it exists because of one observation:
+//
+//   THERE ARE THREE WAYS A GOVERNANCE FIGURE RISES AND ONLY ONE OF THEM IS PROGRESS.
+//     1. The institution did something, and there is evidence of it.
+//     2. The way the figure is computed changed.
+//     3. Nobody knows.
+//
+// Sixteen phases of dashboards report the number and cannot tell the three apart. A maturity level
+// that went from L1 to L3 because a domain was reassessed looks exactly like one that rose because
+// people were trained — and the second is worth celebrating while the first is worth investigating.
+//
+// So every trend in this phase routes through this one function, and a rise with nothing
+// independently verified behind it is recorded as a VIOLATION of the phase invariant rather than as
+// good news. That is the whole idea: unearned credit is a finding.
+const IMPROVEMENT_STATES = {
+  unknown: {
+    improved: false, verified: false, violatesInvariant: false,
+    means: 'Fewer than two observations. Nothing has been compared, so nothing has improved or regressed as far as anybody can tell.',
+  },
+  regressed: {
+    improved: false, verified: false, violatesInvariant: false,
+    means: 'The figure moved against the declared direction. That is a different problem, reported elsewhere — this invariant is about unearned credit, so it never blocks on this invariant.',
+  },
+  steady: {
+    improved: false, verified: false, violatesInvariant: false,
+    means: 'The figure moved by less than the declared tolerance. Noise is not a direction.',
+  },
+  'unverified-improvement': {
+    improved: true, verified: false, violatesInvariant: true,
+    means: 'The figure rose and nothing independently verified supports the rise. This is a finding, not good news.',
+  },
+  'verified-improvement': {
+    improved: true, verified: true, violatesInvariant: false,
+    means: 'The figure rose and something independent — an observed outcome, an independent verification, or a recorded act — supports the rise.',
+  },
+};
+
+// How much movement counts as movement. Declared rather than implicit, so it can be argued with.
+const IMPROVEMENT_TOLERANCE = 0.02;
+
+// What can support a rise, and what merely explains one. The distinction is the point: a
+// self-assessment and a measurement change are both real information and neither is evidence that
+// anything got better.
+const IMPROVEMENT_EVIDENCE_KINDS = {
+  'observed-outcome': { independent: true, means: 'Something was recorded as having happened, by somebody other than the party the figure is about.' },
+  'independent-verification': { independent: true, means: 'A party independent of the owner examined the thing and recorded a conclusion.' },
+  'recorded-act': { independent: true, means: 'A governance act was performed and recorded — a training completed, a review held, a control rebuilt.' },
+  'self-assessment': { independent: false, means: 'The party the figure is about says it improved. That is the claim under examination, not evidence for it.' },
+  'measurement-change': { independent: false, means: 'The way the figure is computed changed. This EXPLAINS a rise and is the opposite of supporting it.' },
+};
+
+function verifiedImprovement({
+  subject = 'unnamed figure', series = [], evidence = [],
+  tolerance = IMPROVEMENT_TOLERANCE, higherIsBetter = true,
+} = {}) {
+  const points = (Array.isArray(series) ? series : []).filter((x) => Number.isFinite(x));
+  const supporting = evidence.filter((e) => e && IMPROVEMENT_EVIDENCE_KINDS[e.kind] && IMPROVEMENT_EVIDENCE_KINDS[e.kind].independent);
+  const measurementChanges = evidence.filter((e) => e && e.kind === 'measurement-change');
+
+  if (points.length < 2) {
+    return {
+      subject, state: 'unknown', ...IMPROVEMENT_STATES.unknown,
+      from: points[0] ?? null, to: points[points.length - 1] ?? null, delta: null,
+      observations: points.length, tolerance, higherIsBetter,
+      supportingEvidence: supporting.map((e) => ({ kind: e.kind, detail: e.detail || null, by: e.by || null })),
+      measurementChanges: measurementChanges.map((e) => ({ kind: e.kind, detail: e.detail || null })),
+      reason: `${subject} has ${points.length} observation(s); at least two are needed before anything can be said to have moved`,
+      informationalOnly: true, authorizes: false,
+    };
+  }
+
+  const from = points[0];
+  const to = points[points.length - 1];
+  const delta = +(to - from).toFixed(6);
+  const moved = Math.abs(delta) > tolerance;
+  const rose = higherIsBetter ? delta > 0 : delta < 0;
+
+  const state = !moved ? 'steady'
+    : !rose ? 'regressed'
+      : supporting.length ? 'verified-improvement' : 'unverified-improvement';
+
+  return {
+    subject, state, ...IMPROVEMENT_STATES[state],
+    from, to, delta, observations: points.length, tolerance, higherIsBetter,
+    supportingEvidence: supporting.map((e) => ({ kind: e.kind, detail: e.detail || null, by: e.by || null })),
+    measurementChanges: measurementChanges.map((e) => ({ kind: e.kind, detail: e.detail || null })),
+    reason: state === 'verified-improvement'
+      ? `${subject} rose from ${from} to ${to}, supported by ${supporting.length} independently verified item(s): ${supporting.map((e) => e.kind).join(', ')}`
+      : state === 'unverified-improvement'
+        ? `${subject} rose from ${from} to ${to} and NOTHING independently verified supports the rise${measurementChanges.length ? `; the way it is computed also changed (${measurementChanges.map((e) => e.detail || 'unspecified').join('; ')})` : ''}`
+        : state === 'regressed' ? `${subject} moved from ${from} to ${to}, against the declared direction`
+          : `${subject} moved from ${from} to ${to}, within the declared tolerance of ${tolerance}`,
+    informationalOnly: true, authorizes: false,
+  };
+}
+
+// A whole set of trends, with the invariant's verdict over them.
+function improvementReport({ trends = [], now = 0 } = {}) {
+  const rows = trends.map((t) => verifiedImprovement(t));
+  const unverified = rows.filter((r) => r.violatesInvariant);
+  return {
+    trends: rows, count: rows.length,
+    states: Object.entries(IMPROVEMENT_STATES).map(([state, s]) => ({ state, ...s })),
+    evidenceKinds: Object.entries(IMPROVEMENT_EVIDENCE_KINDS).map(([kind, k]) => ({ kind, ...k })),
+    tolerance: IMPROVEMENT_TOLERANCE,
+    verifiedImprovements: rows.filter((r) => r.state === 'verified-improvement').map((r) => r.subject),
+    unverifiedImprovements: unverified.map((r) => ({ subject: r.subject, delta: r.delta, reason: r.reason })),
+    regressions: rows.filter((r) => r.state === 'regressed').map((r) => r.subject),
+    unknown: rows.filter((r) => r.state === 'unknown').map((r) => r.subject),
+    // THE PHASE 17 RULE, computed rather than promised. One unverified rise among twenty is a
+    // violation: this aggregates to the weakest link, never to the mean.
+    everyImprovementVerified: unverified.length === 0,
+    violationCount: unverified.length,
+    basis: rows.length
+      ? `${rows.filter((r) => r.state === 'verified-improvement').length} verified improvement(s), ${unverified.length} unverified, ${rows.filter((r) => r.state === 'regressed').length} regression(s), ${rows.filter((r) => r.state === 'unknown').length} with too few observations to say.`
+      : 'no trend was supplied, so nothing has improved or regressed as far as this report knows',
+    now, informationalOnly: true, authorizes: false,
+    note: 'There are three ways a governance figure rises and only one is progress: the institution did something and there is evidence; the measurement changed; or nobody knows. An improvement with no independently verified evidence behind it is reported as UNVERIFIED-IMPROVEMENT — a finding, not good news.',
+  };
+}
+
+// --- Evidence quality evolution (Phase 17, Part 16) ------------------------------------------------
+//
+// `evidenceQualityDashboard` reports the corpus as it stands. Part 16 asks whether it is getting
+// better — and there is a specific way this figure rises without anybody improving anything:
+//
+//   EVIDENCE CAN BE REMOVED. Drop the weakest items and mean quality rises. Every other trend in
+//   this platform is about a figure moving; this one also has to watch the DENOMINATOR, because a
+//   corpus that shrank and got better is a corpus somebody edited.
+//
+// So each snapshot carries its own size, a shrinking corpus is named, and a rise that coincides with
+// one is fed to `verifiedImprovement` as a measurement change — which is exactly what it is.
+function evidenceQualityEvolution({ snapshots = [], evidence = [], now = 0 } = {}) {
+  const dimensions = Object.keys(QUALITY_DIMENSIONS);
+  if (!Array.isArray(snapshots) || snapshots.length < 2) {
+    return {
+      snapshots: snapshots.length, dimensions: [], count: 0, measurable: false,
+      corpusGrowth: null, corpusShrank: null, corpusSizes: [],
+      improving: [], unverifiedImprovements: [], regressing: [], unknown: [],
+      everyImprovementVerified: true,
+      basis: `${snapshots.length} snapshot(s) supplied; at least two are needed before any quality trend exists`,
+      now, informationalOnly: true, authorizes: false,
+      note: 'A corpus that shrank while quality rose is a corpus somebody edited. This trend watches the denominator as well as the figure.',
+    };
+  }
+  const sizeOf = (s) => (Number.isFinite(s.count) ? s.count : null);
+  const first = snapshots[0];
+  const last = snapshots[snapshots.length - 1];
+  const corpusGrowth = sizeOf(first) !== null && sizeOf(last) !== null ? sizeOf(last) - sizeOf(first) : null;
+  const corpusShrank = corpusGrowth !== null && corpusGrowth < 0;
+
+  // A shrinking corpus explains a rise and does not support it.
+  const shared = [
+    ...evidence,
+    ...(corpusShrank ? [{ kind: 'measurement-change', detail: `the corpus shrank from ${sizeOf(first)} to ${sizeOf(last)} item(s); dropping weak evidence raises mean quality without improving anything` }] : []),
+  ];
+
+  const rows = dimensions.map((dimension) => {
+    const series = snapshots.map((s) => (s.byDimension && Number.isFinite(s.byDimension[dimension]) ? s.byDimension[dimension] : null));
+    return {
+      dimension, ...QUALITY_DIMENSIONS[dimension],
+      series,
+      trend: verifiedImprovement({ subject: `evidence ${dimension}`, series, evidence: shared }),
+    };
+  });
+  const measured = rows.filter((r) => r.trend.state !== 'unknown');
+  const unverified = rows.filter((r) => r.trend.violatesInvariant);
+  return {
+    snapshots: snapshots.length, dimensions: rows, count: rows.length,
+    measurable: measured.length > 0,
+    corpusGrowth, corpusShrank,
+    corpusSizes: snapshots.map(sizeOf),
+    improving: rows.filter((r) => r.trend.state === 'verified-improvement').map((r) => r.dimension),
+    unverifiedImprovements: unverified.map((r) => r.dimension),
+    regressing: rows.filter((r) => r.trend.state === 'regressed').map((r) => r.dimension),
+    unknown: rows.filter((r) => r.trend.state === 'unknown').map((r) => r.dimension),
+    everyImprovementVerified: unverified.length === 0,
+    basis: measured.length
+      ? `${measured.length} of ${rows.length} quality dimensions moved measurably across ${snapshots.length} snapshot(s)${corpusShrank ? `, while the corpus SHRANK by ${Math.abs(corpusGrowth)} item(s)` : ''}.`
+      : `${snapshots.length} snapshot(s) supplied and no dimension carried a figure in more than one of them, so no quality trend can be derived.`,
+    now, informationalOnly: true, authorizes: false,
+    note: 'Evidence can be removed, and dropping the weakest items raises mean quality without improving anything. This trend watches the denominator as well as the figure: a corpus that shrank while quality rose is reported as a measurement change rather than as progress.',
+  };
+}
+
 module.exports = {
+  IMPROVEMENT_STATES, IMPROVEMENT_TOLERANCE, IMPROVEMENT_EVIDENCE_KINDS,
+  verifiedImprovement, improvementReport, evidenceQualityEvolution,
   SOURCE_KINDS, DEFAULT_MAX_AGE_MS, CONFIDENCE_BANDS, CONFIDENCE_METHOD,
   ESTIMATE_STATES, ESTABLISHED_FROM, INDICATIVE_FROM,
   interval, statisticalEstimate, confidenceEvolution,
