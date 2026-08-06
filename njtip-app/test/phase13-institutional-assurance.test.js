@@ -23,8 +23,14 @@ const GREEN_SOURCES = {
   capacity: { measured: ['staffing'], complete: true, shortfallCount: 0, unmeasurable: [] },
   decisions: { evaluationRate: 1, contradicted: [], unevaluated: [] },
   publicTrust: { composite: 'warranted', basis: 'every measured condition holds' },
-  learning: { learningRate: 1, correctedNotLearned: [] },
-  optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
+  learning: { learningRate: 1, measurable: true, correctedNotLearned: [] },
+  optimization: { findingCount: 0, bottleneckAuthorities: [], overCapacityAuthorities: [] },
+  // Phase 15, Part 15 added seven institutional-health panels; Part 20 added three domains.
+  legalAuthority: { count: 5, complete: true, blocking: [], completenessBasis: '5 of 5 critical capabilities have a reviewed legal authority' },
+  assumptionMaturity: { organizationalMaturity: 'A4', belowMinimum: [], verificationBacklog: [], maturityBasis: 'every assumption is at or above the maturity its criticality requires' },
+  controlEffectiveness: { effectivenessRate: 1, measurable: true, ineffective: [], effectivenessBasis: 'every observed control is effective' },
+  dependencyIntelligence: { count: 5, open: 0, weakestType: { type: 'organizational' } },
+  sustainability: { sustainable: true },
 };
 
 // --- Part 15: executive governance intelligence ----------------------------------------------------
@@ -34,7 +40,7 @@ test('every executive panel states its question and where it is derived from', (
     assert.ok(p.question && p.question.endsWith('?'), id);
     assert.ok(p.derivedFrom, id);
   }
-  assert.strictEqual(Object.keys(inst.EXECUTIVE_PANELS).length, 15);
+  assert.strictEqual(Object.keys(inst.EXECUTIVE_PANELS).length, 22);
 });
 
 test('an unmeasured panel is unmeasured, never satisfied', () => {
@@ -166,8 +172,8 @@ test('the operational layers are declared in order, with governance-performance 
 
 // --- Part 20: the institutional assurance framework ------------------------------------------------
 
-test('all eighteen domains are declared, each saying what unverified would mean', () => {
-  assert.strictEqual(Object.keys(inst.ASSURANCE_DOMAINS).length, 18);
+test('all twenty-one domains are declared, each saying what unverified would mean', () => {
+  assert.strictEqual(Object.keys(inst.ASSURANCE_DOMAINS).length, 21);
   for (const [id, d] of Object.entries(inst.ASSURANCE_DOMAINS)) {
     assert.ok(d.unverifiedMeans && d.unverifiedMeans.length > 30, id);
   }
@@ -176,7 +182,7 @@ test('all eighteen domains are declared, each saying what unverified would mean'
 test('an unmeasured domain is reported as unmeasured, never as verified', () => {
   const a = inst.institutionalAssurance({});
   assert.strictEqual(a.institutionallyReady, false);
-  assert.strictEqual(a.unmeasured.length, 18);
+  assert.strictEqual(a.unmeasured.length, 21);
   assert.strictEqual(a.verified, 0);
   assert.ok(a.domains.every((d) => d.state === 'unmeasured'));
   for (const b of a.blockers) assert.match(b, /unmeasured|failing/);
@@ -200,9 +206,12 @@ test('a fully verified estate is institutionally ready and still NOT AUTHORIZED'
     regulatory: { ready: true }, learning: { learningRate: 1, correctedNotLearned: [] },
     optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
     publicTrust: { composite: 'warranted' },
+    // Phase 15: legal authority, control effectiveness and sustainability.
+    legalAuthority: { complete: true }, controlEffectiveness: { measurable: true, ineffective: [] },
+    sustainability: { sustainable: true },
   });
   assert.strictEqual(a.institutionallyReady, true, a.blockers.join('; '));
-  assert.strictEqual(a.verified, 18);
+  assert.strictEqual(a.verified, 21);
   // The invariant that has survived every phase.
   assert.strictEqual(a.authorizationStatus, 'NOT AUTHORIZED');
   assert.strictEqual(a.authorizes, false);

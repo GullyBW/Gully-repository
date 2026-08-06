@@ -949,6 +949,17 @@ const INVARIANT_CLAUSES = {
     evaluatedFrom: 'the thirteen dependency kinds across the eleven categories',
     ifUnknown: 'One person, document, dataset, site, instrument or board may be able to stop a constitutional capability.',
   },
+  // --- Phase 15 -------------------------------------------------------------------------------
+  'undocumented-legal-authority': {
+    statement: 'No critical capability may depend upon an undocumented legal authority.',
+    evaluatedFrom: 'src/legislation/legal-authority.js — the recorded, reviewed legal basis for the capability',
+    ifUnknown: 'The capability is operating and nobody can say what permits it to. That is not a paperwork gap; it is a capability nobody can defend.',
+  },
+  'ineffective-detecting-control': {
+    statement: 'No critical capability may depend upon an ineffective detecting control.',
+    evaluatedFrom: 'src/assurance/control-effectiveness.js — observations of the control actually doing its job',
+    ifUnknown: 'A control runs, passes, and nobody has watched it work. It may miss everything it was written for and the build would stay green.',
+  },
 };
 
 // Clause 1: the assumptions this capability's contexts rest on.
@@ -991,10 +1002,18 @@ function verificationClause(capability, { controls = [] } = {}) {
   };
 }
 
-// Clause 3: is every institutional relationship this capability spans recorded and reachable?
+// Clause 3: is every institutional relationship this capability spans recorded and reachable — and
+// is its constitutional relationship DECLARED? Phase 15, Part 6 gave every bounded context an
+// explicit zone, trust boundary and collaboration constraint; a capability spanning a context whose
+// constitutional placement is undeclared has a relationship nobody has written down.
 function governanceRelationshipClause(capability) {
   const crossAgency = require('./cross-agency');
+  const contextMap = require('../architecture/context-map');
   const spec = CRITICAL_CAPABILITIES[capability];
+  const undeclaredContexts = [];
+  for (const ctx of spec.contexts) {
+    try { contextMap.zoneGovernance(ctx); } catch (_) { undeclaredContexts.push(ctx); }
+  }
   const institutions = new Set();
   for (const s of spec.subsystems) {
     try {
@@ -1011,19 +1030,66 @@ function governanceRelationshipClause(capability) {
     }
   }
   const unreachable = pairs.filter((p) => !p.reachable);
+  const zones = spec.contexts.filter((c) => !undeclaredContexts.includes(c)).map((c) => contextMap.zoneGovernance(c));
   return {
     clause: 'undocumented-governance-relationship', capability, institutions: list, pairs,
     unreachable: unreachable.map((p) => p.agencies.join(' ↔ ')),
-    holds: list.length > 0 && unreachable.length === 0,
-    unknown: list.length === 0,
-    reason: !list.length ? 'no institution is recorded as accountable for this capability'
-      : unreachable.length ? `${unreachable.length} institution pair(s) share responsibility with no recorded way to reach each other: ${unreachable.map((p) => p.agencies.join(' ↔ ')).join('; ')}`
-        : `${list.length} institution(s) share responsibility, and each pair has a recorded way to reach the other`,
+    undeclaredContexts,
+    constitutionalZones: [...new Set(zones.map((z) => z.zone))].sort(),
+    holds: list.length > 0 && unreachable.length === 0 && undeclaredContexts.length === 0,
+    unknown: list.length === 0 || undeclaredContexts.length > 0,
+    reason: undeclaredContexts.length ? `the constitutional placement of ${undeclaredContexts.join(', ')} is undeclared, so the relationship this capability has to the zones is unrecorded`
+      : !list.length ? 'no institution is recorded as accountable for this capability'
+        : unreachable.length ? `${unreachable.length} institution pair(s) share responsibility with no recorded way to reach each other: ${unreachable.map((p) => p.agencies.join(' ↔ ')).join('; ')}`
+          : `${list.length} institution(s) share responsibility across the ${[...new Set(zones.map((z) => z.zone))].sort().join(', ')} zone(s), and each pair has a recorded way to reach the other`,
+  };
+}
+
+// Clause 5 (Phase 15): is the legal basis recorded, current and reviewed?
+function legalAuthorityClause(capability, { authorities = null, controls = [], now = 0 } = {}) {
+  if (!authorities) {
+    return {
+      clause: 'undocumented-legal-authority', capability, holds: false, unknown: true, state: 'unknown',
+      reason: 'no legal authority registry was supplied — what permits this capability to operate is unknown, and unknown is not documented',
+    };
+  }
+  const state = authorities.state(capability, { now, controls });
+  return {
+    clause: 'undocumented-legal-authority', capability,
+    state: state.state, authorized: state.authorized,
+    holds: state.authorized, unknown: state.state === 'unknown',
+    reason: state.reason,
+  };
+}
+
+// Clause 6 (Phase 15): are the controls that detect this capability's dependencies actually
+// EFFECTIVE — as distinct from merely running and passing?
+function controlEffectivenessClause(capability, { observations = null, controls = [] } = {}) {
+  const ce = require('../assurance/control-effectiveness');
+  const detecting = [...new Set(Object.values(DEPENDENCY_KINDS).map((k) => k.detectedBy).filter(Boolean))].sort();
+  if (!observations) {
+    return {
+      clause: 'ineffective-detecting-control', capability, controls: detecting,
+      holds: false, unknown: true,
+      reason: `no performance evidence exists for the ${detecting.length} control(s) that detect this capability's dependencies. They run and pass; nobody has watched any of them work.`,
+    };
+  }
+  const rows = detecting.map((c) => ce.controlEffectiveness(c, { register: observations }));
+  const unknown = rows.filter((r) => r.state === 'unknown');
+  const failing = rows.filter((r) => r.state === 'ineffective' || r.state === 'degraded');
+  return {
+    clause: 'ineffective-detecting-control', capability, controls: detecting,
+    unobserved: unknown.map((r) => r.control), ineffective: failing.map((r) => r.control),
+    holds: unknown.length === 0 && failing.length === 0,
+    unknown: unknown.length > 0,
+    reason: unknown.length ? `${unknown.length} detecting control(s) have no performance evidence: ${unknown.map((r) => r.control).join(', ')}`
+      : failing.length ? `${failing.length} detecting control(s) are observed working badly: ${failing.map((r) => `${r.control} (${r.state})`).join(', ')}`
+        : `all ${rows.length} detecting controls are observed effective`,
   };
 }
 
 // The invariant, evaluated across all four clauses for every critical capability.
-function evaluateGlobalInvariant({ assumptions = null, continuity = null, controls = [], instruments = null, regions = ['bw-central', 'bw-south', 'bw-north'], now = 0 } = {}) {
+function evaluateGlobalInvariant({ assumptions = null, continuity = null, controls = [], instruments = null, authorities = null, observations = null, regions = ['bw-central', 'bw-south', 'bw-north'], now = 0 } = {}) {
   const structural = evaluate({ continuity, controls, regions, instruments });
   const capabilities = Object.keys(CRITICAL_CAPABILITIES).sort().map((id) => {
     const spec = CRITICAL_CAPABILITIES[id];
@@ -1032,6 +1098,8 @@ function evaluateGlobalInvariant({ assumptions = null, continuity = null, contro
       assumptionClause(id, { assumptions, controls, now }),
       verificationClause(id, { controls }),
       governanceRelationshipClause(id),
+      legalAuthorityClause(id, { authorities, controls, now }),
+      controlEffectivenessClause(id, { observations, controls }),
       {
         clause: 'single-point-of-organizational-failure', capability: id,
         holds: structuralRow.resilient, unknown: false,
@@ -1055,7 +1123,8 @@ function evaluateGlobalInvariant({ assumptions = null, continuity = null, contro
     failingCapabilities: capabilities.filter((c) => c.failingClauses.includes(clause)).map((c) => c.capability),
   }));
   return {
-    invariant: 'No critical institutional capability may depend upon an unvalidated assumption, an unverified dependency, an undocumented governance relationship, or a single point of organizational failure.',
+    invariant: 'No critical institutional capability may depend upon an unverified assumption, an undocumented legal authority, an ineffective detecting control, an undeclared constitutional relationship, or a single point of organizational failure.',
+    supersedes: 'The four-clause invariant of ADR-0009. Its clauses are preserved verbatim; Phase 15 adds legal authority and control effectiveness, and extends the governance-relationship clause to require a declared constitutional placement.',
     clauses: byClause, capabilities,
     violations: violations.map((c) => ({ capability: c.capability, constitutional: c.constitutional, failingClauses: c.failingClauses, lossMeans: c.lossMeans })),
     violationCount: violations.length,
@@ -1072,8 +1141,8 @@ function evaluateGlobalInvariant({ assumptions = null, continuity = null, contro
 // The same acceptance mechanism, extended to cover a failing CLAUSE rather than only a single
 // dependency kind. Rationale, owner and expiry are all required; constitutional capabilities remain
 // the Oversight Board's alone.
-function globalInvariantReport({ assumptions = null, continuity = null, controls = [], instruments = null, acceptances = null, regions = ['bw-central', 'bw-south', 'bw-north'], now = 0 } = {}) {
-  const evaluation = evaluateGlobalInvariant({ assumptions, continuity, controls, instruments, regions, now });
+function globalInvariantReport({ assumptions = null, continuity = null, controls = [], instruments = null, authorities = null, observations = null, acceptances = null, regions = ['bw-central', 'bw-south', 'bw-north'], now = 0 } = {}) {
+  const evaluation = evaluateGlobalInvariant({ assumptions, continuity, controls, instruments, authorities, observations, regions, now });
   const accepted = acceptances ? acceptances.activeClauses({ now }) : [];
   const acceptedKeys = new Set(accepted.map((a) => `${a.capability}|${a.clause}`));
   const unaccepted = evaluation.violations.flatMap((vi) => vi.failingClauses
@@ -1158,6 +1227,7 @@ module.exports = {
   RISK_PERSPECTIVES, CITIZEN_FACING, assertConstitutionalPrimacy, multiPerspectiveRisk,
   RISK_FACTORS, KIND_LIKELIHOOD, KIND_RECOVERY, scoreDependency, riskPrioritisation,
   INVARIANT_CLAUSES, assumptionClause, verificationClause, governanceRelationshipClause,
+  legalAuthorityClause, controlEffectivenessClause,
   evaluateGlobalInvariant, globalInvariantReport,
   evaluate, recommendations, ResilienceAcceptance, report,
 };

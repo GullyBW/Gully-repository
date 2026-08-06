@@ -8,6 +8,8 @@ const ir = require('../src/governance/institutional-resilience');
 const inst = require('../src/assurance/institutional');
 const own = require('../src/governance/ownership');
 const asm = require('../src/architecture/assumptions');
+const { LegalAuthorityRegistry } = require('../src/legislation/legal-authority');
+const ce = require('../src/assurance/control-effectiveness');
 
 const DAY = 24 * 3600_000;
 const YEAR = 365 * DAY;
@@ -103,12 +105,37 @@ function evidencedEstate() {
     reviewCadenceDays: 3650, expiresAt: NOW + 10 * YEAR, verificationMethod: 'executable-check', confidence: 'high',
   });
   assumptions.recordVerification('CUSTODY-SOUND', { holds: true, by: 'Assurance', at: NOW });
-  return { continuity, assumptions };
+
+  // Phase 15 widened the invariant to six clauses. The two new ones need their own evidence: a
+  // declared and reviewed legal basis, and observations of the detecting controls actually working.
+  const authorities = new LegalAuthorityRegistry({ clock: () => NOW });
+  for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) {
+    authorities.declare(capability, {
+      kind: 'legislation', instrument: 'an instrument recorded by the institution',
+      approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 3650, expiresAt: NOW + 10 * YEAR,
+      evidence: ['APP-FIT-LEGISLATIVE-IMPACT'], scope: 'the capability as declared',
+      declaredBy: 'Legal Informatics Team', at: NOW - DAY,
+    });
+    authorities.review(capability, { by: 'Attorney General Chambers', at: NOW });
+  }
+  const observations = new ce.ControlObservationRegister({ clock: () => NOW });
+  for (const control of [...new Set(Object.values(ir.DEPENDENCY_KINDS).map((k) => k.detectedBy).filter(Boolean))]) {
+    for (let i = 0; i < 20; i += 1) {
+      const occurredAt = NOW - (100 - i) * DAY;
+      observations.record(control, {
+        outcome: 'true-positive', occurredAt, detectedAt: occurredAt + 60_000,
+        acknowledgedAt: occurredAt + 120_000, acknowledgedBy: 'Duty Officer',
+        remediatedAt: occurredAt + 3600_000, observedBy: 'Operations Review Board',
+      });
+    }
+  }
+  return { continuity, assumptions, authorities, observations };
 }
 
-test('the invariant has four clauses, each saying where it is evaluated from', () => {
-  assert.strictEqual(Object.keys(ir.INVARIANT_CLAUSES).length, 4);
-  for (const required of ['unvalidated-assumption', 'unverified-dependency', 'undocumented-governance-relationship', 'single-point-of-organizational-failure']) {
+test('the invariant has six clauses, each saying where it is evaluated from', () => {
+  assert.strictEqual(Object.keys(ir.INVARIANT_CLAUSES).length, 6);
+  for (const required of ['unvalidated-assumption', 'unverified-dependency', 'undocumented-governance-relationship', 'single-point-of-organizational-failure',
+    'undocumented-legal-authority', 'ineffective-detecting-control']) {
     assert.ok(ir.INVARIANT_CLAUSES[required], required);
   }
   for (const [id, c] of Object.entries(ir.INVARIANT_CLAUSES)) {
@@ -145,14 +172,63 @@ test('each clause can fail on its own', () => {
   assert.strictEqual(ir.verificationClause('evidence-custody', { controls: controls.filter((c) => c.id !== spec.detectedBy) }).holds, false);
 });
 
-test('a fully evidenced constitutional capability satisfies all four clauses', () => {
-  const { continuity, assumptions } = evidencedEstate();
-  const g = ir.evaluateGlobalInvariant({ assumptions, continuity, controls: controlsAll(), now: NOW });
+test('a fully evidenced constitutional capability satisfies all six clauses', () => {
+  const { continuity, assumptions, authorities, observations } = evidencedEstate();
+  const g = ir.evaluateGlobalInvariant({ assumptions, continuity, authorities, observations, controls: controlsAll(), now: NOW });
   const custody = g.capabilities.find((c) => c.capability === 'evidence-custody');
   assert.strictEqual(custody.holds, true, custody.clauses.filter((c) => !c.holds).map((c) => `${c.clause}: ${c.reason}`).join('; '));
   // …and the estate as a whole still does not, because other capabilities genuinely fail.
   assert.strictEqual(g.holds, false);
-  assert.strictEqual(g.clauses.length, 4);
+  assert.strictEqual(g.clauses.length, 6);
+});
+
+test('the two Phase 15 clauses report unknown before they report failure', () => {
+  const blind = ir.evaluateGlobalInvariant({ controls: [], now: NOW });
+  for (const cap of blind.capabilities) {
+    const legal = cap.clauses.find((c) => c.clause === 'undocumented-legal-authority');
+    assert.strictEqual(legal.holds, false, cap.capability);
+    assert.strictEqual(legal.unknown, true, cap.capability);
+    const effective = cap.clauses.find((c) => c.clause === 'ineffective-detecting-control');
+    assert.strictEqual(effective.holds, false, cap.capability);
+    assert.strictEqual(effective.unknown, true, cap.capability);
+    assert.ok(effective.controls.length, cap.capability);
+  }
+});
+
+test('a declared but unreviewed legal authority does not satisfy the legal clause', () => {
+  const authorities = new LegalAuthorityRegistry({ clock: () => NOW });
+  authorities.declare('evidence-custody', {
+    kind: 'legislation', instrument: 'an instrument recorded by the institution',
+    approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 3650, expiresAt: NOW + 10 * YEAR,
+    evidence: ['APP-FIT-LEGISLATIVE-IMPACT'], scope: 'the capability as declared',
+    declaredBy: 'Legal Informatics Team', at: NOW - DAY,
+  });
+  const declared = ir.legalAuthorityClause('evidence-custody', { authorities, controls: controlsAll(), now: NOW });
+  assert.strictEqual(declared.holds, false);
+  assert.strictEqual(declared.state, 'declared');
+  // Recorded-but-unconfirmed is not the same finding as nobody having looked.
+  assert.strictEqual(declared.unknown, false);
+  authorities.review('evidence-custody', { by: 'Attorney General Chambers', at: NOW });
+  assert.strictEqual(ir.legalAuthorityClause('evidence-custody', { authorities, controls: controlsAll(), now: NOW }).holds, true);
+});
+
+test('controls observed missing real conditions fail the effectiveness clause while the build stays green', () => {
+  const observations = new ce.ControlObservationRegister({ clock: () => NOW });
+  for (const control of [...new Set(Object.values(ir.DEPENDENCY_KINDS).map((k) => k.detectedBy).filter(Boolean))]) {
+    for (let i = 0; i < 20; i += 1) {
+      const occurredAt = NOW - (100 - i) * DAY;
+      if (i < 6) { observations.record(control, { outcome: 'false-negative', occurredAt, observedBy: 'ORB' }); continue; }
+      observations.record(control, {
+        outcome: 'true-positive', occurredAt, detectedAt: occurredAt + 60_000,
+        acknowledgedAt: occurredAt + 120_000, acknowledgedBy: 'Duty Officer',
+        remediatedAt: occurredAt + 3600_000, observedBy: 'ORB',
+      });
+    }
+  }
+  const clause = ir.controlEffectivenessClause('evidence-custody', { observations, controls: controlsAll() });
+  assert.strictEqual(clause.holds, false);
+  assert.strictEqual(clause.unknown, false);
+  assert.ok(clause.ineffective.length);
 });
 
 test('a failing clause is accepted only by a named authority, with a rationale and an expiry', () => {
@@ -201,11 +277,19 @@ const GREEN_PANELS = {
   capacity: { measured: ['staffing'], complete: true, shortfallCount: 0, unmeasurable: [] },
   decisions: { evaluationRate: 1, contradicted: [], unevaluated: [] },
   publicTrust: { composite: 'warranted', basis: 'every measured condition holds' },
+  // Phase 15, Part 15 added seven institutional-health panels.
+  optimization: { findingCount: 0, bottleneckAuthorities: [], overCapacityAuthorities: [] },
+  legalAuthority: { count: 5, complete: true, completenessBasis: '5 of 5 capabilities have a reviewed legal authority' },
+  assumptionMaturity: { organizationalMaturity: 'A4', belowMinimum: [], maturityBasis: 'every assumption is at or above its required maturity' },
+  controlEffectiveness: { effectivenessRate: 1, measurable: true, ineffective: [], effectivenessBasis: 'every observed control is effective' },
+  dependencyIntelligence: { count: 5, open: 0, weakestType: { type: 'organizational' } },
+  learning: { learningRate: 1, measurable: true, correctedNotLearned: [] },
 };
 
-test('fifteen executive panels, all derived, none enterable by hand', () => {
-  assert.strictEqual(Object.keys(inst.EXECUTIVE_PANELS).length, 15);
-  for (const required of ['strategicReadiness', 'organizationalMaturity', 'operationalSustainability', 'decisionQuality', 'publicTrust']) {
+test('twenty-two executive panels, all derived, none enterable by hand', () => {
+  assert.strictEqual(Object.keys(inst.EXECUTIVE_PANELS).length, 22);
+  for (const required of ['strategicReadiness', 'organizationalMaturity', 'operationalSustainability', 'decisionQuality', 'publicTrust',
+    'governanceHealth', 'legalAuthorityCompleteness', 'assumptionMaturity', 'controlEffectiveness', 'dependencyResilience', 'organizationalLearning', 'documentationIntegrity']) {
     assert.ok(inst.EXECUTIVE_PANELS[required], required);
   }
   const injected = inst.executiveGovernanceIntelligence({ publicTrust: 1, decisionQuality: 0.99 });
@@ -226,13 +310,14 @@ test('a failing strategic source turns its own panel red rather than being avera
   assert.strictEqual(d.sound, false);
 });
 
-test('eighteen assurance domains, each saying what unverified would mean', () => {
-  assert.strictEqual(Object.keys(inst.ASSURANCE_DOMAINS).length, 18);
-  for (const required of ['dependencyResilience', 'strategicReadiness', 'learningMaturity', 'governanceAdaptability', 'publicTrustIndicators']) {
+test('twenty-one assurance domains, each saying what unverified would mean', () => {
+  assert.strictEqual(Object.keys(inst.ASSURANCE_DOMAINS).length, 21);
+  for (const required of ['dependencyResilience', 'strategicReadiness', 'learningMaturity', 'governanceAdaptability', 'publicTrustIndicators',
+    'legalAuthority', 'controlEffectiveness', 'institutionalSustainability']) {
     assert.ok(inst.ASSURANCE_DOMAINS[required], required);
   }
   for (const [id, d] of Object.entries(inst.ASSURANCE_DOMAINS)) assert.ok(d.unverifiedMeans.length > 30, id);
-  assert.strictEqual(inst.institutionalAssurance({}).unmeasured.length, 18);
+  assert.strictEqual(inst.institutionalAssurance({}).unmeasured.length, 21);
 });
 
 test('an institution that corrects without learning fails learning maturity', () => {
@@ -241,7 +326,7 @@ test('an institution that corrects without learning fails learning maturity', ()
   assert.ok(!a.unmeasured.includes('learningMaturity'));
 });
 
-test('eighteen verified domains are institutionally ready and still NOT AUTHORIZED', () => {
+test('twenty-one verified domains are institutionally ready and still NOT AUTHORIZED', () => {
   const a = inst.institutionalAssurance({
     drift: { clean: true }, security: true, privacy: true,
     governanceMaturity: { level: 5 }, documentation: { sound: true },
@@ -252,9 +337,12 @@ test('eighteen verified domains are institutionally ready and still NOT AUTHORIZ
     learning: { learningRate: 1, correctedNotLearned: [] },
     optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
     publicTrust: { composite: 'warranted' },
+    // Phase 15: legal authority, control effectiveness and sustainability.
+    legalAuthority: { complete: true }, controlEffectiveness: { measurable: true, ineffective: [] },
+    sustainability: { sustainable: true },
   });
   assert.strictEqual(a.institutionallyReady, true, a.blockers.join('; '));
-  assert.strictEqual(a.verified, 18);
+  assert.strictEqual(a.verified, 21);
   // The invariant that has survived every phase.
   assert.strictEqual(a.authorizationStatus, 'NOT AUTHORIZED');
   assert.strictEqual(a.authorizes, false);

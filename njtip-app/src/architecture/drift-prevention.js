@@ -384,6 +384,16 @@ const FORECAST_DIMENSIONS = {
   organizationalLearning: { question: 'How often does a corrected failure change what people can do next time?', unit: 'fraction of incidents learned from' },
   policyEffectiveness: { question: 'How much of the operating policy rests on a recorded decision?', unit: 'fraction of declared stances with an ADR' },
   operationalStability: { question: 'How steady is the estate\'s control performance over time?', unit: 'fraction of controls holding, averaged over the window' },
+  // --- Adaptive governance forecasting (Phase 15, Part 16) --------------------------------------
+  // Six workload forecasts. These answer "how much work is coming?" rather than "how well are we
+  // doing?", and they are normalised against declared capacity so the figure is a fraction of what
+  // the institution can actually absorb rather than a raw count nobody can act on.
+  governanceWorkload: { question: 'How much of the available governance capacity do the coming reviews consume?', unit: 'fraction of declared capacity' },
+  reviewBottlenecks: { question: 'What share of authorities are carrying more than they can review?', unit: 'fraction of authorities within capacity' },
+  assumptionVerificationDemand: { question: 'What share of assumptions are currently within their required verification frequency?', unit: 'fraction within cadence' },
+  policyMaintenanceEffort: { question: 'What share of declared operating rules rest on a recorded decision?', unit: 'fraction with an ADR' },
+  auditPreparationEffort: { question: 'What share of the evidence an audit would ask for currently resolves?', unit: 'fraction resolving' },
+  institutionalResilienceTrend: { question: 'Is the share of capabilities with a validated alternative rising or falling?', unit: 'fraction of capabilities resilient, over the supplied history' },
 };
 
 // The interval. Deliberately simple and deliberately wide.
@@ -407,7 +417,8 @@ function forecastInterval(point, observations) {
 
 function adaptiveGovernanceAnalytics({
   controls = [], governanceMaturity = null, resilience = null, learning = null,
-  stabilityHistory = [], now = 0,
+  stabilityHistory = [], optimization = null, assumptionMaturity = null, documentation = null,
+  resilienceHistory = [], now = 0,
 } = {}) {
   const multiRegion = require('../twin2/multi-region');
   const forecast = (dimension, point, observations, basis) => ({
@@ -452,7 +463,41 @@ function adaptiveGovernanceAnalytics({
       `mean control pass rate over ${stabilityHistory.length} recorded period(s)`)
     : forecast('operationalStability', null, 0, 'no history was supplied — a stability figure over one observation is a reading, not a trend');
 
-  const forecasts = [maturity, audit, resilient, learned, policy, stability];
+  // --- Part 16: six workload forecasts, each normalised against declared capacity --------------
+  const load = optimization && optimization.load ? optimization.load : null;
+  const governanceWorkload = load && load.approvalLoad.length
+    ? forecast('governanceWorkload',
+      Math.min(1, load.approvalLoad.reduce((a, r) => a + Math.min(1, r.reviewsPerYear / r.capacityPerYear), 0) / load.approvalLoad.length),
+      load.approvalLoad.length,
+      `${load.approvalLoad.length} approving authorities; the figure is the mean share of each one's declared annual capacity that its reviews consume`)
+    : forecast('governanceWorkload', null, 0, 'no governance load analysis was supplied');
+  const reviewBottlenecks = load && load.approvalLoad.length
+    ? forecast('reviewBottlenecks', load.approvalLoad.filter((r) => !r.overCapacity).length / load.approvalLoad.length, load.approvalLoad.length,
+      `${load.approvalLoad.filter((r) => r.overCapacity).length} of ${load.approvalLoad.length} authorities owe more reviews than a monthly board can perform`)
+    : forecast('reviewBottlenecks', null, 0, 'no governance load analysis was supplied');
+  const assumptionDemand = assumptionMaturity && assumptionMaturity.assumptions
+    ? forecast('assumptionVerificationDemand',
+      (assumptionMaturity.assumptions.length - assumptionMaturity.verificationBacklog.length) / assumptionMaturity.assumptions.length,
+      assumptionMaturity.assumptions.length,
+      `${assumptionMaturity.verificationBacklog.length} of ${assumptionMaturity.assumptions.length} assumptions are overdue for verification or have never been verified`)
+    : forecast('assumptionVerificationDemand', null, 0, 'no assumption maturity report was supplied');
+  const policyEffort = stances.length
+    ? forecast('policyMaintenanceEffort', withAdr / stances.length, stances.length,
+      `${stances.length - withAdr} of ${stances.length} declared stances would need a decision recorded before they could be defended`)
+    : forecast('policyMaintenanceEffort', null, 0, 'no consistency stance is declared');
+  const auditEffort = documentation && documentation.verification
+    ? forecast('auditPreparationEffort',
+      documentation.verification.claims ? (documentation.verification.claims - documentation.verification.unresolvedCount) / documentation.verification.claims : null,
+      documentation.verification.claims || 0,
+      `${documentation.verification.unresolvedCount} of ${documentation.verification.claims} governed claims do not currently resolve`)
+    : forecast('auditPreparationEffort', null, 0, 'no documentation verification was supplied');
+  const resilienceTrend = resilienceHistory.length >= 2
+    ? forecast('institutionalResilienceTrend', resilienceHistory[resilienceHistory.length - 1], resilienceHistory.length,
+      `${resilienceHistory[0]} → ${resilienceHistory[resilienceHistory.length - 1]} across ${resilienceHistory.length} recorded period(s); a trend needs at least two`)
+    : forecast('institutionalResilienceTrend', null, resilienceHistory.length, 'fewer than two recorded periods — one observation is a reading, not a trend');
+
+  const forecasts = [maturity, audit, resilient, learned, policy, stability,
+    governanceWorkload, reviewBottlenecks, assumptionDemand, policyEffort, auditEffort, resilienceTrend];
   const unconstrained = forecasts.filter((f) => !f.constrained);
   return {
     forecasts, count: forecasts.length,

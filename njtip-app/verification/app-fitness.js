@@ -5023,9 +5023,16 @@ module.exports = [
       capacity: { measured: ['staffing'], complete: true, shortfallCount: 0, unmeasurable: [] },
       decisions: { evaluationRate: 1, contradicted: [], unevaluated: [] },
       publicTrust: { composite: 'warranted', basis: 'every measured condition holds' },
+      // Phase 15, Part 15 added seven institutional-health panels.
+      optimization: { findingCount: 0, bottleneckAuthorities: [], overCapacityAuthorities: [] },
+      legalAuthority: { count: 5, complete: true, completenessBasis: '5 of 5 capabilities have a reviewed legal authority' },
+      assumptionMaturity: { organizationalMaturity: 'A4', belowMinimum: [], maturityBasis: 'every assumption is at or above its required maturity' },
+      controlEffectiveness: { effectivenessRate: 1, measurable: true, ineffective: [], effectivenessBasis: 'every observed control is effective' },
+      dependencyIntelligence: { count: 5, open: 0, weakestType: { type: 'organizational' } },
+      learning: { learningRate: 1, measurable: true, correctedNotLearned: [] },
     });
     if (!wired.sound) v.push('a fully evidenced executive dashboard was not sound: ' + wired.unsound.concat(wired.unmeasured).join(', '));
-    if (wired.authorizationStatus !== 'NOT AUTHORIZED') v.push('fifteen green executive panels produced an authorization');
+    if (wired.authorizationStatus !== 'NOT AUTHORIZED') v.push('twenty-two green executive panels produced an authorization');
     if (wired.authorizes !== false) v.push('the executive dashboard claims authority');
 
     // --- Part 19: the improvement loop must close ---------------------------------------------
@@ -5101,10 +5108,13 @@ module.exports = [
       regulatory: { ready: true }, learning: { learningRate: 1, correctedNotLearned: [] },
       optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
       publicTrust: { composite: 'warranted' },
+      // Phase 15 added three: legal authority, control effectiveness and sustainability.
+      legalAuthority: { complete: true }, controlEffectiveness: { measurable: true, ineffective: [] },
+      sustainability: { sustainable: true },
     });
     if (!green.institutionallyReady) v.push('a fully verified estate was not reported institutionally ready: ' + green.blockers.join('; '));
-    // THE INVARIANT. Eighteen verified domains still print NOT AUTHORIZED.
-    if (green.authorizationStatus !== 'NOT AUTHORIZED') v.push('eighteen verified assurance domains produced an authorization');
+    // THE INVARIANT. Twenty-one verified domains still print NOT AUTHORIZED.
+    if (green.authorizationStatus !== 'NOT AUTHORIZED') v.push('twenty-one verified assurance domains produced an authorization');
     if (green.authorizes !== false || green.derivedFromReadiness !== false) v.push('the institutional assurance framework claims to derive authorization');
     if (!/does not replace human authority/.test(green.note)) v.push('the framework does not state that it never replaces human authority');
     if (green.failClosed !== true) v.push('the institutional assurance framework is not fail-closed');
@@ -6999,10 +7009,13 @@ module.exports = [
       ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
     ];
 
-    // --- Six forecast dimensions, each with a question and a unit ----------------------------
-    for (const required of ['governanceMaturity', 'auditReadiness', 'institutionalResilience', 'organizationalLearning', 'policyEffectiveness', 'operationalStability']) {
+    // --- Twelve forecast dimensions, each with a question and a unit -------------------------
+    // Six ask how well the institution is doing; Phase 15 added six asking how much work is coming.
+    for (const required of ['governanceMaturity', 'auditReadiness', 'institutionalResilience', 'organizationalLearning', 'policyEffectiveness', 'operationalStability',
+      'governanceWorkload', 'reviewBottlenecks', 'assumptionVerificationDemand', 'policyMaintenanceEffort', 'auditPreparationEffort', 'institutionalResilienceTrend']) {
       if (!dp.FORECAST_DIMENSIONS[required]) v.push(`forecast dimension '${required}' is not predicted`);
     }
+    if (Object.keys(dp.FORECAST_DIMENSIONS).length !== 12) v.push('the analytics do not carry all twelve forecast dimensions');
     for (const [id, d] of Object.entries(dp.FORECAST_DIMENSIONS)) {
       if (!d.question || !d.question.endsWith('?')) v.push(`forecast dimension '${id}' states no question`);
       if (!d.unit) v.push(`forecast dimension '${id}' states no unit`);
@@ -7026,7 +7039,7 @@ module.exports = [
 
     // --- With nothing supplied, most forecasts are unforecastable rather than optimistic -----
     const blind = dp.adaptiveGovernanceAnalytics({ now: 0 });
-    if (blind.forecasts.length !== 6) v.push('not all six forecasts were produced');
+    if (blind.forecasts.length !== 12) v.push('not all twelve forecasts were produced');
     for (const f of blind.forecasts) {
       if (!f.basis) v.push(`forecast '${f.forecast}' states no basis`);
       if (f.derived !== true) v.push(`forecast '${f.forecast}' is not marked as derived`);
@@ -7057,9 +7070,44 @@ module.exports = [
     if (!/rest on too few observations/.test(full.note)) v.push('the report does not warn that some forecasts are unconstrained');
     if (full.authorizes !== false) v.push('the adaptive analytics report claims authority');
 
+    // --- Part 16: the six workload forecasts, each unforecastable until its source arrives ---
+    // These answer "how much work is coming", which is a different question from "how are we
+    // doing" — and a workload figure invented with no capacity record would be the worst kind of
+    // planning input, so each stays null until the record that feeds it is supplied.
+    const workload = ['governanceWorkload', 'reviewBottlenecks', 'assumptionVerificationDemand', 'auditPreparationEffort', 'institutionalResilienceTrend'];
+    for (const id of workload) {
+      if (byId[id].point !== null) v.push(`workload forecast '${id}' produced a figure with no source supplied`);
+      if (byId[id].constrained) v.push(`workload forecast '${id}' reported itself constrained with no observations`);
+    }
+    // policyMaintenanceEffort reads the declared consistency stances, which always exist.
+    if (byId.policyMaintenanceEffort.point === null) v.push('policy maintenance effort was not derived from the declared stances');
+
+    const opt = require('../src/governance/optimization').governanceOptimization({ controls, now: 0 });
+    const asm = require('../src/architecture/assumptions');
+    const doc = require('../src/architecture/documentation-assurance');
+    const registry = new asm.AssumptionRegistry({ clock: () => 0 });
+    asm.seedPlatformAssumptions(registry, { at: 0 });
+    const loaded = dp.adaptiveGovernanceAnalytics({
+      controls, optimization: opt,
+      assumptionMaturity: registry.maturityReport({ now: 0, controls }),
+      documentation: doc.report({ controls }),
+      resilienceHistory: [0.2, 0.3, 0.4],
+      now: 0,
+    });
+    const loadedById = Object.fromEntries(loaded.forecasts.map((f) => [f.forecast, f]));
+    for (const id of ['governanceWorkload', 'reviewBottlenecks', 'assumptionVerificationDemand', 'institutionalResilienceTrend']) {
+      if (loadedById[id].point === null) v.push(`workload forecast '${id}' produced no figure with its source supplied — the forecast is unreachable`);
+      if (loadedById[id].point < 0 || loadedById[id].point > 1) v.push(`workload forecast '${id}' escaped [0,1]: ${loadedById[id].point}`);
+    }
+    // A trend needs at least two periods. One observation is a reading.
+    const oneReading = dp.adaptiveGovernanceAnalytics({ controls, resilienceHistory: [0.4], now: 0 });
+    const trend = oneReading.forecasts.find((f) => f.forecast === 'institutionalResilienceTrend');
+    if (trend.point !== null) v.push('a trend was reported from a single observation');
+    if (!/a reading, not a trend/.test(trend.basis)) v.push('a single-observation trend does not say why it is not a trend');
+
     // --- And it is wired into the governance analytics the platform already ran --------------
     const analytics = dp.governanceAnalytics({ controls, now: 0 });
-    if (!analytics.adaptive || analytics.adaptive.forecasts.length !== 6) v.push('the adaptive forecasts are not carried by the governance analytics report');
+    if (!analytics.adaptive || analytics.adaptive.forecasts.length !== 12) v.push('the adaptive forecasts are not carried by the governance analytics report');
   }),
 
   fit('APP-FIT-REGULATORY-FORECAST', 'A forecast about a change that has not happened can never move an obligation into a compliance state', (v) => {
@@ -7123,10 +7171,12 @@ module.exports = [
     if (!/nobody has looked/.test(empty.readinessBasis)) v.push('an empty forecast register was not reported as nobody having looked');
   }),
 
-  fit('APP-FIT-GLOBAL-INVARIANT', 'No critical capability rests on an unvalidated assumption, an unverified dependency, an undocumented governance relationship, or a single point of organizational failure', (v) => {
+  fit('APP-FIT-GLOBAL-INVARIANT', 'No critical capability rests on an unverified assumption, an undocumented legal authority, an ineffective detecting control, an undeclared constitutional relationship, or a single point of organizational failure', (v) => {
     const ir = require('../src/governance/institutional-resilience');
     const own = require('../src/governance/ownership');
     const asm = require('../src/architecture/assumptions');
+    const { LegalAuthorityRegistry } = require('../src/legislation/legal-authority');
+    const ce = require('../src/assurance/control-effectiveness');
     const controls = [
       ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
       ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
@@ -7134,11 +7184,13 @@ module.exports = [
     ];
     const DAY = 24 * 3600_000, YEAR = 365 * DAY, NOW = 400 * DAY;
 
-    // --- Four clauses, each naming where it is evaluated from and what an unknown costs -------
-    for (const required of ['unvalidated-assumption', 'unverified-dependency', 'undocumented-governance-relationship', 'single-point-of-organizational-failure']) {
+    // --- Six clauses, each naming where it is evaluated from and what an unknown costs --------
+    // Phase 15 widened the invariant. The two new clauses are the two the platform could not answer
+    // at all before: what legally permits a capability, and whether the controls that watch it work.
+    for (const required of ['unvalidated-assumption', 'unverified-dependency', 'undocumented-governance-relationship', 'single-point-of-organizational-failure', 'undocumented-legal-authority', 'ineffective-detecting-control']) {
       if (!ir.INVARIANT_CLAUSES[required]) v.push(`invariant clause '${required}' is not evaluated`);
     }
-    if (Object.keys(ir.INVARIANT_CLAUSES).length !== 4) v.push('the global invariant does not have exactly four clauses');
+    if (Object.keys(ir.INVARIANT_CLAUSES).length !== 6) v.push('the global invariant does not have exactly six clauses');
     for (const [id, c] of Object.entries(ir.INVARIANT_CLAUSES)) {
       if (!c.statement || !c.evaluatedFrom || !c.ifUnknown) v.push(`invariant clause '${id}' does not state itself, where it is evaluated from, or what an unknown means`);
     }
@@ -7152,6 +7204,14 @@ module.exports = [
       if (assumption.holds || !assumption.unknown) v.push(`'${cap.capability}': an unknown assumption position was not treated as a failure`);
       const verification = cap.clauses.find((c) => c.clause === 'unverified-dependency');
       if (verification.holds) v.push(`'${cap.capability}': every dependency was reported verified with no control results at all`);
+      // The two Phase 15 clauses. With no register supplied, each must report UNKNOWN — not absent,
+      // and certainly not satisfied. An unsupplied legal register is not evidence of legality.
+      const legal = cap.clauses.find((c) => c.clause === 'undocumented-legal-authority');
+      if (legal.holds || !legal.unknown) v.push(`'${cap.capability}': a capability with no recorded legal authority satisfied the legal clause`);
+      if (legal.state !== 'unknown') v.push(`'${cap.capability}': an unsupplied legal register did not report state 'unknown'`);
+      const effective = cap.clauses.find((c) => c.clause === 'ineffective-detecting-control');
+      if (effective.holds || !effective.unknown) v.push(`'${cap.capability}': controls nobody has ever observed were reported as effective`);
+      if (!effective.controls.length) v.push(`'${cap.capability}': the effectiveness clause names no detecting control`);
     }
     if (blind.authorizes !== false) v.push('the global invariant report claims authority');
 
@@ -7170,12 +7230,66 @@ module.exports = [
     if (ir.verificationClause('evidence-custody', { controls: controls.filter((c) => c.id !== oneKind[1].detectedBy) }).holds) {
       v.push('a dependency whose detecting control did not run satisfied the verification clause');
     }
-    // Governance relationship clause: it holds on the real estate, so both directions exist.
+    // Governance relationship clause: it holds on the real estate, so both directions exist. Phase 15
+    // added the constitutional half — every context it spans must have a DECLARED zone.
     const rel = ir.governanceRelationshipClause('evidence-custody');
     if (!rel.holds) v.push(`the governance relationship clause fails on the real estate: ${rel.reason}`);
     if (!rel.institutions.length) v.push('no institution was resolved for a capability');
+    if (!rel.constitutionalZones.length) v.push('the governance relationship clause does not report which constitutional zone(s) the capability spans');
+    if (rel.undeclaredContexts.length) v.push(`a context with no declared constitutional placement reached the invariant: ${rel.undeclaredContexts.join(', ')}`);
 
-    // --- THE SUCCESS PATH: a fully evidenced capability satisfies all four clauses -----------
+    // Legal authority clause: a declaration that is not yet reviewed does NOT satisfy it, and an
+    // expired one stops satisfying it with nobody withdrawing anything.
+    const unreviewed = new LegalAuthorityRegistry({ clock: () => NOW });
+    const declare = (reg, capability, expiresAt) => reg.declare(capability, {
+      kind: 'legislation', instrument: 'an instrument recorded by the institution',
+      approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 3650, expiresAt,
+      evidence: ['APP-FIT-LEGISLATIVE-IMPACT'], scope: 'the capability as declared',
+      declaredBy: 'Legal Informatics Team', at: NOW - DAY,
+    });
+    declare(unreviewed, 'evidence-custody', NOW + 10 * YEAR);
+    const notYetReviewed = ir.legalAuthorityClause('evidence-custody', { authorities: unreviewed, controls, now: NOW });
+    if (notYetReviewed.holds) v.push('a legal authority nobody has reviewed satisfied the legal clause — declaring is not confirming');
+    if (notYetReviewed.state !== 'declared') v.push(`an unreviewed declaration reported state '${notYetReviewed.state}'`);
+    if (notYetReviewed.unknown) v.push('a recorded but unreviewed authority was reported as unknown — those are different findings');
+    unreviewed.review('evidence-custody', { by: 'Attorney General Chambers', at: NOW });
+    if (!ir.legalAuthorityClause('evidence-custody', { authorities: unreviewed, controls, now: NOW }).holds) {
+      v.push('a declared and reviewed legal authority still did not satisfy the legal clause — the bar is unreachable');
+    }
+    const expiredLegal = new LegalAuthorityRegistry({ clock: () => NOW });
+    declare(expiredLegal, 'evidence-custody', NOW + DAY);
+    expiredLegal.review('evidence-custody', { by: 'Attorney General Chambers', at: NOW });
+    if (ir.legalAuthorityClause('evidence-custody', { authorities: expiredLegal, controls, now: NOW + 30 * DAY }).holds) {
+      v.push('an expired legal authority still satisfied the legal clause');
+    }
+
+    // Effectiveness clause: a control observed MISSING a real condition fails it, and a green build
+    // does not repair that — which is the entire point of the clause.
+    const detectingControls = [...new Set(Object.values(ir.DEPENDENCY_KINDS).map((k) => k.detectedBy).filter(Boolean))];
+    const observeAll = (outcome) => {
+      const reg = new ce.ControlObservationRegister({ clock: () => NOW });
+      for (const control of detectingControls) {
+        for (let i = 0; i < 20; i += 1) {
+          const occurredAt = NOW - (100 - i) * DAY;
+          reg.record(control, {
+            outcome: outcome === 'mixed' && i < 6 ? 'false-negative' : 'true-positive',
+            occurredAt,
+            detectedAt: outcome === 'mixed' && i < 6 ? null : occurredAt + 60_000,
+            acknowledgedAt: outcome === 'mixed' && i < 6 ? null : occurredAt + 120_000,
+            acknowledgedBy: outcome === 'mixed' && i < 6 ? null : 'Duty Officer',
+            remediatedAt: outcome === 'mixed' && i < 6 ? null : occurredAt + 3600_000,
+            observedBy: 'Operations Review Board',
+          });
+        }
+      }
+      return reg;
+    };
+    const missing = ir.controlEffectivenessClause('evidence-custody', { observations: observeAll('mixed'), controls });
+    if (missing.holds) v.push('controls observed missing real conditions satisfied the effectiveness clause while the build was green');
+    if (!missing.ineffective.length) v.push('a control observed missing real conditions was not named as ineffective');
+    if (missing.unknown) v.push('an observed-and-bad control was reported as unknown — those need different people to act');
+
+    // --- THE SUCCESS PATH: a fully evidenced capability satisfies all six clauses ------------
     const availability = new own.AvailabilityRegister({ clock: () => NOW });
     const activity = new own.ActivityRegister({ clock: () => NOW });
     const training = new own.TrainingRegister({ clock: () => NOW });
@@ -7193,7 +7307,15 @@ module.exports = [
     const sound = new asm.AssumptionRegistry({ clock: () => NOW });
     sound.register('CUSTODY-SOUND', { statement: 'a verified assumption for the success path', rationale: 'exercises the passing branch of the assumption clause', evidence: ['APP-FIT-CUSTODY-SIGNED-CHAIN'], contexts: ['custody'], owner: 'Directorate of Forensic Services', reviewCadenceDays: 3650, expiresAt: NOW + 10 * YEAR, verificationMethod: 'executable-check', confidence: 'high' });
     sound.recordVerification('CUSTODY-SOUND', { holds: true, by: 'Assurance', at: NOW });
-    const evidenced = ir.evaluateGlobalInvariant({ assumptions: sound, continuity, controls, now: NOW });
+    // The two Phase 15 clauses need their own evidence, and it must be real evidence of the same
+    // kind the clauses demand: a reviewed instrument, and observations of controls actually working.
+    const authorities = new LegalAuthorityRegistry({ clock: () => NOW });
+    for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) {
+      declare(authorities, capability, NOW + 10 * YEAR);
+      authorities.review(capability, { by: 'Attorney General Chambers', at: NOW });
+    }
+    const observations = observeAll('clean');
+    const evidenced = ir.evaluateGlobalInvariant({ assumptions: sound, continuity, controls, authorities, observations, now: NOW });
     const custody = evidenced.capabilities.find((c) => c.capability === 'evidence-custody');
     if (!custody.holds) v.push(`a fully evidenced constitutional capability did not satisfy the invariant: ${custody.clauses.filter((c) => !c.holds).map((c) => `${c.clause} — ${c.reason}`).join('; ')}`);
     // …and the invariant as a whole still does NOT hold, because other capabilities genuinely fail.
@@ -7227,23 +7349,25 @@ module.exports = [
     if (!later.expiredAcceptances.length) v.push('an expired acceptance was not reported as expired');
 
     // --- Evaluated across every capability, and the per-clause view is produced --------------
-    if (evidenced.clauses.length !== 4) v.push('the per-clause view does not report all four clauses');
+    if (evidenced.clauses.length !== 6) v.push('the per-clause view does not report all six clauses');
     for (const c of evidenced.clauses) if (!Array.isArray(c.failingCapabilities)) v.push(`clause '${c.clause}' does not name which capabilities fail it`);
     if (evidenced.capabilities.length !== Object.keys(ir.CRITICAL_CAPABILITIES).length) v.push('the invariant was not evaluated for every critical capability');
   }),
 
-  fit('APP-FIT-STRATEGIC-INTELLIGENCE', 'Every strategic panel and assurance domain is derived, and eighteen verified domains still print NOT AUTHORIZED', (v) => {
+  fit('APP-FIT-STRATEGIC-INTELLIGENCE', 'Every strategic panel and assurance domain is derived, and twenty-one verified domains still print NOT AUTHORIZED', (v) => {
     const inst = require('../src/assurance/institutional');
 
     // --- Part 19: the strategic panels ------------------------------------------------------
-    for (const required of ['institutionalResilience', 'strategicReadiness', 'governanceMaturity', 'complianceEvolution', 'documentationHealth', 'organizationalMaturity', 'operationalSustainability', 'decisionQuality', 'publicTrust']) {
+    for (const required of ['institutionalResilience', 'strategicReadiness', 'governanceMaturity', 'complianceEvolution', 'documentationHealth', 'organizationalMaturity', 'operationalSustainability', 'decisionQuality', 'publicTrust',
+      // Phase 15, Part 15 — institutional health. Seven questions the dashboard could not answer.
+      'governanceHealth', 'legalAuthorityCompleteness', 'assumptionMaturity', 'controlEffectiveness', 'dependencyResilience', 'organizationalLearning', 'documentationIntegrity']) {
       if (!inst.EXECUTIVE_PANELS[required]) v.push(`executive panel '${required}' is not provided`);
     }
     for (const [id, p] of Object.entries(inst.EXECUTIVE_PANELS)) {
       if (!p.question || !p.question.endsWith('?')) v.push(`executive panel '${id}' states no question`);
       if (!p.derivedFrom) v.push(`executive panel '${id}' does not say where it is derived from`);
     }
-    if (Object.keys(inst.EXECUTIVE_PANELS).length !== 15) v.push('the executive dashboard does not carry all fifteen panels');
+    if (Object.keys(inst.EXECUTIVE_PANELS).length !== 22) v.push('the executive dashboard does not carry all twenty-two panels');
 
     // No hand-entered metric, still. Supplying a figure for a panel changes nothing.
     const injected = inst.executiveGovernanceIntelligence({ publicTrust: 1, decisionQuality: 0.99, strategicReadiness: true });
@@ -7272,6 +7396,13 @@ module.exports = [
       capacity: { measured: ['staffing'], complete: true, shortfallCount: 0, unmeasurable: [] },
       decisions: { evaluationRate: 1, contradicted: [], unevaluated: [] },
       publicTrust: { composite: 'warranted', basis: 'every measured condition holds' },
+      // Phase 15, Part 15.
+      optimization: { findingCount: 0, bottleneckAuthorities: [], overCapacityAuthorities: [] },
+      legalAuthority: { count: 5, complete: true, completenessBasis: '5 of 5 critical capabilities have a reviewed legal authority' },
+      assumptionMaturity: { organizationalMaturity: 'A4', belowMinimum: [], maturityBasis: 'every assumption is at or above the maturity its criticality requires' },
+      controlEffectiveness: { effectivenessRate: 1, measurable: true, ineffective: [], effectivenessBasis: 'every observed control is effective' },
+      dependencyIntelligence: { count: 5, open: 0, weakestType: { type: 'organizational' } },
+      learning: { learningRate: 1, measurable: true, correctedNotLearned: [] },
     };
     const dashboard = inst.executiveGovernanceIntelligence(green);
     if (!dashboard.sound) v.push('a fully evidenced strategic dashboard was not sound: ' + dashboard.unsound.concat(dashboard.unmeasured).join(', '));
@@ -7281,17 +7412,19 @@ module.exports = [
     if (!trustLost.unsound.includes('publicTrust')) v.push('a failing public-trust indicator did not turn its panel red');
     if (trustLost.sound) v.push('a dashboard with a red panel reported itself sound');
 
-    // --- Part 20: eighteen assurance domains -------------------------------------------------
-    for (const required of ['architecture', 'governance', 'compliance', 'documentation', 'institutionalResilience', 'dependencyResilience', 'organizationalReadiness', 'strategicReadiness', 'learningMaturity', 'governanceAdaptability', 'evidenceQuality', 'publicTrustIndicators']) {
+    // --- Part 20: twenty-one assurance domains -----------------------------------------------
+    for (const required of ['architecture', 'governance', 'compliance', 'documentation', 'institutionalResilience', 'dependencyResilience', 'organizationalReadiness', 'strategicReadiness', 'learningMaturity', 'governanceAdaptability', 'evidenceQuality', 'publicTrustIndicators',
+      // Phase 15 — the three the framework could not previously verify at all.
+      'legalAuthority', 'controlEffectiveness', 'institutionalSustainability']) {
       if (!inst.ASSURANCE_DOMAINS[required]) v.push(`assurance domain '${required}' is not verified`);
     }
-    if (Object.keys(inst.ASSURANCE_DOMAINS).length !== 18) v.push('the assurance framework does not carry all eighteen domains');
+    if (Object.keys(inst.ASSURANCE_DOMAINS).length !== 21) v.push('the assurance framework does not carry all twenty-one domains');
     for (const [id, d] of Object.entries(inst.ASSURANCE_DOMAINS)) {
       if (!d.unverifiedMeans || d.unverifiedMeans.length < 30) v.push(`assurance domain '${id}' does not say what unverified would mean`);
     }
 
     const unmeasuredAll = inst.institutionalAssurance({});
-    if (unmeasuredAll.unmeasured.length !== 18) v.push('an unmeasured estate did not report all eighteen domains as unmeasured');
+    if (unmeasuredAll.unmeasured.length !== 21) v.push('an unmeasured estate did not report all twenty-one domains as unmeasured');
     if (unmeasuredAll.institutionallyReady) v.push('an entirely unmeasured estate was reported institutionally ready');
     // Failing and unmeasured stay different states.
     const mixed = inst.institutionalAssurance({ drift: { clean: false }, learning: { learningRate: 0, correctedNotLearned: ['IMP-0001'] } });
@@ -7310,10 +7443,29 @@ module.exports = [
       regulatory: { ready: true }, learning: { learningRate: 1, correctedNotLearned: [] },
       optimization: { bottleneckAuthorities: [], overCapacityAuthorities: [] },
       publicTrust: { composite: 'warranted' },
+      // Phase 15.
+      legalAuthority: { complete: true },
+      controlEffectiveness: { measurable: true, ineffective: [] },
+      sustainability: { sustainable: true },
     });
     if (!verified.institutionallyReady) v.push('a fully verified estate was not institutionally ready: ' + verified.blockers.join('; '));
-    if (verified.verified !== 18) v.push(`only ${verified.verified} of 18 domains verified on a fully evidenced estate`);
-    if (verified.authorizationStatus !== 'NOT AUTHORIZED') v.push('eighteen verified domains produced an authorization');
+    if (verified.verified !== 21) v.push(`only ${verified.verified} of 21 domains verified on a fully evidenced estate`);
+    if (verified.authorizationStatus !== 'NOT AUTHORIZED') v.push('twenty-one verified domains produced an authorization');
+    // The Phase 15 domains fail on their own, so none of the three is decoration.
+    for (const [domain, broken] of [
+      ['legalAuthority', { legalAuthority: { complete: false } }],
+      ['controlEffectiveness', { controlEffectiveness: { measurable: true, ineffective: ['APP-FIT-KNOWLEDGE-CONTINUITY'] } }],
+      ['institutionalSustainability', { sustainability: { sustainable: false } }],
+    ]) {
+      const partial = inst.institutionalAssurance({ ...{ legalAuthority: { complete: true }, controlEffectiveness: { measurable: true, ineffective: [] }, sustainability: { sustainable: true } }, ...broken });
+      if (!partial.failing.includes(domain)) v.push(`assurance domain '${domain}' does not fail when its source says it should`);
+      if (partial.institutionallyReady) v.push(`an estate failing '${domain}' was still institutionally ready`);
+    }
+    // A control observed but never watched is UNMEASURED, not failing — the distinction the whole
+    // effectiveness module exists to preserve.
+    const unwatched = inst.institutionalAssurance({ controlEffectiveness: { measurable: false, ineffective: [] } });
+    if (unwatched.failing.includes('controlEffectiveness')) v.push('controls nobody has observed were reported as failing rather than unmeasured');
+    if (!unwatched.unmeasured.includes('controlEffectiveness')) v.push('controls nobody has observed were not reported as unmeasured');
     if (verified.authorizes !== false || verified.derivedFromReadiness !== false) v.push('institutional readiness was allowed to imply authorization');
     if (!/does not replace human authority/.test(verified.note)) v.push('the framework no longer states that it does not replace human authority');
   }),
@@ -8238,6 +8390,282 @@ module.exports = [
     const later = graph.legalDependencyGraph({ authorities: reg, controls, now: 2000 * DAY });
     if (!later.blocksReadiness) v.push('an expired legal authority did not block readiness');
     if (later.authorizes !== false) v.push('the legal dependency graph claims authority');
+  }),
+
+  fit('APP-FIT-CROSS-GOVERNMENT', 'A whole-of-government relationship is only as ready as its weakest of five aspects, and unknown is counted apart from blocked', (v) => {
+    const ca = require('../src/governance/cross-agency');
+    const own = require('../src/governance/ownership');
+    const cm = require('../src/architecture/context-map');
+    const { LegalAuthorityRegistry } = require('../src/legislation/legal-authority');
+    const ir = require('../src/governance/institutional-resilience');
+    const DAY = 24 * 3600_000, YEAR = 365 * DAY, NOW = 400 * DAY;
+
+    // --- Five aspects, each saying what it asks and how it fails ------------------------------
+    for (const required of ['communication', 'legalInteroperability', 'governanceInteroperability', 'operationalCoordination', 'dependencyResilience']) {
+      if (!ca.GOVERNMENT_READINESS_ASPECTS[required]) v.push(`readiness aspect '${required}' is not assessed`);
+    }
+    if (Object.keys(ca.GOVERNMENT_READINESS_ASPECTS).length !== 5) v.push('cross-government readiness does not carry exactly five aspects');
+    for (const [id, a] of Object.entries(ca.GOVERNMENT_READINESS_ASPECTS)) {
+      if (!a.question || !a.question.endsWith('?')) v.push(`readiness aspect '${id}' states no question`);
+      if (!a.evidencedBy || !a.failsAs) v.push(`readiness aspect '${id}' does not say what evidences it or how it fails`);
+    }
+    // Only 'ready' is ready. If 'partial' or 'unknown' counted, an org chart would pass again.
+    const readyStates = Object.entries(ca.ASPECT_STATES).filter(([, s]) => s.ready).map(([id]) => id);
+    if (readyStates.join(',') !== 'ready') v.push(`aspect states counting as ready are '${readyStates.join(', ')}' — only 'ready' may`);
+    if (ca.ASPECT_STATES.unknown.ready || ca.ASPECT_STATES.blocked.ready) v.push('an unknown or blocked aspect counts as ready');
+    // Blocked ranks below unknown so the weakest-link aggregation surfaces a conflict first — but
+    // both must be non-ready, and both must be counted separately at every level.
+    if (!(ca.ASPECT_STATES.blocked.rank < ca.ASPECT_STATES.unknown.rank)) v.push('a recorded conflict does not rank below an unexamined aspect');
+
+    // --- Institutions and their constitutional zones are DERIVED -----------------------------
+    const insts = ca.institutions();
+    if (insts.length !== ca.agencies().length) v.push('the institution list does not match the derived agency list');
+    for (const i of insts) {
+      if (!i.zone) v.push(`institution '${i.agency}' has no derived constitutional zone`);
+      for (const z of i.zones) if (!cm.ZONES.has(z)) v.push(`institution '${i.agency}' was placed in an undeclared zone '${z}'`);
+      if (i.contexts.length && !i.strictestClassification) v.push(`institution '${i.agency}' holds contexts and has no strictest classification`);
+      // The strictest thing it holds, not the average of its portfolio.
+      if (i.contexts.length) {
+        const held = i.contexts.map((c) => cm.zoneGovernance(c).classification);
+        const order = [...cm.CLASSIFICATIONS];
+        if (i.strictestClassification !== order.find((c) => held.includes(c))) v.push(`institution '${i.agency}' reports a classification that is not the strictest it holds`);
+      }
+    }
+    if (!insts.some((i) => i.spansZones)) v.push('no institution was found to span constitutional zones, on an estate whose zones are held by twenty-seven bodies');
+
+    // --- With nothing supplied, two aspects are UNKNOWN and stay distinct from blocked -------
+    const cold = ca.crossGovernmentReadiness({});
+    if (!cold.pairCount) v.push('no institutional relationship was found to assess');
+    if (cold.readinessRate !== 0) v.push('a relationship was reported ready with no legal register and no joint act on record');
+    if (cold.ready) v.push('whole-of-government readiness was claimed with nothing supplied');
+    if (cold.measurable.legalInteroperability || cold.measurable.operationalCoordination) v.push('an aspect reported itself measurable with no register supplied');
+    if (!cold.pairsWithUnknownAspects || !cold.pairsWithBlockedAspects) v.push('unknown and blocked pairs are not both counted at the top level');
+    for (const p of cold.pairs) {
+      if (p.ready) v.push(`pair ${p.agencies.join(' ↔ ')} is ready with no legal basis and no recorded joint act`);
+      if (!p.unknownAspects.includes('operationalCoordination')) v.push(`pair ${p.agencies.join(' ↔ ')} did not report coordination as unknown with no register`);
+      if (p.aspects.length !== 5) v.push('a pair was assessed on fewer than five aspects');
+      if (!p.basis || !/weakest/.test(p.basis)) v.push('a pair readiness does not say it aggregates to the weakest aspect');
+      // The weakest link, never the mean: the band must equal the worst aspect present.
+      const worst = p.aspects.reduce((w, a) => (ca.ASPECT_STATES[a.state].rank < ca.ASPECT_STATES[w].rank ? a.state : w), 'ready');
+      if (p.readiness !== worst) v.push(`pair ${p.agencies.join(' ↔ ')} reported '${p.readiness}' with a weakest aspect of '${worst}' — that is an average, not a weakest link`);
+    }
+    // Every aspect discriminates: none is stuck in one state across the whole estate.
+    for (const a of cold.byAspect) {
+      const spread = Object.values(a.counts).filter((n) => n > 0).length;
+      if (!spread) v.push(`aspect '${a.aspect}' produced no state at all`);
+      if (a.counts.ready === cold.pairCount) v.push(`aspect '${a.aspect}' is ready for every pair — a control nothing can fail is decoration`);
+    }
+    if (!cold.limitingAspect) v.push('the report does not name which aspect limits the most relationships');
+    if (cold.authorizes !== false) v.push('the cross-government readiness report claims authority');
+
+    // --- Each aspect can FAIL and can PASS, fed a real position ------------------------------
+    // Communication: the ISRB cluster shares no forum with the rest of the governance graph, and a
+    // pair inside it is directly reachable. Both answers exist on the real estate.
+    const isolated = ca.communicationReadiness('National Identity Authority', 'Attorney General Chambers');
+    if (isolated.state === 'ready') v.push('two institutions in different components of the governance graph were reported directly reachable');
+    const together = ca.communicationReadiness('National Identity Authority', 'National Cryptographic Authority');
+    if (together.state !== 'ready') v.push('two institutions sharing a board were not reported as able to reach each other');
+    if (together.hops !== 1) v.push('a shared board was not reported as one hop');
+
+    // Legal interoperability: unknown with no register, ready once every reliance is authorised.
+    const pairWithReliance = cold.pairs.find((p) => p.aspects.find((a) => a.aspect === 'legalInteroperability').reliances.length);
+    if (!pairWithReliance) v.push('no institutional pair was found where one delivers a critical capability by relying on the other');
+    else {
+      const [a, b] = pairWithReliance.agencies;
+      if (ca.legalInteroperability(a, b, {}).state !== 'unknown') v.push('a cross-institution capability reliance with no legal register was not reported unknown');
+      const reg = new LegalAuthorityRegistry({ clock: () => NOW });
+      for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) {
+        reg.declare(capability, {
+          kind: 'legislation', instrument: 'an instrument recorded by the institution',
+          approvingOrganization: 'Attorney General Chambers', reviewEveryDays: 3650, expiresAt: NOW + 10 * YEAR,
+          evidence: ['APP-FIT-LEGISLATIVE-IMPACT'], scope: 'the capability as declared', declaredBy: 'Legal Informatics Team', at: NOW - DAY,
+        });
+      }
+      const declaredOnly = ca.legalInteroperability(a, b, { authorities: reg, now: NOW });
+      if (declaredOnly.state === 'ready') v.push('a declared but unreviewed legal authority made a reliance interoperable');
+      if (declaredOnly.state !== 'blocked') v.push(`an unreviewed authority reported '${declaredOnly.state}' — it is recorded, so it is not unknown`);
+      for (const capability of Object.keys(ir.CRITICAL_CAPABILITIES)) reg.review(capability, { by: 'Attorney General Chambers', at: NOW });
+      const reviewed = ca.legalInteroperability(a, b, { authorities: reg, now: NOW });
+      if (reviewed.state !== 'ready') v.push(`a fully reviewed set of authorities did not make the reliance interoperable: ${reviewed.findings.join('; ')}`);
+    }
+
+    // Governance interoperability: a real onward-disclosure conflict exists, and a pair with no
+    // declared flow between them has nothing to reconcile and is ready.
+    const conflicted = cold.pairs.map((p) => p.aspects.find((a) => a.aspect === 'governanceInteroperability')).filter((a) => a.state === 'blocked');
+    if (!conflicted.length) v.push('no governance conflict was found across forty-eight declared cross-institutional flows');
+    for (const c of conflicted) if (!c.findings.length) v.push('a blocked governance aspect names no conflict');
+    if (!conflicted.some((c) => c.findings.some((f) => /onward disclosure/.test(f)))) v.push('no onward-disclosure conflict was detected, though contexts declared open-sharing depend on restricted ones');
+    if (!conflicted.some((c) => c.findings.some((f) => /classification downgrade/.test(f)))) v.push('no classification downgrade was detected across institutional boundaries');
+    if (ca.governanceInteroperability('Service Delivery Board', 'AI Governance Board').state !== 'ready') {
+      v.push('two institutions with no declared flow between them were not reported as having nothing to reconcile');
+    }
+
+    // Operational coordination: a recorded joint rehearsal makes it ready, or the bar is unreachable.
+    const exercises = new own.ExerciseRegister({ clock: () => NOW });
+    const peopleFor = (agency) => own.subsystems()
+      .filter((s) => [own.OWNERSHIP[s].responsibleAuthority, own.OWNERSHIP[s].approvingAuthority].includes(agency))
+      .flatMap((s) => own.DEPUTY_ROLES.map((r) => own.OWNERSHIP[s][r]));
+    const exercise = Object.keys(own.EXERCISE_KINDS)[0];
+    const somePair = cold.pairs[0].agencies;
+    for (const agency of somePair) {
+      const person = peopleFor(agency)[0];
+      if (person) exercises.recordParticipation({ person, exercise, at: NOW - 10 * DAY, by: 'ORB', role: 'operationalOwner' });
+    }
+    const warm = ca.operationalCoordination(somePair[0], somePair[1], { exercises, now: NOW });
+    if (warm.state !== 'ready') v.push(`a pair with a recorded joint rehearsal did not reach ready on coordination: ${warm.detail}`);
+    // A register that exists and records nothing joint is BLOCKED, not unknown — somebody looked.
+    const emptyRegister = new own.ExerciseRegister({ clock: () => NOW });
+    const looked = ca.operationalCoordination(somePair[0], somePair[1], { exercises: emptyRegister, now: NOW });
+    if (looked.state !== 'blocked') v.push(`a register that was consulted and found nothing reported '${looked.state}' rather than blocked`);
+
+    // Dependency resilience: a single declared flow is a single path, and both answers occur.
+    const resilienceStates = new Set(cold.pairs.map((p) => p.aspects.find((a) => a.aspect === 'dependencyResilience').state));
+    if (resilienceStates.size < 2) v.push('every institutional dependency reported the same resilience state — the check does not discriminate');
+    const singlePath = cold.pairs.map((p) => p.aspects.find((a) => a.aspect === 'dependencyResilience')).find((a) => a.findings.some((f) => /exactly one declared flow/.test(f)));
+    if (!singlePath) v.push('no institutional pair connected by exactly one flow was reported as a single path');
+
+    // --- The constitutional separation is recorded whether or not it is a problem ------------
+    if (!cold.crossZonePairCount) v.push('no relationship was found to cross a constitutional separation, on an estate with four declared zones');
+    for (const p of cold.crossZonePairs) if (!p.zones || p.zones[0] === p.zones[1]) v.push(`'${p.agencies}' was reported as crossing zones and both sides are in the same zone`);
+
+    // --- Supplying registers makes the report say so, without inventing readiness ------------
+    const measured = ca.crossGovernmentReadiness({ exercises, now: NOW });
+    if (!measured.measurable.operationalCoordination) v.push('supplying an exercise register did not make coordination measurable');
+    if (measured.readinessRate === null) v.push('a measured report produced no readiness rate');
+  }),
+
+  fit('APP-FIT-INSTITUTIONAL-SUSTAINABILITY', 'Sustainability is assessed over seven dimensions each carrying its own horizon, and an unmeasured dimension is never a sustainable one', (v) => {
+    const inst = require('../src/assurance/institutional');
+
+    for (const required of ['governanceContinuity', 'organizationalResilience', 'documentationSustainability', 'assumptionHealth', 'knowledgePreservation', 'successionReadiness', 'legalContinuity']) {
+      if (!inst.SUSTAINABILITY_DIMENSIONS[required]) v.push(`sustainability dimension '${required}' is not assessed`);
+    }
+    if (Object.keys(inst.SUSTAINABILITY_DIMENSIONS).length !== 7) v.push('sustainability does not carry exactly seven dimensions');
+    for (const [id, d] of Object.entries(inst.SUSTAINABILITY_DIMENSIONS)) {
+      // A horizon is what makes this different from readiness. Without one it is the same question.
+      if (!d.horizon) v.push(`sustainability dimension '${id}' states no horizon — 'sustainable' with no timeframe is a word, not an assessment`);
+      if (!d.asks || !d.asks.endsWith('?')) v.push(`sustainability dimension '${id}' states no question`);
+      if (!d.ifLost) v.push(`sustainability dimension '${id}' does not say what its loss costs`);
+    }
+
+    // --- Nothing supplied: every dimension unmeasured, and unmeasured is not sustainable -----
+    const blind = inst.institutionalSustainability({});
+    if (blind.sustainable) v.push('an entirely unmeasured institution was reported sustainable');
+    if (blind.unmeasured.length !== 7) v.push('an empty assessment did not report all seven dimensions as unmeasured');
+    if (blind.unsustainable.length) v.push('an unmeasured dimension was reported unsustainable — those are different findings needing different work');
+    for (const d of blind.dimensions) {
+      if (d.sustainable !== null) v.push(`dimension '${d.dimension}' produced a verdict with nothing measured`);
+      if (d.derived !== true) v.push(`dimension '${d.dimension}' is not marked as derived`);
+    }
+    if (!blind.everyFigureDerived) v.push('a sustainability figure is not derived');
+    if (blind.authorizes !== false) v.push('the sustainability report claims authority');
+
+    // --- Every dimension can fail ON ITS OWN, so none is decoration --------------------------
+    const green = {
+      optimization: { overCapacityAuthorities: [] },
+      continuity: { sound: true, minimumBusFactor: 2, singlePersonDependencies: [] },
+      documentation: { sound: true, verification: { unresolvedCount: 0 } },
+      assumptionMaturity: { belowMinimum: [], verificationBacklog: [] },
+      resilience: { capabilities: [{ singleDependencies: [] }] },
+      legalAuthority: { complete: true, blocking: [] },
+    };
+    const whole = inst.institutionalSustainability(green);
+    if (!whole.sustainable) v.push('a fully evidenced institution was not sustainable: ' + whole.unsustainable.concat(whole.unmeasured).join(', '));
+    if (whole.unmeasured.length) v.push('a fully evidenced institution still had unmeasured dimensions: ' + whole.unmeasured.join(', '));
+    for (const [dimension, broken] of [
+      ['governanceContinuity', { optimization: { overCapacityAuthorities: ['Oversight Board'] } }],
+      ['organizationalResilience', { continuity: { sound: false, minimumBusFactor: 1, singlePersonDependencies: [] } }],
+      ['documentationSustainability', { documentation: { sound: false, verification: { unresolvedCount: 4 } } }],
+      ['assumptionHealth', { assumptionMaturity: { belowMinimum: ['ASM-0001'], verificationBacklog: [] } }],
+      ['knowledgePreservation', { resilience: { capabilities: [{ singleDependencies: ['knowledge'] }] } }],
+      ['successionReadiness', { continuity: { sound: true, minimumBusFactor: 2, singlePersonDependencies: ['Registrar'] } }],
+      ['legalContinuity', { legalAuthority: { complete: false, blocking: [{ capability: 'case-investigation' }] } }],
+    ]) {
+      const r = inst.institutionalSustainability({ ...green, ...broken });
+      if (!r.unsustainable.includes(dimension)) v.push(`sustainability dimension '${dimension}' cannot fail — a control nothing can fail is decoration`);
+      if (r.sustainable) v.push(`an institution failing '${dimension}' was still reported sustainable — that is a mean, not a weakest link`);
+      if (!r.shortestHorizon.some((h) => h.startsWith(dimension))) v.push(`a failing dimension '${dimension}' did not report the horizon it fails within`);
+    }
+  }),
+
+  fit('APP-FIT-DECISION-SUPPORT', 'Every decision package carries eight kinds of evidence and concludes with a constant string nothing computes', (v) => {
+    const inst = require('../src/assurance/institutional');
+
+    for (const required of ['supportingEvidence', 'confidence', 'assumptions', 'affectedControls', 'legalDependencies', 'institutionalImpacts', 'risks', 'uncertainties']) {
+      if (!inst.DECISION_PACKAGE_FIELDS[required]) v.push(`decision package field '${required}' is not required`);
+    }
+    if (Object.keys(inst.DECISION_PACKAGE_FIELDS).length !== 8) v.push('a decision package does not require exactly eight kinds of evidence');
+    for (const [id, f] of Object.entries(inst.DECISION_PACKAGE_FIELDS)) {
+      if (!f.absentMeans) v.push(`decision package field '${id}' does not say what its absence means`);
+    }
+    if (inst.HUMAN_AUTHORIZATION_REQUIRED !== 'Human authorization required.') v.push('the advisory conclusion is not the expected constant string');
+
+    // --- The guard refuses an incomplete package, one field at a time ------------------------
+    const complete = {
+      recommendation: 'Record the legal basis for case investigation.',
+      supportingEvidence: ['src/legislation/legal-authority.js'], confidence: 'high',
+      assumptions: ['that an instrument exists'], affectedControls: ['APP-FIT-LEGAL-AUTHORITY'],
+      legalDependencies: ['case-investigation: unknown'], institutionalImpacts: ['Attorney General Chambers'],
+      risks: ['recording a plausible instrument that does not authorise it'], uncertainties: ['whether one exists'],
+    };
+    if (!inst.decisionPackage(complete)) v.push('a complete decision package was refused');
+    for (const field of Object.keys(inst.DECISION_PACKAGE_FIELDS)) {
+      let refused = false;
+      try { inst.decisionPackage({ ...complete, [field]: undefined }); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(`a decision package omitting '${field}' was accepted`);
+      // An empty list is the same absence as a missing one.
+      let refusedEmpty = false;
+      try { inst.decisionPackage({ ...complete, [field]: Array.isArray(complete[field]) ? [] : '' }); } catch (e) { refusedEmpty = !!e.failClosed; }
+      if (!refusedEmpty) v.push(`a decision package with an empty '${field}' was accepted`);
+    }
+    let noRecommendation = false;
+    try { inst.decisionPackage({ ...complete, recommendation: undefined }); } catch (e) { noRecommendation = true; }
+    if (!noRecommendation) v.push('a decision package with no recommendation was accepted');
+
+    // --- THE RULE: the conclusion is a constant and no input can change it -------------------
+    const overridden = inst.decisionPackage({ ...complete, conclusion: 'Approved.', authorizes: true, decidedBy: 'Oversight Board', advisory: false });
+    if (overridden.conclusion !== inst.HUMAN_AUTHORIZATION_REQUIRED) v.push('a caller overrode the advisory conclusion');
+    if (overridden.authorizes !== false) v.push('a caller made a decision package claim authority');
+    if (overridden.advisory !== true) v.push('a caller made a decision package non-advisory');
+    if (overridden.decidedBy !== null) v.push('a decision package recorded a decider — it never decides');
+    // …and the guard itself rejects a hand-built package that concludes anything else.
+    let wrongConclusion = false;
+    try { inst.assertAdvisory({ ...complete, conclusion: 'Proceed.', authorizes: false }); } catch (e) { wrongConclusion = !!e.failClosed; }
+    if (!wrongConclusion) v.push('a package concluding something other than the constant was accepted by the guard');
+    let claimsAuthority = false;
+    try { inst.assertAdvisory({ ...complete, conclusion: inst.HUMAN_AUTHORIZATION_REQUIRED, authorizes: true }); } catch (e) { claimsAuthority = !!e.failClosed; }
+    if (!claimsAuthority) v.push('a package claiming authority was accepted by the guard');
+
+    // --- With no evidence, no advice. Nothing is invented -----------------------------------
+    const silent = inst.decisionSupport({});
+    if (silent.count !== 0) v.push('decision packages were assembled with no evidence supplied — advice was invented');
+    if (!/says nothing rather than inventing advice/.test(silent.basis)) v.push('an empty decision support report does not say why it is empty');
+    if (silent.authorizes !== false) v.push('an empty decision support report claims authority');
+
+    // --- With real findings, packages appear, and constitutional matters come first ----------
+    const loaded = inst.decisionSupport({
+      legalAuthority: { blocking: [{ capability: 'anonymous-reporting', state: 'unknown', reason: 'nothing is recorded', constitutional: true }] },
+      assumptionMaturity: { verificationBacklog: [{ assumption: 'ASM-0001', criticality: 'foundational' }], belowMinimum: [], organizationalMaturity: 'A2' },
+      controlEffectiveness: { measurable: false, unknown: ['APP-FIT-KNOWLEDGE-CONTINUITY'] },
+    });
+    if (loaded.count !== 3) v.push(`three findings produced ${loaded.count} decision package(s)`);
+    if (!loaded.everyPackageAdvisory) v.push('a decision package was assembled that is not advisory');
+    if (loaded.conclusion !== inst.HUMAN_AUTHORIZATION_REQUIRED) v.push('the decision support report does not conclude that human authorization is required');
+    if (loaded.authorizes !== false) v.push('the decision support report claims authority');
+    for (const p of loaded.packages) {
+      inst.assertAdvisory(p);
+      if (!p.risks.length || !p.uncertainties.length) v.push(`package '${p.subject}' states no risk or no uncertainty`);
+      if (!p.assumptions.length) v.push(`package '${p.subject}' states no assumption, so its reasoning cannot be disagreed with`);
+    }
+    // A constitutional finding is ordered first, deterministically.
+    if (loaded.ordered[0] !== 'assumption-verification' && loaded.ordered[0] !== 'legal-authority') v.push('a constitutional-priority package was not ordered first');
+    if (!loaded.packages.some((p) => p.priority === 'constitutional')) v.push('a finding on a constitutional capability was not marked constitutional');
+    // Determinism: the same input twice produces the same ordering.
+    if (JSON.stringify(loaded.ordered) !== JSON.stringify(inst.decisionSupport({
+      legalAuthority: { blocking: [{ capability: 'anonymous-reporting', state: 'unknown', reason: 'nothing is recorded', constitutional: true }] },
+      assumptionMaturity: { verificationBacklog: [{ assumption: 'ASM-0001', criticality: 'foundational' }], belowMinimum: [], organizationalMaturity: 'A2' },
+      controlEffectiveness: { measurable: false, unknown: ['APP-FIT-KNOWLEDGE-CONTINUITY'] },
+    }).ordered)) v.push('decision package ordering is not deterministic');
   }),
 
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {

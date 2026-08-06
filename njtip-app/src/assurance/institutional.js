@@ -36,6 +36,14 @@ const EXECUTIVE_PANELS = {
   operationalSustainability: { question: 'Can the estate be run with the people and capacity it actually has?', derivedFrom: 'src/governance/optimization.js (capacityPlan)' },
   decisionQuality: { question: 'Do the decisions taken turn out to do what they said they would?', derivedFrom: 'src/architecture/decision-memory.js' },
   publicTrust: { question: 'Do the conditions under which public trust would be warranted currently hold?', derivedFrom: 'src/observability/business.js (publicTrustIndicators)' },
+  // --- Institutional health (Phase 15, Part 15) ------------------------------------------------
+  governanceHealth: { question: 'Is governance functioning, or jamming?', derivedFrom: 'src/governance/optimization.js (governanceOptimization)' },
+  legalAuthorityCompleteness: { question: 'Can the institution say what permits each capability to operate?', derivedFrom: 'src/legislation/legal-authority.js' },
+  assumptionMaturity: { question: 'How far have the beliefs the platform rests on been taken through verification?', derivedFrom: 'src/architecture/assumptions.js (maturityReport)' },
+  controlEffectiveness: { question: 'Do the controls actually catch the things they were written for?', derivedFrom: 'src/assurance/control-effectiveness.js' },
+  dependencyResilience: { question: 'Does every critical capability have a validated alternative in every dependency category?', derivedFrom: 'src/governance/institutional-resilience.js (dependencyIntelligence)' },
+  organizationalLearning: { question: 'Does a corrected failure change what people can do next time?', derivedFrom: 'src/assurance/institutional.js (institutionalLearning)' },
+  documentationIntegrity: { question: 'Does every claim and diagram in the governed corpus still resolve against the implementation?', derivedFrom: 'src/architecture/documentation-assurance.js' },
 };
 
 // The thirteen domains Part 20 names. Each declares what it would mean for that domain to be
@@ -60,6 +68,10 @@ const ASSURANCE_DOMAINS = {
   learningMaturity: { unverifiedMeans: 'The institution may be repairing the same class of failure indefinitely and scoring perfectly on every improvement measure while it does.' },
   governanceAdaptability: { unverifiedMeans: 'Governance may be jamming — bottlenecked, overloaded, or leaning on exceptions — with no signal until a decision is missed.' },
   publicTrustIndicators: { unverifiedMeans: 'The conditions under which reporting corruption is worth the risk may have stopped holding, and that is the one thing the platform exists to protect.' },
+  // --- Adaptive institutional intelligence (Phase 15, Part 20) ----------------------------------
+  legalAuthority: { unverifiedMeans: 'A capability may be operating with nothing recording what permits it to, which is not a paperwork gap but a capability nobody can defend.' },
+  controlEffectiveness: { unverifiedMeans: 'Controls may run, pass, and catch nothing they were written for, and the build would stay green throughout.' },
+  institutionalSustainability: { unverifiedMeans: 'The institution may be able to run today and not next year, and nothing would say which.' },
 };
 
 // --- Governance state intelligence (Phase 14, Part 10) -------------------------------------------
@@ -639,6 +651,15 @@ function executiveGovernanceIntelligence(sources = {}) {
     panel('operationalSustainability', g(() => sources.capacity && sources.capacity.measured.length), g(() => sources.capacity && sources.capacity.complete && sources.capacity.shortfallCount === 0), g(() => sources.capacity && `${sources.capacity.shortfallCount} capacity shortfall(s), ${sources.capacity.unmeasurable.length} dimension(s) unmeasurable`, 'not assessed')),
     panel('decisionQuality', g(() => sources.decisions && sources.decisions.evaluationRate), g(() => sources.decisions && sources.decisions.contradicted.length === 0 && sources.decisions.unevaluated.length === 0), g(() => sources.decisions && `${sources.decisions.unevaluated.length} decision(s) never evaluated, ${sources.decisions.contradicted.length} contradicted by their own evidence`, 'not assessed')),
     panel('publicTrust', g(() => sources.publicTrust && sources.publicTrust.composite), g(() => sources.publicTrust && sources.publicTrust.composite === 'warranted'), g(() => sources.publicTrust && sources.publicTrust.basis, 'not assessed')),
+    // Part 15. Same rule as the twenty-two above it: each is a function of a register, and there is
+    // still no parameter anywhere in this module that accepts a figure.
+    panel('governanceHealth', g(() => sources.optimization && sources.optimization.findingCount), g(() => sources.optimization && sources.optimization.bottleneckAuthorities.length === 0 && sources.optimization.overCapacityAuthorities.length === 0), g(() => sources.optimization && `${sources.optimization.bottleneckAuthorities.length} bottleneck(s), ${sources.optimization.findingCount} finding(s)`, 'not assessed')),
+    panel('legalAuthorityCompleteness', g(() => sources.legalAuthority && sources.legalAuthority.count), g(() => sources.legalAuthority && sources.legalAuthority.complete), g(() => sources.legalAuthority && sources.legalAuthority.completenessBasis, 'not assessed')),
+    panel('assumptionMaturity', g(() => sources.assumptionMaturity && sources.assumptionMaturity.organizationalMaturity), g(() => sources.assumptionMaturity && sources.assumptionMaturity.belowMinimum.length === 0), g(() => sources.assumptionMaturity && sources.assumptionMaturity.maturityBasis, 'not assessed')),
+    panel('controlEffectiveness', g(() => sources.controlEffectiveness && sources.controlEffectiveness.effectivenessRate), g(() => sources.controlEffectiveness && sources.controlEffectiveness.measurable && sources.controlEffectiveness.ineffective.length === 0), g(() => sources.controlEffectiveness && sources.controlEffectiveness.effectivenessBasis, 'not assessed')),
+    panel('dependencyResilience', g(() => sources.dependencyIntelligence && sources.dependencyIntelligence.count), g(() => sources.dependencyIntelligence && sources.dependencyIntelligence.open === 0), g(() => sources.dependencyIntelligence && `${sources.dependencyIntelligence.open} open single dependency(ies); weakest type ${sources.dependencyIntelligence.weakestType ? sources.dependencyIntelligence.weakestType.type : 'unknown'}`, 'not assessed')),
+    panel('organizationalLearning', g(() => sources.learning && sources.learning.learningRate), g(() => sources.learning && sources.learning.measurable && sources.learning.correctedNotLearned.length === 0), g(() => sources.learning && `${sources.learning.correctedNotLearned.length} incident(s) corrected without learning`, 'not assessed')),
+    panel('documentationIntegrity', g(() => sources.documentation && sources.documentation.verification && sources.documentation.verification.claims), g(() => sources.documentation && sources.documentation.sound), g(() => sources.documentation && `${sources.documentation.verification.unresolvedCount} unresolved claim(s)`, 'not assessed')),
   ];
   const unmeasured = panels.filter((p) => !p.measured).map((p) => p.panel);
   const unsound = panels.filter((p) => p.sound === false).map((p) => p.panel);
@@ -652,6 +673,192 @@ function executiveGovernanceIntelligence(sources = {}) {
     authorizationStatus: 'NOT AUTHORIZED',
     derivedFromEvidence: true, authorizes: false, informationalOnly: true,
     note: 'Every panel is a function of a register; there is no parameter anywhere in this module that accepts a figure. An unmeasured panel is reported as unmeasured, never as satisfied.',
+  };
+}
+
+// --- Institutional sustainability (Phase 15, Part 19) ----------------------------------------------
+//
+// Every other measure in this platform asks whether the institution can operate NOW. Sustainability
+// asks whether it can still operate in five years, which is a different question with different
+// answers — an institution can be entirely ready today and structurally unable to stay that way.
+//
+// Seven dimensions, each with a stated horizon, because "sustainable" with no timeframe attached is
+// a word rather than an assessment.
+const SUSTAINABILITY_DIMENSIONS = {
+  governanceContinuity: { horizon: 'the next board cycle', asks: 'Will the governance bodies still be able to convene and decide?', ifLost: 'Decisions queue and the estate runs on defaults nobody chose.' },
+  organizationalResilience: { horizon: 'the next staffing cycle', asks: 'Will there still be a validated alternative for every accountable role?', ifLost: 'A departure takes a capability with it.' },
+  documentationSustainability: { horizon: 'the next release cycle', asks: 'Is the governed corpus being maintained as fast as the implementation changes?', ifLost: 'An operator follows a procedure that no longer works, during the incident it was written for.' },
+  assumptionHealth: { horizon: 'the review cadence of the shortest-lived assumption', asks: 'Are the beliefs the platform rests on still being verified?', ifLost: 'The platform keeps operating on beliefs that stopped being true, and nothing says when they did.' },
+  knowledgePreservation: { horizon: 'a generation of staff', asks: 'Does the know-how exist outside the heads of the people who hold it now?', ifLost: 'The institution has to rediscover how it works, at the worst possible time.' },
+  successionReadiness: { horizon: 'the next leadership change', asks: 'Could every accountable post change hands without a capability stopping?', ifLost: 'A resignation becomes an outage.' },
+  legalContinuity: { horizon: 'the life of the shortest-lived instrument', asks: 'Will the legal basis for each capability still stand?', ifLost: 'The platform operates without authority, which no amount of technical excellence repairs.' },
+};
+
+function institutionalSustainability(sources = {}) {
+  const g = (fn) => { try { const r = fn(); return r === undefined ? null : r; } catch (_) { return null; } };
+  const dimension = (id, sustainable, detail) => ({
+    dimension: id, ...SUSTAINABILITY_DIMENSIONS[id],
+    measured: sustainable !== null && sustainable !== undefined,
+    sustainable: sustainable === null || sustainable === undefined ? null : sustainable,
+    detail: detail || 'not assessed', derived: true,
+  });
+
+  const dimensions = [
+    dimension('governanceContinuity',
+      g(() => sources.optimization && sources.optimization.overCapacityAuthorities.length === 0),
+      g(() => sources.optimization && `${sources.optimization.overCapacityAuthorities.length} authority(ies) owe more reviews than they can perform`)),
+    dimension('organizationalResilience',
+      g(() => sources.continuity && sources.continuity.sound),
+      g(() => sources.continuity && `minimum bus factor ${sources.continuity.minimumBusFactor}`)),
+    dimension('documentationSustainability',
+      g(() => sources.documentation && sources.documentation.sound),
+      g(() => sources.documentation && `${sources.documentation.verification.unresolvedCount} unresolved claim(s)`)),
+    dimension('assumptionHealth',
+      g(() => sources.assumptionMaturity && sources.assumptionMaturity.belowMinimum.length === 0 && sources.assumptionMaturity.verificationBacklog.length === 0),
+      g(() => sources.assumptionMaturity && `${sources.assumptionMaturity.verificationBacklog.length} assumption(s) overdue for verification, ${sources.assumptionMaturity.belowMinimum.length} below the maturity their criticality requires`)),
+    dimension('knowledgePreservation',
+      g(() => sources.resilience && Array.isArray(sources.resilience.capabilities) && sources.resilience.capabilities.every((c) => !c.singleDependencies.includes('knowledge'))),
+      g(() => sources.resilience && `${(sources.resilience.capabilities || []).filter((c) => c.singleDependencies.includes('knowledge')).length} capability(ies) live in somebody's head`)),
+    dimension('successionReadiness',
+      g(() => sources.continuity && sources.continuity.singlePersonDependencies.length === 0),
+      g(() => sources.continuity && `${sources.continuity.singlePersonDependencies.length} role(s) rest on one person`)),
+    dimension('legalContinuity',
+      g(() => sources.legalAuthority && sources.legalAuthority.complete),
+      g(() => sources.legalAuthority && `${sources.legalAuthority.blocking.length} capability(ies) have no current legal basis`)),
+  ];
+
+  const unmeasured = dimensions.filter((d) => !d.measured);
+  const unsustainable = dimensions.filter((d) => d.sustainable === false);
+  return {
+    dimensions, count: dimensions.length,
+    catalogue: Object.entries(SUSTAINABILITY_DIMENSIONS).map(([dimension, d]) => ({ dimension, ...d })),
+    unmeasured: unmeasured.map((d) => d.dimension),
+    unsustainable: unsustainable.map((d) => d.dimension),
+    // Weakest link, as everywhere. An institution is sustainable only if it is sustainable on every
+    // dimension, and an unmeasured dimension is not a sustainable one.
+    sustainable: unmeasured.length === 0 && unsustainable.length === 0,
+    horizonsBasis: 'Each dimension states its own horizon, because "sustainable" with no timeframe is a word rather than an assessment. The estate is sustainable to the shortest of them.',
+    shortestHorizon: dimensions.filter((d) => d.sustainable === false).map((d) => `${d.dimension} (${d.horizon})`),
+    everyFigureDerived: dimensions.every((d) => d.derived === true),
+    informationalOnly: true, authorizes: false,
+    note: 'Sustainability asks whether the institution can still operate in five years, which is a different question from whether it can operate today and often has a different answer. An unmeasured dimension is not a sustainable one.',
+  };
+}
+
+// --- Executive decision support (Phase 15, Part 18) ------------------------------------------------
+//
+// The most dangerous artefact this platform produces. A decision package is a recommendation with
+// enough evidence attached that a board can act on it without going and checking — which is exactly
+// what makes it capable of substituting for the decision rather than informing it.
+//
+// So every package carries the eight things Part 18 requires, and one more the phase does not ask
+// for and the platform has insisted on since Phase 1:
+//
+//   EVERY PACKAGE CONCLUDES "Human authorization required." It is a constant string, nothing
+//   computes it, and `assertAdvisory` refuses to emit a package without it.
+const DECISION_PACKAGE_FIELDS = {
+  supportingEvidence: { absentMeans: 'The recommendation rests on nothing a reader can check.' },
+  confidence: { absentMeans: 'Nobody can tell whether this is a firm conclusion or a hunch.' },
+  assumptions: { absentMeans: 'The reasoning has premises and none of them is stated, so none can be disagreed with.' },
+  affectedControls: { absentMeans: 'Nothing says what would have to change, so the cost is invisible.' },
+  legalDependencies: { absentMeans: 'The recommendation may not be lawful and nothing here would say so.' },
+  institutionalImpacts: { absentMeans: 'Nothing says who inside the institution this lands on.' },
+  risks: { absentMeans: 'A recommendation with no stated risk is a recommendation nobody has argued with.' },
+  uncertainties: { absentMeans: 'Every recommendation has things nobody knows. One that lists none is concealing them.' },
+};
+
+const HUMAN_AUTHORIZATION_REQUIRED = 'Human authorization required.';
+
+// Exported so the guard can be fed a crafted package that omits something.
+function assertAdvisory(pkg) {
+  const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
+  if (!pkg || !pkg.recommendation) fail('a decision package must state a recommendation');
+  for (const [field, meta] of Object.entries(DECISION_PACKAGE_FIELDS)) {
+    const value = pkg[field];
+    const missing = value === undefined || value === null || (Array.isArray(value) && !value.length) || value === '';
+    if (missing) fail(`a decision package must carry '${field}' — ${meta.absentMeans}`);
+  }
+  if (pkg.conclusion !== HUMAN_AUTHORIZATION_REQUIRED) fail(`every decision package must conclude "${HUMAN_AUTHORIZATION_REQUIRED}" — a package that concludes anything else is a decision`);
+  if (pkg.authorizes !== false) fail('a decision package may not claim authority');
+  return true;
+}
+
+function decisionPackage(spec = {}) {
+  const pkg = {
+    ...spec,
+    advisory: true, authorizes: false,
+    // A constant string. Nothing computes it, and no input can change it.
+    conclusion: HUMAN_AUTHORIZATION_REQUIRED,
+    decidedBy: null,
+    note: 'A decision package assembles evidence for a decision. It never takes one: the conclusion is a constant, and the accountable human decides on the record.',
+  };
+  assertAdvisory(pkg);
+  return pkg;
+}
+
+// Assemble the packages the current evidence actually supports. Each is built from a real finding, so
+// a platform with no findings produces no packages rather than inventing advice.
+function decisionSupport(sources = {}) {
+  const packages = [];
+  const push = (spec) => { packages.push(decisionPackage(spec)); };
+
+  if (sources.legalAuthority && sources.legalAuthority.blocking && sources.legalAuthority.blocking.length) {
+    const blocking = sources.legalAuthority.blocking;
+    push({
+      subject: 'legal-authority', priority: blocking.some((b) => b.constitutional) ? 'constitutional' : 'standard',
+      recommendation: `Record and have reviewed the legal basis for ${blocking.length} capability(ies): ${blocking.map((b) => b.capability).join(', ')}.`,
+      supportingEvidence: [`src/legislation/legal-authority.js: ${blocking.map((b) => `${b.capability} is '${b.state}'`).join('; ')}`],
+      confidence: 'high — this is an absence of records, which is directly observable rather than estimated',
+      assumptions: ['That a legal basis exists and is simply unrecorded. If none exists, this is a far larger finding than a recording gap.'],
+      affectedControls: ['APP-FIT-LEGAL-AUTHORITY', 'APP-FIT-GLOBAL-INVARIANT', 'APP-FIT-LEGAL-DEPENDENCY-GRAPH'],
+      legalDependencies: blocking.map((b) => `${b.capability}: ${b.reason}`),
+      institutionalImpacts: ['The Attorney General\'s Chambers and each capability\'s approving organization would have to record and review a declaration.'],
+      risks: ['Recording a plausible-sounding instrument that turns out not to authorise the capability would be worse than the current gap, because it would look closed.'],
+      uncertainties: ['Whether the instruments exist and are simply unrecorded, or whether some capability is operating without one.'],
+    });
+  }
+  if (sources.assumptionMaturity && sources.assumptionMaturity.verificationBacklog && sources.assumptionMaturity.verificationBacklog.length) {
+    const backlog = sources.assumptionMaturity.verificationBacklog;
+    push({
+      subject: 'assumption-verification', priority: backlog.some((b) => b.criticality === 'foundational') ? 'constitutional' : 'standard',
+      recommendation: `Verify ${backlog.length} assumption(s), most critical first: ${backlog.slice(0, 3).map((b) => b.assumption).join(', ')}.`,
+      supportingEvidence: [`src/architecture/assumptions.js: organizational maturity is ${sources.assumptionMaturity.organizationalMaturity}, ${sources.assumptionMaturity.belowMinimum.length} below the level their criticality requires`],
+      confidence: 'high — derived from what has been recorded, not estimated',
+      assumptions: ['That the declared criticality of each assumption is right. Criticality is a judgement and can be argued with.'],
+      affectedControls: ['APP-FIT-ASSUMPTION-MATURITY', 'APP-FIT-ASSUMPTION-GRAPH', 'APP-FIT-TWIN-CONFIDENCE-DIMENSIONS'],
+      legalDependencies: ['None directly, though several assumptions bear on capabilities whose legal basis is also unrecorded.'],
+      institutionalImpacts: ['Each assumption\'s owner, and somebody independent of them to perform the verification.'],
+      risks: ['Verification performed by the owner would raise the recorded maturity without raising the actual assurance.'],
+      uncertainties: ['Whether the assumptions still hold. That is the point of verifying them, and nothing here can predict the answer.'],
+    });
+  }
+  if (sources.controlEffectiveness && !sources.controlEffectiveness.measurable) {
+    push({
+      subject: 'control-effectiveness', priority: 'standard',
+      recommendation: 'Begin recording observations of controls doing their job, so effectiveness can be measured rather than assumed from a green build.',
+      supportingEvidence: [`src/assurance/control-effectiveness.js: ${sources.controlEffectiveness.unknown.length} control(s) have no performance evidence`],
+      confidence: 'high — the absence of observations is directly observable',
+      assumptions: ['That the controls currently detect anything at all. Nothing has tested that; it is what the observations would establish.'],
+      affectedControls: ['APP-FIT-CONTROL-EFFECTIVENESS', 'APP-FIT-GLOBAL-INVARIANT'],
+      legalDependencies: ['None.'],
+      institutionalImpacts: ['Operations would have to record detection, acknowledgement and remediation times for real conditions.'],
+      risks: ['Recording only the incidents the controls caught would produce a false-negative rate of zero and a reliability figure that means nothing.'],
+      uncertainties: ['How many conditions have occurred that no control noticed. That number is currently unknowable and is exactly what the register would start to reveal.'],
+    });
+  }
+
+  return {
+    packages, count: packages.length,
+    fields: Object.entries(DECISION_PACKAGE_FIELDS).map(([field, f]) => ({ field, ...f })),
+    conclusion: HUMAN_AUTHORIZATION_REQUIRED,
+    // Constitutional matters first, then deterministically.
+    ordered: packages.slice().sort((a, b) => (a.priority === 'constitutional' ? 0 : 1) - (b.priority === 'constitutional' ? 0 : 1) || a.subject.localeCompare(b.subject)).map((p) => p.subject),
+    everyPackageAdvisory: packages.every((p) => p.advisory === true && p.authorizes === false && p.conclusion === HUMAN_AUTHORIZATION_REQUIRED),
+    basis: packages.length
+      ? `${packages.length} package(s), each assembled from a finding the evidence actually supports.`
+      : 'No decision package was assembled, because no supplied evidence supports one. A platform with nothing to say says nothing rather than inventing advice.',
+    advisory: true, authorizes: false,
+    note: 'A decision package is the most dangerous artefact here: enough evidence attached that a board could act without checking, which is what makes it capable of substituting for the decision. The conclusion is a constant string and no input can change it.',
   };
 }
 
@@ -681,6 +888,14 @@ function institutionalAssurance(sources = {}) {
     governanceAdaptability: sources.optimization
       ? sources.optimization.bottleneckAuthorities.length === 0 && sources.optimization.overCapacityAuthorities.length === 0 : null,
     publicTrustIndicators: sources.publicTrust ? sources.publicTrust.composite === 'warranted' : null,
+    // Part 20.
+    legalAuthority: sources.legalAuthority ? sources.legalAuthority.complete : null,
+    // A register that exists but has nothing in it leaves this UNMEASURED, not failing. Controls
+    // nobody has watched are not controls known to be bad, and reporting them as failing would put
+    // the wrong repair on somebody's desk.
+    controlEffectiveness: sources.controlEffectiveness
+      ? (sources.controlEffectiveness.measurable ? sources.controlEffectiveness.ineffective.length === 0 : null) : null,
+    institutionalSustainability: sources.sustainability ? sources.sustainability.sustainable : null,
   };
   const domains = Object.keys(ASSURANCE_DOMAINS).map((id) => ({
     domain: id,
@@ -717,4 +932,6 @@ module.exports = {
   LEARNING_STAGES, institutionalLearning,
   TRUST_EVIDENCE_KINDS, TrustEvidenceRegister, trustEvidence,
   EVIDENCE_TYPES, ONBOARDING_STATES, EvidenceOnboarding,
+  SUSTAINABILITY_DIMENSIONS, institutionalSustainability,
+  DECISION_PACKAGE_FIELDS, HUMAN_AUTHORIZATION_REQUIRED, assertAdvisory, decisionPackage, decisionSupport,
 };

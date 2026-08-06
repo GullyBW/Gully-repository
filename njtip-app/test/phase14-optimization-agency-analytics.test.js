@@ -218,9 +218,9 @@ test('no interval is offered around a null point estimate', () => {
   assert.strictEqual(none.constrained, false);
 });
 
-test('six forecasts, and with nothing supplied most are unforecastable rather than optimistic', () => {
+test('twelve forecasts, and with nothing supplied most are unforecastable rather than optimistic', () => {
   const blind = dp.adaptiveGovernanceAnalytics({ now: 0 });
-  assert.strictEqual(blind.forecasts.length, 6);
+  assert.strictEqual(blind.forecasts.length, 12);
   assert.ok(blind.unforecastable.length);
   assert.strictEqual(blind.everyForecastDerived, true);
   for (const f of blind.forecasts) {
@@ -252,5 +252,5 @@ test('supplied evidence produces forecasts, and a five-observation one is still 
 
 test('the adaptive forecasts are carried by the governance analytics report', () => {
   const analytics = dp.governanceAnalytics({ controls: controlsAll(), now: 0 });
-  assert.strictEqual(analytics.adaptive.forecasts.length, 6);
+  assert.strictEqual(analytics.adaptive.forecasts.length, 12);
 });

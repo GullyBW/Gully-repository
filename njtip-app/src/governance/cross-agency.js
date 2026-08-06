@@ -289,8 +289,397 @@ function collaborationReadiness({ activity = null, exercises = null, now = 0 } =
   };
 }
 
+// ---------------------------------------------------------------------------
+// Part 17 — Cross-Government Readiness (Phase 15).
+//
+// Phase 14 asked whether two institutions could coordinate. That was the right question and it was
+// answered from too little: two bodies sharing a board and a rehearsal were called ready even if one
+// sat in the judiciary and the other in the executive, and nothing recorded what legally permitted
+// them to exchange anything at all.
+//
+// This extends the same analysis to what a WHOLE-OF-GOVERNMENT relationship actually needs. Five
+// aspects, and a relationship is only as ready as its weakest one:
+//
+//   communication · legal interoperability · governance interoperability ·
+//   operational coordination · dependency resilience
+//
+// Two rules carried forward, and one new one.
+//
+//   Carried: a declared relationship is not a working one. Carried: unknown is not ready — it is its
+//   own finding, counted separately from a conflict, because "nobody has looked" and "we looked and
+//   they disagree" need different people to act.
+//
+//   New: THE CONSTITUTIONAL ZONE IS PART OF THE RELATIONSHIP. Two institutions in different zones
+//   relying on each other is not the same relationship as two inside one zone, and the platform now
+//   records the zones (Part 6), so it can finally tell the difference. A reliance that crosses a
+//   constitutional separation is reported as crossing one, whether or not anybody minds.
+const ASPECT_STATES = {
+  blocked: { rank: 0, ready: false, means: 'Something recorded actively conflicts. This is a finding somebody must resolve, not a gap somebody must fill.' },
+  unknown: { rank: 1, ready: false, means: 'Nothing is recorded either way. Unknown is not ready and it is not blocked — nobody has looked.' },
+  partial: { rank: 2, ready: false, means: 'Some of what this aspect needs is present and some is not.' },
+  ready: { rank: 3, ready: true, means: 'Everything this aspect needs is recorded and, where it must be exercised, has been.' },
+};
+const ASPECT_ORDER = ['blocked', 'unknown', 'partial', 'ready'];
+
+// The five aspects. Each says what it is asking, what would evidence it, and what its absence costs
+// in the specific way THIS aspect fails — a relationship can fail five different ways and calling
+// them all "not ready" hides which repair is needed.
+const GOVERNMENT_READINESS_ASPECTS = {
+  communication: {
+    question: 'Can each institution reach the other, and how directly?',
+    evidencedBy: 'a shared governance board, an escalation chain naming the other, or a chain of boards connecting them',
+    failsAs: 'An incident where the two need each other within the hour and start by working out who to call.',
+  },
+  legalInteroperability: {
+    question: 'What legally permits one institution to rely on the other?',
+    evidencedBy: 'a reviewed legal authority covering each capability whose delivery depends on the other institution',
+    failsAs: 'The reliance is challenged, and the answer to "under what authority" is a diagram.',
+  },
+  governanceInteroperability: {
+    question: 'Do the two institutions\' recorded governance rules agree about what may cross between them?',
+    evidencedBy: 'agreeing collaboration constraints, no classification downgrade across the flow, and compatible data residency',
+    failsAs: 'Both sides follow their own rules correctly and the exchange breaches one of them.',
+  },
+  operationalCoordination: {
+    question: 'Have these two institutions ever actually acted together?',
+    evidencedBy: 'a recorded joint governance act or a rehearsal involving people from both',
+    failsAs: 'The first time they coordinate is the time it matters.',
+  },
+  dependencyResilience: {
+    question: 'If the relationship fails, does anything else carry the load?',
+    evidencedBy: 'more than one declared flow between them, and a failover policy on what is depended upon',
+    failsAs: 'One institution\'s outage becomes the other institution\'s outage, with no second path.',
+  },
+};
+
+// Order matters: index 0 is the most restrictive. Derived from the declared sets so a new value added
+// to the architecture cannot silently become the most permissive one.
+const CLASSIFICATION_ORDER = [...contextMap.CLASSIFICATIONS];
+const RESIDENCY_ORDER = [...contextMap.RESIDENCY_POLICIES];
+const COLLABORATION_ORDER = [...contextMap.COLLABORATION_CONSTRAINTS];
+
+// An institution's constitutional position, derived from the zones of what it is accountable for.
+// Nothing lists this: an institution that is given a judiciary context tomorrow changes zone tomorrow.
+function institutions() {
+  return agencies().map((a) => {
+    const held = a.responsibleFor.filter((s) => contextMap.ids().includes(s));
+    const gov = held.map((s) => contextMap.zoneGovernance(s));
+    const zones = [...new Set(gov.map((g) => g.zone))].sort();
+    return {
+      ...a, contexts: held,
+      zones,
+      // An institution accountable for contexts in more than one zone is itself a constitutional
+      // crossing point, whatever its own letterhead says.
+      zone: zones.length === 0 ? 'unknown' : zones.length === 1 ? zones[0] : 'spans-zones',
+      spansZones: zones.length > 1,
+      classifications: [...new Set(gov.map((g) => g.classification))].sort(),
+      residencies: [...new Set(gov.map((g) => g.residency))].sort(),
+      collaboration: [...new Set(gov.map((g) => g.collaboration))].sort(),
+      // The strictest thing it holds. A body holding one constitutional context is governed by that,
+      // not by the average of its portfolio.
+      strictestClassification: gov.length ? CLASSIFICATION_ORDER.find((c) => gov.some((g) => g.classification === c)) || null : null,
+    };
+  });
+}
+
+const institutionOf = (agency) => institutions().find((i) => i.agency === agency) || null;
+
+// Aspect 1 — communication. Direct reach is what Phase 14 measured. Indirect reach (a chain of shared
+// boards) is real but weaker: every hop is a body that has to agree to pass the message on.
+function communicationReadiness(a, b) {
+  const direct = communicationPath(a, b);
+  if (direct.reachable) {
+    return { aspect: 'communication', state: 'ready', hops: 1, via: direct.via, detail: direct.reason, findings: [] };
+  }
+  // Breadth-first over the board graph: institutions are adjacent when they share a board.
+  const all = institutions();
+  const boardsOf = new Map(all.map((i) => [i.agency, new Set(i.boards)]));
+  // An institution the accountability record does not know sits in no forum at all. It is not
+  // "far away" — there is nothing to walk from, and the walk must say so rather than fail.
+  if (!boardsOf.has(a) || !boardsOf.has(b)) {
+    const missing = [a, b].filter((x) => !boardsOf.has(x));
+    return {
+      aspect: 'communication', state: 'blocked', hops: null, via: null,
+      detail: `${missing.join(' and ')} hold${missing.length === 1 ? 's' : ''} nothing in the accountability record, so no forum connects them to anything`,
+      findings: missing.map((x) => `'${x}' is not an institution in the accountability record — nothing can be routed to it`),
+    };
+  }
+  const adjacent = (x) => all.filter((y) => y.agency !== x && [...boardsOf.get(x)].some((brd) => boardsOf.get(y.agency).has(brd))).map((y) => y.agency);
+  const seen = new Set([a]);
+  let frontier = [[a]];
+  for (let hop = 1; hop <= all.length && frontier.length; hop += 1) {
+    const next = [];
+    for (const path of frontier) {
+      for (const n of adjacent(path[path.length - 1])) {
+        if (seen.has(n)) continue;
+        seen.add(n);
+        const extended = [...path, n];
+        if (n === b) {
+          return {
+            aspect: 'communication', state: 'partial', hops: extended.length - 1, via: extended.join(' → '),
+            detail: `no shared board and no escalation chain connects them directly; they are connected through ${extended.length - 2} intermediary institution(s): ${extended.join(' → ')}`,
+            findings: [`reaching '${b}' from '${a}' requires ${extended.length - 2} other institution(s) to relay`],
+          };
+        }
+        next.push(extended);
+      }
+    }
+    frontier = next;
+  }
+  return {
+    aspect: 'communication', state: 'blocked', hops: null, via: null,
+    detail: `${direct.reason}; and no chain of shared boards connects them either`,
+    findings: [`'${a}' and '${b}' are in different components of the governance graph — nothing recorded connects them at any distance`],
+  };
+}
+
+// Which critical capabilities does one institution deliver by relying on the other? Derived from the
+// capability's own context and that context's declared dependencies — never from a list of
+// "partnerships", which is the kind of thing that is written once and then stops being true.
+function crossInstitutionCapabilities(a, b) {
+  const ir = require('./institutional-resilience');
+  const out = [];
+  for (const [capability, spec] of Object.entries(ir.CRITICAL_CAPABILITIES)) {
+    for (const ctx of spec.contexts || []) {
+      if (!ownership.OWNERSHIP[ctx]) continue;
+      const holder = agencyOf(ctx);
+      const other = holder === a ? b : holder === b ? a : null;
+      if (!other) continue;
+      const reliedOn = (contextMap.describe(ctx).dependsOn || [])
+        .filter((d) => ownership.OWNERSHIP[d.context] && agencyOf(d.context) === other)
+        .map((d) => d.context);
+      if (!reliedOn.length) continue;
+      out.push({ capability, constitutional: !!spec.constitutional, context: ctx, deliveredBy: holder, reliesOn: other, viaContexts: reliedOn.sort() });
+    }
+  }
+  return out.sort((x, y) => x.capability.localeCompare(y.capability));
+}
+
+// Aspect 2 — legal interoperability. The question is not "is there a statute" but "does anything
+// recorded permit THIS institution to depend on THAT one for THIS capability".
+function legalInteroperability(a, b, { authorities = null, now = 0, controls = [] } = {}) {
+  const reliances = crossInstitutionCapabilities(a, b);
+  const ia = institutionOf(a); const ib = institutionOf(b);
+  const crossesZone = !!(ia && ib && ia.zone !== ib.zone);
+  if (!reliances.length) {
+    return {
+      aspect: 'legalInteroperability', state: 'ready', crossesZone, reliances: [],
+      detail: 'no critical capability of either institution is delivered by relying on the other, so no authority is required for one',
+      findings: [],
+    };
+  }
+  if (!authorities) {
+    return {
+      aspect: 'legalInteroperability', state: 'unknown', crossesZone, reliances,
+      detail: `${reliances.length} critical capability reliance(s) cross between these institutions and no legal authority register was supplied — what permits the reliance is unknown, and unknown is not permission`,
+      findings: reliances.map((r) => `'${r.capability}' is delivered by '${r.deliveredBy}' relying on '${r.reliesOn}' and nothing states under what authority`),
+    };
+  }
+  const rows = reliances.map((r) => ({ ...r, authority: authorities.state(r.capability, { now, controls }) }));
+  const unauthorized = rows.filter((r) => !r.authority.authorized);
+  const findings = unauthorized.map((r) => `'${r.capability}' (${r.deliveredBy} → ${r.reliesOn}): legal authority is '${r.authority.state}' — ${r.authority.reason}`);
+  // A reliance that crosses a constitutional zone without authority is the sharper case, and it is
+  // named rather than folded into the count.
+  if (crossesZone && unauthorized.length) {
+    findings.push(`this reliance crosses a constitutional separation ('${ia.zone}' → '${ib.zone}') and no reviewed authority covers it`);
+  }
+  const state = !unauthorized.length ? 'ready'
+    : unauthorized.every((r) => r.authority.state === 'unknown') ? 'unknown' : 'blocked';
+  return {
+    aspect: 'legalInteroperability', state, crossesZone, reliances: rows,
+    detail: unauthorized.length
+      ? `${unauthorized.length} of ${rows.length} cross-institution capability reliance(s) rest on no reviewed legal authority`
+      : `all ${rows.length} cross-institution capability reliance(s) rest on a reviewed legal authority`,
+    findings,
+  };
+}
+
+// Aspect 3 — governance interoperability. Read from the zone governance record, which is the only
+// place the platform states what may cross a boundary. Every finding here is two correct rules
+// disagreeing, which is why it reports `blocked` rather than `unknown`: nothing is missing.
+function governanceInteroperability(a, b) {
+  const flows = informationSharing().filter((f) => (f.fromAgency === a && f.toAgency === b) || (f.fromAgency === b && f.toAgency === a));
+  if (!flows.length) {
+    return { aspect: 'governanceInteroperability', state: 'ready', flows: [], detail: 'no declared data flow crosses between these institutions, so no rule has to reconcile with another', findings: [] };
+  }
+  const findings = []; const rows = [];
+  for (const f of flows) {
+    // The dependency is declared from → to, so data moves from the depended-upon context to the
+    // depending one. The source is `toContext`.
+    const source = contextMap.zoneGovernance(f.toContext);
+    const sink = contextMap.zoneGovernance(f.fromContext);
+    const issues = [];
+    // Onward disclosure, and ONLY onward disclosure. A declared dependency between two contexts of
+    // this platform is not an act of sharing — `collaboration` governs what may be passed OUTWARD to
+    // another body, so an internal dependency on a 'no-sharing' context is architecture working as
+    // designed, not a breach. What matters is where the data LANDS: data that may only leave under
+    // governance arriving somewhere that may publish it is a real leak of authority, and reading the
+    // field the other way would fire on almost every dependency in the estate and teach everybody to
+    // ignore it.
+    if (COLLABORATION_ORDER.indexOf(sink.collaboration) > COLLABORATION_ORDER.indexOf(source.collaboration)) {
+      issues.push(`onward disclosure: '${f.toContext}' permits '${source.collaboration}' and it flows into '${f.fromContext}', which permits the looser '${sink.collaboration}'`);
+    }
+    if (CLASSIFICATION_ORDER.indexOf(sink.classification) > CLASSIFICATION_ORDER.indexOf(source.classification)) {
+      issues.push(`classification downgrade: '${source.classification}' data from '${f.toContext}' lands in '${f.fromContext}', classified '${sink.classification}'`);
+    }
+    if (RESIDENCY_ORDER.indexOf(sink.residency) > RESIDENCY_ORDER.indexOf(source.residency)) {
+      issues.push(`residency relaxation: '${f.toContext}' is '${source.residency}' and '${f.fromContext}' is '${sink.residency}'`);
+    }
+    rows.push({ ...f, sourceZone: source.zone, sinkZone: sink.zone, crossesZone: source.zone !== sink.zone, issues });
+    for (const i of issues) findings.push(`${f.fromAgency} ← ${f.toAgency}: ${i}`);
+  }
+  const sharedBoard = (institutionOf(a)?.boards || []).some((brd) => (institutionOf(b)?.boards || []).includes(brd));
+  if (!sharedBoard) {
+    findings.push(`no board governs both institutions, so a disagreement about these ${flows.length} flow(s) has no forum that can settle it`);
+  }
+  const state = rows.some((r) => r.issues.length) ? 'blocked' : sharedBoard ? 'ready' : 'partial';
+  return {
+    aspect: 'governanceInteroperability', state, flows: rows, sharedBoard,
+    detail: findings.length ? `${findings.length} governance conflict(s) across ${flows.length} declared flow(s)` : `${flows.length} declared flow(s) and no recorded rule conflicts with another`,
+    findings,
+  };
+}
+
+// Aspect 4 — operational coordination. Unchanged in substance from Phase 14; restated as an aspect so
+// that "they have never worked together" caps the whole relationship rather than one dimension of it.
+function operationalCoordination(a, b, { activity = null, exercises = null, now = 0 } = {}) {
+  const c = demonstratedCoordination(a, b, { activity, exercises, now });
+  const state = c.unknown ? 'unknown' : c.demonstrated ? 'ready' : 'blocked';
+  return {
+    aspect: 'operationalCoordination', state, coordination: c, detail: c.reason,
+    findings: state === 'ready' ? [] : [`'${a}' and '${b}': ${c.reason}`],
+  };
+}
+
+// Aspect 5 — dependency resilience. What happens to the relationship when it fails. A single declared
+// flow is a single path, and a single path across an institutional boundary fails at a boundary
+// nobody controls both sides of.
+function dependencyResilience(a, b) {
+  const flows = informationSharing().filter((f) => (f.fromAgency === a && f.toAgency === b) || (f.fromAgency === b && f.toAgency === a));
+  if (!flows.length) {
+    return { aspect: 'dependencyResilience', state: 'ready', flows: [], detail: 'neither institution depends on the other for anything declared, so there is no relationship to lose', findings: [] };
+  }
+  const findings = [];
+  const rows = flows.map((f) => {
+    const source = contextMap.zoneGovernance(f.toContext);
+    const noFailover = source.failover === 'no-failover';
+    if (noFailover) findings.push(`'${f.toContext}' (${f.toAgency}) is declared 'no-failover' and '${f.fromContext}' (${f.fromAgency}) depends on it — when it is gone it is gone, across an institutional boundary`);
+    return { ...f, failover: source.failover, noFailover };
+  });
+  // Direction matters. One institution depending on another through exactly one context has one path
+  // to lose; the reciprocal direction is a separate relationship with its own single point.
+  const byDirection = new Map();
+  for (const f of rows) {
+    const key = `${f.fromAgency}|${f.toAgency}`;
+    byDirection.set(key, (byDirection.get(key) || 0) + 1);
+  }
+  for (const [key, count] of [...byDirection.entries()].sort()) {
+    const [from, to] = key.split('|');
+    if (count === 1) findings.push(`'${from}' depends on '${to}' through exactly one declared flow — there is no second path between these institutions in that direction`);
+  }
+  const state = rows.some((r) => r.noFailover) ? 'blocked' : findings.length ? 'partial' : 'ready';
+  return {
+    aspect: 'dependencyResilience', state, flows: rows,
+    detail: findings.length ? `${findings.length} resilience finding(s) across ${rows.length} declared flow(s)` : `${rows.length} declared flow(s), each with an alternative path and a failover policy`,
+    findings,
+  };
+}
+
+// One pair, across all five aspects, aggregated to the weakest link — never averaged. A relationship
+// that is exemplary on four aspects and has no legal basis is a relationship with no legal basis.
+function pairGovernmentReadiness(a, b, { authorities = null, activity = null, exercises = null, now = 0, controls = [] } = {}) {
+  const aspects = [
+    communicationReadiness(a, b),
+    legalInteroperability(a, b, { authorities, now, controls }),
+    governanceInteroperability(a, b),
+    operationalCoordination(a, b, { activity, exercises, now }),
+    dependencyResilience(a, b),
+  ].map((x) => ({ ...x, ...GOVERNMENT_READINESS_ASPECTS[x.aspect], ...ASPECT_STATES[x.state] }));
+
+  const weakest = aspects.reduce((w, x) => (ASPECT_STATES[x.state].rank < ASPECT_STATES[w.state].rank ? x : w), aspects[0]);
+  const ia = institutionOf(a); const ib = institutionOf(b);
+  return {
+    agencies: [a, b].sort(),
+    zones: [ia ? ia.zone : 'unknown', ib ? ib.zone : 'unknown'],
+    // Recorded whether or not it is a problem: a relationship spanning the constitutional separation
+    // is a different relationship, and the report says so instead of leaving the reader to notice.
+    crossesConstitutionalSeparation: !!(ia && ib && ia.zone !== ib.zone),
+    aspects,
+    // Both counted, never merged. "Nobody looked" and "we looked and they conflict" are different jobs.
+    unknownAspects: aspects.filter((x) => x.state === 'unknown').map((x) => x.aspect),
+    blockedAspects: aspects.filter((x) => x.state === 'blocked').map((x) => x.aspect),
+    readyAspects: aspects.filter((x) => x.state === 'ready').map((x) => x.aspect),
+    findings: aspects.flatMap((x) => x.findings),
+    readiness: weakest.state, weakestAspect: weakest.aspect,
+    ready: aspects.every((x) => x.state === 'ready'),
+    basis: `weakest of five aspects; '${weakest.aspect}' is '${weakest.state}' — ${ASPECT_STATES[weakest.state].means}`,
+  };
+}
+
+// Whole-of-government. The pairs analysed are the ones that actually have a relationship to assess:
+// a declared data flow, or a critical capability delivered by relying on the other. Two institutions
+// with neither are not partners who are failing — they are simply not partners.
+function crossGovernmentReadiness({ authorities = null, activity = null, exercises = null, now = 0, controls = [] } = {}) {
+  const all = institutions();
+  const keys = new Set(informationSharing().map((f) => [f.fromAgency, f.toAgency].sort().join('|')));
+  for (const x of all) {
+    for (const y of all) {
+      if (x.agency >= y.agency) continue;
+      if (crossInstitutionCapabilities(x.agency, y.agency).length) keys.add([x.agency, y.agency].sort().join('|'));
+    }
+  }
+  const pairs = [...keys].sort().map((k) => { const [a, b] = k.split('|'); return pairGovernmentReadiness(a, b, { authorities, activity, exercises, now, controls }); });
+
+  // Per aspect, across every pair. This is the figure that says WHICH repair would move the most
+  // relationships, rather than how many relationships are unhappy.
+  const byAspect = Object.keys(GOVERNMENT_READINESS_ASPECTS).map((aspect) => {
+    const states = pairs.map((p) => p.aspects.find((x) => x.aspect === aspect).state);
+    const counts = Object.fromEntries(ASPECT_ORDER.map((s) => [s, states.filter((x) => x === s).length]));
+    return {
+      aspect, ...GOVERNMENT_READINESS_ASPECTS[aspect], counts,
+      readyPairs: counts.ready, blockedPairs: counts.blocked, unknownPairs: counts.unknown,
+      // The weakest state ANY pair is in for this aspect, not the common one.
+      weakestState: ASPECT_ORDER.find((s) => counts[s] > 0) || 'ready',
+    };
+  });
+  const ready = pairs.filter((p) => p.ready);
+  const crossZone = pairs.filter((p) => p.crossesConstitutionalSeparation);
+  const limiting = [...byAspect].sort((x, y) => (x.readyPairs - y.readyPairs) || x.aspect.localeCompare(y.aspect))[0] || null;
+
+  return {
+    institutions: all, institutionCount: all.length,
+    zones: [...new Set(all.map((i) => i.zone))].sort(),
+    spanningInstitutions: all.filter((i) => i.spansZones).map((i) => i.agency),
+    aspects: Object.entries(GOVERNMENT_READINESS_ASPECTS).map(([aspect, a]) => ({ aspect, ...a })),
+    states: ASPECT_ORDER.map((state) => ({ state, ...ASPECT_STATES[state] })),
+    pairs, pairCount: pairs.length,
+    byAspect,
+    limitingAspect: limiting ? limiting.aspect : null,
+    readyPairs: ready.map((p) => p.agencies.join(' ↔ ')),
+    readinessRate: pairs.length ? +(ready.length / pairs.length).toFixed(4) : null,
+    crossZonePairs: crossZone.map((p) => ({ agencies: p.agencies.join(' ↔ '), zones: p.zones, readiness: p.readiness })),
+    crossZonePairCount: crossZone.length,
+    // Counted separately at the top level too, so the headline cannot quietly become "mostly blocked"
+    // when the truth is "mostly unexamined".
+    pairsWithUnknownAspects: pairs.filter((p) => p.unknownAspects.length).length,
+    pairsWithBlockedAspects: pairs.filter((p) => p.blockedAspects.length).length,
+    findings: pairs.flatMap((p) => p.findings),
+    // What the report is entitled to say. Without a legal register and an activity register, two of
+    // the five aspects cannot be answered at all, and the summary states that rather than scoring it.
+    measurable: { legalInteroperability: authorities !== null, operationalCoordination: activity !== null || exercises !== null, communication: true, governanceInteroperability: true, dependencyResilience: true },
+    ready: pairs.length > 0 && ready.length === pairs.length,
+    informationalOnly: true, authorizes: false,
+    note: 'Institutions, their constitutional zones and their relationships are all derived from the accountability and architecture records — nothing here is a list of partners. A pair is only as ready as its weakest aspect, and unknown is counted apart from blocked because nobody having looked and two rules conflicting need different people to act.',
+  };
+}
+
 module.exports = {
   COORDINATION_DIMENSIONS, READINESS_BANDS,
   agencies, agencyOf, informationSharing, approvalDependencies,
   communicationPath, demonstratedCoordination, pairReadiness, interAgencyRisks, collaborationReadiness,
+  ASPECT_STATES, ASPECT_ORDER, GOVERNMENT_READINESS_ASPECTS,
+  institutions, institutionOf, crossInstitutionCapabilities,
+  communicationReadiness, legalInteroperability, governanceInteroperability,
+  operationalCoordination, dependencyResilience,
+  pairGovernmentReadiness, crossGovernmentReadiness,
 };
