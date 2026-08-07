@@ -65,6 +65,31 @@ const GOVERNANCE_SCHEMA = [
   { field: 'sunsetCriteria', heading: 'Sunset criteria', why: 'The observable conditions under which this decision stops applying. Without them a decision can only be replaced, never retired.' },
 ];
 
+// --- Merge schema (Phase 18.1, Part 2) ----------------------------------------------------------
+//
+// Applied from ADR-0012 onward, and it exists because of a specific thing that happened rather than
+// a general principle.
+//
+// Three specifications — Phase 17 Parts 15 and 17, and Phase 18 Part 7 — each asked for fields on
+// the executive decision package. Implementing them as three frameworks would have been the exact
+// duplication every phase forbids, so they were merged into one guard. That was the right call and
+// it was made in a commit message, which is not architectural governance:
+//
+//   A MERGE IS AN ARCHITECTURAL DECISION. It resolves several stated requirements into one
+//   implementation, which means a future reader looking for "Phase 18 Part 7" will find nothing
+//   under that name. Without a record naming the requirements it absorbed, the merge is
+//   indistinguishable from a requirement that was silently dropped.
+//
+// So an ADR that records a merge must name what it merged, and the register in this module refuses
+// to hold a merge that cites no ADR.
+const MERGE_SCHEMA_FROM = 12;
+const MERGE_SCHEMA = [
+  { field: 'mergedRequirements', heading: 'Merged requirements', why: 'The specification requirements this implementation absorbed. Without them, a merge is indistinguishable from a requirement that was quietly dropped.' },
+  { field: 'mergeRationale', heading: 'Merge rationale', why: 'Why one implementation rather than several. A merge made for convenience and one made to prevent duplication look identical afterwards.' },
+  { field: 'compatibilityImpact', heading: 'Compatibility impact', why: 'What existing callers of the merged surfaces have to change, and what they do not.' },
+  { field: 'implementationStrategy', heading: 'Implementation strategy', why: 'How the requirements were combined, so a reader can check that each one is still satisfied rather than taking it on trust.' },
+];
+
 // Sections whose content must actually be measurable — a threshold, a count, a percentage or a
 // date. This is the one place the validator reads content rather than structure, because
 // "improve reliability" satisfies a heading check and commits to nothing.
@@ -106,12 +131,14 @@ function parseText(text, { file = '(in-memory)', number = 0 } = {}) {
 
 // Which schema applies to an ADR number.
 function schemaFor(number) {
+  if (number >= MERGE_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA, ...GOVERNANCE_SCHEMA, ...MERGE_SCHEMA];
   if (number >= GOVERNANCE_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA, ...GOVERNANCE_SCHEMA];
   if (number >= EXTENDED_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA];
   if (number >= FULL_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA];
   return LEGACY_SCHEMA;
 }
 function schemaNameFor(number) {
+  if (number >= MERGE_SCHEMA_FROM) return 'merge';
   return number >= GOVERNANCE_SCHEMA_FROM ? 'governance' : number >= EXTENDED_SCHEMA_FROM ? 'extended' : number >= FULL_SCHEMA_FROM ? 'full' : 'legacy';
 }
 
@@ -381,11 +408,197 @@ function schema() {
   };
 }
 
+// --- Merge register and verification (Phase 18.1, Parts 2 and 6) -------------------------------------
+//
+// The record of which implementations absorbed which specification requirements. It exists because
+// an ungoverned merge is invisible: from the code alone there is no way to tell a requirement that
+// was absorbed into a larger implementation from one that was quietly dropped. Both look like
+// absence, and only one of them is fine.
+//
+// The register is DECLARATIVE and says so. It records what somebody recorded. Nothing here scans the
+// codebase for merge-shaped implementations that were never registered — that is named as a debt in
+// ADR-0012 rather than pretended away, because inferring intent from a diff would fill the register
+// with guesses that read exactly like recorded decisions.
+class MergeRegister {
+  constructor({ clock = () => 0 } = {}) { this._merges = new Map(); this._clock = clock; }
+
+  // Record a merge. Every field the merge schema requires of the ADR is required of the entry, and
+  // an entry that cites no ADR is refused fail-closed — for the same reason the authority register
+  // refuses an unattributed declaration.
+  record(id, {
+    mergedRequirements = [], into, rationale, architecturalJustification,
+    affectedContexts = [], rejectedAlternatives = [], compatibilityImpact, implementationStrategy,
+    adr, recordedBy, at = null,
+  } = {}) {
+    const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
+    if (!id) fail('a merge record must have an identifier');
+    if (!adr) fail('a merge must cite the ADR that governs it — a merge recorded only in a commit message is indistinguishable afterwards from a requirement that was dropped');
+    if (!/^ADR-\d{4}$/.test(adr)) fail(`'${adr}' is not an ADR reference of the form ADR-NNNN`);
+    // The ADR must EXIST. A citation of something nobody wrote is worse than no citation, because it
+    // looks governed.
+    const numbers = adrFiles().map((f) => Number(path.basename(f).slice(0, 4)));
+    if (!numbers.includes(Number(adr.slice(4)))) fail(`${adr} does not exist in docs/adr/, so this merge cites a decision nobody recorded`);
+    if (!Array.isArray(mergedRequirements) || mergedRequirements.length < 2) {
+      fail('a merge must name at least two requirements it absorbed — one requirement implemented once is not a merge');
+    }
+    if (!into) fail('a merge must name the implementation the requirements were merged into');
+    if (!rationale) fail('a merge must state why one implementation rather than several — a merge for convenience and one to prevent duplication are indistinguishable afterwards');
+    if (!architecturalJustification) fail('a merge must state its architectural justification');
+    if (!compatibilityImpact) fail('a merge must state what existing callers have to change, and what they do not');
+    if (!implementationStrategy) fail('a merge must state how the requirements were combined, so a reader can check each is still satisfied rather than taking it on trust');
+    if (!recordedBy) fail('a merge record must name who recorded it');
+
+    const rec = {
+      id, mergedRequirements: [...mergedRequirements], into, rationale, architecturalJustification,
+      affectedContexts: [...affectedContexts], rejectedAlternatives: [...rejectedAlternatives],
+      compatibilityImpact, implementationStrategy, adr, recordedBy, at: at ?? this._clock(),
+    };
+    this._merges.set(id, rec);
+    return { ...rec };
+  }
+
+  merges() { return [...this._merges.values()].map((m) => ({ ...m })).sort((a, b) => a.id.localeCompare(b.id)); }
+  merge(id) { const m = this._merges.get(id); return m ? { ...m } : null; }
+
+  // Which requirements are recorded as absorbed, and by what. This is the lookup a reader performs
+  // when a specification requirement appears to have no implementation.
+  requirementIndex() {
+    const index = new Map();
+    for (const m of this.merges()) {
+      for (const r of m.mergedRequirements) {
+        if (!index.has(r)) index.set(r, []);
+        index.get(r).push({ merge: m.id, into: m.into, adr: m.adr });
+      }
+    }
+    return index;
+  }
+
+  report({ now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = this.merges();
+    const index = this.requirementIndex();
+    // A requirement recorded as merged into more than one implementation is a contradiction: it
+    // cannot have been absorbed twice, so one of the records is wrong.
+    const duplicated = [...index.entries()].filter(([, v]) => v.length > 1).map(([r, v]) => ({ requirement: r, into: v.map((x) => x.into) }));
+    return {
+      merges: rows, count: rows.length,
+      requirementsAbsorbed: index.size,
+      requirementIndex: Object.fromEntries([...index.entries()]),
+      implementations: [...new Set(rows.map((m) => m.into))].sort(),
+      duplicatedRequirements: duplicated,
+      everyMergeGoverned: rows.every((m) => !!m.adr),
+      measurable: rows.length > 0,
+      basis: rows.length
+        ? `${rows.length} merge(s) recorded, absorbing ${index.size} specification requirement(s) into ${new Set(rows.map((m) => m.into)).size} implementation(s). ${duplicated.length} requirement(s) are recorded as absorbed more than once.`
+        : 'No merge is recorded. That is not the same as no merge having happened — this register is declarative, and an unregistered merge is invisible to it.',
+      now: t, declarative: true, informationalOnly: true, authorizes: false,
+      note: 'This register records what somebody recorded. Nothing scans the codebase for merge-shaped implementations that were never registered; inferring intent from a diff would populate it with guesses that read exactly like recorded decisions. That gap is named in ADR-0012 rather than closed here.',
+    };
+  }
+}
+
+// The merges this platform has actually performed. Recorded because they happened and there is a
+// commit and an ADR for each — not fabricated, and deliberately not inferred.
+const PLATFORM_MERGES = [
+  {
+    id: 'MERGE-0001',
+    mergedRequirements: ['Phase 17 Part 15', 'Phase 17 Part 17', 'Phase 18 Part 7'],
+    into: 'src/assurance/institutional.js — DECISION_PACKAGE_FIELDS and assertAdvisory',
+    rationale: 'All three specifications describe the same artefact — the package a board reads before taking a decision — and each explicitly forbids creating another decision framework. Three schemas over one concept would have let a board act on whichever package it was handed, with no way to tell that another schema required a field this one omitted.',
+    architecturalJustification: 'The decision package and its fail-closed guard already existed from Phase 15. Extending one schema preserves the single composition root, the single guard and the existing callers; three parallel schemas would have been a duplicate governance framework, which every phase since 15 forbids.',
+    affectedContexts: ['assurance'],
+    rejectedAlternatives: [
+      'Implement all three separately and reconcile later — reconciling three live schemas over one concept is strictly harder than not creating them.',
+      'Create a fourth module to validate the other three — a framework whose purpose is to manage the existence of three others.',
+      'Rename existing fields to match each specification\'s vocabulary — breaks every caller in exchange for terminology.',
+    ],
+    compatibilityImpact: 'Additive for readers: every field present before is present now, unrenamed. Breaking for assemblers: a package satisfying the Phase 15 eight-field schema is refused fail-closed with the missing field named. All in-repository callers were updated in the same change.',
+    implementationStrategy: 'The union of the three field lists was taken, each specification\'s terminology mapped onto an existing field name where one covered it, and a new field added only where none did. Two fields were made structural rather than documentary: evidenceStrength is a four-grade enum, and forecastConfidence is required exactly when the grade is projected and refused otherwise.',
+    adr: 'ADR-0012',
+    recordedBy: 'Architecture Review Board',
+    at: 0,
+  },
+];
+
+function seedPlatformMerges(register, { at = 0 } = {}) {
+  for (const m of PLATFORM_MERGES) register.record(m.id, { ...m, at });
+  return register;
+}
+
+// --- Merge verification (Phase 18.1, Part 6) ---------------------------------------------------------
+//
+// For every recorded merge, check that the requirements it absorbed are still satisfied — and be
+// explicit about what that check can and cannot establish:
+//
+//   THIS VERIFIES STRUCTURE, NOT MEANING. It confirms that each merged requirement maps to fields
+//   that exist and are required by the guard. It cannot confirm that a field means what the
+//   specification intended. That judgement is human, and a verification that claimed otherwise
+//   would be the most confident wrong answer in the module.
+//
+// `satisfiedBy` is supplied by the caller: a mapping from requirement to the fields or behaviours
+// that satisfy it. Nothing here infers it, for the same reason nothing infers a merge.
+function mergeVerification({ register = null, satisfiedBy = {}, requiredFields = [], now = 0 } = {}) {
+  const merges = register ? register.merges() : [];
+  const present = new Set(requiredFields);
+
+  const rows = merges.map((m) => {
+    const requirements = m.mergedRequirements.map((r) => {
+      const fields = Array.isArray(satisfiedBy[r]) ? satisfiedBy[r] : null;
+      if (!fields) {
+        return {
+          requirement: r, examined: false, satisfied: false, fields: [], missing: [],
+          detail: `nothing was supplied saying what satisfies '${r}', so whether it survived the merge is UNKNOWN — not satisfied, and not lost`,
+        };
+      }
+      const missing = fields.filter((f) => !present.has(f));
+      return {
+        requirement: r, examined: true, satisfied: missing.length === 0, fields, missing,
+        detail: missing.length
+          ? `${missing.length} of ${fields.length} field(s) that should satisfy '${r}' are not required by the implementation: ${missing.join(', ')}`
+          : `all ${fields.length} field(s) satisfying '${r}' are present and required`,
+      };
+    });
+    const examined = requirements.filter((r) => r.examined);
+    const lost = examined.filter((r) => !r.satisfied);
+    return {
+      merge: m.id, into: m.into, adr: m.adr,
+      requirements,
+      requirementCount: requirements.length,
+      examinedCount: examined.length,
+      unexamined: requirements.filter((r) => !r.examined).map((r) => r.requirement),
+      functionalityLost: lost.map((r) => ({ requirement: r.requirement, missing: r.missing })),
+      // Complete means every requirement was EXAMINED and survived. Unexamined is neither.
+      complete: requirements.length > 0 && examined.length === requirements.length && lost.length === 0,
+      backwardsCompatible: !!m.compatibilityImpact,
+      governed: !!m.adr,
+      verifies: 'structure',
+      cannotVerify: 'whether each field means what the specification intended — that judgement is human',
+    };
+  });
+
+  const verified = rows.filter((r) => r.complete);
+  return {
+    merges: rows, count: rows.length,
+    complete: verified.map((r) => r.merge),
+    incomplete: rows.filter((r) => !r.complete).map((r) => ({ merge: r.merge, lost: r.functionalityLost, unexamined: r.unexamined })),
+    functionalityLost: rows.flatMap((r) => r.functionalityLost),
+    everyMergeGoverned: rows.every((r) => r.governed),
+    everyMergeVerified: rows.length > 0 && verified.length === rows.length,
+    measurable: rows.length > 0,
+    basis: rows.length
+      ? `${verified.length} of ${rows.length} merge(s) have every absorbed requirement examined and satisfied. ${rows.flatMap((r) => r.unexamined).length} requirement(s) had nothing supplied to check them against and are UNKNOWN rather than lost.`
+      : 'No merge is recorded, so there is nothing to verify. That is not evidence that no merge happened.',
+    now, informationalOnly: true, authorizes: false,
+    note: 'Merge verification is structural: it confirms each absorbed requirement maps to fields that exist and are required. It cannot confirm a field means what the specification intended, and it says so rather than implying a completeness it does not have.',
+  };
+}
+
 module.exports = {
   ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, GOVERNANCE_SCHEMA,
   FULL_SCHEMA_FROM, EXTENDED_SCHEMA_FROM, GOVERNANCE_SCHEMA_FROM,
   MEASURABLE_SECTIONS, DATED_SECTIONS, QUALITY_DIMENSIONS, STATUSES,
   adrFiles, parse, parseText, schemaFor, schemaNameFor, validateAdr, validateParsed, validateCatalogue,
   lifecycle, architecturalDebt, template, schema,
+  MERGE_SCHEMA, MERGE_SCHEMA_FROM, MergeRegister, PLATFORM_MERGES, seedPlatformMerges, mergeVerification,
   qualityScore, qualityReport, nextReview, dueForReview, admit,
 };

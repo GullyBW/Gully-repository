@@ -1167,3 +1167,130 @@ test('phase17: security certification is genuinely unmet — no residual risk ha
   const cert = rm.accreditationReadiness({ now: 0 }).artefacts.find((a) => a.artefact === 'securityCertification');
   assert.ok(cert.unmetRequirements.includes('residual risks with named acceptors'));
 });
+
+// ---------------------------------------------------------------------------------------------
+// Phase 18.1 Parts 2 & 6 — merge governance and merge verification.
+//
+// These exist because of something that happened rather than a general principle: three
+// specifications were merged into one decision-package guard and the merge was recorded in a commit
+// message, which is not architectural governance. An ungoverned merge is invisible — from the code
+// alone there is no way to tell a requirement that was absorbed from one that was dropped.
+// ---------------------------------------------------------------------------------------------
+
+const adrGov = require('../src/architecture/adr-governance');
+
+const MERGE_BASE = {
+  mergedRequirements: ['Spec A Part 1', 'Spec B Part 2'],
+  into: 'src/somewhere.js',
+  rationale: 'because they describe one artefact',
+  architecturalJustification: 'one guard, not two',
+  compatibilityImpact: 'additive for readers',
+  implementationStrategy: 'union of the field lists',
+  recordedBy: 'Architecture Review Board',
+};
+
+test('phase18.1: the merge schema applies from ADR-0012, where the first merge was recorded', () => {
+  assert.equal(adrGov.MERGE_SCHEMA_FROM, 12);
+  assert.deepEqual(
+    adrGov.MERGE_SCHEMA.map((s) => s.field),
+    ['mergedRequirements', 'mergeRationale', 'compatibilityImpact', 'implementationStrategy'],
+  );
+  for (const s of adrGov.MERGE_SCHEMA) assert.ok(s.heading && s.why, s.field);
+  // The ADR that establishes the tier satisfies it. A rule its own ADR does not meet is the
+  // weakest possible version of that rule.
+  assert.equal(adrGov.schemaNameFor(12), 'merge');
+  assert.equal(adrGov.schemaNameFor(11), 'governance', 'earlier ADRs are never retrofitted');
+});
+
+test('phase18.1: a merge citing no ADR, or an ADR nobody wrote, is refused', () => {
+  const reg = new adrGov.MergeRegister({ clock: () => 0 });
+  assert.throws(() => reg.record('M', { ...MERGE_BASE }), (e) => e.failClosed === true);
+  assert.throws(() => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0099' }), (e) => e.failClosed === true);
+  assert.throws(() => reg.record('M', { ...MERGE_BASE, adr: 'not-an-adr' }), (e) => e.failClosed === true);
+  // …and a complete record is accepted, or nothing could ever be registered.
+  assert.ok(reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012' }));
+});
+
+test('phase18.1: one requirement implemented once is not a merge', () => {
+  const reg = new adrGov.MergeRegister({ clock: () => 0 });
+  assert.throws(
+    () => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', mergedRequirements: ['only one'] }),
+    (e) => e.failClosed === true,
+  );
+});
+
+test('phase18.1: a merge must state its rationale, compatibility impact and strategy', () => {
+  const reg = new adrGov.MergeRegister({ clock: () => 0 });
+  for (const field of ['rationale', 'architecturalJustification', 'compatibilityImpact', 'implementationStrategy', 'recordedBy', 'into']) {
+    assert.throws(
+      () => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', [field]: undefined }),
+      (e) => e.failClosed === true,
+      field,
+    );
+  }
+});
+
+test('phase18.1: an empty merge register says what it does not know', () => {
+  const empty = new adrGov.MergeRegister({ clock: () => 0 }).report({ now: 0 });
+  assert.equal(empty.measurable, false);
+  assert.equal(empty.declarative, true);
+  assert.match(empty.basis, /not the same as no merge having happened/);
+  assert.equal(empty.authorizes, false);
+});
+
+test('phase18.1: the merge this platform actually performed is recorded and governed', () => {
+  const reg = adrGov.seedPlatformMerges(new adrGov.MergeRegister({ clock: () => 0 }));
+  const report = reg.report({ now: 0 });
+  assert.equal(report.everyMergeGoverned, true);
+  assert.deepEqual(report.duplicatedRequirements, [], 'a requirement cannot be absorbed twice');
+  const index = reg.requirementIndex();
+  for (const requirement of ['Phase 17 Part 15', 'Phase 17 Part 17', 'Phase 18 Part 7']) {
+    assert.ok(index.has(requirement), `${requirement} is findable in the register`);
+  }
+});
+
+test('phase18.1: every merged requirement still maps to a field the guard requires', () => {
+  const reg = adrGov.seedPlatformMerges(new adrGov.MergeRegister({ clock: () => 0 }));
+  const requiredFields = Object.keys(inst.DECISION_PACKAGE_FIELDS);
+  const verified = adrGov.mergeVerification({
+    register: reg, requiredFields, now: 0,
+    satisfiedBy: {
+      'Phase 17 Part 15': ['supportingEvidence', 'assumptions', 'confidence', 'alternativesConsidered', 'legalDependencies', 'historicalOutcomes', 'forecastConfidence', 'validationHistory'],
+      'Phase 17 Part 17': ['confidence', 'supportingEvidence', 'assumptions', 'risks', 'uncertainties', 'historicalOutcomes', 'governanceOwner'],
+      'Phase 18 Part 7': ['supportingEvidence', 'assumptions', 'confidence', 'historicalOutcomes', 'legalDependencies', 'governanceOwner', 'risks', 'institutionalImpacts', 'alternativesConsidered', 'predictedConsequences', 'validationHistory', 'constitutionalImplications'],
+    },
+  });
+  assert.equal(verified.everyMergeVerified, true);
+  assert.deepEqual(verified.functionalityLost, []);
+  // …and it says what it cannot establish.
+  for (const m of verified.merges) {
+    assert.equal(m.verifies, 'structure');
+    assert.match(m.cannotVerify, /judgement is human/);
+  }
+});
+
+test('phase18.1: an unchecked requirement is unknown — neither satisfied nor lost', () => {
+  const reg = adrGov.seedPlatformMerges(new adrGov.MergeRegister({ clock: () => 0 }));
+  const unchecked = adrGov.mergeVerification({
+    register: reg, satisfiedBy: {}, requiredFields: Object.keys(inst.DECISION_PACKAGE_FIELDS), now: 0,
+  });
+  assert.equal(unchecked.everyMergeVerified, false);
+  assert.deepEqual(unchecked.functionalityLost, [], 'unknown is not lost');
+  assert.equal(unchecked.merges[0].unexamined.length, 3);
+  assert.match(unchecked.basis, /UNKNOWN rather than lost/);
+
+  // …and a requirement whose field genuinely vanished IS reported as lost.
+  const broken = adrGov.mergeVerification({
+    register: reg, requiredFields: Object.keys(inst.DECISION_PACKAGE_FIELDS), now: 0,
+    satisfiedBy: { 'Phase 18 Part 7': ['constitutionalImplications', 'aFieldThatWasRemoved'] },
+  });
+  assert.ok(broken.functionalityLost.length > 0);
+  assert.equal(broken.everyMergeVerified, false);
+});
+
+test('phase18.1: a verification over no merges is not a passing one', () => {
+  const nothing = adrGov.mergeVerification({ register: null, now: 0 });
+  assert.equal(nothing.measurable, false);
+  assert.equal(nothing.everyMergeVerified, false);
+  assert.match(nothing.basis, /not evidence that no merge happened/);
+});

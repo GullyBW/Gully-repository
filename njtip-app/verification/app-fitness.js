@@ -4869,6 +4869,108 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-MERGE-GOVERNANCE', 'A merge recorded only in a commit message is indistinguishable from a requirement that was dropped', (v) => {
+    const adr = require('../src/architecture/adr-governance');
+    const inst = require('../src/assurance/institutional');
+
+    // --- The merge schema tier is the newest in force ----------------------------------------
+    if (adr.MERGE_SCHEMA_FROM !== 12) v.push(`the merge schema applies from ADR-${adr.MERGE_SCHEMA_FROM}, not from 0012 where the first merge was recorded`);
+    for (const required of ['mergedRequirements', 'mergeRationale', 'compatibilityImpact', 'implementationStrategy']) {
+      if (!adr.MERGE_SCHEMA.some((s) => s.field === required)) v.push(`the merge schema does not require '${required}'`);
+    }
+    for (const s of adr.MERGE_SCHEMA) {
+      if (!s.heading || !s.why) v.push(`merge schema section '${s.field}' does not state its heading or why it is required`);
+    }
+    // ADR-0012 exists and satisfies the tier it introduced. An ADR that establishes a rule and does
+    // not meet it is the weakest possible version of that rule.
+    const numbers = adr.adrFiles().map((f) => Number(require('node:path').basename(f).slice(0, 4)));
+    if (!numbers.includes(12)) v.push('ADR-0012 does not exist, so the merge it governs is ungoverned');
+
+    // --- THE POINT OF PART 2: a merge that cites nothing is refused --------------------------
+    const base = {
+      mergedRequirements: ['Spec A Part 1', 'Spec B Part 2'], into: 'src/somewhere.js',
+      rationale: 'because they describe one artefact', architecturalJustification: 'one guard, not two',
+      compatibilityImpact: 'additive for readers', implementationStrategy: 'union of the field lists',
+      recordedBy: 'Architecture Review Board',
+    };
+    const refuses = (spec, label) => {
+      const reg = new adr.MergeRegister({ clock: () => 0 });
+      let refused = false;
+      try { reg.record('M', spec); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(label);
+    };
+    refuses({ ...base }, 'a merge citing no ADR was accepted — a merge recorded only in a commit message is indistinguishable afterwards from a requirement that was dropped');
+    refuses({ ...base, adr: 'ADR-0099' }, 'a merge citing an ADR nobody wrote was accepted — a citation of something that does not exist is worse than no citation, because it looks governed');
+    refuses({ ...base, adr: 'not-an-adr' }, 'a merge citing a malformed ADR reference was accepted');
+    refuses({ ...base, adr: 'ADR-0012', mergedRequirements: ['only one'] }, 'a single requirement implemented once was accepted as a merge');
+    refuses({ ...base, adr: 'ADR-0012', rationale: undefined }, 'a merge with no rationale was accepted — a merge for convenience and one to prevent duplication are indistinguishable afterwards');
+    refuses({ ...base, adr: 'ADR-0012', compatibilityImpact: undefined }, 'a merge that does not say what existing callers must change was accepted');
+    refuses({ ...base, adr: 'ADR-0012', implementationStrategy: undefined }, 'a merge that does not say how the requirements were combined was accepted');
+    refuses({ ...base, adr: 'ADR-0012', recordedBy: undefined }, 'a merge was recorded with nobody named as having recorded it');
+    // …and a complete one is accepted, or the register is unusable.
+    const ok = new adr.MergeRegister({ clock: () => 0 });
+    if (!ok.record('M', { ...base, adr: 'ADR-0012' })) v.push('a complete merge record was refused, so nothing could ever be registered');
+
+    // --- An empty register says what it does NOT know ---------------------------------------
+    const empty = new adr.MergeRegister({ clock: () => 0 }).report({ now: 0 });
+    if (empty.measurable) v.push('an empty merge register reported itself measurable');
+    if (!/not the same as no merge having happened/.test(empty.basis)) {
+      v.push('an empty merge register does not say that an unregistered merge is invisible to it');
+    }
+    if (empty.declarative !== true) v.push('the merge register does not declare that it records what somebody recorded');
+    if (empty.authorizes !== false) v.push('the merge register claims authority');
+
+    // --- The real merge on this platform is recorded and governed ---------------------------
+    const register = adr.seedPlatformMerges(new adr.MergeRegister({ clock: () => 0 }));
+    const report = register.report({ now: 0 });
+    if (!report.count) v.push('the merge this platform actually performed is not recorded');
+    if (!report.everyMergeGoverned) v.push('a recorded merge cites no ADR');
+    if (report.duplicatedRequirements.length) v.push('a requirement is recorded as absorbed into more than one implementation, which cannot both be true');
+    const index = register.requirementIndex();
+    for (const requirement of ['Phase 17 Part 15', 'Phase 17 Part 17', 'Phase 18 Part 7']) {
+      if (!index.has(requirement)) v.push(`'${requirement}' was merged into the decision package and the register does not say so`);
+    }
+
+    // --- Part 6: every absorbed requirement still maps to fields that exist ------------------
+    const fields = Object.keys(inst.DECISION_PACKAGE_FIELDS);
+    const satisfiedBy = {
+      'Phase 17 Part 15': ['supportingEvidence', 'assumptions', 'confidence', 'alternativesConsidered', 'legalDependencies', 'historicalOutcomes', 'forecastConfidence', 'validationHistory'],
+      'Phase 17 Part 17': ['confidence', 'supportingEvidence', 'assumptions', 'risks', 'uncertainties', 'historicalOutcomes', 'governanceOwner'],
+      'Phase 18 Part 7': ['supportingEvidence', 'assumptions', 'confidence', 'historicalOutcomes', 'legalDependencies', 'governanceOwner', 'risks', 'institutionalImpacts', 'alternativesConsidered', 'predictedConsequences', 'validationHistory', 'constitutionalImplications'],
+    };
+    const verified = adr.mergeVerification({ register, satisfiedBy, requiredFields: fields, now: 0 });
+    if (!verified.everyMergeVerified) v.push(`a merged requirement no longer maps to a required field: ${JSON.stringify(verified.functionalityLost)}`);
+    if (verified.functionalityLost.length) v.push('functionality was lost in the merge');
+    if (!verified.everyMergeGoverned) v.push('an unverified merge is also ungoverned');
+
+    // --- Verification says what it CANNOT establish ------------------------------------------
+    for (const m of verified.merges) {
+      if (m.verifies !== 'structure') v.push(`merge '${m.merge}' claims to verify something other than structure`);
+      if (!/judgement is human/.test(m.cannotVerify)) v.push(`merge '${m.merge}' does not state that whether a field means what the specification intended is a human judgement`);
+    }
+
+    // --- A requirement nothing was supplied for is UNKNOWN, not satisfied and not lost -------
+    const unchecked = adr.mergeVerification({ register, satisfiedBy: {}, requiredFields: fields, now: 0 });
+    if (unchecked.everyMergeVerified) v.push('a merge whose requirements nothing was supplied to check was reported as verified');
+    if (unchecked.functionalityLost.length) v.push('a requirement nobody checked was reported as lost — unknown is neither satisfied nor lost');
+    if (unchecked.merges[0].unexamined.length !== 3) v.push('the unexamined requirements were not named');
+    if (!/UNKNOWN rather than lost/.test(unchecked.basis)) v.push('the verification basis does not distinguish unknown from lost');
+
+    // --- …and a requirement whose field genuinely vanished IS reported as lost ---------------
+    const broken = adr.mergeVerification({
+      register, satisfiedBy: { 'Phase 18 Part 7': ['constitutionalImplications', 'aFieldThatWasRemoved'] },
+      requiredFields: fields, now: 0,
+    });
+    if (!broken.functionalityLost.length) v.push('a merged requirement whose field is no longer required was not reported as lost');
+    if (broken.everyMergeVerified) v.push('a merge that lost a field reported itself verified');
+
+    // --- An empty verification is not a passing one -----------------------------------------
+    const nothing = adr.mergeVerification({ register: null, now: 0 });
+    if (nothing.measurable) v.push('a verification over no merges reported itself measurable');
+    if (nothing.everyMergeVerified) v.push('a verification over no merges reported every merge verified');
+    if (!/not evidence that no merge happened/.test(nothing.basis)) v.push('an empty verification does not say that silence is not evidence');
+  }),
+
   fit('APP-FIT-ACCREDITATION-READINESS', 'A complete accreditation artefact permits exactly what an empty one permits, which is nothing', (v) => {
     const rm = require('../src/migration/roadmap');
     const fs = require('node:fs');
@@ -6369,8 +6471,10 @@ module.exports = [
     if (!vague.violations.some((x) => /no measurable value/.test(x))) v.push('the measurability failure was not named');
     const measurable = probe('p95 latency stays under 500 ms across a 30-day window; 108 invariants hold.');
     if (!measurable.valid) v.push('a genuinely measurable criterion was rejected: ' + measurable.violations.join('; '));
-    // A new ADR is held to the newest tier in force, which Phase 12 made 'governance'.
-    if (measurable.schema !== 'governance') v.push('ADR-0099 was not held to the newest schema in force');
+    // A new ADR is held to the newest tier in force. Phase 12 made that 'governance'; Phase 18.1
+    // added 'merge' from ADR-0012, because a merge that is recorded only in a commit message is
+    // indistinguishable afterwards from a requirement that was dropped.
+    if (measurable.schema !== 'merge') v.push(`ADR-0099 was held to the '${measurable.schema}' schema rather than the newest tier in force`);
     // The real catalogue satisfies the rule, or it is decorative here.
     for (const a of res.adrs.filter((x) => x.schema === 'extended')) {
       const crit = adr.parse(a.file).sections['measurable success criteria'];

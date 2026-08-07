@@ -113,7 +113,9 @@ test('ADR: an unmeasurable success criterion fails validation', () => {
   assert.ok(vague.violations.some((x) => /no measurable value/.test(x)));
   const ok = probe('p95 latency under 500 ms across a 30-day window.');
   assert.strictEqual(ok.valid, true, ok.violations.join('; '));
-  assert.strictEqual(ok.schema, 'governance');   // a new ADR is held to the newest tier in force
+  // A new ADR is held to the newest tier in force. Phase 12 made that 'governance'; Phase 18.1
+  // added 'merge' from ADR-0012, so a probe numbered 98 now sits above the merge cutover too.
+  assert.strictEqual(ok.schema, 'merge');
 });
 
 test('ADR: lifecycle and architectural debt are queryable', () => {
