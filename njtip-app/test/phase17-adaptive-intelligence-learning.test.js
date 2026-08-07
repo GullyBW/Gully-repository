@@ -1058,3 +1058,112 @@ test('phase17: the coupling forecast and the drift ratchet read the same baselin
   assert.equal(coupling.proximity, 'imminent');
   assert.equal(coupling.headroom, 0);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 13 — executive performance intelligence. Two more evidence-derived indicators.
+// ---------------------------------------------------------------------------------------------
+
+test('phase17: the executive dashboard carries eight indicators and none accepts a figure', () => {
+  assert.equal(Object.keys(inst.PERFORMANCE_INDICATORS).length, 8);
+  for (const required of ['evidenceQuality', 'collaborationMaturity']) {
+    assert.ok(inst.PERFORMANCE_INDICATORS[required], required);
+    assert.ok(inst.PERFORMANCE_INDICATORS[required].derivedFrom, required);
+  }
+  const injected = inst.institutionalPerformance({ evidenceQuality: 1, collaborationMaturity: 1 });
+  assert.deepEqual(injected.measured, [], 'a supplied figure produces unmeasured, never the figure');
+  assert.equal(injected.everyIndicatorDerived, true);
+});
+
+test('phase17: an ungraded corpus and an unexamined hand-off are unknown, not poor', () => {
+  const eq = inst.institutionalPerformance({ evidenceQuality: { count: 0, quality: null, sound: false, threshold: 0.7, belowThreshold: [] } })
+    .indicators.find((i) => i.indicator === 'evidenceQuality');
+  assert.equal(eq.measured, false);
+  assert.equal(eq.performing, null, 'unknown quality is not poor quality');
+
+  const cm = inst.institutionalPerformance({ workflowIntelligence: { coordinationQuality: null, compoundingSteps: [], coordinationBasis: 'b' } })
+    .indicators.find((i) => i.indicator === 'collaborationMaturity');
+  assert.equal(cm.measured, false);
+  assert.equal(cm.performing, null, 'unknown collaboration is not failing collaboration');
+});
+
+test('phase17: evidence quality reports the weakest item, because a corpus is as good as its worst', () => {
+  const eq = inst.institutionalPerformance({ evidenceQuality: { count: 3, quality: 0.2, sound: false, threshold: 0.7, belowThreshold: [{ evidence: 'x' }] } })
+    .indicators.find((i) => i.indicator === 'evidenceQuality');
+  assert.equal(eq.value, 0.2);
+  assert.equal(eq.performing, false);
+  assert.match(eq.detail, /weakest of 3 graded item\(s\)/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 14 — accreditation readiness. Planning artefacts that cannot become permission.
+// ---------------------------------------------------------------------------------------------
+
+const rm = require('../src/migration/roadmap');
+
+const fullPack = () => rm.accreditationReadiness({
+  fitnessResults: [{ id: 'X', pass: true }],
+  documentation: { sound: true, verification: { unresolvedCount: 0, claims: 1 } },
+  rehearsals: { coverage: () => ({ neverRehearsed: [] }) },
+  ownershipContinuity: { continuous: true, rolesWithoutValidatedAlternate: [] },
+  now: 0,
+});
+
+test('phase17: seven planning artefacts, each naming the human who alone can sign it', () => {
+  assert.equal(Object.keys(rm.ACCREDITATION_ARTEFACTS).length, 7);
+  for (const [id, a] of Object.entries(rm.ACCREDITATION_ARTEFACTS)) {
+    assert.ok(a.produces && a.signedByRole && a.humanOnly, id);
+    assert.ok(a.requires.length > 0, id);
+  }
+});
+
+test('phase17: a more complete accreditation pack permits exactly what an empty one permits', () => {
+  const bare = rm.accreditationReadiness({ now: 0 });
+  const full = fullPack();
+  assert.ok(full.completeness > bare.completeness, 'supplying evidence genuinely raised completeness');
+  for (const field of ['deploymentPermitted', 'authorizes', 'executes', 'planOnly', 'signedBy', 'authorizationStatus']) {
+    assert.deepEqual(full[field], bare[field], `${field} did not move with completeness`);
+  }
+  assert.equal(full.deploymentPermitted, false);
+  assert.equal(full.authorizationStatus, 'NOT AUTHORIZED');
+  assert.equal(full.signedBy, null);
+});
+
+test('phase17: every artefact is unsigned, and the preparer is never the role that signs it', () => {
+  const full = fullPack();
+  assert.equal(full.unsigned.length, full.count);
+  for (const a of full.artefacts) {
+    assert.equal(a.signedBy, null, a.artefact);
+    assert.equal(a.permitsDeployment, false, a.artefact);
+    assert.equal(a.isPlanOnly, true, a.artefact);
+    assert.notEqual(a.preparedBy, a.signedByRole, a.artefact);
+  }
+});
+
+test('phase17: a requirement nothing could answer is unknown and excluded, never counted as unmet', () => {
+  assert.equal(rm.REQUIREMENT_STATES.unknown.examined, false);
+  assert.match(rm.REQUIREMENT_STATES.unknown.means, /Not examined is not unmet/);
+
+  const acceptance = rm.accreditationReadiness({ now: 0 }).artefacts.find((a) => a.artefact === 'operationalAcceptance');
+  assert.ok(acceptance.unknownRequirements.length > 0);
+  assert.equal(acceptance.completeness, null, 'nothing examinable produces null, not zero');
+  assert.match(acceptance.completenessBasis, /unknown rather than zero/);
+
+  for (const a of fullPack().artefacts) {
+    if (a.completeness === null) continue;
+    const examined = a.requirementCount - a.unknownRequirements.length;
+    assert.ok(examined > 0, a.artefact);
+    assert.ok(a.satisfiedCount <= examined, a.artefact);
+  }
+});
+
+test('phase17: accreditation completeness is the weakest artefact, because a pack is submitted whole', () => {
+  const full = fullPack();
+  const examinable = full.artefacts.filter((a) => a.completeness !== null);
+  assert.equal(full.completeness, Math.min(...examinable.map((a) => a.completeness)));
+  assert.ok(full.artefacts.some((a) => a.artefact === full.weakestArtefact));
+});
+
+test('phase17: security certification is genuinely unmet — no residual risk has ever been accepted', () => {
+  const cert = rm.accreditationReadiness({ now: 0 }).artefacts.find((a) => a.artefact === 'securityCertification');
+  assert.ok(cert.unmetRequirements.includes('residual risks with named acceptors'));
+});

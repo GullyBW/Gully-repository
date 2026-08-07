@@ -4869,6 +4869,100 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-ACCREDITATION-READINESS', 'A complete accreditation artefact permits exactly what an empty one permits, which is nothing', (v) => {
+    const rm = require('../src/migration/roadmap');
+    const fs = require('node:fs');
+    const path = require('node:path');
+
+    // --- Seven artefacts, each naming the human who alone can sign it ------------------------
+    for (const required of ['accreditation', 'securityCertification', 'operationalAcceptance', 'migrationPlanning', 'rollbackPlanning', 'deploymentGovernance', 'operationalOwnership']) {
+      if (!rm.ACCREDITATION_ARTEFACTS[required]) v.push(`accreditation artefact '${required}' is not prepared`);
+    }
+    if (Object.keys(rm.ACCREDITATION_ARTEFACTS).length !== 7) v.push('accreditation readiness does not carry exactly seven planning artefacts');
+    for (const [id, a] of Object.entries(rm.ACCREDITATION_ARTEFACTS)) {
+      if (!a.produces || !a.signedByRole || !a.humanOnly) v.push(`artefact '${id}' does not state what it produces, who signs it or what only a human may do`);
+      if (!Array.isArray(a.requires) || !a.requires.length) v.push(`artefact '${id}' states no requirements, so its completeness would be over nothing`);
+    }
+    if (!rm.REQUIREMENT_STATES.unknown || rm.REQUIREMENT_STATES.unknown.examined !== false) v.push('an unexamined requirement is not distinguished from an unmet one');
+    if (!/Not examined is not unmet/.test(rm.REQUIREMENT_STATES.unknown.means)) v.push('the unknown requirement state does not say it is distinct from unmet');
+
+    // --- THE POINT OF PART 14: completeness cannot become permission -------------------------
+    const bare = rm.accreditationReadiness({ now: 0 });
+    const full = rm.accreditationReadiness({
+      fitnessResults: [{ id: 'X', pass: true }],
+      documentation: { sound: true, verification: { unresolvedCount: 0, claims: 1 } },
+      rehearsals: { coverage: () => ({ neverRehearsed: [] }) },
+      ownershipContinuity: { continuous: true, rolesWithoutValidatedAlternate: [] },
+      now: 0,
+    });
+    for (const field of ['deploymentPermitted', 'authorizes', 'executes', 'planOnly', 'signedBy', 'authorizationStatus']) {
+      if (bare[field] !== full[field]) v.push(`a fully evidenced accreditation pack differs from an empty one on '${field}' — completeness became permission`);
+    }
+    if (full.deploymentPermitted !== false) v.push('a complete accreditation pack permitted deployment');
+    if (full.authorizationStatus !== 'NOT AUTHORIZED') v.push('the authorization status is not the constant NOT AUTHORIZED');
+    if (full.signedBy !== null) v.push('an accreditation pack was signed by something that is not a human');
+    // …and it must genuinely be more complete, or the comparison above proves nothing.
+    if (!(full.completeness > bare.completeness)) v.push(`supplying evidence did not raise completeness (${bare.completeness} → ${full.completeness}), so the counterexample does not exercise the point`);
+
+    // --- The guarantee is STRUCTURAL, not observed -------------------------------------------
+    // Comparing two packs is not enough, because no input can currently drive completeness to 1.
+    // Every permission field is a literal, so no expression exists that could make permission
+    // depend on progress.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'migration', 'roadmap.js'), 'utf8');
+    const start = src.indexOf('function accreditationReadiness');
+    const fn = src.slice(start, src.indexOf('module.exports', start));
+    const params = fn.slice(fn.indexOf('({'), fn.indexOf('} = {}'));
+    if (/sign|approv|authoriz|permit|accredited/i.test(params)) {
+      v.push('accreditationReadiness accepts a signature, approval or permission as a parameter — a machine may prepare an accreditation artefact and may never sign one');
+    }
+    for (const [field, literal] of [
+      ['deploymentPermitted', 'false'], ['permitsDeployment', 'false'], ['authorizes', 'false'],
+      ['executes', 'false'], ['planOnly', 'true'], ['isPlanOnly', 'true'], ['signedBy', 'null'],
+      ['authorizationStatus', "'NOT AUTHORIZED'"],
+    ]) {
+      const occurrences = [...fn.matchAll(new RegExp(`(?<![\\w.])${field}\\s*:\\s*([^,\\n]+)`, 'g'))].map((m) => m[1].trim());
+      if (!occurrences.length) v.push(`the accreditation artefacts do not state '${field}' at all`);
+      for (const value of occurrences) {
+        if (value !== literal) v.push(`'${field}' is assigned the expression \`${value}\` rather than the literal ${literal} — a permission that is computed is a permission that can be earned, and accreditation progress must never earn one`);
+      }
+    }
+    if (/\b(deploy|cutover|promote|execute)\s*\(/.test(fn)) v.push('the accreditation section calls something that deploys, cuts over, promotes or executes');
+
+    // --- Every artefact is unsigned, and the preparer is never the signer --------------------
+    if (full.unsigned.length !== full.count) v.push('an accreditation artefact reported itself signed');
+    for (const a of full.artefacts) {
+      if (a.signedBy !== null) v.push(`artefact '${a.artefact}' carries a signature`);
+      if (a.permitsDeployment !== false || a.isPlanOnly !== true) v.push(`artefact '${a.artefact}' is not marked as plan-only and non-permitting`);
+      if (a.preparedBy === a.signedByRole) v.push(`artefact '${a.artefact}' was prepared by the role that must sign it`);
+    }
+
+    // --- An unanswerable requirement is UNKNOWN, and excluded from the rate ------------------
+    const acceptance = bare.artefacts.find((a) => a.artefact === 'operationalAcceptance');
+    if (!acceptance.unknownRequirements.length) v.push('with no reports supplied, operational acceptance reported no unknown requirement');
+    if (acceptance.completeness !== null) v.push('an artefact whose requirements could not be examined produced a completeness figure rather than null');
+    if (!/unknown rather than zero/.test(acceptance.completenessBasis)) v.push('an unexaminable artefact does not say its completeness is unknown rather than zero');
+    for (const a of full.artefacts) {
+      if (a.completeness === null) continue;
+      const examined = a.requirementCount - a.unknownRequirements.length;
+      if (examined === 0) v.push(`artefact '${a.artefact}' produced a completeness over zero examined requirements`);
+      if (a.satisfiedCount > examined) v.push(`artefact '${a.artefact}' counted more satisfied requirements than it examined`);
+      if (a.unknownRequirements.length && !/excluded rather than counted as unmet/.test(a.completenessBasis)) {
+        v.push(`artefact '${a.artefact}' excludes unexamined requirements without saying so`);
+      }
+    }
+
+    // --- Aggregated to the weakest artefact, because a pack is submitted whole ---------------
+    const examinable = full.artefacts.filter((a) => a.completeness !== null);
+    if (full.completeness !== Math.min(...examinable.map((a) => a.completeness))) v.push('accreditation completeness is a mean rather than the weakest artefact');
+    if (!full.artefacts.some((a) => a.artefact === full.weakestArtefact)) v.push('the weakest artefact named is not one of the artefacts');
+
+    // --- A real unmet requirement, on the estate as it stands --------------------------------
+    // Nothing has accepted a residual risk, and that is what an unaccredited platform looks like.
+    if (!bare.artefacts.find((a) => a.artefact === 'securityCertification').unmetRequirements.length) {
+      v.push('security certification reported no unmet requirement on a platform where no residual risk has ever been accepted');
+    }
+  }),
+
   fit('APP-FIT-CAPABILITY-EVOLUTION', 'Velocity without stability is churn, and a maturity rise needs verified evidence like everything else', (v) => {
     const own = require('../src/governance/ownership');
     const snap = (level) => ({ organizationalLevel: level, assessedCount: 7, domains: [] });
@@ -9532,20 +9626,23 @@ module.exports = [
     if (!nothingSupplied) v.push('the gate passed with nothing supplied to validate');
   }),
 
-  fit('APP-FIT-INSTITUTIONAL-PERFORMANCE', 'Six performance indicators are derived from reports, a supplied figure produces unmeasured, and nothing authorizes', (v) => {
+  fit('APP-FIT-INSTITUTIONAL-PERFORMANCE', 'Eight performance indicators are derived from reports, a supplied figure produces unmeasured, and nothing authorizes', (v) => {
     const inst = require('../src/assurance/institutional');
 
-    for (const required of ['governanceEfficiency', 'operationalEffectiveness', 'organizationalMaturity', 'legalReadiness', 'documentationQuality', 'institutionalResilience']) {
+    for (const required of ['governanceEfficiency', 'operationalEffectiveness', 'organizationalMaturity', 'legalReadiness', 'documentationQuality', 'institutionalResilience',
+      // Phase 17, Part 13. The two the executive view never carried: the quality of the material
+      // every other indicator is derived from, and whether work can cross institutions at all.
+      'evidenceQuality', 'collaborationMaturity']) {
       if (!inst.PERFORMANCE_INDICATORS[required]) v.push(`performance indicator '${required}' is not measured`);
     }
-    if (Object.keys(inst.PERFORMANCE_INDICATORS).length !== 6) v.push('institutional performance does not carry exactly six indicators');
+    if (Object.keys(inst.PERFORMANCE_INDICATORS).length !== 8) v.push('institutional performance does not carry exactly eight indicators');
     for (const [id, i] of Object.entries(inst.PERFORMANCE_INDICATORS)) {
       if (!i.asks || !i.asks.endsWith('?') || !i.derivedFrom || !i.ifUnmeasured) v.push(`performance indicator '${id}' does not state its question, its source or what not measuring it costs`);
     }
 
     // --- Nothing supplied: every indicator unmeasured, and unmeasured is not performing -------
     const blind = inst.institutionalPerformance({});
-    if (blind.unmeasured.length !== 6) v.push('an unsourced institution did not report all six indicators as unmeasured');
+    if (blind.unmeasured.length !== 8) v.push('an unsourced institution did not report all eight indicators as unmeasured');
     if (blind.performing) v.push('an entirely unmeasured institution reported itself performing');
     if (blind.measurable) v.push('an unsourced institution reported itself measurable');
     for (const i of blind.indicators) {
@@ -9554,7 +9651,7 @@ module.exports = [
     if (blind.authorizationStatus !== 'NOT AUTHORIZED' || blind.authorizes !== false) v.push('institutional performance claims authority');
 
     // --- THE PROHIBITION: a supplied figure produces unmeasured, never the figure -------------
-    const injected = inst.institutionalPerformance({ legalReadiness: 0.99, documentationQuality: 1, governanceEfficiency: 1, operationalEffectiveness: 1, organizationalMaturity: 'L4', institutionalResilience: 1 });
+    const injected = inst.institutionalPerformance({ legalReadiness: 0.99, documentationQuality: 1, governanceEfficiency: 1, operationalEffectiveness: 1, organizationalMaturity: 'L4', institutionalResilience: 1, evidenceQuality: 1, collaborationMaturity: 1 });
     if (injected.measured.length) v.push('a hand-entered performance figure was accepted');
     if (!injected.everyIndicatorDerived) v.push('an indicator is not marked as derived and non-enterable');
     for (const i of injected.indicators) if (i.manualEntry !== false) v.push(`indicator '${i.indicator}' permits manual entry`);
@@ -9567,11 +9664,13 @@ module.exports = [
       legalAuthority: { authorized: ['a', 'b'], count: 2, complete: true, completenessBasis: '2 of 2 authorised' },
       documentation: { sound: true, verification: { claims: 247, unresolvedCount: 0 } },
       resilience: { holds: true, capabilities: [{ categoriesValidated: true }], violationCount: 0 },
+      evidenceQuality: { count: 12, quality: 0.9, sound: true, threshold: 0.7, belowThreshold: [] },
+      workflowIntelligence: { coordinationQuality: 0.9, compoundingSteps: [], coordinationBasis: 'computed over 5 of 5 workflows' },
     };
     const performing = inst.institutionalPerformance(green);
     if (!performing.performing) v.push(`a fully evidenced institution was not performing: ${performing.underperforming.concat(performing.unmeasured).join(', ')}`);
     if (performing.unmeasured.length) v.push('a fully sourced institution still had unmeasured indicators');
-    if (performing.authorizationStatus !== 'NOT AUTHORIZED') v.push('six performing indicators produced an authorization');
+    if (performing.authorizationStatus !== 'NOT AUTHORIZED') v.push('eight performing indicators produced an authorization');
 
     // --- Each indicator can fail ON ITS OWN, so none is decoration ----------------------------
     for (const [indicator, broken] of [
@@ -9581,6 +9680,8 @@ module.exports = [
       ['legalReadiness', { legalAuthority: { authorized: [], count: 5, complete: false, completenessBasis: '0 of 5' } }],
       ['documentationQuality', { documentation: { sound: false, verification: { claims: 247, unresolvedCount: 9 } } }],
       ['institutionalResilience', { resilience: { holds: false, capabilities: [{ categoriesValidated: false }], violationCount: 3 } }],
+      ['evidenceQuality', { evidenceQuality: { count: 12, quality: 0.2, sound: false, threshold: 0.7, belowThreshold: [{ evidence: 'x' }] } }],
+      ['collaborationMaturity', { workflowIntelligence: { coordinationQuality: 0.4, compoundingSteps: [{ context: 'case-management' }], coordinationBasis: 'computed over 2 of 5 workflows' } }],
     ]) {
       const r = inst.institutionalPerformance({ ...green, ...broken });
       if (!r.underperforming.includes(indicator)) v.push(`performance indicator '${indicator}' cannot fail — a control nothing can fail is decoration`);
@@ -9590,6 +9691,24 @@ module.exports = [
     const partial = inst.institutionalPerformance({ documentation: green.documentation });
     if (partial.performing) v.push('an institution with one measured indicator reported itself performing');
     if (!/excluded rather than counted as performing/.test(partial.basis)) v.push('the basis does not say that unmeasured indicators are excluded');
+
+    // --- Part 13: an ungraded corpus and an unexamined hand-off are UNKNOWN, not poor ---------
+    // The trap the two new indicators are most likely to fall into, checked with the empty reports
+    // the platform actually produces rather than with contrived ones.
+    const eq = inst.institutionalPerformance({ evidenceQuality: { count: 0, quality: null, sound: false, threshold: 0.7, belowThreshold: [] } })
+      .indicators.find((i) => i.indicator === 'evidenceQuality');
+    if (eq.measured) v.push('an ungraded evidence corpus produced a measured quality figure');
+    if (eq.performing !== null) v.push('an ungraded evidence corpus was given a performance verdict — unknown quality is not poor quality');
+    const cm = inst.institutionalPerformance({ workflowIntelligence: { coordinationQuality: null, compoundingSteps: [], coordinationBasis: 'b' } })
+      .indicators.find((i) => i.indicator === 'collaborationMaturity');
+    if (cm.measured) v.push('unexamined institutional hand-offs produced a measured collaboration figure');
+    if (cm.performing !== null) v.push('unexamined hand-offs were given a performance verdict — unknown collaboration is not failing collaboration');
+    // Evidence quality reports the WEAKEST item, not a mean: a corpus is as good as the worst thing
+    // somebody will cite from it.
+    const weakest = inst.institutionalPerformance({ evidenceQuality: { count: 3, quality: 0.2, sound: false, threshold: 0.7, belowThreshold: [{ evidence: 'x' }] } })
+      .indicators.find((i) => i.indicator === 'evidenceQuality');
+    if (weakest.value !== 0.2) v.push('evidence quality did not report the weakest graded item');
+    if (!/weakest of 3 graded item\(s\)/.test(weakest.detail)) v.push('the evidence quality detail does not say it is the weakest item over a stated corpus size');
   }),
 
   fit('APP-FIT-TRACEABILITY-INVARIANT', 'No executive conclusion, readiness assessment, recommendation, forecast or decision exists without a complete evidence-backed traceability chain', (v) => {

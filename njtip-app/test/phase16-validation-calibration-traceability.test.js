@@ -571,6 +571,11 @@ test('every performance indicator can fail on its own', () => {
     legalAuthority: { authorized: ['a'], count: 1, complete: true, completenessBasis: 'b' },
     documentation: { sound: true, verification: { claims: 247, unresolvedCount: 0 } },
     resilience: { holds: true, capabilities: [{ categoriesValidated: true }], violationCount: 0 },
+    // Phase 17, Part 13 added two indicators to this dashboard. A "green" fixture that does not
+    // source them is no longer green: an unsourced indicator is unmeasured, and unmeasured is not
+    // performing.
+    evidenceQuality: { count: 12, quality: 0.9, sound: true, threshold: 0.7, belowThreshold: [] },
+    workflowIntelligence: { coordinationQuality: 0.9, compoundingSteps: [], coordinationBasis: 'b' },
   };
   assert.strictEqual(inst.institutionalPerformance(green).performing, true);
   for (const [indicator, broken] of [
@@ -580,6 +585,8 @@ test('every performance indicator can fail on its own', () => {
     ['legalReadiness', { legalAuthority: { authorized: [], count: 5, complete: false, completenessBasis: 'b' } }],
     ['documentationQuality', { documentation: { sound: false, verification: { claims: 247, unresolvedCount: 9 } } }],
     ['institutionalResilience', { resilience: { holds: false, capabilities: [{ categoriesValidated: false }], violationCount: 3 } }],
+    ['evidenceQuality', { evidenceQuality: { count: 12, quality: 0.2, sound: false, threshold: 0.7, belowThreshold: [{ evidence: 'x' }] } }],
+    ['collaborationMaturity', { workflowIntelligence: { coordinationQuality: 0.4, compoundingSteps: [{ context: 'case-management' }], coordinationBasis: 'b' } }],
   ]) {
     const r = inst.institutionalPerformance({ ...green, ...broken });
     assert.ok(r.underperforming.includes(indicator), indicator);

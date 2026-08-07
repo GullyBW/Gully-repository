@@ -1937,6 +1937,22 @@ const PERFORMANCE_INDICATORS = {
     derivedFrom: 'src/governance/institutional-resilience.js',
     ifUnmeasured: 'A single person, document or instrument can stop a constitutional capability and nothing says so.',
   },
+  // --- Phase 17, Part 13 --------------------------------------------------------------------------
+  //
+  // The two indicators the executive view has never carried. Both are about the QUALITY of what
+  // everything else is derived from, which is why their absence is worse than a low reading: a
+  // dashboard with no evidence-quality indicator reports seven conclusions without ever saying how
+  // good the material behind them is.
+  evidenceQuality: {
+    asks: 'How good is the evidence every other indicator on this dashboard is derived from?',
+    derivedFrom: 'src/assurance/evidence-confidence.js (evidenceQualityDashboard)',
+    ifUnmeasured: 'Every other figure here is reported at face value, with no statement of what it rests on.',
+  },
+  collaborationMaturity: {
+    asks: 'Can work actually cross the institutions it has to cross?',
+    derivedFrom: 'src/governance/cross-agency.js (workflowIntelligence) — examined institutional hand-offs',
+    ifUnmeasured: 'Cross-government delivery is assumed to work because nothing has reported it failing.',
+  },
 };
 
 function institutionalPerformance(sources = {}) {
@@ -1979,6 +1995,23 @@ function institutionalPerformance(sources = {}) {
         ? +(sources.resilience.capabilities.filter((c) => c.categoriesValidated).length / Math.max(1, sources.resilience.capabilities.length)).toFixed(4) : null),
       g(() => sources.resilience && sources.resilience.holds),
       g(() => sources.resilience && `${sources.resilience.violationCount} capability(ies) rest on a single dependency`)),
+    // --- Phase 17, Part 13 ------------------------------------------------------------------------
+    indicator('evidenceQuality',
+      // The WEAKEST item in the corpus, which is what `quality` already reports — deliberately not a
+      // mean, because a corpus is only as good as the worst thing somebody will cite from it. An
+      // ungraded corpus produces null: evidence nobody has assessed is not evidence known to be poor.
+      g(() => (sources.evidenceQuality && sources.evidenceQuality.count ? sources.evidenceQuality.quality : null)),
+      g(() => sources.evidenceQuality && sources.evidenceQuality.sound),
+      g(() => sources.evidenceQuality && (sources.evidenceQuality.count
+        ? `weakest of ${sources.evidenceQuality.count} graded item(s); ${sources.evidenceQuality.belowThreshold.length} below the threshold of ${sources.evidenceQuality.threshold}`
+        : 'no evidence has been graded'))),
+    indicator('collaborationMaturity',
+      // Over EXAMINED institutional hand-offs. A path nobody has assessed contributes nothing to this
+      // figure rather than dragging it down.
+      g(() => (sources.workflowIntelligence ? sources.workflowIntelligence.coordinationQuality : null)),
+      g(() => sources.workflowIntelligence && sources.workflowIntelligence.coordinationQuality !== null
+        && sources.workflowIntelligence.compoundingSteps.length === 0),
+      g(() => sources.workflowIntelligence && sources.workflowIntelligence.coordinationBasis)),
   ];
 
   const measured = indicators.filter((i) => i.measured);

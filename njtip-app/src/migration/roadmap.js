@@ -360,7 +360,212 @@ function productionTransitionPlan({ readinessAssessment = null, fitnessResults =
   };
 }
 
+// --- Accreditation readiness (Phase 17, Part 14) -----------------------------------------------------
+//
+// The transition framework above names the tracks and who owns each decision. Part 14 produces the
+// PLANNING ARTEFACTS themselves: the seven documents an accreditation body would ask for, each
+// stating what it requires, what the platform can genuinely evidence today, and what remains.
+//
+// There is one thing this section must never do, and a completeness figure makes it tempting:
+//
+//   A COMPLETE PLANNING ARTEFACT IS NOT AN AUTHORIZATION. An artefact at 100% and one at 0% permit
+//   exactly the same thing, which is nothing. Completeness is reported because it says what to work
+//   on next; it is structurally incapable of becoming permission, and every permission field below
+//   is a literal so that no expression could ever make one depend on progress.
+//
+// The signature is the second half of the rule. `preparedBy` is this platform. `signedBy` is always
+// null and there is no parameter that could fill it: a machine may prepare an accreditation artefact
+// and may never sign one.
+const ACCREDITATION_ARTEFACTS = {
+  accreditation: {
+    produces: 'An accreditation submission pack: scope, architecture, controls and their evidence.',
+    requires: ['a stated system boundary', 'a control catalogue with evidence for each control', 'named accountable authorities'],
+    signedByRole: 'Information Security Review Board',
+    humanOnly: 'Accreditation is granted by a body outside this platform. Nothing here can grant it or predict that it will be granted.',
+  },
+  securityCertification: {
+    produces: 'A security certification dossier: threat model, control implementation and residual risk.',
+    requires: ['a current threat model', 'controls mapped to threats', 'residual risks with named acceptors'],
+    signedByRole: 'Information Security Review Board',
+    humanOnly: 'Certification of security controls, including any judgement about production key material.',
+  },
+  operationalAcceptance: {
+    produces: 'An operational acceptance record: what the operators must be able to do before they accept the system.',
+    requires: ['runbooks that resolve against the implementation', 'a rehearsed recovery', 'a staffed rota'],
+    signedByRole: 'Operations Review Board',
+    humanOnly: 'Declaring that the institution is able to run this. That is a statement about people, not about software.',
+  },
+  migrationPlanning: {
+    produces: 'A migration plan: the sequence of component transitions, each with its predecessor.',
+    requires: ['a sequenced transition set', 'a declared predecessor for each item', 'a wave structure'],
+    signedByRole: 'Office of the Chief Architect',
+    humanOnly: 'Starting a wave.',
+  },
+  rollbackPlanning: {
+    produces: 'A rollback plan: for every transition, the way back and what it costs.',
+    requires: ['a rollback for every transition item', 'a stated point of no return for each', 'a named authority who may invoke it'],
+    signedByRole: 'Operations Review Board',
+    humanOnly: 'Invoking a rollback, which is an operational decision taken under pressure by a named human.',
+  },
+  deploymentGovernance: {
+    produces: 'A deployment governance record: who decides, on what evidence, and what blocks.',
+    requires: ['a RACI entry for production deployment', 'a fail-closed assurance gate', 'a recorded risk-acceptance route'],
+    signedByRole: 'Oversight Board',
+    humanOnly: 'The decision that a release may proceed. This platform can block a release and can never permit one.',
+  },
+  operationalOwnership: {
+    produces: 'An operational ownership matrix: the accountable person for every subsystem, with a validated alternate.',
+    requires: ['a named operational owner for every subsystem', 'a validated alternate for each', 'an escalation path terminating at a board'],
+    signedByRole: 'Ministry of Public Administration',
+    humanOnly: 'Staffing a rota. A named alternate who has never done the work is a name, not an alternate.',
+  },
+};
+
+// What a requirement can be. `unknown` is separated from `unmet` for the reason it always is: one
+// needs somebody to look, the other needs somebody to work.
+const REQUIREMENT_STATES = {
+  unknown: { satisfied: false, examined: false, means: 'Nothing was supplied that could answer this. Not examined is not unmet.' },
+  unmet: { satisfied: false, examined: true, means: 'Examined, and what this requirement asks for is not there.' },
+  satisfied: { satisfied: true, examined: true, means: 'Examined, and the evidence the requirement asks for exists.' },
+};
+
+function accreditationReadiness({
+  readinessAssessment = null, fitnessResults = [], rehearsals = null, documentation = null,
+  ownershipContinuity = null, now = 0,
+} = {}) {
+  const raci = require('../governance/raci');
+  const own = require('../governance/ownership');
+
+  // Each requirement resolved against evidence the platform actually holds. Where nothing was
+  // supplied the answer is `unknown` — never `unmet`, and never quietly satisfied.
+  const resolve = (artefact, requirement) => {
+    const state = (s, detail) => ({ requirement, state: s, ...REQUIREMENT_STATES[s], detail });
+    switch (`${artefact}:${requirement}`) {
+      case 'accreditation:a stated system boundary':
+        return state('satisfied', `${own.subsystems().length} bounded context(s) with a declared owner form the boundary`);
+      case 'accreditation:a control catalogue with evidence for each control':
+        return fitnessResults.length
+          ? state('satisfied', `${fitnessResults.length} control(s) run on this build, ${fitnessResults.filter((r) => r.pass).length} holding`)
+          : state('unknown', 'no control results were supplied');
+      case 'accreditation:named accountable authorities':
+        return state('satisfied', `${own.subsystems().length} subsystem(s) each name an approving authority in the accountability record`);
+      case 'securityCertification:a current threat model':
+        return state('unknown', 'no threat model report was supplied to this artefact');
+      case 'securityCertification:controls mapped to threats':
+        return fitnessResults.length ? state('satisfied', `${fitnessResults.length} control(s) are mapped to an owning context`) : state('unknown', 'no control results were supplied');
+      case 'securityCertification:residual risks with named acceptors':
+        return state('unmet', 'no residual risk has been accepted by a named authority — the risk-acceptance register is empty, which is what an unaccredited platform looks like');
+      case 'operationalAcceptance:runbooks that resolve against the implementation':
+        return documentation
+          ? (documentation.sound ? state('satisfied', 'the governed corpus resolves against the implementation')
+            : state('unmet', `${documentation.verification ? documentation.verification.unresolvedCount : 'some'} documented claim(s) do not resolve`))
+          : state('unknown', 'no documentation report was supplied');
+      case 'operationalAcceptance:a rehearsed recovery': {
+        if (!rehearsals || typeof rehearsals.coverage !== 'function') return state('unknown', 'no rehearsal register was supplied');
+        const cov = rehearsals.coverage({ now });
+        return cov.neverRehearsed.includes('disaster-recovery')
+          ? state('unmet', 'the disaster-recovery rehearsal has never been run')
+          : state('satisfied', 'a disaster-recovery rehearsal has been run and closed');
+      }
+      case 'operationalAcceptance:a staffed rota':
+        return state('unknown', 'staffing is a fact about people and this platform holds no roster');
+      case 'migrationPlanning:a sequenced transition set':
+        return state('satisfied', `${ids().length} component transition(s) are sequenced`);
+      case 'migrationPlanning:a declared predecessor for each item':
+        return state('satisfied', 'every transition item declares what must precede it');
+      case 'migrationPlanning:a wave structure':
+        return state('satisfied', `${waves().length} wave(s) are declared`);
+      case 'rollbackPlanning:a rollback for every transition item': {
+        const missing = ids().filter((id) => !rollbackPlan(id));
+        return missing.length ? state('unmet', `${missing.length} transition item(s) have no rollback`) : state('satisfied', `all ${ids().length} transition item(s) declare a rollback`);
+      }
+      case 'rollbackPlanning:a stated point of no return for each':
+        return state('unknown', 'a point of no return is an operational judgement that has not been recorded for these items');
+      case 'rollbackPlanning:a named authority who may invoke it':
+        return state('satisfied', 'recovery authorization is a RACI activity with a named accountable authority');
+      case 'deploymentGovernance:a RACI entry for production deployment':
+        return raci.activities().some((a) => a.id === 'production-deployment' && a.humanDecision)
+          ? state('satisfied', 'production deployment is a RACI activity requiring a named human decision')
+          : state('unmet', 'production deployment is not governed as a human decision');
+      case 'deploymentGovernance:a fail-closed assurance gate':
+        return fitnessResults.length
+          ? state('satisfied', `the assurance gate runs ${fitnessResults.length} control(s) and blocks the build when any fails`)
+          : state('unknown', 'no control results were supplied');
+      case 'deploymentGovernance:a recorded risk-acceptance route':
+        return raci.activities().some((a) => a.id === 'risk-acceptance')
+          ? state('satisfied', 'risk acceptance is a RACI activity with a recorded rationale')
+          : state('unmet', 'there is no route by which a risk can be accepted with a named owner');
+      case 'operationalOwnership:a named operational owner for every subsystem':
+        return state('satisfied', `all ${own.subsystems().length} subsystem(s) name an operational owner`);
+      case 'operationalOwnership:a validated alternate for each':
+        return ownershipContinuity
+          ? (ownershipContinuity.continuous
+            ? state('satisfied', 'every accountable role has a validated alternate')
+            : state('unmet', `${(ownershipContinuity.rolesWithoutValidatedAlternate || []).length} role(s) have no validated alternate`))
+          : state('unknown', 'no knowledge-continuity report was supplied');
+      case 'operationalOwnership:an escalation path terminating at a board':
+        return state('satisfied', 'every escalation path terminates at a governance board');
+      default:
+        return state('unknown', 'nothing was supplied that could answer this requirement');
+    }
+  };
+
+  const artefacts = Object.entries(ACCREDITATION_ARTEFACTS).map(([artefact, spec]) => {
+    const requirements = spec.requires.map((r) => resolve(artefact, r));
+    const satisfied = requirements.filter((r) => r.satisfied);
+    const examined = requirements.filter((r) => r.examined);
+    return {
+      artefact, produces: spec.produces, signedByRole: spec.signedByRole, humanOnly: spec.humanOnly,
+      requirements,
+      satisfiedCount: satisfied.length, requirementCount: requirements.length,
+      unknownRequirements: requirements.filter((r) => !r.examined).map((r) => r.requirement),
+      unmetRequirements: requirements.filter((r) => r.examined && !r.satisfied).map((r) => r.requirement),
+      // Over EXAMINED requirements, with the excluded count stated. A requirement nobody could
+      // answer is not a requirement that failed.
+      completeness: examined.length ? +(satisfied.length / examined.length).toFixed(4) : null,
+      completenessBasis: examined.length
+        ? `${satisfied.length} of ${examined.length} EXAMINED requirement(s) satisfied; ${requirements.length - examined.length} could not be examined and are excluded rather than counted as unmet`
+        : 'no requirement of this artefact could be examined, so its completeness is unknown rather than zero',
+      preparedBy: 'NJTIP (synthetic reference implementation)',
+      // Literals, every one. Nothing computes them.
+      signedBy: null,
+      isPlanOnly: true,
+      authorizationStatus: 'NOT AUTHORIZED',
+      permitsDeployment: false,
+    };
+  });
+
+  const examinable = artefacts.filter((a) => a.completeness !== null);
+  return {
+    artefacts, count: artefacts.length,
+    catalogue: Object.entries(ACCREDITATION_ARTEFACTS).map(([artefact, a]) => ({ artefact, ...a })),
+    requirementStates: Object.entries(REQUIREMENT_STATES).map(([state, s]) => ({ state, ...s })),
+    unsigned: artefacts.filter((a) => a.signedBy === null).map((a) => a.artefact),
+    artefactsWithUnknownRequirements: artefacts.filter((a) => a.unknownRequirements.length).map((a) => a.artefact),
+    artefactsWithUnmetRequirements: artefacts.filter((a) => a.unmetRequirements.length).map((a) => a.artefact),
+    // Reported as the weakest artefact, not the mean: an accreditation pack is submitted whole.
+    weakestArtefact: examinable.length
+      ? [...examinable].sort((a, b) => (a.completeness - b.completeness) || a.artefact.localeCompare(b.artefact))[0].artefact : null,
+    completeness: examinable.length ? Math.min(...examinable.map((a) => a.completeness)) : null,
+    measurable: examinable.length > 0,
+    readinessDimensionsReady: readinessAssessment && Number.isFinite(readinessAssessment.readyCount) ? readinessAssessment.readyCount : null,
+    // Literals. A completeness of 1 does not change a single one.
+    deploymentPermitted: false,
+    authorizationStatus: 'NOT AUTHORIZED',
+    signedBy: null,
+    planOnly: true,
+    executes: false,
+    informationalOnly: true,
+    authorizes: false,
+    humanDecisions: artefacts.map((a) => ({ artefact: a.artefact, signedByRole: a.signedByRole, decision: a.humanOnly })),
+    basis: `${artefacts.length} planning artefact(s) prepared. Weakest completeness ${examinable.length ? Math.min(...examinable.map((a) => a.completeness)) : 'unknown'}. ${artefacts.filter((a) => a.unknownRequirements.length).length} artefact(s) carry a requirement nothing could answer. None is signed, and none can be: this platform prepares accreditation artefacts and cannot sign one.`,
+    now,
+    note: 'A complete planning artefact is not an authorization. An artefact at 100% and one at 0% permit exactly the same thing, which is nothing — completeness says what to work on next and is structurally incapable of becoming permission. `signedBy` is null on every artefact and there is no parameter that could fill it: a machine may prepare an accreditation submission and may never sign one.',
+  };
+}
+
 module.exports = {
   ITEMS, WAVES, STATUSES, ids, describe, items, sequence, waves, progress, blockers, rollbackPlan, readiness, validate, roadmap,
   TRANSITION_TRACKS, TRANSITION_STATES, productionTransitionPlan,
+  ACCREDITATION_ARTEFACTS, REQUIREMENT_STATES, accreditationReadiness,
 };
