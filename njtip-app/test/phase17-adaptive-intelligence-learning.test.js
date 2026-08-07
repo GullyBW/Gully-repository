@@ -953,3 +953,108 @@ test('phase17: a rising workflow validation rate needs verified evidence like ev
     now: 0,
   }).validationTrend.state, 'verified-improvement');
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 10 — capability evolution. Movement is not progress; churn is the figure that catches it.
+// ---------------------------------------------------------------------------------------------
+
+const snap = (level) => ({ organizationalLevel: level, assessedCount: 7, domains: [] });
+
+test('phase17: capability evolution needs two assessed snapshots, and unknown is not level zero', () => {
+  const one = own.capabilityEvolution({ snapshots: [snap('L1')] });
+  assert.equal(one.measurable, false);
+  assert.equal(one.improvementVelocity, null);
+  assert.equal(one.organizationalStability, null);
+  assert.equal(one.progression, null);
+  assert.equal(one.authorizes, false);
+
+  const unassessed = own.capabilityEvolution({
+    snapshots: [snap('L2'), { organizationalLevel: 'unknown', assessedCount: 0, domains: [] }],
+  });
+  assert.equal(unassessed.measurable, false, 'an unknown level is not a data point at rank zero');
+});
+
+test('phase17: an institution moving eight steps to end where it started is churning, not progressing', () => {
+  const churning = own.capabilityEvolution({ snapshots: [snap('L1'), snap('L3'), snap('L1'), snap('L3'), snap('L1')] });
+  assert.equal(churning.netMovement, 0);
+  assert.equal(churning.totalMovement, 8);
+  assert.equal(churning.churn, true);
+  assert.equal(churning.improvementVelocity, 0);
+  assert.ok(churning.organizationalStability > 1);
+  assert.match(churning.reason, /churning rather than progressing/);
+});
+
+test('phase17: neither a flat institution nor a monotonic climb is churn', () => {
+  const flat = own.capabilityEvolution({ snapshots: [snap('L2'), snap('L2'), snap('L2')] });
+  assert.equal(flat.churn, false);
+  assert.equal(flat.totalMovement, 0);
+  assert.equal(flat.trend.state, 'steady');
+  assert.equal(own.capabilityEvolution({ snapshots: [snap('L0'), snap('L2'), snap('L4')] }).churn, false,
+    'velocity alone must not trigger the finding');
+});
+
+test('phase17: a maturity rise obeys the improvement invariant like every other trend', () => {
+  const rising = own.capabilityEvolution({ snapshots: [snap('L0'), snap('L1'), snap('L2')] });
+  assert.equal(rising.progression, 2);
+  assert.equal(rising.regression, 0);
+  assert.equal(rising.trend.state, 'unverified-improvement');
+  assert.equal(rising.everyImprovementVerified, false);
+
+  const supported = own.capabilityEvolution({
+    snapshots: [snap('L0'), snap('L2')],
+    evidence: [{ kind: 'independent-verification', detail: 'an external assessment confirmed the level', by: 'Auditor General' }],
+  });
+  assert.equal(supported.trend.state, 'verified-improvement');
+});
+
+test('phase17: velocity states its unit rather than implying a timescale nobody supplied', () => {
+  const perSnapshot = own.capabilityEvolution({ snapshots: [snap('L0'), snap('L2')] });
+  assert.match(perSnapshot.velocityUnit, /per snapshot/);
+  const timed = own.capabilityEvolution({ snapshots: [snap('L0'), snap('L2')], periodDays: 90 });
+  assert.match(timed.velocityUnit, /per day/);
+  assert.notEqual(timed.improvementVelocity, perSnapshot.improvementVelocity);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 11 — architecture intelligence. A forecast is not a finding.
+// ---------------------------------------------------------------------------------------------
+
+test('phase17: every architectural risk states what would falsify it', () => {
+  assert.equal(Object.keys(dp.ARCHITECTURE_RISKS).length, 5);
+  for (const [id, r] of Object.entries(dp.ARCHITECTURE_RISKS)) {
+    assert.ok(r.asks.endsWith('?'), id);
+    assert.ok(r.derivedFrom, id);
+    assert.ok(r.falsifiedBy, `${id} — a forecast nothing could falsify is a hunch`);
+    assert.ok(r.ifRealised, id);
+  }
+});
+
+test('phase17: unknown proximity is off the scale, not at the far end of it', () => {
+  assert.equal(dp.RISK_PROXIMITY.unknown.rank, null);
+  assert.match(dp.RISK_PROXIMITY.unknown.means, /not the same as far away/);
+  for (const id of ['distant', 'approaching', 'imminent']) {
+    assert.equal(typeof dp.RISK_PROXIMITY[id].rank, 'number', id);
+  }
+});
+
+test('phase17: an unmeasurable pressure is unknown rather than distant, and no risk is a finding', () => {
+  const blind = dp.architectureIntelligence({ controls: [], assumptions: null, documentation: null, adrReview: null, now: 0 });
+  const drift = blind.risks.find((r) => r.risk === 'documentation-drift');
+  assert.equal(drift.proximity, 'unknown');
+  assert.equal(drift.value, null);
+  assert.ok(blind.unknown.includes('documentation-drift'));
+  for (const r of blind.risks) assert.equal(r.isFinding, false, r.risk);
+  assert.equal(blind.findings, 0);
+  assert.equal(blind.scored, false, 'five pressures with different units are never summed');
+  assert.equal(blind.authorizes, false);
+});
+
+test('phase17: the coupling forecast and the drift ratchet read the same baseline', () => {
+  assert.equal(dp.COUPLING_BASELINE, 125);
+  const coupling = dp.architectureIntelligence({ now: 0 }).risks.find((r) => r.risk === 'dependency-conflict');
+  // Measured from the source tree, so it is available even with nothing else supplied.
+  assert.notEqual(coupling.proximity, 'unknown');
+  assert.equal(coupling.value, dp.COUPLING_BASELINE, 'coupling sits exactly at its baseline: the next added edge fails the build');
+  assert.equal(coupling.proximity, 'imminent');
+  assert.equal(coupling.headroom, 0);
+});

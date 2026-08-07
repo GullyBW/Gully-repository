@@ -22,6 +22,12 @@ const telemetry = require('../observability/telemetry');
 
 const ROOT = path.join(__dirname, '..', '..');
 
+// The cross-context coupling ratchet. Declared here rather than in the fitness function so that the
+// gate that BLOCKS on it and the Phase 17 forecast that predicts approaching it read the same
+// number. Two copies of this constant would eventually disagree, and the disagreement would be
+// discovered as a forecast that said "distant" about a build that had already failed.
+const COUPLING_BASELINE = 125;
+
 const DRIFT_KINDS = {
   module: { undocumented: 'A source module no bounded context claims.', unrealised: 'A context claiming modules that do not exist.' },
   // SOURCE-LEVEL COUPLING IS NOT A DECLARED CONTEXT DEPENDENCY, and conflating them was this
@@ -1059,7 +1065,161 @@ class ForecastRegister {
   }
 }
 
+// --- Architecture intelligence (Phase 17, Part 11) --------------------------------------------------
+//
+// `detect()` finds drift that has ALREADY happened. Part 11 asks what is about to, and that is a
+// different kind of statement — kept structurally separate from drift for one reason:
+//
+//   A FORECAST IS NOT A FINDING. Reporting "coupling will exceed its baseline" alongside "coupling
+//   HAS exceeded its baseline" would make the drift report untrustworthy, because a reader could no
+//   longer tell which sentences are about the estate as it stands. Every row here carries
+//   `isFinding: false` and the report carries `findings: 0`.
+//
+// And a forecast nothing could falsify is a hunch, so every risk states what would falsify it.
+const ARCHITECTURE_RISKS = {
+  'dependency-conflict': {
+    asks: 'Is cross-context coupling approaching the point where the ratchet blocks the build?',
+    derivedFrom: 'detect().couplingCount against COUPLING_BASELINE',
+    falsifiedBy: 'coupling falling below the baseline, or the baseline being moved deliberately with a recorded decision',
+    ifRealised: 'The next added dependency fails the build, and the change that needed it stalls until somebody unpicks the coupling or moves the baseline under pressure.',
+  },
+  'ownership-overload': {
+    asks: 'Is approval concentrating in too few authorities to remain a review rather than a rubber stamp?',
+    derivedFrom: 'the share of subsystems whose approving authority is the single most-loaded one',
+    falsifiedBy: 'approval being distributed across more authorities, or a declared capacity showing the load is sustainable',
+    ifRealised: 'One board approves so much of the estate that its approval stops being a review, and separation of duties survives only on paper.',
+  },
+  'documentation-drift': {
+    asks: 'Is the governed corpus drifting away from the implementation it describes?',
+    derivedFrom: 'documentation-assurance verification: unresolved claims against total claims',
+    falsifiedBy: 'every documented claim resolving against the implementation',
+    ifRealised: 'An operator follows a runbook describing a system that no longer exists, during an incident.',
+  },
+  'governance-inconsistency': {
+    asks: 'Are the beliefs the platform rests on being examined at the rate their criticality requires?',
+    derivedFrom: 'the assumption registry: the share of assumptions outside their verification cadence',
+    falsifiedBy: 'every assumption being verified within its declared cadence',
+    ifRealised: 'The platform reasons from premises nobody has checked, and the first sign is a conclusion that turns out to have been wrong for years.',
+  },
+  'adr-conflict': {
+    asks: 'Is the ADR corpus accumulating decisions that are overdue for review?',
+    derivedFrom: 'adr-governance dueForReview: overdue ADRs against the corpus',
+    falsifiedBy: 'every ADR being within its review schedule',
+    ifRealised: 'Two recorded decisions contradict each other and neither has been revisited, so the answer to "why do we do it this way" depends on which one somebody finds.',
+  },
+};
+
+// How close a pressure is. `unknown` deliberately carries no rank: putting it on the same scale as a
+// measured proximity is how "nobody looked" quietly becomes "it is far away".
+const RISK_PROXIMITY = {
+  unknown: { rank: null, means: 'Nothing was supplied that could measure this pressure. Not measured is not the same as far away.' },
+  distant: { rank: 0, means: 'Measured, and well inside its threshold.' },
+  approaching: { rank: 1, means: 'Measured, and within a fifth of its threshold.' },
+  imminent: { rank: 2, means: 'Measured, and at or past its threshold. The next change of this kind realises it.' },
+};
+
+function architectureIntelligence({
+  controls = [], assumptions = null, documentation = null, adrReview = null, now = 0,
+} = {}) {
+  const ownershipModule = require('../governance/ownership');
+
+  const proximityOf = (value, threshold) => {
+    if (value === null || threshold === null) return 'unknown';
+    if (value >= threshold) return 'imminent';
+    return value / threshold >= 0.8 ? 'approaching' : 'distant';
+  };
+  const row = (risk, { value, threshold, unit, detail }) => ({
+    risk, ...ARCHITECTURE_RISKS[risk],
+    value, threshold, unit,
+    proximity: proximityOf(value, threshold), ...RISK_PROXIMITY[proximityOf(value, threshold)],
+    headroom: value === null ? null : +(threshold - value).toFixed(4),
+    detail,
+    // A forecast is not a finding. Stated on every row so it cannot be read past.
+    isFinding: false,
+  });
+
+  // 1. Coupling, against the SAME baseline the ratchet enforces.
+  const couplingCount = (() => { try { return detect({ controls, checkDocumentation: false }).couplingCount; } catch (_) { return null; } })();
+  const coupling = row('dependency-conflict', {
+    value: couplingCount, threshold: COUPLING_BASELINE, unit: 'cross-context dependency edges',
+    detail: couplingCount === null ? 'coupling could not be measured from the source tree'
+      : `${couplingCount} edge(s) against a baseline of ${COUPLING_BASELINE} — headroom ${COUPLING_BASELINE - couplingCount}`,
+  });
+
+  // 2. Approval concentration, derived from the accountability record rather than declared.
+  const subsystems = ownershipModule.subsystems();
+  const byApprover = new Map();
+  for (const s of subsystems) {
+    const a = ownershipModule.describe(s).approvingAuthority;
+    byApprover.set(a, (byApprover.get(a) || 0) + 1);
+  }
+  const busiest = [...byApprover.entries()].sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))[0] || null;
+  const concentration = busiest && subsystems.length ? +(busiest[1] / subsystems.length).toFixed(4) : null;
+  const ownership = row('ownership-overload', {
+    value: concentration, threshold: 0.25, unit: 'share of subsystems approved by one authority',
+    detail: concentration === null ? 'no accountability record was available'
+      : `'${busiest[0]}' approves ${busiest[1]} of ${subsystems.length} subsystem(s) — ${Math.round(concentration * 100)}%`,
+  });
+
+  // 3. Documentation drift. Unknown when nothing was supplied — never "no drift".
+  const claims = documentation && documentation.verification ? documentation.verification.claims : null;
+  const unresolved = documentation && documentation.verification ? documentation.verification.unresolvedCount : null;
+  const driftRate = claims ? +(unresolved / claims).toFixed(4) : null;
+  const docs = row('documentation-drift', {
+    value: driftRate, threshold: 0.02, unit: 'share of documented claims that do not resolve',
+    detail: driftRate === null ? 'no documentation verification was supplied, so drift is unknown rather than absent'
+      : `${unresolved} of ${claims} documented claim(s) do not resolve`,
+  });
+
+  // 4. Assumptions inside their cadence.
+  const assumptionReport = assumptions && typeof assumptions.report === 'function'
+    ? (() => { try { return assumptions.report({ now }); } catch (_) { return null; } })() : null;
+  const list = assumptionReport && Array.isArray(assumptionReport.assumptions) ? assumptionReport.assumptions : null;
+  const stale = list ? list.filter((a) => a.state === 'stale' || a.state === 'overdue' || a.state === 'unverified').length : null;
+  const staleRate = list && list.length ? +(stale / list.length).toFixed(4) : null;
+  const governance = row('governance-inconsistency', {
+    value: staleRate, threshold: 0.2, unit: 'share of assumptions outside their verification cadence',
+    detail: staleRate === null ? 'no assumption registry was supplied, so verification cadence is unknown'
+      : `${stale} of ${list.length} assumption(s) are outside their cadence`,
+  });
+
+  // 5. ADRs overdue for review.
+  const overdue = adrReview && Array.isArray(adrReview.overdue) ? adrReview.overdue.length : null;
+  const adrCount = adrReview && Number.isFinite(adrReview.count) ? adrReview.count
+    : (adrReview && Array.isArray(adrReview.adrs) ? adrReview.adrs.length : null);
+  const overdueRate = adrCount ? +(overdue / adrCount).toFixed(4) : null;
+  const adr = row('adr-conflict', {
+    value: overdueRate, threshold: 0.25, unit: 'share of ADRs overdue for review',
+    detail: overdueRate === null ? 'no ADR review report was supplied, so review currency is unknown'
+      : `${overdue} of ${adrCount} ADR(s) are overdue for review`,
+  });
+
+  const risks = [coupling, ownership, docs, governance, adr];
+  const measured = risks.filter((r) => r.proximity !== 'unknown');
+  return {
+    risks, count: risks.length,
+    catalogue: Object.entries(ARCHITECTURE_RISKS).map(([risk, r]) => ({ risk, ...r })),
+    proximities: Object.entries(RISK_PROXIMITY).map(([proximity, p]) => ({ proximity, ...p })),
+    imminent: risks.filter((r) => r.proximity === 'imminent').map((r) => r.risk),
+    approaching: risks.filter((r) => r.proximity === 'approaching').map((r) => r.risk),
+    distant: risks.filter((r) => r.proximity === 'distant').map((r) => r.risk),
+    unknown: risks.filter((r) => r.proximity === 'unknown').map((r) => r.risk),
+    couplingBaseline: COUPLING_BASELINE,
+    measurable: measured.length > 0,
+    // Constants, both. A forecast is not a finding, and five pressures with different units and
+    // different thresholds do not add up to a risk score.
+    findings: 0,
+    scored: false,
+    basis: measured.length
+      ? `${measured.length} of ${risks.length} architectural pressure(s) are measurable. ${risks.filter((r) => r.proximity === 'imminent').length} are at or past their threshold. ${risks.length - measured.length} could not be measured and are UNKNOWN rather than distant.`
+      : 'No architectural pressure could be measured. That is unknown, not safe: an unmeasured pressure is one nobody is watching.',
+    now, informationalOnly: true, authorizes: false,
+    note: 'A forecast is not a finding: every row here is about what MIGHT happen, and reporting it alongside drift that HAS happened would make the drift report untrustworthy. Unknown proximity carries no rank, because putting it on the same scale as a measured one is how "nobody looked" becomes "it is far away". The five pressures are never summed.',
+  };
+}
+
 module.exports = {
+  COUPLING_BASELINE, ARCHITECTURE_RISKS, RISK_PROXIMITY, architectureIntelligence,
   DRIFT_KINDS, DRIFT_CLASSES, classOfKind, assertDistinctResponses,
   FORECAST_DIMENSIONS, forecastInterval, adaptiveGovernanceAnalytics,
   CALIBRATION_MEASURES, CALIBRATION_GRADES, CALIBRATION_MIN_OUTCOMES, ForecastRegister,

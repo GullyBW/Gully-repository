@@ -4869,6 +4869,131 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-CAPABILITY-EVOLUTION', 'Velocity without stability is churn, and a maturity rise needs verified evidence like everything else', (v) => {
+    const own = require('../src/governance/ownership');
+    const snap = (level) => ({ organizationalLevel: level, assessedCount: 7, domains: [] });
+
+    // --- Fewer than two assessed snapshots: everything unknown -------------------------------
+    const one = own.capabilityEvolution({ snapshots: [snap('L1')] });
+    if (one.measurable) v.push('one snapshot produced a measurable evolution');
+    if (one.improvementVelocity !== null || one.organizationalStability !== null) v.push('velocity or stability was derived from one snapshot');
+    if (one.progression !== null || one.churn !== null) v.push('progression or churn was derived from one snapshot');
+    if (one.authorizes !== false) v.push('the capability evolution report claims authority');
+    // An UNKNOWN level is not a rank of zero, so an unassessed snapshot must not become a data point.
+    const unassessed = own.capabilityEvolution({ snapshots: [snap('L2'), { organizationalLevel: 'unknown', assessedCount: 0, domains: [] }] });
+    if (unassessed.measurable) v.push('an unknown organizational level was treated as an assessed data point — unknown is not level zero');
+
+    // --- A steady rise: progression, velocity, stability, and an UNVERIFIED improvement ------
+    const rising = own.capabilityEvolution({ snapshots: [snap('L0'), snap('L1'), snap('L2')] });
+    if (rising.progression !== 2 || rising.regression !== 0) v.push('progression and regression were not derived from the steps');
+    if (rising.improvementVelocity !== 1) v.push(`velocity computed as ${rising.improvementVelocity}, expected one level per snapshot`);
+    if (rising.organizationalStability !== 1) v.push('stability was not derived from the mean absolute step');
+    if (rising.churn) v.push('a monotonic rise was reported as churn');
+    // THE PHASE 17 RULE.
+    if (rising.trend.state !== 'unverified-improvement') v.push('a maturity rise with nothing behind it was reported as progress');
+    if (rising.everyImprovementVerified) v.push('an unsupported maturity rise satisfied the improvement invariant');
+    const supported = own.capabilityEvolution({
+      snapshots: [snap('L0'), snap('L2')],
+      evidence: [{ kind: 'independent-verification', detail: 'an external assessment confirmed the level', by: 'Auditor General' }],
+    });
+    if (supported.trend.state !== 'verified-improvement') v.push('a maturity rise confirmed by an independent assessment was not verified');
+
+    // --- CHURN: the figure that catches an institution that looks flat -----------------------
+    const churning = own.capabilityEvolution({ snapshots: [snap('L1'), snap('L3'), snap('L1'), snap('L3'), snap('L1')] });
+    if (churning.netMovement !== 0) v.push('a series returning to its start did not report zero net movement');
+    if (churning.totalMovement !== 8) v.push('total movement was not derived from the absolute steps');
+    if (!churning.churn) v.push('an institution moving eight steps to end where it started was not reported as churning');
+    if (churning.improvementVelocity !== 0) v.push('a churning institution did not report a velocity of zero');
+    if (!(churning.organizationalStability > 1)) v.push('a churning institution reported itself stable');
+    if (!/churning rather than progressing/.test(churning.reason)) v.push('a churning institution does not say so plainly');
+    // …and a steady institution is neither churning nor moving, or the finding fires on everything.
+    const flat = own.capabilityEvolution({ snapshots: [snap('L2'), snap('L2'), snap('L2')] });
+    if (flat.churn) v.push('an institution that did not move was reported as churning');
+    if (flat.trend.state !== 'steady') v.push('an institution that did not move reported a direction');
+    if (flat.totalMovement !== 0) v.push('an institution that did not move reported movement');
+    // …nor is a monotonic climb, which has high velocity and is not churn.
+    if (own.capabilityEvolution({ snapshots: [snap('L0'), snap('L2'), snap('L4')] }).churn) {
+      v.push('a monotonic climb was reported as churn — velocity alone must not trigger the finding');
+    }
+
+    // --- Velocity states its unit rather than implying a timescale --------------------------
+    if (!/per snapshot/.test(rising.velocityUnit)) v.push('a velocity with no period length does not say it is not a rate over time');
+    const timed = own.capabilityEvolution({ snapshots: [snap('L0'), snap('L2')], periodDays: 90 });
+    if (!/per day/.test(timed.velocityUnit)) v.push('a velocity with a period length does not state the timescale');
+    if (timed.improvementVelocity === own.capabilityEvolution({ snapshots: [snap('L0'), snap('L2')] }).improvementVelocity) {
+      v.push('supplying a period length did not change the velocity figure');
+    }
+  }),
+
+  fit('APP-FIT-ARCHITECTURE-INTELLIGENCE', 'Every architectural risk names what would falsify it, and none of it is a finding', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const asm = require('../src/architecture/assumptions');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const assumptions = new asm.AssumptionRegistry({ clock: () => 0 });
+    asm.seedPlatformAssumptions(assumptions, { at: 0 });
+
+    // --- Five risks, each stating what would falsify it -------------------------------------
+    for (const required of ['dependency-conflict', 'ownership-overload', 'documentation-drift', 'governance-inconsistency', 'adr-conflict']) {
+      if (!dp.ARCHITECTURE_RISKS[required]) v.push(`architectural risk '${required}' is not forecast`);
+    }
+    if (Object.keys(dp.ARCHITECTURE_RISKS).length !== 5) v.push('architecture intelligence does not carry exactly five risks');
+    for (const [id, r] of Object.entries(dp.ARCHITECTURE_RISKS)) {
+      if (!r.asks || !r.asks.endsWith('?') || !r.derivedFrom || !r.ifRealised) v.push(`architectural risk '${id}' does not state its question, its derivation or what it costs`);
+      // A forecast nothing could falsify is a hunch.
+      if (!r.falsifiedBy) v.push(`architectural risk '${id}' states nothing that would falsify it`);
+    }
+    // `unknown` proximity is off the scale, not at the far end of it.
+    if (dp.RISK_PROXIMITY.unknown.rank !== null) v.push('unknown proximity was given a rank, which puts it on the same scale as a measured one');
+    if (!/not the same as far away/.test(dp.RISK_PROXIMITY.unknown.means)) v.push('unknown proximity does not say it is distinct from distant');
+    for (const id of ['distant', 'approaching', 'imminent']) {
+      if (!Number.isFinite(dp.RISK_PROXIMITY[id].rank)) v.push(`measured proximity '${id}' carries no rank`);
+    }
+
+    // --- The baseline is shared with the ratchet, so the two cannot disagree ----------------
+    if (dp.COUPLING_BASELINE !== 125) v.push(`the coupling baseline exported for the forecast is ${dp.COUPLING_BASELINE}, which is not the number the ratchet was written against`);
+
+    // --- On the real estate, the pressures are measurable and at least one is real ----------
+    const documentation = require('../src/architecture/documentation-assurance').report({ controls });
+    const adrReview = require('../src/architecture/adr-governance').dueForReview({ now: '2026-08-07' });
+    const report = dp.architectureIntelligence({ controls, assumptions, documentation, adrReview, now: 0 });
+    if (report.count !== 5) v.push('the report does not cover all five risks');
+    if (!report.measurable) v.push('no architectural pressure was measurable on the real estate');
+    for (const r of report.risks) {
+      // A risk is what MIGHT happen. Reporting it as drift would make the drift report untrustworthy.
+      if (r.isFinding !== false) v.push(`risk '${r.risk}' is marked as a finding`);
+      if (r.proximity !== 'unknown' && r.headroom === null) v.push(`risk '${r.risk}' is measured and states no headroom`);
+      if (!r.detail) v.push(`risk '${r.risk}' states no detail`);
+      if (!r.unit) v.push(`risk '${r.risk}' states no unit, so its threshold means nothing`);
+    }
+    if (report.findings !== 0) v.push('the architectural forecast reported findings');
+    if (report.scored !== false) v.push('five pressures with different thresholds and units were summed into a risk score');
+    if (report.authorizes !== false) v.push('the architecture intelligence report claims authority');
+
+    // Coupling sits exactly at its baseline on this estate: the next added edge fails the build.
+    const coupling = report.risks.find((r) => r.risk === 'dependency-conflict');
+    if (coupling.proximity === 'unknown') v.push('the coupling pressure could not be measured, so the forecast cannot see the ratchet it is about');
+    if (coupling.value !== dp.COUPLING_BASELINE) v.push(`coupling measured at ${coupling.value} against a baseline of ${dp.COUPLING_BASELINE} — if this has changed, so has the risk, and this control should be read again rather than edited`);
+    if (coupling.proximity !== 'imminent') v.push('coupling at its baseline was not reported as imminent');
+    // Ownership concentration is a real, derived pressure on this estate.
+    if (report.risks.find((r) => r.risk === 'ownership-overload').proximity === 'unknown') {
+      v.push('ownership concentration could not be derived from the accountability record');
+    }
+
+    // --- An unmeasurable pressure is UNKNOWN, not distant -----------------------------------
+    const blind = dp.architectureIntelligence({ controls: [], assumptions: null, documentation: null, adrReview: null, now: 0 });
+    const drift = blind.risks.find((r) => r.risk === 'documentation-drift');
+    if (drift.proximity !== 'unknown') v.push('documentation drift was given a proximity with no verification supplied');
+    if (drift.value !== null) v.push('documentation drift produced a value with nothing supplied');
+    if (!blind.unknown.includes('documentation-drift')) v.push('an unmeasurable risk was not named as unknown');
+    if (!/UNKNOWN rather than distant/.test(blind.basis)) v.push('the basis does not say that an unmeasurable pressure is unknown rather than distant');
+    // …and a genuinely distant pressure is still reachable, or `distant` is decoration.
+    if (!report.distant.length) v.push('no pressure on the real estate came out distant, so the band is unreachable');
+  }),
+
   fit('APP-FIT-LEGAL-HIERARCHY', 'An instrument cannot exceed what it was made under, and an empty hierarchy is not a consistent one', (v) => {
     const la = require('../src/legislation/legal-authority');
 
@@ -5876,7 +6001,9 @@ module.exports = [
     // 124 → 125 in Phase 14 Part 8: the drift checker itself now reads the threat model, so that a
     // treatment naming a control which no longer runs is reported as security drift. Detecting drift
     // in another context means reading that context.
-    const COUPLING_BASELINE = 125;
+    // Read from the module rather than declared here, so the gate that BLOCKS on this number and
+    // the Phase 17 forecast that predicts approaching it cannot drift apart.
+    const { COUPLING_BASELINE } = require('../src/architecture/drift-prevention');
     if (drift.couplingCount > COUPLING_BASELINE) v.push(`cross-context coupling has grown to ${drift.couplingCount} from a baseline of ${COUPLING_BASELINE} — reduce it or move the baseline deliberately`);
 
     // The checks can fail: a fabricated module claim and a fabricated context are both caught.

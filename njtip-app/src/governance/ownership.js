@@ -828,8 +828,76 @@ function maturityEvolution(snapshots = []) {
   };
 }
 
+// --- Capability evolution (Phase 17, Part 10) -------------------------------------------------------
+//
+// `maturityEvolution` reports the direction between the first and last snapshot. Part 10 asks what
+// happened in between, and the figure that answers it is the one nothing carried before:
+//
+//   VELOCITY WITHOUT STABILITY IS CHURN. An institution that rises two levels and falls two has a
+//   net movement of zero, a mean velocity of zero, and has been anything but steady. Reported as a
+//   direction it reads "steady", which is the exact opposite of what happened to the people doing
+//   the work.
+//
+// So total movement is carried beside net movement, and an institution whose net is small relative
+// to its total is named as churning rather than progressing.
+function capabilityEvolution({ snapshots = [], evidence = [], periodDays = null, now = 0 } = {}) {
+  const evidenceConfidence = require('../assurance/evidence-confidence');
+  const rankOf = (level) => (CAPABILITY_LEVELS[level] ? CAPABILITY_LEVELS[level].rank : null);
+  const ranks = snapshots.map((s) => rankOf(s.organizationalLevel)).filter((r) => r !== null);
+
+  if (ranks.length < 2) {
+    return {
+      snapshots: snapshots.length, assessedSnapshots: ranks.length, measurable: false,
+      progression: null, regression: null, netMovement: null, totalMovement: null,
+      improvementVelocity: null, velocityUnit: null, organizationalStability: null, churn: null,
+      trend: evidenceConfidence.verifiedImprovement({ subject: 'organizational capability', series: [] }),
+      everyImprovementVerified: true,
+      reason: `${ranks.length} snapshot(s) carry an assessed level; at least two are needed before anything can be said to have moved. An unknown level is not a rank of zero.`,
+      now, informationalOnly: true, authorizes: false,
+    };
+  }
+
+  const steps = ranks.slice(1).map((r, i) => r - ranks[i]);
+  const progression = steps.filter((s) => s > 0).reduce((a, b) => a + b, 0);
+  const regression = Math.abs(steps.filter((s) => s < 0).reduce((a, b) => a + b, 0));
+  const netMovement = ranks[ranks.length - 1] - ranks[0];
+  const totalMovement = steps.reduce((a, s) => a + Math.abs(s), 0);
+
+  // Velocity states its unit rather than implying a timescale nobody supplied. Per snapshot when no
+  // period length is given; per day when one is.
+  const improvementVelocity = periodDays
+    ? +(netMovement / (periodDays * steps.length)).toFixed(6)
+    : +(netMovement / steps.length).toFixed(4);
+  const velocityUnit = periodDays
+    ? `levels per day, over ${steps.length} period(s) of ${periodDays} day(s)`
+    : `levels per snapshot — no period length was supplied, so this is NOT a rate over time`;
+
+  // Mean absolute step. Lower is steadier; this is the figure velocity alone cannot show.
+  const organizationalStability = +(totalMovement / steps.length).toFixed(4);
+  // THE FIGURE THAT CATCHES AN INSTITUTION THAT LOOKS FLAT.
+  const churn = totalMovement > 0 && Math.abs(netMovement) < totalMovement / 2;
+
+  const trend = evidenceConfidence.verifiedImprovement({
+    subject: 'organizational capability', series: ranks, evidence,
+  });
+
+  return {
+    snapshots: snapshots.length, assessedSnapshots: ranks.length, measurable: true,
+    ranks, steps,
+    progression, regression, netMovement, totalMovement,
+    improvementVelocity, velocityUnit, organizationalStability, churn,
+    trend,
+    everyImprovementVerified: !trend.violatesInvariant,
+    reason: churn
+      ? `the institution moved ${totalMovement} level-step(s) in total and ended ${netMovement} from where it started — that is churning rather than progressing, and a direction alone would report it as steady`
+      : `${progression} step(s) of progression and ${regression} of regression across ${steps.length} interval(s); net ${netMovement}`,
+    now, informationalOnly: true, authorizes: false,
+    note: 'Velocity without stability is churn: an institution that rises two levels and falls two has a mean velocity of zero and has been anything but steady. The two figures are reported together, and a rise with nothing verified behind it is an unverified improvement rather than progress.',
+  };
+}
+
 module.exports = {
-  CAPABILITY_DOMAINS, CAPABILITY_LEVELS, CAPABILITY_ORDER, capabilityMaturity, maturityEvolution,
+  CAPABILITY_DOMAINS, CAPABILITY_LEVELS, CAPABILITY_ORDER, capabilityMaturity, maturityEvolution, capabilityEvolution,
   OWNERSHIP, BOARDS, ROLES, DEPUTY_ROLES, DEPUTY_RULE, DEPUTY_OVERRIDES, REVIEW_CADENCE_DAYS,
   subsystems, describe, boards, escalationPath, accountabilityFor, validate, model,
   deputyOf, deputies, AvailabilityRegister, successionPlan, reviewSchedule,
