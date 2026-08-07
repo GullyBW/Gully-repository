@@ -2293,7 +2293,55 @@ const DECISION_PACKAGE_FIELDS = {
   institutionalImpacts: { absentMeans: 'Nothing says who inside the institution this lands on.' },
   risks: { absentMeans: 'A recommendation with no stated risk is a recommendation nobody has argued with.' },
   uncertainties: { absentMeans: 'Every recommendation has things nobody knows. One that lists none is concealing them.' },
+  // --- Phase 17 Parts 15 & 17, and Phase 18 Part 7 ------------------------------------------------
+  //
+  // Three specifications ask for fields on this package. They are ONE set, added to the existing
+  // guard, because three parallel decision frameworks is exactly what a decision package is for
+  // preventing: a board reading whichever one it happened to open.
+  evidenceStrength: { absentMeans: 'The package says what it rests on and not how good that is. Evidence from a recorded event and evidence from an absence of records read identically.' },
+  forecastConfidence: { absentMeans: 'A package resting on a projection is indistinguishable from one resting on something that happened.' },
+  recommendedHumanActions: { absentMeans: 'The recommendation is addressed to nobody. Advice with no named actor is advice nobody owns.' },
+  alternativesConsidered: { absentMeans: 'A recommendation with no alternative is not a decision. It is an instruction, and a board asked to approve it has nothing to choose between.' },
+  predictedConsequences: { absentMeans: 'Nothing states what is expected to follow, so nobody can come back later and find out whether it did.' },
+  historicalOutcomes: { absentMeans: 'Nothing says how comparable recommendations turned out. The institution repeats what it has already tried and calls each attempt new.' },
+  validationHistory: { absentMeans: 'Nothing says whether the premise has ever been tested. An untested premise and a confirmed one read alike.' },
+  governanceOwner: { absentMeans: 'No body is accountable for the recommendation, so it can be discussed indefinitely and owned by nobody.' },
+  constitutionalImplications: { absentMeans: 'Nothing states what this touches constitutionally, and separation of powers is the one property nobody notices being eroded.' },
 };
+
+// How good the evidence behind a package actually is. GRADED rather than described, because
+// "high — derived from what has been recorded" and "high — a projection" are not the same claim,
+// and prose lets them look the same.
+//
+// The grade that matters is `absence`. Most of this platform's genuine findings are absences — no
+// declaration, no observation, no rehearsal — and an absence is DIRECTLY OBSERVABLE while saying
+// nothing whatever about why the thing is missing.
+const EVIDENCE_STRENGTH = {
+  observed: { rank: 3, means: 'Derived from something recorded as having happened. The strongest thing this platform can hold.' },
+  derived: { rank: 2, means: 'Computed from the platform\'s own records, which are complete for what they cover and silent about what they do not.' },
+  absence: { rank: 1, means: 'Derived from the ABSENCE of records. Directly observable, and it says nothing about WHY they are absent — that is the next question, not this answer.' },
+  projected: { rank: 0, means: 'A forecast. It has not happened and may not. A package resting on this is about a future somebody is choosing to plan for.' },
+};
+
+// A recommended action with the role accountable for taking it. A role that does not appear in the
+// accountability record is a role nobody holds, so `assertAdvisory` checks that every named role
+// resolves — advice addressed to one is advice into the air.
+function humanAction(action, role, { blockedBy = null } = {}) {
+  return { action, role, blockedBy, takenBy: null, takenAt: null, isHumanDecision: true };
+}
+
+// The bodies that exist, derived from the accountability record rather than listed.
+function accountableBodies() {
+  const ownership = require('../governance/ownership');
+  const roles = new Set();
+  for (const s of ownership.subsystems()) {
+    const o = ownership.describe(s);
+    for (const r of [o.operationalOwner, o.approvingAuthority, o.responsibleAuthority, o.dataSteward, o.board && o.board.name]) {
+      if (r) roles.add(r);
+    }
+  }
+  return roles;
+}
 
 const HUMAN_AUTHORIZATION_REQUIRED = 'Human authorization required.';
 
@@ -2308,6 +2356,35 @@ function assertAdvisory(pkg) {
   }
   if (pkg.conclusion !== HUMAN_AUTHORIZATION_REQUIRED) fail(`every decision package must conclude "${HUMAN_AUTHORIZATION_REQUIRED}" — a package that concludes anything else is a decision`);
   if (pkg.authorizes !== false) fail('a decision package may not claim authority');
+
+  // --- Phase 17 Parts 15 & 17, and Phase 18 Part 7 ------------------------------------------------
+  if (!EVIDENCE_STRENGTH[pkg.evidenceStrength]) {
+    fail(`a decision package must grade its evidence as one of ${Object.keys(EVIDENCE_STRENGTH).join(', ')} — prose lets an absence and an observation look identical`);
+  }
+  // A package graded `projected` rests on a forecast, so it must say how that forecast has done.
+  // One graded anything else must NOT claim a forecast confidence, because there is no forecast.
+  if (pkg.evidenceStrength === 'projected' && pkg.forecastConfidence === 'not-applicable') {
+    fail('a package resting on a projection must state the confidence of the forecast it rests on');
+  }
+  if (pkg.evidenceStrength !== 'projected' && pkg.forecastConfidence !== 'not-applicable') {
+    fail(`a package graded '${pkg.evidenceStrength}' rests on no forecast, so a forecast confidence of '${pkg.forecastConfidence}' describes something that does not exist`);
+  }
+  // A recommendation with no alternative is not a decision — it is an instruction, and a board
+  // asked to approve it has nothing to choose between.
+  if (!Array.isArray(pkg.alternativesConsidered) || !pkg.alternativesConsidered.length) {
+    fail('a decision package must state at least one alternative it considered — a recommendation with no alternative is an instruction, not a decision');
+  }
+  // The accountable body must exist. Advice owned by nobody is advice that can be discussed forever.
+  const bodies = accountableBodies();
+  if (!bodies.has(pkg.governanceOwner)) {
+    fail(`'${pkg.governanceOwner}' holds nothing in the accountability record, so it cannot be the governance owner of this recommendation`);
+  }
+  for (const a of pkg.recommendedHumanActions) {
+    if (!a || !a.action || !a.role) fail('every recommended action must name what to do and who is accountable for doing it');
+    if (a.isHumanDecision !== true) fail(`recommended action '${a.action}' is not marked as a human decision`);
+    if (a.takenBy !== null || a.takenAt !== null) fail(`recommended action '${a.action}' arrives already taken — this platform recommends actions and never records itself performing one`);
+    if (!bodies.has(a.role)) fail(`recommended action '${a.action}' is addressed to '${a.role}', which holds nothing in the accountability record — advice with no named actor is advice into the air`);
+  }
   return true;
 }
 
@@ -2343,6 +2420,26 @@ function decisionSupport(sources = {}) {
       institutionalImpacts: ['The Attorney General\'s Chambers and each capability\'s approving organization would have to record and review a declaration.'],
       risks: ['Recording a plausible-sounding instrument that turns out not to authorise the capability would be worse than the current gap, because it would look closed.'],
       uncertainties: ['Whether the instruments exist and are simply unrecorded, or whether some capability is operating without one.'],
+      evidenceStrength: 'absence', forecastConfidence: 'not-applicable',
+      governanceOwner: 'Attorney General Chambers',
+      alternativesConsidered: [
+        'Suspend the affected capabilities until a legal basis is recorded. Rejected as a recommendation because it is a decision with constitutional weight that only the accountable authority may take.',
+        'Record a plausible instrument now and confirm it later. Rejected because a wrong citation in a governed register is worse than an empty one: it looks closed.',
+      ],
+      predictedConsequences: [
+        `If the instruments exist and are recorded, ${blocking.length} capability(ies) move from an unknown legal basis to a declared one — declared, not reviewed.`,
+        'If any capability turns out to have no instrument, this becomes a far larger finding than a recording gap, and that discovery is the point of doing it.',
+      ],
+      historicalOutcomes: ['No comparable recommendation has been recorded, so nothing is known about how this has gone before. That is an absence of history, not a history of success.'],
+      validationHistory: ['The premise — that an unrecorded legal basis is a recording gap rather than a missing authority — has never been tested against a real instrument.'],
+      constitutionalImplications: [
+        'Capabilities resting on a constitutional mandate are affected differently from those resting on ordinary instruments: the first cannot be withdrawn by a change of administration and the second can.',
+      ],
+      recommendedHumanActions: [
+        humanAction(`Read the instrument that authorises each of the ${blocking.length} capability(ies) and record it against the capability.`, 'Attorney General Chambers'),
+        humanAction('Review each recorded declaration and confirm the instrument still stands.', 'Oversight Board',
+          { blockedBy: 'the declarations do not exist yet, so there is nothing to review' }),
+      ],
     });
   }
   if (sources.assumptionMaturity && sources.assumptionMaturity.verificationBacklog && sources.assumptionMaturity.verificationBacklog.length) {
@@ -2358,6 +2455,23 @@ function decisionSupport(sources = {}) {
       institutionalImpacts: ['Each assumption\'s owner, and somebody independent of them to perform the verification.'],
       risks: ['Verification performed by the owner would raise the recorded maturity without raising the actual assurance.'],
       uncertainties: ['Whether the assumptions still hold. That is the point of verifying them, and nothing here can predict the answer.'],
+      evidenceStrength: 'derived', forecastConfidence: 'not-applicable',
+      governanceOwner: 'Oversight Board',
+      alternativesConsidered: [
+        'Verify only the foundational assumptions and accept the rest as declared. Cheaper, and it leaves the platform reasoning from unexamined premises in every non-foundational area.',
+        'Lower the declared criticality of the backlog so fewer assumptions require verification. Rejected: that raises the recorded maturity without raising any actual assurance.',
+      ],
+      predictedConsequences: [
+        `${backlog.length} assumption(s) move from declared to verified, or are found not to hold — both outcomes are useful and only one is comfortable.`,
+        'Twin confidence dimensions that depend on assumption health become measurable rather than capped.',
+      ],
+      historicalOutcomes: ['No assumption in this registry has yet been through a full verification cycle, so nothing is known about how often they turn out to hold.'],
+      validationHistory: ['The verification cadence itself has never been tested: nobody has yet observed an assumption lapse and been caught by the schedule.'],
+      constitutionalImplications: ['None directly. Several assumptions bear on capabilities whose legal basis is separately unrecorded, and those are constitutional.'],
+      recommendedHumanActions: [
+        humanAction(`Assign a verifier independent of the owner to each of the ${backlog.length} assumption(s).`, 'Oversight Board'),
+        humanAction('Perform the verification and record what was found, including a finding that an assumption no longer holds.', 'Information Security Review Board'),
+      ],
     });
   }
   if (sources.controlEffectiveness && !sources.controlEffectiveness.measurable) {
@@ -2372,6 +2486,23 @@ function decisionSupport(sources = {}) {
       institutionalImpacts: ['Operations would have to record detection, acknowledgement and remediation times for real conditions.'],
       risks: ['Recording only the incidents the controls caught would produce a false-negative rate of zero and a reliability figure that means nothing.'],
       uncertainties: ['How many conditions have occurred that no control noticed. That number is currently unknowable and is exactly what the register would start to reveal.'],
+      evidenceStrength: 'absence', forecastConfidence: 'not-applicable',
+      governanceOwner: 'Operations Review Board',
+      alternativesConsidered: [
+        'Infer effectiveness from the green build. Rejected: a control that runs and passes has been executed, not tested against a real condition.',
+        'Begin with the highest-criticality controls only. Narrower and faster, and it leaves detection coverage low while making the recall figure look complete.',
+      ],
+      predictedConsequences: [
+        'Detection coverage becomes measurable, and the first honest reading of it will be low, because most controls have never been observed.',
+        'The estate detection rate acquires a history, which is what makes any later improvement in it verifiable rather than asserted.',
+      ],
+      historicalOutcomes: ['No control observation has ever been recorded, so there is no history of this recommendation having been acted on.'],
+      validationHistory: ['Nothing has tested whether these controls detect anything at all. That is what the observations would establish, and it is why the absence is the finding.'],
+      constitutionalImplications: ['None directly, though several observed controls would be the evidence that constitutional capabilities are protected in practice rather than on paper.'],
+      recommendedHumanActions: [
+        humanAction('Record each occasion a control detects a real condition, including the ones it missed and somebody else found.', 'Operations Review Board'),
+        humanAction('Set each control\'s observation window from how often its condition actually occurs, rather than a uniform period.', 'Oversight Board'),
+      ],
     });
   }
 
@@ -2468,5 +2599,5 @@ module.exports = {
   CONNECTOR_KINDS, TRUST_LEVELS, TRUST_ORDER, INTEGRITY_STATES, FRESHNESS_STATES, SYNC_STATES,
   EvidenceConnectorRegistry, SOURCE_HEALTH_DIMENSIONS, SOURCE_HEALTH_STATES,
   SUSTAINABILITY_DIMENSIONS, institutionalSustainability,
-  DECISION_PACKAGE_FIELDS, HUMAN_AUTHORIZATION_REQUIRED, assertAdvisory, decisionPackage, decisionSupport,
+  DECISION_PACKAGE_FIELDS, EVIDENCE_STRENGTH, humanAction, accountableBodies, HUMAN_AUTHORIZATION_REQUIRED, assertAdvisory, decisionPackage, decisionSupport,
 };

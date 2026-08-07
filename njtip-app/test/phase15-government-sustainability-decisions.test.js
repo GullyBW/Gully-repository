@@ -300,10 +300,20 @@ const COMPLETE_PACKAGE = {
   assumptions: ['that an instrument exists'], affectedControls: ['APP-FIT-LEGAL-AUTHORITY'],
   legalDependencies: ['case-investigation: unknown'], institutionalImpacts: ['Attorney General Chambers'],
   risks: ['recording a plausible instrument that does not authorise it'], uncertainties: ['whether one exists'],
+  // Phase 17 Parts 15 & 17 and Phase 18 Part 7 added nine fields to this one guard rather than
+  // creating parallel decision frameworks.
+  evidenceStrength: 'absence', forecastConfidence: 'not-applicable',
+  governanceOwner: 'Attorney General Chambers',
+  alternativesConsidered: ['suspend the capability until a basis is recorded'],
+  predictedConsequences: ['the capability moves from an unknown legal basis to a declared one'],
+  historicalOutcomes: ['no comparable recommendation has been recorded'],
+  validationHistory: ['the premise has never been tested against a real instrument'],
+  constitutionalImplications: ['none identified for this capability'],
+  recommendedHumanActions: [inst.humanAction('Read and record the instrument.', 'Attorney General Chambers')],
 };
 
-test('a decision package requires eight kinds of evidence, each saying what its absence means', () => {
-  assert.strictEqual(Object.keys(inst.DECISION_PACKAGE_FIELDS).length, 8);
+test('a decision package requires seventeen kinds of evidence, each saying what its absence means', () => {
+  assert.strictEqual(Object.keys(inst.DECISION_PACKAGE_FIELDS).length, 17);
   for (const [id, f] of Object.entries(inst.DECISION_PACKAGE_FIELDS)) assert.ok(f.absentMeans, id);
   assert.ok(inst.decisionPackage(COMPLETE_PACKAGE));
   for (const field of Object.keys(inst.DECISION_PACKAGE_FIELDS)) {
@@ -311,6 +321,35 @@ test('a decision package requires eight kinds of evidence, each saying what its 
     // An empty list is the same absence as a missing one.
     assert.throws(() => inst.decisionPackage({ ...COMPLETE_PACKAGE, [field]: Array.isArray(COMPLETE_PACKAGE[field]) ? [] : '' }), (e) => e.failClosed === true, field);
   }
+});
+
+test('a recommendation with no alternative is an instruction, and advice must be owned', () => {
+  // A board asked to approve a recommendation with nothing to choose between is not deciding.
+  assert.throws(() => inst.decisionPackage({ ...COMPLETE_PACKAGE, alternativesConsidered: [] }), (e) => e.failClosed === true);
+  // The accountable body and every named actor must exist in the accountability record.
+  assert.throws(() => inst.decisionPackage({ ...COMPLETE_PACKAGE, governanceOwner: 'Department of Nobody' }), (e) => e.failClosed === true);
+  assert.throws(
+    () => inst.decisionPackage({ ...COMPLETE_PACKAGE, recommendedHumanActions: [inst.humanAction('Do it.', 'Department of Nobody')] }),
+    (e) => e.failClosed === true,
+  );
+  // This platform recommends actions and never records itself performing one.
+  assert.throws(
+    () => inst.decisionPackage({
+      ...COMPLETE_PACKAGE,
+      recommendedHumanActions: [{ ...inst.humanAction('Do it.', 'Oversight Board'), takenBy: 'NJTIP', takenAt: 0 }],
+    }),
+    (e) => e.failClosed === true,
+  );
+});
+
+test('evidence strength is graded, not described, and a forecast confidence needs a forecast', () => {
+  // "high — derived from the records" and "high — a projection" are not the same claim.
+  assert.throws(() => inst.decisionPackage({ ...COMPLETE_PACKAGE, evidenceStrength: 'high — from the records' }), (e) => e.failClosed === true);
+  assert.throws(() => inst.decisionPackage({ ...COMPLETE_PACKAGE, evidenceStrength: 'projected' }), (e) => e.failClosed === true);
+  assert.throws(() => inst.decisionPackage({ ...COMPLETE_PACKAGE, forecastConfidence: 'well calibrated' }), (e) => e.failClosed === true);
+  assert.ok(inst.decisionPackage({ ...COMPLETE_PACKAGE, evidenceStrength: 'projected', forecastConfidence: 'the forecast has been scored 8 times, 62% within interval' }));
+  assert.ok(inst.EVIDENCE_STRENGTH.projected.rank < inst.EVIDENCE_STRENGTH.absence.rank,
+    'a projection does not outrank a directly observable absence');
 });
 
 test('the advisory conclusion is a constant string and no input can change it', () => {

@@ -11100,13 +11100,24 @@ module.exports = [
     }
   }),
 
-  fit('APP-FIT-DECISION-SUPPORT', 'Every decision package carries eight kinds of evidence and concludes with a constant string nothing computes', (v) => {
+  fit('APP-FIT-DECISION-SUPPORT', 'Every decision package grades its evidence, names who must act, states an alternative, and concludes with a constant nothing computes', (v) => {
     const inst = require('../src/assurance/institutional');
 
-    for (const required of ['supportingEvidence', 'confidence', 'assumptions', 'affectedControls', 'legalDependencies', 'institutionalImpacts', 'risks', 'uncertainties']) {
+    for (const required of ['supportingEvidence', 'confidence', 'assumptions', 'affectedControls', 'legalDependencies', 'institutionalImpacts', 'risks', 'uncertainties',
+      // Phase 17 Parts 15 & 17 and Phase 18 Part 7 land on this ONE guard rather than in three
+      // parallel frameworks — three decision frameworks is what a decision package prevents.
+      'evidenceStrength', 'forecastConfidence', 'recommendedHumanActions', 'alternativesConsidered',
+      'predictedConsequences', 'historicalOutcomes', 'validationHistory', 'governanceOwner',
+      'constitutionalImplications']) {
       if (!inst.DECISION_PACKAGE_FIELDS[required]) v.push(`decision package field '${required}' is not required`);
     }
-    if (Object.keys(inst.DECISION_PACKAGE_FIELDS).length !== 8) v.push('a decision package does not require exactly eight kinds of evidence');
+    if (Object.keys(inst.DECISION_PACKAGE_FIELDS).length !== 17) v.push('a decision package does not require exactly seventeen kinds of evidence');
+    for (const [id, g] of Object.entries(inst.EVIDENCE_STRENGTH)) {
+      if (!g.means || !Number.isFinite(g.rank)) v.push(`evidence strength '${id}' does not state what it means or where it sits`);
+    }
+    // The grade carrying the whole point: most of this platform's findings are absences.
+    if (!/says nothing about WHY/.test(inst.EVIDENCE_STRENGTH.absence.means)) v.push('the absence grade does not say that an absence explains nothing about its own cause');
+    if (inst.EVIDENCE_STRENGTH.projected.rank >= inst.EVIDENCE_STRENGTH.absence.rank) v.push('a projection outranks a directly observable absence');
     for (const [id, f] of Object.entries(inst.DECISION_PACKAGE_FIELDS)) {
       if (!f.absentMeans) v.push(`decision package field '${id}' does not say what its absence means`);
     }
@@ -11119,6 +11130,14 @@ module.exports = [
       assumptions: ['that an instrument exists'], affectedControls: ['APP-FIT-LEGAL-AUTHORITY'],
       legalDependencies: ['case-investigation: unknown'], institutionalImpacts: ['Attorney General Chambers'],
       risks: ['recording a plausible instrument that does not authorise it'], uncertainties: ['whether one exists'],
+      evidenceStrength: 'absence', forecastConfidence: 'not-applicable',
+      governanceOwner: 'Attorney General Chambers',
+      alternativesConsidered: ['suspend the capability until a basis is recorded'],
+      predictedConsequences: ['the capability moves from an unknown legal basis to a declared one'],
+      historicalOutcomes: ['no comparable recommendation has been recorded'],
+      validationHistory: ['the premise has never been tested against a real instrument'],
+      constitutionalImplications: ['none identified for this capability'],
+      recommendedHumanActions: [inst.humanAction('Read and record the instrument.', 'Attorney General Chambers')],
     };
     if (!inst.decisionPackage(complete)) v.push('a complete decision package was refused');
     for (const field of Object.keys(inst.DECISION_PACKAGE_FIELDS)) {
@@ -11147,6 +11166,59 @@ module.exports = [
     let claimsAuthority = false;
     try { inst.assertAdvisory({ ...complete, conclusion: inst.HUMAN_AUTHORIZATION_REQUIRED, authorizes: true }); } catch (e) { claimsAuthority = !!e.failClosed; }
     if (!claimsAuthority) v.push('a package claiming authority was accepted by the guard');
+
+    // --- The grade is an enum, not prose ----------------------------------------------------
+    let ungraded = false;
+    try { inst.decisionPackage({ ...complete, evidenceStrength: 'high — derived from the records' }); } catch (e) { ungraded = !!e.failClosed; }
+    if (!ungraded) v.push('a decision package graded its evidence in prose, which lets an absence and an observation look identical');
+    // A package on a projection must state its forecast confidence; one resting on no forecast must
+    // NOT claim a confidence for a forecast that does not exist.
+    let unstatedForecast = false;
+    try { inst.decisionPackage({ ...complete, evidenceStrength: 'projected' }); } catch (e) { unstatedForecast = !!e.failClosed; }
+    if (!unstatedForecast) v.push('a package resting on a projection did not have to state the confidence of the forecast');
+    let phantomForecast = false;
+    try { inst.decisionPackage({ ...complete, forecastConfidence: 'the forecast has been well calibrated' }); } catch (e) { phantomForecast = !!e.failClosed; }
+    if (!phantomForecast) v.push('a package resting on no forecast claimed a forecast confidence');
+
+    // --- A recommendation with no alternative is an instruction, not a decision --------------
+    let noAlternative = false;
+    try { inst.decisionPackage({ ...complete, alternativesConsidered: [] }); } catch (e) { noAlternative = !!e.failClosed; }
+    if (!noAlternative) v.push('a recommendation with no alternative was accepted — a board asked to approve it has nothing to choose between');
+
+    // --- Advice must be owned, and addressed to somebody who exists --------------------------
+    let phantomOwner = false;
+    try { inst.decisionPackage({ ...complete, governanceOwner: 'Department of Nobody' }); } catch (e) { phantomOwner = !!e.failClosed; }
+    if (!phantomOwner) v.push('a package was owned by a body that holds nothing in the accountability record');
+    let unaddressed = false;
+    try { inst.decisionPackage({ ...complete, recommendedHumanActions: [inst.humanAction('Do the thing.', 'Department of Nobody')] }); } catch (e) { unaddressed = !!e.failClosed; }
+    if (!unaddressed) v.push('a recommended action was addressed to a role that holds nothing in the accountability record');
+    let alreadyTaken = false;
+    try {
+      inst.decisionPackage({ ...complete, recommendedHumanActions: [{ ...inst.humanAction('Do the thing.', 'Oversight Board'), takenBy: 'NJTIP', takenAt: 0 }] });
+    } catch (e) { alreadyTaken = !!e.failClosed; }
+    if (!alreadyTaken) v.push('a recommended action arrived already taken — this platform recommends actions and never performs one');
+    let notHuman = false;
+    try {
+      inst.decisionPackage({ ...complete, recommendedHumanActions: [{ action: 'Do it.', role: 'Oversight Board', isHumanDecision: false, takenBy: null, takenAt: null }] });
+    } catch (e) { notHuman = !!e.failClosed; }
+    if (!notHuman) v.push('a recommended action not marked as a human decision was accepted');
+
+    // --- Every assembled package satisfies all seventeen, or the fields are decoration -------
+    const assembled = inst.decisionSupport({
+      legalAuthority: { blocking: [{ capability: 'case-investigation', state: 'unknown', reason: 'nothing recorded', constitutional: true }] },
+      assumptionMaturity: { verificationBacklog: [{ assumption: 'a', criticality: 'foundational' }], organizationalMaturity: 'L1', belowMinimum: [] },
+      controlEffectiveness: { measurable: false, unknown: ['APP-FIT-X'] },
+    });
+    if (assembled.count !== 3) v.push(`three findings produced ${assembled.count} package(s)`);
+    for (const p of assembled.packages) {
+      if (!inst.EVIDENCE_STRENGTH[p.evidenceStrength]) v.push(`package '${p.subject}' carries no graded evidence strength`);
+      if (!p.alternativesConsidered.length) v.push(`package '${p.subject}' states no alternative`);
+      if (!inst.accountableBodies().has(p.governanceOwner)) v.push(`package '${p.subject}' names a governance owner that does not exist`);
+      for (const a of p.recommendedHumanActions) {
+        if (a.takenBy !== null) v.push(`package '${p.subject}' carries an action already taken`);
+      }
+      if (p.conclusion !== inst.HUMAN_AUTHORIZATION_REQUIRED) v.push(`package '${p.subject}' concludes something other than the constant`);
+    }
 
     // --- With no evidence, no advice. Nothing is invented -----------------------------------
     const silent = inst.decisionSupport({});
