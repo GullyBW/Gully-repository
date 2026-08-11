@@ -593,7 +593,305 @@ function mergeVerification({ register = null, satisfiedBy = {}, requiredFields =
   };
 }
 
+// --- Requirements traceability (Phase 18.1, Parts 1 and 3) -------------------------------------------
+//
+// Nothing in this repository represented a specification requirement before this. Eighteen phases of
+// specifications arrived as prose, were implemented, and left no artefact saying which requirement
+// authorised which module. The gap was found the hard way: a merge of three requirements went in
+// with no ADR, and nothing in a 204-invariant assurance suite noticed, because nothing knew the
+// three requirements existed.
+//
+// Two rules shape everything below, and both are refusals.
+//
+//   THE REGISTER IS DECLARED, NEVER INFERRED. A requirement's owner, context and ADR are recorded by
+//   somebody. Deriving them from a diff would populate the matrix with guesses that read exactly
+//   like declarations — and the one thing worse than an untraceable requirement is a traceable-
+//   looking one that traces to a guess.
+//
+//   A MISSING VERIFICATION ELEMENT IS BLOCKED, NOT PARTIAL. "Seven of nine present" invites somebody
+//   to read 78% and move on. A requirement missing its tests is not 78% verified; it is unverified,
+//   and the state says so.
+const REQUIREMENT_STATES = {
+  UNKNOWN: {
+    rank: 0, verified: false, blocking: false,
+    means: 'Declared and nothing has been checked about it. Not a failure — nobody has looked.',
+  },
+  DECLARED: {
+    rank: 1, verified: false, blocking: false,
+    means: 'The requirement is recorded with an owner and a context. Nothing yet says it was built.',
+  },
+  PARTIAL: {
+    rank: 2, verified: false, blocking: false,
+    means: 'An implementation is mapped and at least one non-required verification element is absent.',
+  },
+  VERIFIED: {
+    rank: 3, verified: true, blocking: false,
+    means: 'Every element this requirement\'s artefact type demands is present and resolves.',
+  },
+  BLOCKED: {
+    rank: 4, verified: false, blocking: true,
+    means: 'A REQUIRED verification element is missing. Not a percentage: the requirement is unverified and says so.',
+  },
+  REJECTED: {
+    rank: 5, verified: false, blocking: false,
+    means: 'Recorded, considered, and deliberately not implemented — with a rationale. Distinct from an orphan in every way that matters.',
+  },
+};
+
+// Artefact types, and this is the distinction the Phase 18.1 invariant turns on. Requiring mutation
+// testing of a governance decision would be a category error: you cannot mutate a board's approval
+// to see whether a control notices.
+const ARTEFACT_TYPES = {
+  executable: {
+    requires: ['implementation', 'context', 'owner', 'tests', 'fitness'],
+    optional: ['adr', 'endpoint', 'documentation', 'runbook', 'mutation'],
+    means: 'Code. Verified by deterministic tests, executable fitness functions and mutation testing.',
+  },
+  governance: {
+    requires: ['owner', 'context', 'documentation'],
+    optional: ['adr', 'implementation', 'tests', 'fitness', 'endpoint', 'runbook', 'mutation'],
+    means: 'A decision, an approval, an ownership record. Verified by authorization, evidence and reviewability — never by mutation, which would be a category error.',
+  },
+  architectural: {
+    requires: ['adr', 'owner', 'context', 'implementation'],
+    optional: ['tests', 'fitness', 'endpoint', 'documentation', 'runbook', 'mutation'],
+    means: 'A structural change. Verified by a recorded decision, impact analysis and compatibility analysis.',
+  },
+  documentation: {
+    requires: ['documentation', 'owner'],
+    optional: ['adr', 'context', 'implementation', 'tests', 'fitness', 'endpoint', 'runbook', 'mutation'],
+    means: 'A governed document. Verified by existing, resolving against the implementation, and having somebody accountable for it.',
+  },
+};
+
+// Every traceability element a requirement can carry, and what its absence costs.
+const TRACE_ELEMENTS = {
+  implementation: { asks: 'Which module implements this?', ifAbsent: 'The requirement is an orphan: stated, never built, and nothing says so.' },
+  context: { asks: 'Which bounded context owns it?', ifAbsent: 'The requirement belongs to nobody structurally, so it drifts between contexts.' },
+  owner: { asks: 'Which institution is accountable?', ifAbsent: 'There is nobody to ask when it is questioned.' },
+  capability: { asks: 'Which enduring capability does it serve?', ifAbsent: 'It can only be planned against a phase, which ends.' },
+  adr: { asks: 'Which recorded decision authorises it?', ifAbsent: 'It is being enforced and nobody can say who decided it.' },
+  tests: { asks: 'Which deterministic tests cover it?', ifAbsent: 'A change can remove it and every test still passes.' },
+  fitness: { asks: 'Which executable control enforces it?', ifAbsent: 'It is a statement rather than a check — nothing would fail if it stopped being true.' },
+  mutation: { asks: 'Has the control been shown to detect its own defect?', ifAbsent: 'A control nothing can fail is decoration, and nothing here would reveal that.' },
+  endpoint: { asks: 'Which HTTP surface exposes it?', ifAbsent: 'Nothing outside the process can observe it.' },
+  documentation: { asks: 'Which governed document describes it?', ifAbsent: 'An operator has nothing to read.' },
+  runbook: { asks: 'Which runbook operates it?', ifAbsent: 'Nobody knows what to do with it at three in the morning.' },
+  commits: { asks: 'Which commits delivered it?', ifAbsent: 'The change cannot be reviewed against the requirement that asked for it.' },
+};
+
+class RequirementRegister {
+  constructor({ clock = () => 0 } = {}) { this._requirements = new Map(); this._clock = clock; }
+
+  // Declare a requirement. Identity, statement, artefact type and owner are mandatory because a
+  // requirement missing any of them cannot be traced in either direction — and an untraceable entry
+  // in a traceability matrix is worse than no entry, because it inflates the denominator.
+  declare(id, {
+    specification, section, statement, artefactType,
+    implementation = null, context = null, owner = null, capability = null, adr = null,
+    tests = [], fitness = [], mutation = [], endpoint = null, documentation = null, runbook = null,
+    commits = [], rejected = false, rejectionRationale = null, declaredBy, at = null,
+  } = {}) {
+    const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
+    if (!id) fail('a requirement must have an identifier');
+    if (!specification) fail(`'${id}' must name the specification it came from — a requirement with no source cannot be traced back to anything`);
+    if (!section) fail(`'${id}' must name the section of that specification`);
+    if (!statement) fail(`'${id}' must carry the requirement statement itself, or the register records an identifier and not a requirement`);
+    if (!ARTEFACT_TYPES[artefactType]) fail(`'${id}' must declare an artefact type — one of ${Object.keys(ARTEFACT_TYPES).join(', ')} — because what counts as verified differs between them`);
+    if (!declaredBy) fail(`'${id}' must name who declared it`);
+    if (rejected && !rejectionRationale) fail(`'${id}' is recorded as rejected and states no rationale — a rejection with no reason is indistinguishable from an oversight`);
+
+    const rec = {
+      id, specification, section, statement, artefactType,
+      implementation, context, owner, capability, adr,
+      tests: [...tests], fitness: [...fitness], mutation: [...mutation],
+      endpoint, documentation, runbook, commits: [...commits],
+      rejected, rejectionRationale, declaredBy, at: at ?? this._clock(),
+    };
+    this._requirements.set(id, rec);
+    return { ...rec };
+  }
+
+  requirements() { return [...this._requirements.values()].map((r) => ({ ...r })).sort((a, b) => a.id.localeCompare(b.id)); }
+  requirement(id) { const r = this._requirements.get(id); return r ? { ...r } : null; }
+
+  // --- Part 3: executable coverage verification -------------------------------------------------
+  //
+  // Each element is checked against the thing it claims, not against its own presence. A requirement
+  // naming a fitness function that does not exist is worse than one naming none, because it reads as
+  // covered.
+  verify(id, { controls = [], testFiles = [], now = null } = {}) {
+    const t = now ?? this._clock();
+    const r = this._requirements.get(id);
+    if (!r) throw new Error('unknown requirement: ' + id);
+    const spec = ARTEFACT_TYPES[r.artefactType];
+    const contextMap = require('./context-map');
+    const ownershipModule = require('../governance/ownership');
+
+    const controlIds = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+    const adrNumbers = adrFiles().map((f) => Number(path.basename(f).slice(0, 4)));
+    const contexts = new Set(contextMap.ids());
+    const owners = new Set(ownershipModule.subsystems().flatMap((s) => {
+      const o = ownershipModule.describe(s);
+      return [o.operationalOwner, o.approvingAuthority, o.responsibleAuthority, o.dataSteward, o.board && o.board.name].filter(Boolean);
+    }));
+
+    // present: declared AND resolves. A declaration that does not resolve is a broken mapping, which
+    // is a third thing — worse than absent, because it looks satisfied.
+    const check = (element) => {
+      switch (element) {
+        case 'implementation': {
+          if (!r.implementation) return { present: false, resolves: null, detail: 'no implementation declared' };
+          const exists = fs.existsSync(path.join(__dirname, '..', '..', r.implementation));
+          return { present: true, resolves: exists, detail: exists ? `${r.implementation} exists on disk` : `${r.implementation} is declared and does not exist` };
+        }
+        case 'context': {
+          if (!r.context) return { present: false, resolves: null, detail: 'no bounded context declared' };
+          const ok = contexts.has(r.context);
+          return { present: true, resolves: ok, detail: ok ? `'${r.context}' is a declared bounded context` : `'${r.context}' is not one of the ${contexts.size} bounded contexts` };
+        }
+        case 'owner': {
+          if (!r.owner) return { present: false, resolves: null, detail: 'no owner declared' };
+          const ok = owners.has(r.owner);
+          return { present: true, resolves: ok, detail: ok ? `'${r.owner}' holds a role in the accountability record` : `'${r.owner}' holds nothing in the accountability record` };
+        }
+        case 'adr': {
+          if (!r.adr) return { present: false, resolves: null, detail: 'no ADR declared' };
+          const ok = /^ADR-\d{4}$/.test(r.adr) && adrNumbers.includes(Number(r.adr.slice(4)));
+          return { present: true, resolves: ok, detail: ok ? `${r.adr} exists in docs/adr/` : `${r.adr} does not exist` };
+        }
+        case 'tests': {
+          if (!r.tests.length) return { present: false, resolves: null, detail: 'no deterministic test declared' };
+          const missing = r.tests.filter((f) => !testFiles.includes(f) && !fs.existsSync(path.join(__dirname, '..', '..', 'test', f)));
+          return { present: true, resolves: missing.length === 0, detail: missing.length ? `${missing.length} declared test file(s) do not exist: ${missing.join(', ')}` : `${r.tests.length} test file(s) exist` };
+        }
+        case 'fitness': {
+          if (!r.fitness.length) return { present: false, resolves: null, detail: 'no fitness function declared' };
+          const missing = r.fitness.filter((f) => !controlIds.has(f));
+          return { present: true, resolves: missing.length === 0, detail: missing.length ? `${missing.length} declared control(s) did not run: ${missing.join(', ')}` : `${r.fitness.length} control(s) ran on this build` };
+        }
+        case 'mutation': {
+          // Mutation evidence is a claim about a process, not an artefact on disk. It is recorded
+          // where it was performed and is UNKNOWN where nothing recorded it — never back-filled.
+          if (!r.mutation.length) return { present: false, resolves: null, detail: 'no mutation evidence recorded — unknown, and deliberately not inferred from the fitness function existing' };
+          return { present: true, resolves: true, detail: `${r.mutation.length} mutation(s) recorded as caught` };
+        }
+        case 'endpoint':
+          return r.endpoint ? { present: true, resolves: true, detail: r.endpoint } : { present: false, resolves: null, detail: 'no HTTP endpoint declared' };
+        case 'documentation': {
+          if (!r.documentation) return { present: false, resolves: null, detail: 'no governed document declared' };
+          const exists = fs.existsSync(path.join(__dirname, '..', '..', r.documentation));
+          return { present: true, resolves: exists, detail: exists ? `${r.documentation} exists` : `${r.documentation} is declared and does not exist` };
+        }
+        case 'runbook': {
+          if (!r.runbook) return { present: false, resolves: null, detail: 'no runbook declared' };
+          const exists = fs.existsSync(path.join(__dirname, '..', '..', r.runbook));
+          return { present: true, resolves: exists, detail: exists ? `${r.runbook} exists` : `${r.runbook} is declared and does not exist` };
+        }
+        case 'capability':
+          return r.capability ? { present: true, resolves: true, detail: r.capability } : { present: false, resolves: null, detail: 'no enduring capability declared' };
+        case 'commits':
+          return r.commits.length ? { present: true, resolves: true, detail: `${r.commits.length} commit(s)` } : { present: false, resolves: null, detail: 'no delivering commit recorded' };
+        default:
+          return { present: false, resolves: null, detail: 'unknown element' };
+      }
+    };
+
+    const elements = Object.keys(TRACE_ELEMENTS).map((element) => ({
+      element, ...TRACE_ELEMENTS[element],
+      required: spec.requires.includes(element),
+      ...check(element),
+    }));
+
+    const missingRequired = elements.filter((e) => e.required && !e.present);
+    const brokenMappings = elements.filter((e) => e.present && e.resolves === false);
+    const missingOptional = elements.filter((e) => !e.required && !e.present);
+
+    // THE STATE RULE. A missing REQUIRED element or a broken mapping is BLOCKED — never a fraction.
+    const state = r.rejected ? 'REJECTED'
+      : missingRequired.length || brokenMappings.length ? 'BLOCKED'
+        : missingOptional.length ? 'PARTIAL'
+          : 'VERIFIED';
+
+    return {
+      requirement: id, specification: r.specification, section: r.section, statement: r.statement,
+      artefactType: r.artefactType, artefactMeans: spec.means,
+      state, ...REQUIREMENT_STATES[state],
+      elements,
+      missingRequired: missingRequired.map((e) => e.element),
+      brokenMappings: brokenMappings.map((e) => ({ element: e.element, detail: e.detail })),
+      missingOptional: missingOptional.map((e) => e.element),
+      reason: r.rejected ? `recorded as rejected: ${r.rejectionRationale}`
+        : brokenMappings.length ? `${brokenMappings.length} declared mapping(s) do not resolve — a declaration that points at nothing reads as covered and is not`
+          : missingRequired.length ? `${missingRequired.length} REQUIRED element(s) absent for a '${r.artefactType}' requirement: ${missingRequired.map((e) => e.element).join(', ')}. This is BLOCKED, not partially verified.`
+            : missingOptional.length ? `every required element is present; ${missingOptional.length} optional element(s) absent`
+              : 'every element this artefact type requires is present and resolves',
+      now: t,
+    };
+  }
+
+  // Bidirectional traceability plus the whole-register report.
+  matrix({ controls = [], testFiles = [], modules = [], now = null } = {}) {
+    const t = now ?? this._clock();
+    const rows = this.requirements().map((r) => this.verify(r.id, { controls, testFiles, now: t }));
+    const all = this.requirements();
+
+    // Requirement → implementation, and back. The reverse direction is the one nothing asked before,
+    // and it is what finds a module no requirement authorised.
+    const byImplementation = new Map();
+    for (const r of all) {
+      if (!r.implementation) continue;
+      if (!byImplementation.has(r.implementation)) byImplementation.set(r.implementation, []);
+      byImplementation.get(r.implementation).push(r.id);
+    }
+    const orphanImplementations = modules.filter((m) => !byImplementation.has(m));
+    // One module implementing several requirements is normal. The same requirement mapped to two
+    // implementations is not: it cannot have one implementation responsibility.
+    const duplicateMappings = all.filter((r) => Array.isArray(r.implementation));
+    const ambiguousOwnership = rows.filter((row) => {
+      const r = this._requirements.get(row.requirement);
+      return r.implementation && (byImplementation.get(r.implementation) || []).length > 1;
+    }).map((row) => ({ requirement: row.requirement, sharedWith: byImplementation.get(this._requirements.get(row.requirement).implementation).filter((x) => x !== row.requirement) }));
+
+    const counted = (state) => rows.filter((x) => x.state === state);
+    return {
+      requirements: rows, count: rows.length,
+      states: Object.entries(REQUIREMENT_STATES).map(([state, s]) => ({ state, ...s })),
+      artefactTypes: Object.entries(ARTEFACT_TYPES).map(([type, s]) => ({ type, ...s })),
+      elements: Object.entries(TRACE_ELEMENTS).map(([element, e]) => ({ element, ...e })),
+      byState: Object.fromEntries(Object.keys(REQUIREMENT_STATES).map((s) => [s, counted(s).map((x) => x.requirement)])),
+      verified: counted('VERIFIED').map((x) => x.requirement),
+      blocked: counted('BLOCKED').map((x) => ({ requirement: x.requirement, missing: x.missingRequired, broken: x.brokenMappings })),
+      partial: counted('PARTIAL').map((x) => x.requirement),
+      unknown: counted('UNKNOWN').map((x) => x.requirement),
+      rejected: counted('REJECTED').map((x) => x.requirement),
+      // Requirement → implementation
+      orphanRequirements: all.filter((r) => !r.implementation && !r.rejected).map((r) => r.id),
+      // Implementation → requirement. Only meaningful over modules the caller supplied.
+      orphanImplementations,
+      implementationsExamined: modules.length,
+      duplicateMappings: duplicateMappings.map((r) => r.id),
+      ambiguousOwnership,
+      brokenMappings: rows.flatMap((x) => x.brokenMappings.map((b) => ({ requirement: x.requirement, ...b }))),
+      missingOwnership: all.filter((r) => !r.owner).map((r) => r.id),
+      missingAdrs: all.filter((r) => ARTEFACT_TYPES[r.artefactType].requires.includes('adr') && !r.adr).map((r) => r.id),
+      // Deliberately NOT a single percentage. Counts, per state, so a high verified count cannot
+      // conceal a blocked requirement.
+      counts: Object.fromEntries(Object.keys(REQUIREMENT_STATES).map((s) => [s, counted(s).length])),
+      everyRequirementVerified: rows.length > 0 && counted('VERIFIED').length + counted('REJECTED').length === rows.length,
+      anyBlocked: counted('BLOCKED').length > 0,
+      measurable: rows.length > 0,
+      basis: rows.length
+        ? `${counted('VERIFIED').length} verified, ${counted('BLOCKED').length} blocked, ${counted('PARTIAL').length} partial, ${counted('REJECTED').length} rejected, of ${rows.length} declared requirement(s). ${orphanImplementations.length} of ${modules.length} examined module(s) map to no requirement.`
+        : 'No requirement is declared. The register is empty, which is not the same as a platform with no requirements — it is a platform that has not written them down.',
+      now: t, declarative: true, informationalOnly: true, authorizes: false,
+      note: 'Declared, never inferred. A requirement\'s owner, context and ADR are recorded by somebody; deriving them from a diff would fill the matrix with guesses that read exactly like declarations. A missing REQUIRED element produces BLOCKED rather than a percentage, because "seven of nine" invites a reader to see 78% and move on when the requirement is simply unverified.',
+    };
+  }
+}
+
 module.exports = {
+  REQUIREMENT_STATES, ARTEFACT_TYPES, TRACE_ELEMENTS, RequirementRegister,
   ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, GOVERNANCE_SCHEMA,
   FULL_SCHEMA_FROM, EXTENDED_SCHEMA_FROM, GOVERNANCE_SCHEMA_FROM,
   MEASURABLE_SECTIONS, DATED_SECTIONS, QUALITY_DIMENSIONS, STATUSES,

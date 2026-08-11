@@ -4869,6 +4869,161 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-REQUIREMENTS-TRACEABILITY', 'A missing required element is BLOCKED, never a percentage, and a broken mapping is worse than none', (v) => {
+    const adr = require('../src/architecture/adr-governance');
+    const contextMap = require('../src/architecture/context-map');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Six states, and the three that must never be confused -------------------------------
+    for (const required of ['UNKNOWN', 'DECLARED', 'PARTIAL', 'VERIFIED', 'BLOCKED', 'REJECTED']) {
+      if (!adr.REQUIREMENT_STATES[required]) v.push(`requirement state '${required}' is not defined`);
+    }
+    if (Object.keys(adr.REQUIREMENT_STATES).length !== 6) v.push('the requirement state model does not carry exactly six states');
+    for (const [id, s] of Object.entries(adr.REQUIREMENT_STATES)) {
+      if (!s.means || typeof s.verified !== 'boolean' || typeof s.blocking !== 'boolean') v.push(`requirement state '${id}' does not say what it means or whether it verifies and blocks`);
+    }
+    // Exactly one state verifies, and exactly one blocks. If UNKNOWN blocked, nobody could ever
+    // declare a requirement; if PARTIAL verified, an unverified requirement would read as done.
+    const verifying = Object.entries(adr.REQUIREMENT_STATES).filter(([, s]) => s.verified).map(([id]) => id);
+    if (verifying.length !== 1 || verifying[0] !== 'VERIFIED') v.push(`${verifying.length} state(s) count as verified (${verifying.join(', ')}) — exactly one should`);
+    const blocking = Object.entries(adr.REQUIREMENT_STATES).filter(([, s]) => s.blocking).map(([id]) => id);
+    if (blocking.length !== 1 || blocking[0] !== 'BLOCKED') v.push(`${blocking.length} state(s) block (${blocking.join(', ')}) — exactly one should, and UNKNOWN must not`);
+    if (adr.REQUIREMENT_STATES.UNKNOWN.blocking) v.push('UNKNOWN blocks, which would make declaring a requirement impossible before verifying it');
+    if (!/not a percentage/i.test(adr.REQUIREMENT_STATES.BLOCKED.means)) v.push('the BLOCKED state does not say that it is not a percentage');
+
+    // --- Artefact types: mutation is required of code and NOT of a governance decision --------
+    for (const required of ['executable', 'governance', 'architectural', 'documentation']) {
+      if (!adr.ARTEFACT_TYPES[required]) v.push(`artefact type '${required}' is not defined`);
+    }
+    const governance = adr.ARTEFACT_TYPES.governance;
+    if (governance.requires.includes('mutation')) {
+      v.push('mutation testing is required of a governance artefact — you cannot mutate a board\'s approval to see whether a control notices, and demanding it is a category error');
+    }
+    if (governance.requires.includes('fitness')) v.push('an executable control is required of a governance decision');
+    if (!adr.ARTEFACT_TYPES.executable.requires.includes('fitness')) v.push('an executable requirement does not have to carry a fitness function');
+    if (!adr.ARTEFACT_TYPES.executable.requires.includes('tests')) v.push('an executable requirement does not have to carry deterministic tests');
+    if (!adr.ARTEFACT_TYPES.architectural.requires.includes('adr')) v.push('an architectural requirement does not have to carry an ADR');
+    for (const [id, t] of Object.entries(adr.ARTEFACT_TYPES)) {
+      if (!t.means || !Array.isArray(t.requires) || !t.requires.length) v.push(`artefact type '${id}' does not state what it means or what it requires`);
+      const overlap = t.requires.filter((e) => t.optional.includes(e));
+      if (overlap.length) v.push(`artefact type '${id}' lists ${overlap.join(', ')} as both required and optional`);
+    }
+    for (const [id, e] of Object.entries(adr.TRACE_ELEMENTS)) {
+      if (!e.asks || !e.asks.endsWith('?') || !e.ifAbsent) v.push(`trace element '${id}' does not state its question or what its absence costs`);
+    }
+
+    // --- The register is DECLARED, never inferred --------------------------------------------
+    const reg = new adr.RequirementRegister({ clock: () => 0 });
+    const base = {
+      specification: 'Phase 18.1', section: 'Part 1', statement: 'Implement an executable requirements traceability matrix',
+      artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    };
+    const refuses = (spec, label) => {
+      let refused = false;
+      try { reg.declare('PROBE', spec); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(label);
+    };
+    refuses({ ...base, specification: undefined }, 'a requirement with no source specification was accepted — it cannot be traced back to anything');
+    refuses({ ...base, section: undefined }, 'a requirement naming no section of its specification was accepted');
+    refuses({ ...base, statement: undefined }, 'a requirement carrying no statement was accepted — the register would hold an identifier and not a requirement');
+    refuses({ ...base, artefactType: 'invented' }, 'a requirement declared with an unknown artefact type was accepted, though what counts as verified differs between them');
+    refuses({ ...base, artefactType: undefined }, 'a requirement with no artefact type was accepted');
+    refuses({ ...base, declaredBy: undefined }, 'a requirement was declared with nobody named as having declared it');
+    refuses({ ...base, rejected: true }, 'a rejected requirement with no rationale was accepted — indistinguishable from an oversight');
+
+    // --- A fully traced executable requirement reaches VERIFIED or PARTIAL, never blocked -----
+    const traced = {
+      ...base,
+      implementation: 'src/architecture/adr-governance.js',
+      context: (contextMap.moduleOwnership().owner || {})['src/architecture/adr-governance.js'],
+      owner: 'Architecture Review Board', capability: 'Architecture Governance', adr: 'ADR-0012',
+      tests: ['phase17-adaptive-intelligence-learning.test.js'],
+      fitness: ['APP-FIT-REQUIREMENTS-TRACEABILITY'],
+      mutation: ['the BLOCKED state was weakened to PARTIAL and the control caught it'],
+      documentation: 'docs/architecture-governance.md', commits: ['0225cae'],
+    };
+    reg.declare('P181-1', traced);
+    const verified = reg.verify('P181-1', { controls, now: 0 });
+    if (verified.state === 'BLOCKED') v.push(`a fully traced requirement was BLOCKED: ${verified.reason} — a state nothing can reach is not a state`);
+    if (!['VERIFIED', 'PARTIAL'].includes(verified.state)) v.push(`a fully traced requirement reported '${verified.state}'`);
+    if (verified.brokenMappings.length) v.push(`a requirement whose declarations all resolve reported broken mappings: ${JSON.stringify(verified.brokenMappings)}`);
+
+    // --- THE POINT OF PART 3: a missing REQUIRED element is BLOCKED, not partial --------------
+    reg.declare('P181-NOTESTS', { ...traced, tests: [] });
+    const noTests = reg.verify('P181-NOTESTS', { controls, now: 0 });
+    if (noTests.state !== 'BLOCKED') v.push(`an executable requirement with no deterministic test reported '${noTests.state}' rather than BLOCKED`);
+    if (!noTests.missingRequired.includes('tests')) v.push('the missing required element was not named');
+    if (!/BLOCKED, not partially verified/.test(noTests.reason)) v.push('a blocked requirement does not say that it is not partially verified');
+    reg.declare('P181-NOFIT', { ...traced, fitness: [] });
+    if (reg.verify('P181-NOFIT', { controls, now: 0 }).state !== 'BLOCKED') v.push('an executable requirement with no fitness function was not BLOCKED');
+    // …and a missing OPTIONAL element is PARTIAL, so the two are genuinely different.
+    reg.declare('P181-NORUNBOOK', { ...traced, runbook: null, endpoint: null });
+    const partial = reg.verify('P181-NORUNBOOK', { controls, now: 0 });
+    if (partial.state === 'BLOCKED') v.push('a requirement missing only OPTIONAL elements was blocked, which collapses the distinction the states exist for');
+
+    // --- A BROKEN MAPPING is worse than an absent one, because it reads as covered ------------
+    reg.declare('P181-BROKEN', {
+      ...traced, implementation: 'src/module-that-does-not-exist.js',
+      context: 'not-a-bounded-context', owner: 'Department of Nobody', adr: 'ADR-0099',
+      tests: ['a-test-file-that-does-not-exist.test.js'], fitness: ['APP-FIT-NEVER-EXISTED'],
+    });
+    const broken = reg.verify('P181-BROKEN', { controls, now: 0 });
+    if (broken.state !== 'BLOCKED') v.push('a requirement whose every declaration points at nothing was not BLOCKED');
+    for (const element of ['implementation', 'context', 'owner', 'adr', 'tests', 'fitness']) {
+      if (!broken.brokenMappings.some((b) => b.element === element)) {
+        v.push(`a declared '${element}' that does not resolve was not reported as a broken mapping — a declaration pointing at nothing reads as covered`);
+      }
+    }
+    if (!/reads as covered and is not/.test(broken.reason)) v.push('a broken mapping does not say why it is worse than an absence');
+
+    // --- Mutation evidence is never inferred from a fitness function existing -----------------
+    reg.declare('P181-NOMUT', { ...traced, mutation: [] });
+    const noMutation = reg.verify('P181-NOMUT', { controls, now: 0 });
+    const mutationElement = noMutation.elements.find((e) => e.element === 'mutation');
+    if (mutationElement.present) v.push('mutation evidence was reported present with none recorded');
+    if (mutationElement.resolves !== null) v.push('unrecorded mutation evidence produced a resolution verdict rather than unknown');
+    if (!/deliberately not inferred/.test(mutationElement.detail)) v.push('the mutation element does not say that it is not inferred from the fitness function existing');
+
+    // --- Bidirectional traceability, and an empty register that says so -----------------------
+    const empty = new adr.RequirementRegister({ clock: () => 0 }).matrix({ now: 0 });
+    if (empty.measurable) v.push('an empty requirement register reported itself measurable');
+    if (empty.everyRequirementVerified) v.push('an empty register reported every requirement verified');
+    if (!/has not written them down/.test(empty.basis)) v.push('an empty register does not distinguish having no requirements from not having written them down');
+    if (empty.declarative !== true) v.push('the requirement register does not declare that it is declarative');
+    if (empty.authorizes !== false) v.push('the requirement matrix claims authority');
+
+    const matrix = reg.matrix({ controls, modules: ['src/architecture/adr-governance.js', 'src/app.js'], now: 0 });
+    // Implementation → requirement: the direction nothing asked before.
+    if (!matrix.orphanImplementations.includes('src/app.js')) v.push('a module no requirement maps to was not reported as an orphan implementation');
+    if (matrix.orphanImplementations.includes('src/architecture/adr-governance.js')) v.push('a module a requirement maps to was reported as an orphan');
+    if (matrix.implementationsExamined !== 2) v.push('the matrix does not state how many implementations it examined, so its orphan count could be read as absolute');
+    // Requirement → implementation.
+    reg.declare('P181-ORPHAN', { ...base, implementation: null });
+    if (!reg.matrix({ controls, now: 0 }).orphanRequirements.includes('P181-ORPHAN')) v.push('a requirement with no implementation was not reported as an orphan');
+    // A rejected requirement is not an orphan — it was considered and declined.
+    reg.declare('P181-REJECTED', { ...base, rejected: true, rejectionRationale: 'superseded by P181-1 before implementation' });
+    const withRejected = reg.matrix({ controls, now: 0 });
+    if (withRejected.orphanRequirements.includes('P181-REJECTED')) v.push('a deliberately rejected requirement was counted as an orphan');
+    if (withRejected.byState.REJECTED.length !== 1) v.push('a rejected requirement was not reported in the REJECTED state');
+
+    // --- Counts per state, never a single compliance percentage ------------------------------
+    if (typeof matrix.counts !== 'object') v.push('the matrix reports no per-state counts');
+    for (const state of Object.keys(adr.REQUIREMENT_STATES)) {
+      if (!Number.isFinite(matrix.counts[state])) v.push(`the matrix does not count requirements in the '${state}' state`);
+    }
+    const total = Object.values(matrix.counts).reduce((a, b) => a + b, 0);
+    if (total !== matrix.count) v.push(`the per-state counts total ${total} against ${matrix.count} requirements — a requirement is in no state or in two`);
+    if (Object.prototype.hasOwnProperty.call(matrix, 'compliancePercentage') || Object.prototype.hasOwnProperty.call(matrix, 'coverageRate')) {
+      v.push('the matrix reports a single compliance figure, which lets a high number conceal a blocked requirement');
+    }
+    if (matrix.anyBlocked !== (matrix.counts.BLOCKED > 0)) v.push('the blocked flag disagrees with the blocked count');
+    if (matrix.everyRequirementVerified && matrix.counts.BLOCKED > 0) v.push('a register containing a blocked requirement reported every requirement verified');
+  }),
+
   fit('APP-FIT-MERGE-GOVERNANCE', 'A merge recorded only in a commit message is indistinguishable from a requirement that was dropped', (v) => {
     const adr = require('../src/architecture/adr-governance');
     const inst = require('../src/assurance/institutional');
