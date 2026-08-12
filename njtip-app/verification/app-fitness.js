@@ -11883,6 +11883,245 @@ module.exports = [
     }).ordered)) v.push('decision package ordering is not deterministic');
   }),
 
+  fit('APP-FIT-SPECIFICATION-COMPLIANCE', 'A specification nobody wrote requirements for is unknown, not compliant', (v) => {
+    const adr = require('../src/architecture/adr-governance');
+    const ep = require('../src/assurance/epistemic');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id })),
+      ...require('./app-fitness').map((f) => ({ id: f.id })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id })),
+    ];
+
+    // --- Five outcomes, and the pairs that must not be merged --------------------------------
+    for (const required of ['COMPLIANT', 'NON_COMPLIANT', 'EVIDENCE_UNRESOLVED', 'UNKNOWN', 'HUMAN_REVIEW_REQUIRED']) {
+      if (!adr.COMPLIANCE_STATES[required]) v.push(`compliance state '${required}' is not defined`);
+    }
+    if (adr.COMPLIANCE_STATES.UNKNOWN.compliant) v.push('an unknown compliance status was marked compliant — absence of evidence is not evidence of compliance');
+    if (adr.COMPLIANCE_STATES.HUMAN_REVIEW_REQUIRED.compliant) v.push('a requirement awaiting human review was marked compliant');
+    if (adr.COMPLIANCE_STATES.UNKNOWN.blocking) v.push('an unknown compliance status blocks — nobody having looked is not a failure');
+    if (!adr.COMPLIANCE_STATES.NON_COMPLIANT.blocking) v.push('observed non-compliance does not block');
+    if (!adr.COMPLIANCE_STATES.EVIDENCE_UNRESOLVED.blocking) v.push('a declaration pointing at nothing does not block, though it reads as covered');
+    // The two states most often merged map to different epistemic outcomes, which is the point.
+    if (adr.COMPLIANCE_STATES.NON_COMPLIANT.epistemic !== 'BROKEN') v.push('observed non-compliance is not epistemically broken');
+    if (adr.COMPLIANCE_STATES.UNKNOWN.epistemic !== 'UNKNOWN') v.push('an unestablished compliance status is not epistemically unknown');
+    if (adr.COMPLIANCE_STATES.UNKNOWN.epistemic === adr.COMPLIANCE_STATES.NON_COMPLIANT.epistemic) {
+      v.push('unestablished and non-compliant collapse to the same epistemic state — one is investigated and the other is fixed');
+    }
+
+    const reg = new adr.RequirementRegister({ clock: () => 0 });
+    const compliantSpec = {
+      specification: 'SPEC-A', section: 'Part 1', statement: 'an executable requirement',
+      artefactType: 'executable', declaredBy: 'Architecture Review Board',
+      implementation: 'src/architecture/adr-governance.js', context: 'assurance',
+      owner: 'Office of the Chief Architect',
+      tests: ['phase18-1-traceability-and-merge-governance.test.js'],
+      fitness: ['APP-FIT-REQUIREMENTS-TRACEABILITY'],
+    };
+    reg.declare('REQ-EXEC', compliantSpec);
+
+    // --- A control nothing can pass proves nothing --------------------------------------------
+    const clean = reg.specificationCompliance({ controls, now: 0 });
+    if (clean.overall !== 'COMPLIANT') v.push(`a fully evidenced executable requirement reported '${clean.overall}' — a state nothing can reach is not a state`);
+
+    // --- THE POINT OF PART 7: a specification nobody declared anything about ------------------
+    const withExpected = reg.specificationCompliance({ controls, specifications: ['SPEC-A', 'SPEC-NEVER-DECLARED'], now: 0 });
+    const ghost = withExpected.bySpecification.find((s) => s.specification === 'SPEC-NEVER-DECLARED');
+    if (!ghost) v.push('an expected specification with no declared requirements vanished from the dashboard entirely');
+    else {
+      if (ghost.state !== 'UNKNOWN') v.push(`a specification with no declared requirements reported '${ghost.state}' — an empty register is not a clean one`);
+      if (ghost.measurable) v.push('a specification with no declared requirements was reported as measurable');
+      if (!/not a clean one|nothing is known/.test(ghost.reason)) v.push('a specification with no requirements does not say why it is unknown');
+    }
+    if (withExpected.overall === 'COMPLIANT') v.push('an estate containing a specification nobody wrote requirements for reported overall compliance');
+
+    // --- Observed non-compliance: a required element simply absent ----------------------------
+    const missing = new adr.RequirementRegister({ clock: () => 0 });
+    missing.declare('REQ-BARE', {
+      specification: 'SPEC-B', section: 'Part 1', statement: 'declared and not built',
+      artefactType: 'executable', declaredBy: 'ARB', context: 'assurance', owner: 'Office of the Chief Architect',
+    });
+    const bare = missing.specificationCompliance({ controls, now: 0 });
+    if (bare.overall !== 'NON_COMPLIANT') v.push(`a requirement missing its implementation, tests and fitness reported '${bare.overall}'`);
+
+    // --- Unresolved evidence: a declaration that points at nothing ----------------------------
+    const broken = new adr.RequirementRegister({ clock: () => 0 });
+    broken.declare('REQ-GHOST', { ...compliantSpec, specification: 'SPEC-C', implementation: 'src/does-not-exist.js' });
+    const ghosted = broken.specificationCompliance({ controls, now: 0 });
+    if (ghosted.overall !== 'EVIDENCE_UNRESOLVED') v.push(`a requirement declaring a module that does not exist reported '${ghosted.overall}' — worse than absent, because it reads as covered`);
+    if (!ghosted.unresolvedEvidence.length) v.push('a declaration pointing at nothing was not listed as unresolved evidence');
+
+    // --- Human review: structurally complete, substantively unestablished ---------------------
+    const gov = new adr.RequirementRegister({ clock: () => 0 });
+    gov.declare('REQ-GOV', {
+      specification: 'SPEC-D', section: 'Part 1', statement: 'a governance decision',
+      artefactType: 'governance', declaredBy: 'ARB', context: 'assurance',
+      owner: 'Office of the Chief Architect', documentation: 'docs/architecture-governance.md',
+    });
+    const awaiting = gov.specificationCompliance({ controls, now: 0 });
+    if (awaiting.overall !== 'HUMAN_REVIEW_REQUIRED') {
+      v.push(`a structurally complete governance requirement reported '${awaiting.overall}' — whether it is substantively adequate is not a thing a test establishes`);
+    }
+    if (!awaiting.requirementsNeedingHumanReview.length) v.push('a requirement whose adequacy no test can settle was not listed for human review');
+    // …and a recorded human finding clears it, or the state is a dead end nothing can leave.
+    const reviewed = gov.specificationCompliance({ controls, now: 0, reviews: [{ requirement: 'REQ-GOV', reviewedBy: 'Architecture Review Board', finding: 'adequate for the decision it records' }] });
+    if (reviewed.overall !== 'COMPLIANT') v.push('a recorded human review does not clear a human-review-required requirement, so the state is a dead end');
+    // An unsigned review is an assertion that somebody agreed.
+    const unsigned = gov.specificationCompliance({ controls, now: 0, reviews: [{ requirement: 'REQ-GOV' }] });
+    if (!unsigned.rejectedReviews.length) v.push('a review naming nobody and stating no finding was accepted');
+    if (unsigned.overall === 'COMPLIANT') v.push('an unsigned review cleared a requirement');
+
+    // --- Weakest link, never the mean ----------------------------------------------------------
+    const mixed = new adr.RequirementRegister({ clock: () => 0 });
+    for (let i = 0; i < 9; i += 1) mixed.declare(`REQ-OK-${i}`, { ...compliantSpec, specification: 'SPEC-E' });
+    mixed.declare('REQ-BAD', { specification: 'SPEC-E', section: 'Part 2', statement: 'not built', artefactType: 'executable', declaredBy: 'ARB', context: 'assurance', owner: 'Office of the Chief Architect' });
+    const weakest = mixed.specificationCompliance({ controls, now: 0 });
+    if (weakest.overall !== 'NON_COMPLIANT') v.push('nine compliant requirements outvoted one that is not — specification state is the weakest link, not the average');
+    if (weakest.bySpecification[0].weakestRequirement !== 'REQ-BAD') v.push('the specification does not name which requirement made it non-compliant');
+
+    // --- Never a percentage --------------------------------------------------------------------
+    for (const text of [weakest.basis, weakest.bySpecification[0].reason, weakest.note]) {
+      if (/\d+\s?%|percent/.test(String(text))) v.push('the compliance dashboard rendered a percentage — a reader who sees a high number stops asking which fifth is missing');
+    }
+    if ('complianceRate' in weakest || 'compliancePercentage' in weakest || 'score' in weakest) {
+      v.push('the compliance dashboard exposes a single rate, which can conceal an unverified prerequisite');
+    }
+
+    // --- The machine/human boundary is stated, not implied -------------------------------------
+    if (!weakest.machineDetectable || !weakest.humanJudgementRequired) v.push('the dashboard does not state which of its findings are observed and which need a human');
+    if (weakest.producesInstitutionalVerdict !== false) v.push('the dashboard claims to produce an institutional verdict');
+    if (weakest.authorizes !== false) v.push('the compliance dashboard claims authority');
+
+    // --- The five lists survive the state spread ----------------------------------------------
+    // They did not, once: the spread carries a boolean `compliant`, and a list called `compliant`
+    // came back as `true`. A field whose type depends on spread order is a bug waiting to be trusted.
+    for (const [field, expected] of [
+      ['specificationsCompliant', 'COMPLIANT'], ['specificationsNonCompliant', 'NON_COMPLIANT'],
+      ['specificationsEvidenceUnresolved', 'EVIDENCE_UNRESOLVED'], ['specificationsUnknown', 'UNKNOWN'],
+      ['specificationsHumanReviewRequired', 'HUMAN_REVIEW_REQUIRED'],
+    ]) {
+      if (!Array.isArray(clean[field])) v.push(`'${field}' is not a list of specifications — it was overwritten by the ${expected} state spread`);
+    }
+
+    // --- It is a view over the existing register, not a second one -----------------------------
+    if (typeof adr.RequirementRegister.prototype.specificationCompliance !== 'function') {
+      v.push('specification compliance is not a view over the requirement register — the platform now holds two registers of the same records');
+    }
+    if (Object.keys(ep.EPISTEMIC_STATES).some((s) => !Object.values(adr.COMPLIANCE_STATES).some((c) => c.epistemic === s))) {
+      v.push('a compliance state maps to no epistemic state, so a compliance finding cannot enter any other assurance chain without a translation inventing a meaning');
+    }
+  }),
+
+  fit('APP-FIT-EPISTEMIC-INTEGRITY', 'Unknown is not pass, and depth is the walk before the first gap rather than the tally of steps that happen to resolve', (v) => {
+    const ep = require('../src/assurance/epistemic');
+
+    // --- Three states, and what each of them is for -------------------------------------------
+    if (Object.keys(ep.EPISTEMIC_STATES).length !== 3) v.push('the platform holds other than three epistemic states — resolved, broken and unknown are not two things');
+    if (ep.EPISTEMIC_STATES.UNKNOWN.satisfied) v.push('UNKNOWN was marked satisfied — unknown is not pass');
+    if (ep.EPISTEMIC_STATES.UNKNOWN.examined) v.push('UNKNOWN was marked examined — the whole content of the state is that nobody could establish it');
+    if (ep.EPISTEMIC_STATES.UNKNOWN.continuesChain) v.push('an unknown step continues a chain');
+    if (ep.EPISTEMIC_STATES.BROKEN.continuesChain) v.push('a broken step continues a chain');
+    if (!ep.EPISTEMIC_STATES.RESOLVED.continuesChain) v.push('a resolved step does not continue a chain, so no chain can ever complete');
+    // BROKEN is actionable, UNKNOWN is investigable. Collapsing them loses the reader's next move.
+    if (ep.EPISTEMIC_STATES.UNKNOWN.blocking === ep.EPISTEMIC_STATES.BROKEN.blocking) {
+      v.push('unknown and broken carry the same blocking semantics — one means somebody must fix something and the other means somebody must go and look');
+    }
+
+    // --- weakest(): the roll-up rule ------------------------------------------------------------
+    if (ep.weakest([]) !== 'UNKNOWN') v.push('an empty set of results rolled up to something other than unknown');
+    if (ep.weakest(['RESOLVED', 'RESOLVED']) !== 'RESOLVED') v.push('a set of resolved results does not roll up to resolved');
+    if (ep.weakest(['RESOLVED', 'UNKNOWN']) !== 'UNKNOWN') v.push('an unknown member did not weaken the set — aggregation is to the weakest link, not the mean');
+    if (ep.weakest(['RESOLVED', 'UNKNOWN', 'BROKEN']) !== 'BROKEN') v.push('a broken member did not dominate an unknown one');
+    if (ep.weakest(['nonsense']) !== 'UNKNOWN') v.push('an unrecognised state rolled up to something other than unknown');
+
+    // --- The seven chain shapes -----------------------------------------------------------------
+    const chain = (states) => ep.assuranceChain(states.map((s, i) => ({ step: `s${i + 1}`, state: s, detail: 'd', ifBroken: 'x', resolvedFrom: 'y' })), { now: 0 });
+    const R = 'RESOLVED'; const B = 'BROKEN'; const U = 'UNKNOWN';
+
+    const whole = chain([R, R, R, R, R]);
+    if (!whole.complete) v.push('a chain of five resolved steps was not complete — a chain nothing can complete proves nothing');
+    if (whole.contiguousNavigableDepth !== 5) v.push('a complete chain does not report full depth');
+    if (whole.stoppedAt !== null) v.push('a complete chain reported a stopping point');
+
+    const first = chain([B, R, R, R, R]);
+    if (first.contiguousNavigableDepth !== 0) v.push(`a chain broken at step 1 reported depth ${first.contiguousNavigableDepth}`);
+    if (first.resolvedCount !== 4) v.push('the tally of individually resolved steps was lost');
+    if (first.stoppedAtPosition !== 1) v.push('a chain broken at step 1 did not report position 1');
+    if (first.resolvedButUnreachable.length !== 4) v.push('steps that resolve behind a gap were not named as unreachable');
+
+    const middle = chain([R, R, U, R, R]);
+    if (middle.contiguousNavigableDepth !== 2) v.push(`a chain stopped at step 3 reported depth ${middle.contiguousNavigableDepth} rather than 2`);
+    if (middle.resolvedCount !== 4) v.push('the resolved tally was conflated with the contiguous depth');
+    if (middle.contiguousNavigableDepth === middle.resolvedCount) v.push('depth and resolved count are the same number, so a gap in the middle is invisible');
+    if (middle.chainState !== 'UNKNOWN') v.push('a chain stopped by an unknown step did not take that state');
+    if (middle.stoppedAt !== 's3') v.push('the chain did not name the step it stopped at');
+
+    const last = chain([R, R, R, R, B]);
+    if (last.contiguousNavigableDepth !== 4) v.push('a chain broken at its final step did not report depth 4');
+    if (last.complete) v.push('a chain broken at its final step was reported complete');
+    if (last.chainState !== 'BROKEN') v.push('a chain stopped by a broken step did not take that state');
+
+    // Unknown and broken stop a chain identically and are still reported apart.
+    const unknownStop = chain([R, U, R]);
+    const brokenStop = chain([R, B, R]);
+    if (unknownStop.contiguousNavigableDepth !== brokenStop.contiguousNavigableDepth) v.push('unknown and broken stop a chain at different depths');
+    if (unknownStop.chainState === brokenStop.chainState) v.push('a chain stopped by an unknown step is indistinguishable from one stopped by a broken step');
+
+    // A step with no recognisable state is unknown, never assumed good.
+    const silent = ep.assuranceChain([{ step: 'a' }, { step: 'b', state: 'RESOLVED' }], { now: 0 });
+    if (silent.chainState !== 'UNKNOWN') v.push('a step declaring no state was treated as something other than unknown');
+    if (silent.contiguousNavigableDepth !== 0) v.push('a step declaring no state did not stop the chain');
+
+    // --- Never a percentage ---------------------------------------------------------------------
+    for (const c of [first, middle, last]) {
+      if (/\d+\s?%|percent/.test(c.summary)) v.push('an incomplete chain was summarised as a percentage');
+      if (!/NAVIGABLE THROUGH/.test(c.summary)) v.push('an incomplete chain does not report its contiguous boundary');
+    }
+    if (!middle.summary.startsWith('NAVIGABLE THROUGH 2/5')) v.push(`a chain stopped at step 3 summarised as '${middle.summary.split(' —')[0]}'`);
+
+    // --- The machine/human boundary helper -------------------------------------------------------
+    const b = ep.machineBoundary({ observed: ['a missing field'], judged: ['whether it matters'] });
+    if (b.producesInstitutionalVerdict !== false) v.push('a machine observation claims to be an institutional verdict');
+    if (!/human judgement/.test(b.pipeline)) v.push('the boundary helper does not state the pipeline it preserves');
+    if (!b.refused) v.push('the boundary helper does not state the pipeline it refuses');
+    const silentBoundary = ep.machineBoundary({});
+    if (silentBoundary.machineDetectable === null || /^$/.test(String(silentBoundary.machineDetectable))) {
+      v.push('a control observing nothing renders as having observed something');
+    }
+
+    // --- One walker, not several ------------------------------------------------------------------
+    // The decision chain must be built on this module rather than carrying a private copy of it.
+    const inst = require('../src/assurance/institutional');
+    if (inst.HOP_STATES !== ep.EPISTEMIC_STATES) v.push('the decision explainability chain holds its own copy of the epistemic vocabulary');
+    const walked = inst.explainDecision({}, { now: 0 });
+    if (!walked.chain || typeof walked.chain.contiguousNavigableDepth !== 'number') {
+      v.push('the decision explanation does not run through the shared chain walker, so the first-break rule is implemented twice');
+    }
+    if (walked.chain.contiguousNavigableDepth !== walked.contiguousNavigableDepth) v.push('the decision chain and the shared walker disagree on depth');
+
+    // --- Every control that can report a state a human must act on has somewhere to send it -----
+    //
+    // A control producing BLOCKED, GOVERNANCE_REVIEW_REQUIRED or UNKNOWN is asking somebody to do
+    // something. If nothing says who, the finding is a message in a bottle: it will be read by
+    // whoever happens to run the suite and actioned by nobody.
+    const raci = require('../src/governance/raci');
+    const ownership = require('../src/governance/ownership');
+    const escalating = [
+      'APP-FIT-SPECIFICATION-COMPLIANCE', 'APP-FIT-EPISTEMIC-INTEGRITY',
+      'APP-FIT-DECISION-QUALITY', 'APP-FIT-DECISION-EXPLAINABILITY',
+    ];
+    for (const row of raci.controlOwnership(escalating).controls) {
+      if (!row.owned) v.push(`${row.control} is owned by nobody — a control whose findings nobody is accountable for is a control nobody acts on`);
+      if (!row.responsibleAuthority) v.push(`${row.control} names no responsible authority`);
+      if (!row.governanceBoard) v.push(`${row.control} names no governance board, so an unknown finding has nowhere to escalate`);
+      if (!row.context) continue;
+      const path = ownership.escalationPath(row.context);
+      if (!path || !path.terminatesAt) v.push(`${row.control} sits in a context whose escalation path terminates nowhere`);
+      if (path && path.terminatesAt !== row.governanceBoard) {
+        v.push(`${row.control} escalates to '${path.terminatesAt}' and is governed by '${row.governanceBoard}' — a finding would arrive somewhere other than at the body accountable for it`);
+      }
+    }
+  }),
+
   fit('APP-FIT-DECISION-QUALITY', 'An alternative that restates the recommendation is not a choice, and the machine says which part of that it can actually see', (v) => {
     const inst = require('../src/assurance/institutional');
     const q = inst.alternativeQuality;

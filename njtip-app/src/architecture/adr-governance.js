@@ -754,6 +754,42 @@ const TRACE_ELEMENTS = {
   commits: { asks: 'Which commits delivered it?', ifAbsent: 'The change cannot be reviewed against the requirement that asked for it.' },
 };
 
+// --- Part 7: specification compliance vocabulary ---------------------------------------------------
+//
+// Five outcomes, and the two that are most often merged are the two that must not be. "Not compliant"
+// and "not established" are different institutional facts leading to different actions: one is fixed,
+// the other is investigated. A dashboard that shows them in the same colour has thrown away the
+// distinction its readers most need.
+//
+// Each maps onto the platform's three epistemic states so a compliance figure can be rolled into any
+// other assurance chain without a translation layer inventing a fourth meaning on the way.
+const COMPLIANCE_STATES = {
+  COMPLIANT: {
+    epistemic: 'RESOLVED', compliant: true, blocking: false, humanJudgementNeeded: false,
+    means: 'Every element this requirement\'s artefact type demands is present and resolves, or it was deliberately rejected with a recorded rationale.',
+  },
+  NON_COMPLIANT: {
+    epistemic: 'BROKEN', compliant: false, blocking: true, humanJudgementNeeded: false,
+    means: 'A required element is absent. Checked, and the specification is not met — this is the actionable state.',
+  },
+  EVIDENCE_UNRESOLVED: {
+    epistemic: 'BROKEN', compliant: false, blocking: true, humanJudgementNeeded: false,
+    means: 'A declaration points at a file, control, owner or ADR that does not exist. Worse than an absent declaration, because it reads as covered.',
+  },
+  UNKNOWN: {
+    epistemic: 'UNKNOWN', compliant: false, blocking: false, humanJudgementNeeded: true,
+    means: 'Nothing has been checked, or nothing was ever declared. Not a failure and emphatically not a pass — nobody has looked.',
+  },
+  HUMAN_REVIEW_REQUIRED: {
+    epistemic: 'UNKNOWN', compliant: false, blocking: false, humanJudgementNeeded: true,
+    means: 'Structurally complete, with an outstanding question no test can settle. A machine has done what it can and says so.',
+  },
+};
+
+// Rolling a set of requirements up collapses to three epistemic states; this maps back to the
+// compliance vocabulary so the specification-level answer stays as specific as the evidence allows.
+const COMPLIANCE_FROM_EPISTEMIC = { RESOLVED: 'COMPLIANT', BROKEN: 'NON_COMPLIANT', UNKNOWN: 'UNKNOWN' };
+
 class RequirementRegister {
   constructor({ clock = () => 0 } = {}) { this._requirements = new Map(); this._clock = clock; }
 
@@ -904,6 +940,180 @@ class RequirementRegister {
     };
   }
 
+  // --- Part 7: specification compliance dashboard ----------------------------------------------
+  //
+  // Not a new framework, and the platform's own duplication analysis is why. Asked to compare a
+  // proposed compliance dashboard against what already exists, it returned GOVERNANCE_REVIEW_REQUIRED
+  // against this very register on five dimensions — responsibility, registry, validation logic,
+  // decision framework and bounded context. A second module would have been the CONFIRMED_DUPLICATION
+  // that Part 6 blocks. So this is a view over the requirements already declared here.
+  //
+  // What it adds is the axis `matrix()` does not have: the SPECIFICATION. `matrix()` answers "is this
+  // requirement verified"; a board asks "is Phase 18.1 implemented". Those differ in one way that
+  // matters enormously — a specification with no declared requirements has a perfectly clean matrix,
+  // because a register you never wrote to contains no failures.
+  //
+  //     absence of evidence is not evidence of compliance
+  //
+  // So the dashboard is told which specifications are expected to exist, and reports UNKNOWN for any
+  // it holds nothing about. A dashboard that rendered "no requirements declared" as green would be
+  // worse than no dashboard, because it would be believed.
+  specificationCompliance({
+    controls = [], testFiles = [], modules = [], specifications = [], reviews = [], now = null,
+  } = {}) {
+    const t = now ?? this._clock();
+    const { EPISTEMIC_STATES, weakest, machineBoundary } = require('../assurance/epistemic');
+    const rows = this.requirements().map((r) => this.verify(r.id, { controls, testFiles, now: t }));
+
+    // A review is a recorded human finding. Declared, never inferred, and refused if it does not say
+    // who looked and what they concluded — an unsigned review is an assertion that somebody agreed.
+    const reviewed = new Map();
+    const rejectedReviews = [];
+    for (const rv of reviews) {
+      if (!rv || !rv.requirement || !rv.reviewedBy || !rv.finding) {
+        rejectedReviews.push({ review: rv || null, reason: 'a review must name the requirement, who reviewed it and what they found' });
+        continue;
+      }
+      reviewed.set(rv.requirement, { reviewedBy: rv.reviewedBy, finding: rv.finding, at: rv.at ?? t });
+    }
+
+    // Per requirement: what the machine observed, and whether anything is left that it cannot settle.
+    const assessed = rows.map((row) => {
+      const req = this._requirements.get(row.requirement);
+      const spec = ARTEFACT_TYPES[req.artefactType];
+      const review = reviewed.get(row.requirement) || null;
+
+      // Substantive adequacy is a human matter for every artefact type whose verification is a
+      // judgement rather than an execution. A governance decision that names an owner, a context and
+      // a document is structurally complete and may still be inadequate, and no test can tell.
+      const adequacyIsHuman = !spec.requires.includes('fitness');
+      const outstanding = adequacyIsHuman && !review;
+
+      const state = row.state === 'REJECTED' ? 'COMPLIANT'
+        : row.brokenMappings.length ? 'EVIDENCE_UNRESOLVED'
+          : row.state === 'BLOCKED' ? 'NON_COMPLIANT'
+            : row.state === 'UNKNOWN' ? 'UNKNOWN'
+              : outstanding ? 'HUMAN_REVIEW_REQUIRED'
+                : 'COMPLIANT';
+
+      return {
+        requirement: row.requirement, specification: req.specification, section: req.section,
+        artefactType: req.artefactType, requirementState: row.state,
+        state, ...COMPLIANCE_STATES[state],
+        missingRequired: row.missingRequired, brokenMappings: row.brokenMappings,
+        missingOptional: row.missingOptional,
+        humanReview: review,
+        adequacyIsHuman,
+        detail: state === 'EVIDENCE_UNRESOLVED'
+          ? `${row.brokenMappings.length} declared mapping(s) point at something that does not exist: ${row.brokenMappings.map((b) => b.element).join(', ')}`
+          : state === 'NON_COMPLIANT' ? row.reason
+            : state === 'HUMAN_REVIEW_REQUIRED'
+              ? `structurally complete, and whether a '${req.artefactType}' requirement is substantively adequate is not a thing a test establishes`
+              : state === 'UNKNOWN' ? 'declared and nothing has been checked about it'
+                : review ? `reviewed by ${review.reviewedBy}: ${review.finding}`
+                  : row.reason,
+      };
+    });
+
+    // --- The specification axis, which is the point of Part 7 ------------------------------------
+    const declaredSpecs = [...new Set(assessed.map((a) => a.specification))];
+    const expected = [...new Set([...specifications, ...declaredSpecs])].sort();
+
+    const bySpecification = expected.map((name) => {
+      const mine = assessed.filter((a) => a.specification === name);
+      // THE RULE THIS PART EXISTS FOR. No requirements declared means nobody wrote down what the
+      // specification demanded — which is an absence of evidence, and never a clean bill.
+      if (!mine.length) {
+        return {
+          specification: name, requirements: [], count: 0,
+          state: 'UNKNOWN', ...COMPLIANCE_STATES.UNKNOWN,
+          reason: 'no requirement is declared against this specification, so nothing is known about whether it was implemented. An empty register is not a clean one.',
+          counts: Object.fromEntries(Object.keys(COMPLIANCE_STATES).map((c) => [c, 0])),
+          measurable: false,
+        };
+      }
+      // Weakest link, never the mean. One unresolved requirement is an unresolved specification.
+      const state = COMPLIANCE_FROM_EPISTEMIC[weakest(mine.map((a) => COMPLIANCE_STATES[a.state].epistemic))] || 'UNKNOWN';
+      // weakest() collapses to three; recover the specific compliance state so a reader is told
+      // WHICH kind of not-compliant this is.
+      const worst = mine.find((a) => a.state === 'EVIDENCE_UNRESOLVED') || mine.find((a) => a.state === 'NON_COMPLIANT')
+        || mine.find((a) => a.state === 'UNKNOWN') || mine.find((a) => a.state === 'HUMAN_REVIEW_REQUIRED') || null;
+      const resolved = worst ? worst.state : state;
+      const counts = Object.fromEntries(Object.keys(COMPLIANCE_STATES).map((c) => [c, mine.filter((a) => a.state === c).length]));
+      return {
+        specification: name, requirements: mine.map((a) => a.requirement), count: mine.length,
+        state: resolved, ...COMPLIANCE_STATES[resolved],
+        counts, measurable: true,
+        weakestRequirement: worst ? worst.requirement : null,
+        reason: worst
+          ? `${worst.requirement} is ${resolved}: ${worst.detail}`
+          : `all ${mine.length} declared requirement(s) are compliant on the evidence recorded`,
+      };
+    });
+
+    const of = (state) => bySpecification.filter((s2) => s2.state === state).map((s2) => s2.specification);
+
+    // The top line keeps the specificity the rows have. Collapsing through the three epistemic states
+    // and back would report UNKNOWN — "nobody looked" — for an estate where the machine looked, every
+    // structural check passed, and a human review is outstanding. Those are different institutional
+    // facts and the reader acts differently on each, so the roll-up names the weakest SPECIFIC state
+    // rather than the weakest epistemic one.
+    const severity = ['EVIDENCE_UNRESOLVED', 'NON_COMPLIANT', 'UNKNOWN', 'HUMAN_REVIEW_REQUIRED', 'COMPLIANT'];
+    const overall = bySpecification.length
+      ? severity.find((state) => bySpecification.some((s2) => s2.state === state)) || 'UNKNOWN'
+      : 'UNKNOWN';
+
+    return {
+      requirements: assessed, bySpecification,
+      specificationsExpected: expected, specificationsWithNoRequirements: of('UNKNOWN').filter((n) => !declaredSpecs.includes(n)),
+      states: Object.entries(COMPLIANCE_STATES).map(([state, c]) => ({ state, ...c })),
+      epistemicStates: Object.entries(EPISTEMIC_STATES).map(([state, e]) => ({ state, ...e })),
+
+      // Five outcomes, reported apart. Collapsing any pair loses the thing a reader needs.
+      //
+      // Named `specifications*` rather than `compliant`/`unknown` because the state spread below
+      // carries a BOOLEAN `compliant`, and the short names let it silently overwrite these lists —
+      // `compliant` came back as `true` instead of the specifications that were. A field whose type
+      // changes depending on spread order is a bug waiting for a reader to trust it.
+      specificationsCompliant: of('COMPLIANT'),
+      specificationsNonCompliant: of('NON_COMPLIANT'),
+      specificationsEvidenceUnresolved: of('EVIDENCE_UNRESOLVED'),
+      specificationsUnknown: of('UNKNOWN'),
+      specificationsHumanReviewRequired: of('HUMAN_REVIEW_REQUIRED'),
+
+      requirementsNeedingHumanReview: assessed.filter((a) => a.state === 'HUMAN_REVIEW_REQUIRED').map((a) => ({ requirement: a.requirement, why: a.detail })),
+      unresolvedEvidence: assessed.filter((a) => a.state === 'EVIDENCE_UNRESOLVED').flatMap((a) => a.brokenMappings.map((b) => ({ requirement: a.requirement, ...b }))),
+      rejectedReviews,
+
+      // Counts per state. Deliberately not a compliance percentage: "80% compliant" cannot tell a
+      // reader whether the missing fifth is a runbook or the implementation, and one that sees 80
+      // stops asking.
+      counts: Object.fromEntries(Object.keys(COMPLIANCE_STATES).map((c) => [c, of(c).length])),
+      overall, ...COMPLIANCE_STATES[overall],
+
+      ...machineBoundary({
+        observed: [
+          'a declared requirement missing an element its artefact type requires',
+          'a declaration pointing at a file, control, context, owner or ADR that does not exist',
+          'a specification with no declared requirements at all',
+          'a requirement nothing has yet been checked about',
+        ],
+        judged: [
+          'whether a structurally complete governance or architectural requirement is substantively adequate',
+          'whether a rejection rationale is acceptable',
+          'whether the specification was correctly understood in the first place',
+        ],
+      }),
+
+      measurable: bySpecification.some((s2) => s2.measurable),
+      basis: bySpecification.length
+        ? `${of('COMPLIANT').length} compliant, ${of('NON_COMPLIANT').length} non-compliant, ${of('EVIDENCE_UNRESOLVED').length} with unresolved evidence, ${of('HUMAN_REVIEW_REQUIRED').length} awaiting human review, ${of('UNKNOWN').length} unknown, of ${bySpecification.length} specification(s).`
+        : 'No specification is declared and none was supplied as expected. The dashboard reports nothing rather than reporting that nothing is wrong.',
+      now: t, informationalOnly: true, authorizes: false,
+      note: 'A specification with no declared requirements is UNKNOWN, never compliant: an empty register is not a clean one. Specification state is the weakest of its requirements rather than their average, because one unverified requirement is an unverified specification no matter how many others hold.',
+    };
+  }
+
   // Bidirectional traceability plus the whole-register report.
   matrix({ controls = [], testFiles = [], modules = [], now = null } = {}) {
     const t = now ?? this._clock();
@@ -966,6 +1176,7 @@ class RequirementRegister {
 
 module.exports = {
   REQUIREMENT_STATES, ARTEFACT_TYPES, TRACE_ELEMENTS, RequirementRegister,
+  COMPLIANCE_STATES, COMPLIANCE_FROM_EPISTEMIC,
   ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, GOVERNANCE_SCHEMA,
   FULL_SCHEMA_FROM, EXTENDED_SCHEMA_FROM, GOVERNANCE_SCHEMA_FROM,
   MEASURABLE_SECTIONS, DATED_SECTIONS, QUALITY_DIMENSIONS, STATUSES,

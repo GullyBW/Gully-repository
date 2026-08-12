@@ -2602,11 +2602,10 @@ const DECISION_EXPLANATION_ORDER = [
 // absence read as a presence. UNKNOWN is not a softer BROKEN — BROKEN means the hop was checked and
 // failed, UNKNOWN means it could not be established either way — but neither is RESOLVED, and only
 // RESOLVED continues a chain.
-const HOP_STATES = {
-  RESOLVED: { continuesChain: true, means: 'The hop was checked and answered from the record.' },
-  BROKEN: { continuesChain: false, means: 'The hop was checked and the answer is missing or contradicted.' },
-  UNKNOWN: { continuesChain: false, means: 'The hop could not be established either way. Not an answer, and never a pass.' },
-};
+// The vocabulary now lives in src/assurance/epistemic.js, because the same three states turned out
+// to be needed by specification compliance and by every other sequential assurance chain. Defining
+// them twice would have been the duplication this phase exists to prevent.
+const { EPISTEMIC_STATES: HOP_STATES, assuranceChain } = require('./epistemic');
 
 // Records that declare their own absence. Narrow and stated on purpose: this catches a record that
 // SAYS it is an absence, which is the honest case the platform itself produces. It cannot catch a
@@ -2688,12 +2687,16 @@ function explainDecision(pkg = {}, { now = 0 } = {}) {
         : `${list(pkg.affectedControls).length} affected control(s); ${list(pkg.predictedConsequences).length} predicted consequence(s)`,
     [...list(pkg.affectedControls), ...list(pkg.predictedConsequences)]);
 
-  // THE RULE, inherited from `explain()`: broken AT the first failing hop, never a percentage.
+  // THE RULE, inherited from `explain()`: stopped AT the first unresolved hop, never a percentage.
+  // The arithmetic — first break, contiguous depth, the two counts kept apart — is the shared
+  // walker in src/assurance/epistemic.js rather than a second copy of it living here. What this
+  // function owns is what each hop MEANS; how a chain stops is one rule for the whole platform.
+  const chain = assuranceChain(hops.map((h) => ({
+    step: h.hop, state: h.state, detail: h.detail, ifBroken: h.ifBroken,
+    resolvedFrom: h.resolvedFrom, evidence: h.records,
+  })), { subject: pkg.subject || null, now });
   const firstBreak = hops.find((h) => !h.resolved) || null;
-  // Depth is how far you can walk WITHOUT stepping over a gap, not how many hops happen to resolve.
-  // A chain broken at hop four with hops five to nine intact is traceable through three hops; saying
-  // eight would be the percentage this function refuses to print, wearing a count.
-  const navigable = firstBreak ? hops.indexOf(firstBreak) : hops.length;
+  const navigable = chain.contiguousNavigableDepth;
   return {
     subject: pkg.subject || null, recommendation: pkg.recommendation || null,
     hops, hopCount: hops.length, maxDepth: DECISION_EXPLANATION_ORDER.length,
@@ -2708,7 +2711,10 @@ function explainDecision(pkg = {}, { now = 0 } = {}) {
     unknownHops: hops.filter((h) => h.state === 'UNKNOWN').map((h) => h.hop),
     brokenHops: hops.filter((h) => h.state === 'BROKEN').map((h) => h.hop),
     navigableDepth: navigable,
-    resolvedCount: hops.filter((h) => h.resolved).length,
+    contiguousNavigableDepth: navigable,
+    resolvedCount: chain.resolvedCount,
+    resolvedButUnreachable: chain.resolvedButUnreachable,
+    chain,
     alternativeQuality: quality,
     explanation: firstBreak
       ? `TRACEABLE THROUGH HOP ${navigable}/${hops.length} — ${firstBreak.state} AT ${firstBreak.hop.toUpperCase()}: ${firstBreak.detail}`
