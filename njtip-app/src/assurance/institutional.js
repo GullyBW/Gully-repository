@@ -2403,6 +2403,321 @@ function decisionPackage(spec = {}) {
 
 // Assemble the packages the current evidence actually supports. Each is built from a real finding, so
 // a platform with no findings produces no packages rather than inventing advice.
+// --- Executive decision quality (Phase 18.1, Part 5) -------------------------------------------------
+//
+// The guard already refuses a package with no alternatives. Part 5 asks the harder question: are the
+// alternatives it has any good?
+//
+// The trap here is specific and worth naming, because getting it wrong makes the whole check
+// worthless in one direction or the other:
+//
+//   SEMANTIC DIVERSITY IS NOT MACHINE-DETECTABLE. "Suspend the capability" and "halt the capability"
+//   are the same alternative in two words, and no structural check will ever be sure. A tool that
+//   claimed to detect that would be confidently wrong; one that ignored it would let a package pass
+//   with two restatements of one option and call it a choice.
+//
+// So the machine reports what it can actually observe — near-identical text, an alternative with no
+// stated reason, an alternative shorter than the recommendation it supposedly competes with — and
+// says plainly that the judgement of whether two options are materially different is a human one.
+// Only structural emptiness blocks.
+const ALTERNATIVE_QUALITY = {
+  SUPPORTED: {
+    blocking: false, humanJudgementNeeded: false,
+    means: 'The alternative states a distinct option and gives a reason it was or was not taken.',
+  },
+  INSUFFICIENT_EVIDENCE: {
+    blocking: false, humanJudgementNeeded: true,
+    means: 'The alternative is stated with nothing a reader could evaluate it against. Not wrong — unarguable.',
+  },
+  POSSIBLE_DUPLICATION: {
+    blocking: false, humanJudgementNeeded: true,
+    means: 'Normalises close to another alternative or to the recommendation itself. Evidence of restatement, not proof of it — whether two options are materially different is a human judgement.',
+  },
+  HUMAN_REVIEW_REQUIRED: {
+    blocking: false, humanJudgementNeeded: true,
+    means: 'The set as a whole cannot be shown to offer a real choice. A board should look before acting on it.',
+  },
+  STRUCTURALLY_EMPTY: {
+    blocking: true, humanJudgementNeeded: false,
+    means: 'Two alternatives that normalise to the same string are one alternative written twice. This is observable rather than judged, and it blocks.',
+  },
+};
+
+// Below this many characters, an "alternative" is a label rather than an option somebody weighed.
+const ALTERNATIVE_MIN_CHARS = 40;
+
+function alternativeQuality(pkg = {}) {
+  const normalise = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const alternatives = Array.isArray(pkg.alternativesConsidered) ? pkg.alternativesConsidered : [];
+  const recommendation = normalise(pkg.recommendation);
+
+  // Jaccard over word sets. Deliberately crude: a similarity measure clever enough to be trusted
+  // would be one nobody could argue with, and this one is meant to raise a question rather than
+  // settle it.
+  const words = (s) => new Set(normalise(s).split(' ').filter(Boolean));
+  const overlap = (a, b) => {
+    const A = words(a), B = words(b);
+    if (!A.size || !B.size) return 0;
+    const shared = [...A].filter((w) => B.has(w)).length;
+    return +(shared / new Set([...A, ...B]).size).toFixed(4);
+  };
+
+  const rows = alternatives.map((alt, i) => {
+    const text = String(alt || '');
+    const normalised = normalise(text);
+    // Observable: an identical restatement.
+    const identicalTo = alternatives
+      .map((other, j) => ({ other, j }))
+      .filter(({ other, j }) => j !== i && normalise(other) === normalised)
+      .map(({ j }) => j);
+    const vsRecommendation = overlap(text, pkg.recommendation);
+    const closest = alternatives
+      .map((other, j) => ({ j, score: j === i ? 0 : overlap(text, other) }))
+      .sort((a, b) => b.score - a.score)[0] || { j: null, score: 0 };
+    // A reason is what makes an alternative arguable. "Rejected because…", "Cheaper, and…" —
+    // detected by the presence of a rationale marker rather than by reading the prose.
+    const givesReason = /\b(rejected|because|would|cheaper|costlier|leaves|fails|risks|but|however|instead|trade)\b/i.test(text);
+
+    const state = identicalTo.length ? 'STRUCTURALLY_EMPTY'
+      : (vsRecommendation >= 0.6 || closest.score >= 0.6) ? 'POSSIBLE_DUPLICATION'
+        : (!givesReason || text.length < ALTERNATIVE_MIN_CHARS) ? 'INSUFFICIENT_EVIDENCE'
+          : 'SUPPORTED';
+
+    return {
+      index: i, alternative: text,
+      state, ...ALTERNATIVE_QUALITY[state],
+      similarityToRecommendation: vsRecommendation,
+      closestAlternative: closest.j, closestSimilarity: closest.score,
+      givesReason, length: text.length,
+      detail: identicalTo.length ? `identical after normalisation to alternative ${identicalTo.join(', ')} — one alternative written twice`
+        : vsRecommendation >= 0.6 ? `shares ${Math.round(vsRecommendation * 100)}% of its words with the recommendation itself, so it may be a restatement rather than a competitor`
+          : closest.score >= 0.6 ? `shares ${Math.round(closest.score * 100)}% of its words with alternative ${closest.j}`
+            : !givesReason ? 'states an option and no reason it was or was not taken, so a reader has nothing to weigh'
+              : text.length < ALTERNATIVE_MIN_CHARS ? `${text.length} characters — a label rather than an option somebody weighed`
+                : 'a distinct option with a stated reason',
+    };
+  });
+
+  const empty = rows.filter((r) => r.state === 'STRUCTURALLY_EMPTY');
+  const needsJudgement = rows.filter((r) => r.humanJudgementNeeded);
+  const supported = rows.filter((r) => r.state === 'SUPPORTED');
+  const verdict = !alternatives.length ? 'STRUCTURALLY_EMPTY'
+    : empty.length ? 'STRUCTURALLY_EMPTY'
+      : !supported.length ? 'HUMAN_REVIEW_REQUIRED'
+        : needsJudgement.length ? 'HUMAN_REVIEW_REQUIRED'
+          : 'SUPPORTED';
+
+  return {
+    alternatives: rows, count: rows.length,
+    states: Object.entries(ALTERNATIVE_QUALITY).map(([state, s]) => ({ state, ...s })),
+    verdict, ...ALTERNATIVE_QUALITY[verdict],
+    supported: supported.map((r) => r.index),
+    duplicationCandidates: rows.filter((r) => r.state === 'POSSIBLE_DUPLICATION').map((r) => r.index),
+    unsupported: rows.filter((r) => r.state === 'INSUFFICIENT_EVIDENCE').map((r) => r.index),
+    structurallyEmpty: empty.map((r) => r.index),
+    minimumChars: ALTERNATIVE_MIN_CHARS,
+    // The boundary, stated rather than implied.
+    machineDetectable: 'identical text after normalisation, word overlap, absence of a stated reason, and length',
+    humanJudgementRequired: 'whether two differently worded options are materially different. No structural check can settle that, and this one does not claim to.',
+    reason: verdict === 'STRUCTURALLY_EMPTY'
+      ? (!alternatives.length ? 'no alternative was stated' : `${empty.length} alternative(s) are identical after normalisation — one option written twice is not a choice`)
+      : verdict === 'HUMAN_REVIEW_REQUIRED'
+        ? `${needsJudgement.length} of ${rows.length} alternative(s) cannot be shown to offer a distinct option from structure alone`
+        : `${supported.length} alternative(s) each state a distinct option with a reason`,
+    informationalOnly: true, authorizes: false,
+  };
+}
+
+// --- Decision explainability (Phase 18.1, Part 8) ----------------------------------------------------
+//
+// The executive chain in `explain()` walks a dashboard FIGURE back to a source record. Part 8 walks a
+// RECOMMENDATION back to what authorises it. Same discipline, same hop shape, same refusal — a chain
+// is reported as broken AT its first failing hop and never as a percentage, because a chain that is
+// eight-ninths complete supports exactly nothing.
+//
+// It is deliberately not a second explainability engine: the hop structure, the first-break rule and
+// the "state what it costs" convention are the ones `EXPLANATION_HOPS` established, applied to a
+// different subject. What differs is only where each hop resolves from — a decision package's own
+// fields rather than the architecture.
+const DECISION_EXPLANATION_HOPS = {
+  recommendation: {
+    answers: 'What is being recommended?',
+    resolvedFrom: 'the package\'s recommendation',
+    ifBroken: 'There is no recommendation, so there is nothing to explain.',
+  },
+  evidence: {
+    answers: 'What does it rest on that a reader can check?',
+    resolvedFrom: 'supportingEvidence, graded by evidenceStrength',
+    ifBroken: 'The recommendation rests on nothing anybody can go and read.',
+  },
+  assumptions: {
+    answers: 'What must be true for it to hold?',
+    resolvedFrom: 'the stated assumptions',
+    ifBroken: 'The reasoning has premises and none can be disagreed with.',
+  },
+  confidence: {
+    answers: 'How firm is it, and is that consistent with the evidence grade?',
+    resolvedFrom: 'confidence against evidenceStrength',
+    ifBroken: 'A firm conclusion and a hunch read identically.',
+  },
+  alternatives: {
+    answers: 'What else was considered, and is any of it a real alternative?',
+    resolvedFrom: 'alternativesConsidered, assessed by alternativeQuality()',
+    ifBroken: 'A board asked to approve this has nothing to choose between.',
+  },
+  historicalPrecedent: {
+    answers: 'How has anything comparable turned out before?',
+    resolvedFrom: 'historicalOutcomes and validationHistory',
+    ifBroken: 'The institution repeats what it has already tried and calls each attempt new.',
+  },
+  legalAuthority: {
+    answers: 'What permits the institution to do this?',
+    resolvedFrom: 'legalDependencies',
+    ifBroken: 'A recommendation may be unlawful and nothing here would say so.',
+  },
+  governanceOwner: {
+    answers: 'Who is accountable for it, and do they exist?',
+    resolvedFrom: 'governanceOwner, resolved against the accountability record',
+    ifBroken: 'Advice owned by nobody can be discussed indefinitely.',
+  },
+  implementation: {
+    answers: 'What would actually change, and what does that risk?',
+    resolvedFrom: 'affectedControls, predictedConsequences and risks',
+    ifBroken: 'Nothing states what would change, so nobody can come back and find out whether it did.',
+  },
+};
+const DECISION_EXPLANATION_ORDER = [
+  'recommendation', 'evidence', 'assumptions', 'confidence', 'alternatives',
+  'historicalPrecedent', 'legalAuthority', 'governanceOwner', 'implementation',
+];
+
+// A hop has three outcomes, not two. RESOLVED and BROKEN are the obvious pair; UNKNOWN is the one
+// that matters, and it exists because the first draft of this function did not have it. A package
+// whose historical record honestly reads "no comparable recommendation has been recorded, so nothing
+// is known about how this has gone before" was counted as a RESOLVED precedent hop, because a record
+// was present and the code counted records. The chain then reported "explainable end to end across
+// all 9 hops" for a recommendation with no precedent whatsoever.
+//
+// That is the failure this codebase keeps guarding against wearing a new hat: an honest statement of
+// absence read as a presence. UNKNOWN is not a softer BROKEN — BROKEN means the hop was checked and
+// failed, UNKNOWN means it could not be established either way — but neither is RESOLVED, and only
+// RESOLVED continues a chain.
+const HOP_STATES = {
+  RESOLVED: { continuesChain: true, means: 'The hop was checked and answered from the record.' },
+  BROKEN: { continuesChain: false, means: 'The hop was checked and the answer is missing or contradicted.' },
+  UNKNOWN: { continuesChain: false, means: 'The hop could not be established either way. Not an answer, and never a pass.' },
+};
+
+// Records that declare their own absence. Narrow and stated on purpose: this catches a record that
+// SAYS it is an absence, which is the honest case the platform itself produces. It cannot catch a
+// record that is empty of precedent without saying so — a limit worth stating rather than hiding,
+// because the alternative is a checker that claims to read prose and is confidently wrong.
+const ABSENCE_DECLARATION = /\b(no comparable|nothing is known|never been (tested|recorded|acted)|has never|absence of history|no .{0,40}has (ever )?been recorded|not been recorded|no history)\b/i;
+
+function explainDecision(pkg = {}, { now = 0 } = {}) {
+  const bodies = accountableBodies();
+  const hops = [];
+  const hop = (id, state, detail, records = []) => {
+    hops.push({
+      hop: id, ...DECISION_EXPLANATION_HOPS[id], state, ...HOP_STATES[state],
+      resolved: state === 'RESOLVED', detail, records,
+    });
+    return state;
+  };
+  const list = (x) => (Array.isArray(x) ? x : []);
+  const quality = alternativeQuality(pkg);
+
+  hop('recommendation', pkg.recommendation ? 'RESOLVED' : 'BROKEN',
+    pkg.recommendation ? pkg.recommendation : 'the package states no recommendation',
+    pkg.recommendation ? [pkg.recommendation] : []);
+
+  const evidence = list(pkg.supportingEvidence);
+  const graded = !!EVIDENCE_STRENGTH[pkg.evidenceStrength];
+  hop('evidence', !evidence.length ? 'BROKEN' : !graded ? 'UNKNOWN' : 'RESOLVED',
+    !evidence.length ? 'no supporting evidence is cited'
+      : !graded ? `evidence is cited and its strength is '${pkg.evidenceStrength}', which is not a recognised grade — so how much it is worth is unknown`
+        : `${evidence.length} item(s), graded '${pkg.evidenceStrength}' — ${EVIDENCE_STRENGTH[pkg.evidenceStrength].means}`,
+    evidence);
+
+  hop('assumptions', list(pkg.assumptions).length ? 'RESOLVED' : 'BROKEN',
+    list(pkg.assumptions).length ? `${list(pkg.assumptions).length} stated premise(s)` : 'no premise is stated',
+    list(pkg.assumptions));
+
+  // Consistency, not mere presence: a package graded on an ABSENCE cannot also be highly confident,
+  // because an absence tells you something is missing and nothing about why.
+  const confidenceText = String(pkg.confidence || '');
+  const overconfident = pkg.evidenceStrength === 'absence' && /\bhigh\b/i.test(confidenceText) && !/absence|directly observable/i.test(confidenceText);
+  hop('confidence', !pkg.confidence ? 'BROKEN' : overconfident ? 'BROKEN' : 'RESOLVED',
+    !pkg.confidence ? 'no confidence is stated'
+      : overconfident ? `confidence is stated as high while the evidence is graded 'absence' — an absence is directly observable and still says nothing about why the thing is missing`
+        : confidenceText,
+    pkg.confidence ? [confidenceText] : []);
+
+  hop('alternatives',
+    quality.verdict === 'SUPPORTED' ? 'RESOLVED' : quality.blocking ? 'BROKEN' : 'UNKNOWN',
+    quality.reason, quality.alternatives.map((a) => a.alternative));
+
+  // The hop that taught this function to have three states. Records that declare an absence of
+  // precedent are counted as declared absences, not as precedent.
+  const outcomes = list(pkg.historicalOutcomes);
+  const validations = list(pkg.validationHistory);
+  const declaredAbsences = [...outcomes, ...validations].filter((r) => ABSENCE_DECLARATION.test(String(r)));
+  const substantive = [...outcomes, ...validations].filter((r) => !ABSENCE_DECLARATION.test(String(r)));
+  hop('historicalPrecedent',
+    !outcomes.length || !validations.length ? 'BROKEN' : !substantive.length ? 'UNKNOWN' : 'RESOLVED',
+    !outcomes.length || !validations.length ? 'no comparable outcome or validation history is recorded'
+      : !substantive.length ? `${declaredAbsences.length} record(s) present, every one of which states that nothing comparable has happened — an absence of history is not a history of success`
+        : `${outcomes.length} recorded outcome(s) and ${validations.length} validation record(s), ${substantive.length} of which state something that happened`,
+    [...outcomes, ...validations]);
+
+  hop('legalAuthority', list(pkg.legalDependencies).length ? 'RESOLVED' : 'BROKEN',
+    list(pkg.legalDependencies).length ? `${list(pkg.legalDependencies).length} legal dependency(ies) stated` : 'no legal dependency is stated',
+    list(pkg.legalDependencies));
+
+  hop('governanceOwner',
+    !pkg.governanceOwner ? 'BROKEN' : bodies.has(pkg.governanceOwner) ? 'RESOLVED' : 'BROKEN',
+    !pkg.governanceOwner ? 'no governance owner is named'
+      : bodies.has(pkg.governanceOwner) ? `'${pkg.governanceOwner}' holds a role in the accountability record`
+        : `'${pkg.governanceOwner}' holds nothing in the accountability record`,
+    pkg.governanceOwner ? [pkg.governanceOwner] : []);
+
+  hop('implementation',
+    list(pkg.affectedControls).length && list(pkg.predictedConsequences).length ? 'RESOLVED' : 'BROKEN',
+    !list(pkg.affectedControls).length ? 'nothing says which controls would change'
+      : !list(pkg.predictedConsequences).length ? 'nothing states what is expected to follow, so nobody can come back and check'
+        : `${list(pkg.affectedControls).length} affected control(s); ${list(pkg.predictedConsequences).length} predicted consequence(s)`,
+    [...list(pkg.affectedControls), ...list(pkg.predictedConsequences)]);
+
+  // THE RULE, inherited from `explain()`: broken AT the first failing hop, never a percentage.
+  const firstBreak = hops.find((h) => !h.resolved) || null;
+  // Depth is how far you can walk WITHOUT stepping over a gap, not how many hops happen to resolve.
+  // A chain broken at hop four with hops five to nine intact is traceable through three hops; saying
+  // eight would be the percentage this function refuses to print, wearing a count.
+  const navigable = firstBreak ? hops.indexOf(firstBreak) : hops.length;
+  return {
+    subject: pkg.subject || null, recommendation: pkg.recommendation || null,
+    hops, hopCount: hops.length, maxDepth: DECISION_EXPLANATION_ORDER.length,
+    hopStates: Object.entries(HOP_STATES).map(([state, s]) => ({ state, ...s })),
+    complete: !firstBreak,
+    brokenAt: firstBreak ? firstBreak.hop : null,
+    brokenAtPosition: firstBreak ? DECISION_EXPLANATION_ORDER.indexOf(firstBreak.hop) + 1 : null,
+    brokenState: firstBreak ? firstBreak.state : null,
+    consequence: firstBreak ? firstBreak.ifBroken : null,
+    whatWouldResolveIt: firstBreak ? firstBreak.resolvedFrom : null,
+    resolvedHops: hops.filter((h) => h.resolved).map((h) => h.hop),
+    unknownHops: hops.filter((h) => h.state === 'UNKNOWN').map((h) => h.hop),
+    brokenHops: hops.filter((h) => h.state === 'BROKEN').map((h) => h.hop),
+    navigableDepth: navigable,
+    resolvedCount: hops.filter((h) => h.resolved).length,
+    alternativeQuality: quality,
+    explanation: firstBreak
+      ? `TRACEABLE THROUGH HOP ${navigable}/${hops.length} — ${firstBreak.state} AT ${firstBreak.hop.toUpperCase()}: ${firstBreak.detail}`
+      : `explainable end to end across all ${hops.length} hops`,
+    now, informationalOnly: true, authorizes: false,
+    note: 'A chain is reported as stopped AT its first unresolved hop and never as a percentage: eight of nine hops resolved supports exactly nothing. A hop that could not be established is UNKNOWN rather than BROKEN, and neither continues the chain — an honest statement that nothing comparable has happened before is an absence of history, not a history of success.',
+  };
+}
+
 function decisionSupport(sources = {}) {
   const packages = [];
   const push = (spec) => { packages.push(decisionPackage(spec)); };
@@ -2600,4 +2915,6 @@ module.exports = {
   EvidenceConnectorRegistry, SOURCE_HEALTH_DIMENSIONS, SOURCE_HEALTH_STATES,
   SUSTAINABILITY_DIMENSIONS, institutionalSustainability,
   DECISION_PACKAGE_FIELDS, EVIDENCE_STRENGTH, humanAction, accountableBodies, HUMAN_AUTHORIZATION_REQUIRED, assertAdvisory, decisionPackage, decisionSupport,
+  ALTERNATIVE_QUALITY, ALTERNATIVE_MIN_CHARS, alternativeQuality,
+  DECISION_EXPLANATION_HOPS, DECISION_EXPLANATION_ORDER, HOP_STATES, explainDecision,
 };

@@ -494,3 +494,245 @@ test('phase18.1: the merge ADR tier is conditional on recording a merge, not on 
   assert.equal(thirteen.recordsMerge, null);
   assert.ok(catalogue.adrs.every((a) => a.valid), catalogue.adrs.filter((a) => !a.valid).map((a) => a.file).join(', '));
 });
+
+// --- Part 5: executive decision quality -----------------------------------------------------------
+//
+// The question this part answers is narrow and worth stating plainly: given a decision package, can
+// a machine tell whether the alternatives on it are a real choice? Partly. It can see that two
+// entries are the same string, that one shares most of its words with the recommendation it is meant
+// to compete with, that another gives no reason anybody could weigh. It cannot see whether two
+// differently worded options are materially different, and the tests below fix that boundary in
+// place so a later change cannot quietly move it.
+
+const BODIES = [...inst.accountableBodies()];
+
+const REAL_CHOICE = [
+  'Enable the archive now and record the legal basis afterwards, rejected because it would create records the institution cannot lawfully hold.',
+  'Leave the archive disabled indefinitely, however that leaves case history unrecoverable for the courts that need it.',
+];
+
+const COMPLETE_PACKAGE = {
+  subject: 'test-subject',
+  recommendation: 'Record the legal basis for evidence retention before enabling the archive.',
+  supportingEvidence: ['src/legislation/legal-authority.js: retention is UNDECLARED'],
+  evidenceStrength: 'absence',
+  assumptions: ['That a legal basis exists and is simply unrecorded.'],
+  confidence: 'high — this is an absence of records, which is directly observable rather than estimated',
+  alternativesConsidered: REAL_CHOICE,
+  historicalOutcomes: ['The retention register was enabled in the twin and the archive tier held every record written to it.'],
+  validationHistory: ['Reviewed at the February validation workshop against the recorded instrument.'],
+  legalDependencies: ['Evidence Act: retention of case material'],
+  governanceOwner: BODIES[0],
+  affectedControls: ['APP-FIT-LEGAL-AUTHORITY'],
+  predictedConsequences: ['the legal authority register stops reporting an undeclared capability'],
+};
+
+test('phase18.1 part 5: a complete decision package with two distinct reasoned options is supported', () => {
+  const q = inst.alternativeQuality(COMPLETE_PACKAGE);
+  assert.equal(q.verdict, 'SUPPORTED');
+  assert.equal(q.blocking, false);
+  assert.deepEqual(q.supported, [0, 1]);
+  assert.equal(q.authorizes, false);
+});
+
+test('phase18.1 part 5: a package offering no alternative is structurally empty and blocks', () => {
+  const q = inst.alternativeQuality({ recommendation: 'Do the thing.' });
+  assert.equal(q.verdict, 'STRUCTURALLY_EMPTY');
+  assert.equal(q.blocking, true);
+  assert.match(q.reason, /no alternative was stated/);
+});
+
+test('phase18.1 part 5: one option written twice is one option, and that is observable enough to block', () => {
+  const q = inst.alternativeQuality({
+    recommendation: 'Enable it.',
+    alternativesConsidered: ['Do nothing, rejected because it leaves the gap open.', 'Do nothing; rejected because it leaves the gap open!'],
+  });
+  assert.equal(q.verdict, 'STRUCTURALLY_EMPTY');
+  assert.equal(q.blocking, true);
+  assert.deepEqual(q.structurallyEmpty, [0, 1]);
+});
+
+test('phase18.1 part 5: an alternative that restates the recommendation is raised, not ruled on', () => {
+  const q = inst.alternativeQuality({
+    recommendation: 'Record the legal basis for evidence retention before enabling the archive.',
+    alternativesConsidered: ['Record the legal basis for the evidence retention archive before enabling it.'],
+  });
+  assert.equal(q.alternatives[0].state, 'POSSIBLE_DUPLICATION');
+  assert.ok(q.alternatives[0].similarityToRecommendation >= 0.6);
+  // Evidence, not a verdict. It stops the package being called supported and it does not block.
+  assert.equal(q.verdict, 'HUMAN_REVIEW_REQUIRED');
+  assert.equal(q.blocking, false);
+  assert.equal(q.humanJudgementNeeded, true);
+});
+
+test('phase18.1 part 5: an option with no stated reason is unarguable rather than wrong', () => {
+  const q = inst.alternativeQuality({
+    recommendation: 'Something quite different from the option below.',
+    alternativesConsidered: ['Buy a larger server for the archive tier'],
+  });
+  assert.equal(q.alternatives[0].state, 'INSUFFICIENT_EVIDENCE');
+  assert.equal(q.alternatives[0].givesReason, false);
+  assert.equal(q.blocking, false);
+  assert.match(q.alternatives[0].detail, /nothing to weigh/);
+});
+
+test('phase18.1 part 5: a label shorter than the minimum is not an option somebody weighed', () => {
+  const q = inst.alternativeQuality({
+    recommendation: 'Something quite different from the option below.',
+    alternativesConsidered: ['Rejected because cost'],
+  });
+  assert.equal(q.alternatives[0].state, 'INSUFFICIENT_EVIDENCE');
+  assert.ok(q.alternatives[0].length < inst.ALTERNATIVE_MIN_CHARS);
+});
+
+test('phase18.1 part 5: only structural emptiness blocks, and the boundary is stated in the output', () => {
+  const blocking = Object.entries(inst.ALTERNATIVE_QUALITY).filter(([, s]) => s.blocking).map(([id]) => id);
+  assert.deepEqual(blocking, ['STRUCTURALLY_EMPTY']);
+  const q = inst.alternativeQuality(COMPLETE_PACKAGE);
+  assert.match(q.machineDetectable, /identical text after normalisation/);
+  assert.match(q.humanJudgementRequired, /No structural check can settle that/);
+});
+
+test('phase18.1 part 5: every package the platform actually assembles offers a real choice', () => {
+  const loaded = inst.decisionSupport({
+    legalAuthority: { blocking: [{ capability: 'anonymous-reporting', state: 'unknown', reason: 'nothing is recorded', constitutional: true }] },
+    assumptionMaturity: { verificationBacklog: [{ assumption: 'ASM-0001', criticality: 'foundational' }], belowMinimum: [], organizationalMaturity: 'A2' },
+    controlEffectiveness: { measurable: false, unknown: ['APP-FIT-KNOWLEDGE-CONTINUITY'] },
+  });
+  assert.ok(loaded.packages.length > 0);
+  for (const p of loaded.packages) {
+    assert.equal(inst.alternativeQuality(p).blocking, false, `package '${p.subject}' does not offer a choice`);
+  }
+});
+
+// --- Part 8: decision explainability --------------------------------------------------------------
+//
+// Not a second explainability engine — the same hop discipline `explain()` established, pointed at a
+// recommendation instead of a dashboard figure. One thing had to be added: a third hop outcome. The
+// first version of this chain counted records, so a package whose precedent field honestly read "no
+// comparable recommendation has been recorded" resolved the precedent hop and the whole chain
+// reported "explainable end to end across all 9 hops". A stated absence had been read as a presence.
+
+test('phase18.1 part 8: a fully evidenced recommendation is explainable end to end', () => {
+  const r = inst.explainDecision(COMPLETE_PACKAGE, { now: 0 });
+  assert.equal(r.complete, true);
+  assert.equal(r.brokenAt, null);
+  assert.equal(r.hops.length, 9);
+  assert.equal(r.authorizes, false);
+});
+
+test('phase18.1 part 8: each hop is load-bearing and names the exact place traceability stops', () => {
+  const cases = [
+    ['recommendation', 1, { recommendation: null }],
+    ['evidence', 2, { supportingEvidence: [] }],
+    ['assumptions', 3, { assumptions: [] }],
+    ['confidence', 4, { confidence: '' }],
+    ['alternatives', 5, { alternativesConsidered: [] }],
+    ['historicalPrecedent', 6, { historicalOutcomes: [] }],
+    ['legalAuthority', 7, { legalDependencies: [] }],
+    ['governanceOwner', 8, { governanceOwner: null }],
+    ['implementation', 9, { affectedControls: [] }],
+  ];
+  for (const [hop, position, mutation] of cases) {
+    const r = inst.explainDecision({ ...COMPLETE_PACKAGE, ...mutation }, { now: 0 });
+    assert.equal(r.complete, false, `the '${hop}' hop is decoration`);
+    assert.equal(r.brokenAt, hop);
+    assert.equal(r.brokenAtPosition, position);
+    assert.ok(r.consequence, `a chain broken at '${hop}' does not say what that costs`);
+  }
+});
+
+test('phase18.1 part 8: an incomplete chain is never rendered as a percentage', () => {
+  const r = inst.explainDecision({ ...COMPLETE_PACKAGE, governanceOwner: null }, { now: 0 });
+  assert.equal(r.navigableDepth, 7, "seven hops walk cleanly before the eighth stops the chain");
+  assert.doesNotMatch(r.explanation, /%|percent/);
+  assert.match(r.explanation, /BROKEN AT GOVERNANCEOWNER/);
+  // Eight of nine is not eight-ninths of an explanation. It is a recommendation nobody owns.
+  assert.match(r.consequence, /owned by nobody/);
+});
+
+test('phase18.1 part 8: an honest statement that nothing comparable has happened is UNKNOWN, not precedent', () => {
+  const r = inst.explainDecision({
+    ...COMPLETE_PACKAGE,
+    historicalOutcomes: ['No comparable recommendation has been recorded, so nothing is known about how this has gone before.'],
+    validationHistory: ['The premise has never been tested against a real instrument.'],
+  }, { now: 0 });
+  assert.equal(r.complete, false);
+  assert.equal(r.brokenAt, 'historicalPrecedent');
+  assert.equal(r.brokenState, 'UNKNOWN');
+  assert.deepEqual(r.unknownHops, ['historicalPrecedent']);
+  assert.match(r.hops[5].detail, /an absence of history is not a history of success/);
+});
+
+test('phase18.1 part 8: unknown, broken and resolved are three states and only one continues a chain', () => {
+  assert.equal(Object.keys(inst.HOP_STATES).length, 3);
+  assert.equal(inst.HOP_STATES.RESOLVED.continuesChain, true);
+  assert.equal(inst.HOP_STATES.BROKEN.continuesChain, false);
+  assert.equal(inst.HOP_STATES.UNKNOWN.continuesChain, false);
+});
+
+test('phase18.1 part 8: evidence of an unrecognised grade is worth an unknown amount, not a lot', () => {
+  const r = inst.explainDecision({ ...COMPLETE_PACKAGE, evidenceStrength: 'strong' }, { now: 0 });
+  assert.equal(r.brokenAt, 'evidence');
+  assert.equal(r.brokenState, 'UNKNOWN');
+  assert.match(r.hops[1].detail, /not a recognised grade/);
+});
+
+test('phase18.1 part 8: a confident conclusion drawn from an absence is inconsistent, not firm', () => {
+  const r = inst.explainDecision({ ...COMPLETE_PACKAGE, confidence: 'high confidence in the projected outcome' }, { now: 0 });
+  assert.equal(r.brokenAt, 'confidence');
+  assert.equal(r.brokenState, 'BROKEN');
+  assert.match(r.hops[3].detail, /says nothing about why the thing is missing/);
+});
+
+test('phase18.1 part 8: an actor who holds nothing in the accountability record is not an owner', () => {
+  const r = inst.explainDecision({ ...COMPLETE_PACKAGE, governanceOwner: 'Committee For Doing The Thing' }, { now: 0 });
+  assert.equal(r.brokenAt, 'governanceOwner');
+  assert.equal(r.brokenState, 'BROKEN', 'a contradicted owner is checked and wrong, which is not the same as unestablished');
+  assert.match(r.hops[7].detail, /holds nothing in the accountability record/);
+});
+
+test('phase18.1 part 8: cosmetic alternatives stop the chain without blocking the package', () => {
+  const r = inst.explainDecision({
+    ...COMPLETE_PACKAGE,
+    alternativesConsidered: ['Record the legal basis for evidence retention before enabling the archive.'],
+  }, { now: 0 });
+  assert.equal(r.brokenAt, 'alternatives');
+  assert.equal(r.brokenState, 'UNKNOWN');
+  assert.equal(r.alternativeQuality.blocking, false);
+});
+
+test('phase18.1 part 8: an incomplete implementation trace leaves nobody able to check afterwards', () => {
+  const r = inst.explainDecision({ ...COMPLETE_PACKAGE, predictedConsequences: [] }, { now: 0 });
+  assert.equal(r.brokenAt, 'implementation');
+  assert.match(r.hops[8].detail, /nobody can come back and check/);
+});
+
+test('phase18.1 part 8: the chain is deterministic and reuses the nine-hop discipline rather than a second engine', () => {
+  const a = inst.explainDecision(COMPLETE_PACKAGE, { now: 0 });
+  const b = inst.explainDecision(COMPLETE_PACKAGE, { now: 0 });
+  assert.deepEqual(a, b);
+  assert.equal(inst.DECISION_EXPLANATION_ORDER.length, inst.EXPLANATION_ORDER.length);
+  for (const h of Object.values(inst.DECISION_EXPLANATION_HOPS)) {
+    assert.ok(h.answers.endsWith('?'));
+    assert.ok(h.ifBroken, 'a hop that does not say what its absence costs is decoration');
+  }
+});
+
+test('phase18.1 part 8: the platform reports its own decision packages honestly, including where they stop', () => {
+  const loaded = inst.decisionSupport({
+    legalAuthority: { blocking: [{ capability: 'anonymous-reporting', state: 'unknown', reason: 'nothing is recorded', constitutional: true }] },
+  });
+  for (const p of loaded.packages) {
+    const chain = inst.explainDecision(p, { now: 0 });
+    assert.equal(chain.authorizes, false);
+    if (!chain.complete) assert.ok(chain.brokenAt, `package '${p.subject}' is incomplete and does not name where`);
+  }
+  // The honest finding, recorded rather than smoothed: the platform's own legal-authority package
+  // stops at the precedent hop, because nothing comparable has ever been recorded.
+  const legal = loaded.packages.find((p) => p.subject === 'legal-authority');
+  const chain = inst.explainDecision(legal, { now: 0 });
+  assert.equal(chain.complete, false);
+  assert.equal(chain.brokenAt, 'historicalPrecedent');
+  assert.equal(chain.brokenState, 'UNKNOWN');
+});

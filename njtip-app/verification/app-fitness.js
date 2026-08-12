@@ -11883,6 +11883,211 @@ module.exports = [
     }).ordered)) v.push('decision package ordering is not deterministic');
   }),
 
+  fit('APP-FIT-DECISION-QUALITY', 'An alternative that restates the recommendation is not a choice, and the machine says which part of that it can actually see', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const q = inst.alternativeQuality;
+
+    // --- The vocabulary, and the one thing in it that blocks ---------------------------------
+    for (const required of ['SUPPORTED', 'INSUFFICIENT_EVIDENCE', 'POSSIBLE_DUPLICATION', 'HUMAN_REVIEW_REQUIRED', 'STRUCTURALLY_EMPTY']) {
+      if (!inst.ALTERNATIVE_QUALITY[required]) v.push(`alternative-quality state '${required}' is not defined`);
+    }
+    const blocking = Object.entries(inst.ALTERNATIVE_QUALITY).filter(([, s]) => s.blocking).map(([id]) => id);
+    if (JSON.stringify(blocking) !== JSON.stringify(['STRUCTURALLY_EMPTY'])) {
+      v.push(`${blocking.join(', ') || 'nothing'} blocks — only structural emptiness is observable enough to block, because whether two differently worded options differ is a human judgement`);
+    }
+    for (const [id, s] of Object.entries(inst.ALTERNATIVE_QUALITY)) {
+      if (!s.means) v.push(`alternative-quality state '${id}' does not say what it means`);
+      if (typeof s.humanJudgementNeeded !== 'boolean') v.push(`state '${id}' does not say whether a human has to look`);
+    }
+    // A duplication signal that decided by itself would be a verdict. It is evidence.
+    if (inst.ALTERNATIVE_QUALITY.POSSIBLE_DUPLICATION.blocking) v.push('a similarity score blocks a decision package — similarity is evidence, not a verdict');
+    if (!inst.ALTERNATIVE_QUALITY.POSSIBLE_DUPLICATION.humanJudgementNeeded) v.push('a possible duplication was marked as needing no human judgement');
+
+    // --- No alternatives at all -------------------------------------------------------------
+    const none = q({ recommendation: 'Do the thing.' });
+    if (none.verdict !== 'STRUCTURALLY_EMPTY' || !none.blocking) v.push('a package offering no alternative at all was not blocked');
+
+    // --- Two ways of writing one option -----------------------------------------------------
+    const twice = q({ recommendation: 'Enable it.', alternativesConsidered: ['Do nothing, rejected because it leaves the gap open.', 'Do nothing; rejected because it leaves the gap open!'] });
+    if (twice.verdict !== 'STRUCTURALLY_EMPTY') v.push('two alternatives identical after normalisation were accepted as a choice');
+    if (!twice.structurallyEmpty.length) v.push('an identical restatement was not identified by index');
+
+    // --- Cosmetic: near-identical to the recommendation it supposedly competes with ----------
+    const cosmetic = q({
+      recommendation: 'Record the legal basis for evidence retention before enabling the archive.',
+      alternativesConsidered: ['Record the legal basis for the evidence retention archive before enabling it.'],
+    });
+    if (cosmetic.verdict === 'SUPPORTED') v.push('an alternative that restates the recommendation in different word order passed as a real alternative');
+    if (!cosmetic.duplicationCandidates.length) v.push('a near-restatement of the recommendation was not raised as a duplication candidate');
+    if (cosmetic.blocking) v.push('a similarity score blocked a package on its own — the boundary between what is observed and what is judged was crossed');
+
+    // --- Unsupported: an option with no reason attached to it -------------------------------
+    const bare = q({ recommendation: 'Something quite different from the option below.', alternativesConsidered: ['Buy a larger server for the archive tier'] });
+    if (bare.verdict === 'SUPPORTED') v.push('an alternative with no stated reason passed — a reader has nothing to weigh it against');
+    if (!bare.unsupported.length) v.push('an alternative with no stated reason was not identified as insufficiently evidenced');
+
+    // --- A label rather than an option ------------------------------------------------------
+    const label = q({ recommendation: 'Something quite different from the option below.', alternativesConsidered: ['Rejected because cost'] });
+    if (label.verdict === 'SUPPORTED') v.push(`a ${'Rejected because cost'.length}-character label passed as an option somebody weighed`);
+    if (inst.ALTERNATIVE_MIN_CHARS < 20) v.push('the minimum alternative length was lowered to the point where a word would pass');
+
+    // --- A genuine choice passes. A control nothing can pass is as useless as one nothing fails.
+    const real = q({
+      recommendation: 'Record the legal basis for evidence retention before enabling the archive.',
+      alternativesConsidered: [
+        'Enable the archive now and record the legal basis afterwards, rejected because it would create records the institution cannot lawfully hold.',
+        'Leave the archive disabled indefinitely, however that leaves case history unrecoverable for the courts that need it.',
+      ],
+    });
+    if (real.verdict !== 'SUPPORTED') v.push(`two distinct options each with a stated reason reported '${real.verdict}' — a control nothing can pass proves nothing`);
+    if (real.authorizes !== false || !real.informationalOnly) v.push('an alternatives assessment claims authority');
+
+    // --- The boundary is stated in the output, not left to be inferred ----------------------
+    if (!real.machineDetectable || !real.humanJudgementRequired) v.push('the assessment does not state which part of it is observed and which part is a human judgement');
+    if (!/no structural check can settle/i.test(real.humanJudgementRequired)) v.push('the assessment does not admit that materially-different is beyond it');
+
+    // --- Every real package the platform assembles is put through it ------------------------
+    const loaded = inst.decisionSupport({
+      legalAuthority: { blocking: [{ capability: 'anonymous-reporting', state: 'unknown', reason: 'nothing is recorded', constitutional: true }] },
+      assumptionMaturity: { verificationBacklog: [{ assumption: 'ASM-0001', criticality: 'foundational' }], belowMinimum: [], organizationalMaturity: 'A2' },
+      controlEffectiveness: { measurable: false, unknown: ['APP-FIT-KNOWLEDGE-CONTINUITY'] },
+    });
+    for (const p of loaded.packages) {
+      const assessed = q(p);
+      if (assessed.blocking) v.push(`package '${p.subject}' offers ${assessed.reason}`);
+    }
+  }),
+
+  fit('APP-FIT-DECISION-EXPLAINABILITY', 'A recommendation is explainable or it stops at a named hop, and eight of nine hops is not eight-ninths explainable', (v) => {
+    const inst = require('../src/assurance/institutional');
+    const bodies = [...inst.accountableBodies()];
+
+    // --- One explainability discipline, applied to a second subject -------------------------
+    if (inst.DECISION_EXPLANATION_ORDER.length !== 9) v.push('the decision explanation chain is not nine hops');
+    if (Object.keys(inst.DECISION_EXPLANATION_HOPS).length !== inst.DECISION_EXPLANATION_ORDER.length) {
+      v.push('a decision explanation hop is defined but not ordered, or ordered but not defined');
+    }
+    for (const [id, h] of Object.entries(inst.DECISION_EXPLANATION_HOPS)) {
+      if (!h.answers || !h.answers.endsWith('?')) v.push(`decision hop '${id}' does not state the question it answers`);
+      if (!h.resolvedFrom) v.push(`decision hop '${id}' does not say where it resolves from`);
+      if (!h.ifBroken) v.push(`decision hop '${id}' does not say what it costs when it does not resolve`);
+    }
+    // Three hop states, and only one of them continues a chain. UNKNOWN exists because a record
+    // that honestly says "nothing comparable has happened" was once counted as precedent.
+    if (Object.keys(inst.HOP_STATES).length !== 3) v.push('a hop has other than three outcomes — resolved, broken and unknown are not two things');
+    if (inst.HOP_STATES.UNKNOWN.continuesChain) v.push('an unknown hop continues the chain — unknown is not resolved');
+    if (inst.HOP_STATES.BROKEN.continuesChain) v.push('a broken hop continues the chain');
+    if (!inst.HOP_STATES.RESOLVED.continuesChain) v.push('a resolved hop does not continue the chain, so no chain can ever complete');
+
+    const bodyOwned = bodies[0];
+    const complete = {
+      subject: 'test-subject', recommendation: 'Record the legal basis for evidence retention before enabling the archive.',
+      supportingEvidence: ['src/legislation/legal-authority.js: retention is UNDECLARED'],
+      evidenceStrength: 'absence',
+      assumptions: ['That a legal basis exists and is simply unrecorded.'],
+      confidence: 'high — this is an absence of records, which is directly observable rather than estimated',
+      alternativesConsidered: [
+        'Enable the archive now and record the legal basis afterwards, rejected because it would create records the institution cannot lawfully hold.',
+        'Leave the archive disabled indefinitely, however that leaves case history unrecoverable for the courts that need it.',
+      ],
+      historicalOutcomes: ['The retention register was enabled in the twin and the archive tier held every record written to it.'],
+      validationHistory: ['Reviewed at the February validation workshop against the recorded instrument.'],
+      legalDependencies: ['Evidence Act: retention of case material'],
+      governanceOwner: bodyOwned,
+      affectedControls: ['APP-FIT-LEGAL-AUTHORITY'],
+      predictedConsequences: ['the legal authority register stops reporting an undeclared capability'],
+    };
+
+    // A chain that can never complete is not a chain, it is a refusal wearing one.
+    const whole = inst.explainDecision(complete, { now: 0 });
+    if (!whole.complete) v.push(`a fully evidenced recommendation stopped at '${whole.brokenAt}' — a chain nothing can complete proves nothing`);
+    if (whole.brokenAt !== null || whole.brokenAtPosition !== null) v.push('a complete chain reported a break position');
+    if (whole.authorizes !== false) v.push('an explanation chain claims authority');
+
+    // --- Each break is named, at the right hop, and stops the walk there ---------------------
+    const breaks = [
+      ['recommendation', 1, { recommendation: null }],
+      ['evidence', 2, { supportingEvidence: [] }],
+      ['assumptions', 3, { assumptions: [] }],
+      ['confidence', 4, { confidence: '' }],
+      ['alternatives', 5, { alternativesConsidered: [] }],
+      ['historicalPrecedent', 6, { historicalOutcomes: [] }],
+      ['legalAuthority', 7, { legalDependencies: [] }],
+      ['governanceOwner', 8, { governanceOwner: null }],
+      ['implementation', 9, { affectedControls: [] }],
+    ];
+    for (const [hop, position, mutation] of breaks) {
+      const r = inst.explainDecision({ ...complete, ...mutation }, { now: 0 });
+      if (r.complete) v.push(`removing ${Object.keys(mutation)[0]} left the chain complete — the '${hop}' hop is decoration`);
+      if (r.brokenAt !== hop) v.push(`removing ${Object.keys(mutation)[0]} stopped the chain at '${r.brokenAt}' rather than '${hop}'`);
+      if (r.brokenAtPosition !== position) v.push(`the '${hop}' break was reported at position ${r.brokenAtPosition} rather than ${position}`);
+      if (!r.consequence) v.push(`a chain broken at '${hop}' does not say what that costs`);
+      if (!r.whatWouldResolveIt) v.push(`a chain broken at '${hop}' does not say what would resolve it`);
+    }
+
+    // --- Depth is how far you walk without stepping over a gap ------------------------------
+    // Break the FIRST hop and leave the other eight intact. A chain that counts resolved hops
+    // rather than contiguous ones reports "traceable through 8/9" for a package with no
+    // recommendation at all — which is the percentage this control forbids, wearing a count.
+    const headless = inst.explainDecision({ ...complete, recommendation: null }, { now: 0 });
+    if (headless.navigableDepth !== 0) {
+      v.push(`a package with no recommendation reported ${headless.navigableDepth} navigable hop(s) — depth is the walk before the first gap, not the tally of hops that happen to resolve`);
+    }
+    if (headless.resolvedCount !== 8) v.push('the count of individually resolved hops was lost, so the two measures cannot be told apart');
+    if (!headless.explanation.startsWith('TRACEABLE THROUGH HOP 0/9')) v.push(`a chain that stops at its first hop reported '${headless.explanation.split(' —')[0]}'`);
+
+    // --- Never a percentage -----------------------------------------------------------------
+    const stopped = inst.explainDecision({ ...complete, governanceOwner: null }, { now: 0 });
+    if (/%|percent|\b0\.\d/.test(stopped.explanation)) v.push('an incomplete explanation chain was rendered as a percentage — eight of nine hops supports exactly nothing');
+    if (!/BLOCKED AT|UNKNOWN AT|BROKEN AT/.test(stopped.explanation)) v.push('an incomplete chain does not name the hop it stopped at');
+    if (stopped.explanation.includes('89')) v.push('an eight-of-nine chain was rendered as a score');
+
+    // --- Unknown is not broken, and neither is resolved --------------------------------------
+    // A precedent record that states nothing comparable has happened is an absence of history.
+    const noHistory = inst.explainDecision({
+      ...complete,
+      historicalOutcomes: ['No comparable recommendation has been recorded, so nothing is known about how this has gone before.'],
+      validationHistory: ['The premise has never been tested against a real instrument.'],
+    }, { now: 0 });
+    if (noHistory.complete) v.push('a recommendation whose only precedent record states that nothing comparable has happened was reported as explainable end to end');
+    if (noHistory.brokenAt !== 'historicalPrecedent') v.push(`a declared absence of history stopped the chain at '${noHistory.brokenAt}'`);
+    if (noHistory.brokenState !== 'UNKNOWN') v.push('a declared absence of history was reported as BROKEN rather than UNKNOWN — the record was checked and says nothing, which is a different thing from missing');
+    if (!noHistory.unknownHops.includes('historicalPrecedent')) v.push('an unknown hop was not listed as unknown');
+
+    // An unrecognised evidence grade means the evidence's worth is unknown, not that it is strong.
+    const ungraded = inst.explainDecision({ ...complete, evidenceStrength: 'strong' }, { now: 0 });
+    if (ungraded.complete) v.push("evidence graded 'strong', which is not a recognised grade, was accepted");
+    if (ungraded.brokenState !== 'UNKNOWN') v.push('an unrecognised evidence grade was not reported as unknown');
+
+    // --- Consistency, not presence: a confident conclusion drawn from an absence -------------
+    const overconfident = inst.explainDecision({ ...complete, confidence: 'high confidence in the projected outcome' }, { now: 0 });
+    if (overconfident.complete) v.push("a package graded on an absence and stated as highly confident passed — an absence says nothing about why the thing is missing");
+    if (overconfident.brokenAt !== 'confidence') v.push('an inconsistent confidence was not caught at the confidence hop');
+
+    // --- An owner nobody can find is not an owner -------------------------------------------
+    const ghost = inst.explainDecision({ ...complete, governanceOwner: 'Committee For Doing The Thing' }, { now: 0 });
+    if (ghost.complete) v.push('a governance owner that holds nothing in the accountability record was accepted');
+    if (ghost.brokenState !== 'BROKEN') v.push('an owner contradicted by the accountability record was reported as unknown rather than broken');
+
+    // --- Cosmetic alternatives stop the chain -----------------------------------------------
+    const cosmetic = inst.explainDecision({ ...complete, alternativesConsidered: ['Record the legal basis for evidence retention before enabling the archive.'] }, { now: 0 });
+    if (cosmetic.complete) v.push('a recommendation whose only alternative restates it was reported as explainable');
+    if (cosmetic.brokenAt !== 'alternatives') v.push('a restated alternative did not stop the chain at the alternatives hop');
+
+    // --- Determinism -------------------------------------------------------------------------
+    if (JSON.stringify(inst.explainDecision(complete, { now: 0 })) !== JSON.stringify(whole)) v.push('the explanation chain is not deterministic');
+
+    // --- Every package the platform assembles is walked, and its state reported honestly -----
+    const loaded = inst.decisionSupport({
+      legalAuthority: { blocking: [{ capability: 'anonymous-reporting', state: 'unknown', reason: 'nothing is recorded', constitutional: true }] },
+    });
+    for (const p of loaded.packages) {
+      const chain = inst.explainDecision(p, { now: 0 });
+      if (chain.authorizes !== false) v.push(`the explanation of package '${p.subject}' claims authority`);
+      if (!chain.complete && !chain.brokenAt) v.push(`package '${p.subject}' is incomplete and does not name where`);
+    }
+  }),
+
   fit('APP-FIT-CREDENTIAL-HYGIENE', 'Tokens are revocable and secret values never leak in metadata', (v) => {
     const idp = new OidcVerifier({ secret: 's' });
     const tok = idp.issue({ sub: 'x', role: 'admin' });
