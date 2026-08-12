@@ -11883,6 +11883,142 @@ module.exports = [
     }).ordered)) v.push('decision package ordering is not deterministic');
   }),
 
+  fit('APP-FIT-GOVERNANCE-RESILIENCE', 'The invariant applies to the machinery that evaluates it, and a single point in the platform\'s own governance goes to a board rather than to the build', (v) => {
+    const ir = require('../src/governance/institutional-resilience');
+    const ep = require('../src/assurance/epistemic');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- The four kinds the invariant names ---------------------------------------------------
+    for (const kind of ['person', 'process', 'document', 'system']) {
+      if (!ir.SINGLE_POINT_KINDS[kind]) v.push(`the single-point clause does not evaluate '${kind}', which the invariant names`);
+    }
+    for (const [kind, k] of Object.entries(ir.SINGLE_POINT_KINDS)) {
+      if (!k.asks || !k.asks.endsWith('?') || !k.ifSingle) v.push(`single-point kind '${kind}' does not state its question or what one instance costs`);
+    }
+
+    // --- THE GOVERNANCE BOUNDARY --------------------------------------------------------------
+    // Only a capability the governance model ALREADY requires to be resilient may block. Escalating
+    // a finding about the platform's own tooling would be a silent change to governance semantics.
+    if (ir.GOVERNANCE_RESILIENCE_STATES.SINGLE_POINT_OBSERVED.blocking) {
+      v.push('an observed single point in the governance machinery blocks the build — ADR-0009 says a violation against a CONSTITUTIONAL capability blocks readiness and says nothing about this');
+    }
+    if (!ir.GOVERNANCE_RESILIENCE_STATES.SINGLE_POINT_OBSERVED.requiresGovernanceReview) {
+      v.push('an observed single point goes nowhere — a finding that blocks nothing and escalates nowhere is decoration');
+    }
+    if (!ir.GOVERNANCE_RESILIENCE_STATES.BLOCKED.blocking) v.push('the blocking state does not block');
+    if (ir.GOVERNANCE_RESILIENCE_STATES.UNKNOWN.blocking) v.push('an unexamined capability blocks — nobody having looked is not a fault');
+    if (ir.GOVERNANCE_RESILIENCE_STATES.UNKNOWN.epistemic !== 'UNKNOWN') v.push('an unexamined capability is not epistemically unknown');
+    if (ir.GOVERNANCE_RESILIENCE_STATES.RESILIENT.epistemic !== 'RESOLVED') v.push('a resilient capability is not epistemically resolved');
+
+    const report = ir.governanceCapabilityResilience({ controls, now: 0 });
+
+    // --- Declared references must resolve, or the report is decoration ------------------------
+    // The same rule the requirement register applies to itself: a declaration pointing at nothing
+    // reads as covered. This caught a document declared here that had never been written.
+    for (const c of report.capabilities) {
+      if (c.documentsMissing.length) v.push(`'${c.capability}' declares document(s) that do not exist: ${c.documentsMissing.join(', ')}`);
+      if (c.modulesMissing.length) v.push(`'${c.capability}' declares module(s) that do not exist: ${c.modulesMissing.join(', ')}`);
+      if (c.controlsDeclaredNotRunning.length) v.push(`'${c.capability}' declares control(s) that did not run: ${c.controlsDeclaredNotRunning.join(', ')}`);
+    }
+
+    // --- Counting what ran, not what was declared ---------------------------------------------
+    // A capability naming controls that no longer exist must not look watched.
+    const blind = ir.governanceCapabilityResilience({ controls: [], now: 0 });
+    if (blind.holds) v.push('every governance capability was resilient with no control results supplied at all');
+    for (const c of blind.capabilities) {
+      if (!c.unexaminedKinds.includes('process')) v.push(`'${c.capability}' reported its watching processes as examined when no control ran`);
+      if (c.state === 'RESILIENT') v.push(`'${c.capability}' was resilient with nothing supplied — unexamined is not resilient`);
+    }
+
+    // --- A declared reference that does not exist must not inflate a count --------------------
+    // Reporting the missing document is not enough on its own: if the count still includes it, a
+    // capability resting on ONE real document reads as resting on two, and the single point
+    // disappears from the report that exists to find it.
+    const phantom = ir.governanceCapabilityResilience({
+      controls, now: 0,
+      capabilities: {
+        phantom: {
+          title: 'one real document and one that was never written',
+          controls: ['APP-FIT-DECISION-QUALITY', 'APP-FIT-LIFECYCLE-DEFAULT-DENY'],
+          documents: ['docs/architecture-governance.md', 'docs/never-written.md'],
+          modules: ['src/assurance/epistemic.js', 'src/assurance/nowhere.js'],
+        },
+      },
+    });
+    const ph = phantom.capabilities[0];
+    if (ph.counts.document !== 1) v.push(`a capability declaring one real document and one that does not exist counted ${ph.counts.document} — a reference to nothing inflated the count and hid a single point`);
+    if (ph.counts.system !== 1) v.push(`a capability declaring one real module and one that does not exist counted ${ph.counts.system}`);
+    if (!ph.singlePointKinds.includes('document')) v.push('a capability resting on one real document did not report a single point, because a phantom made it two');
+    if (!ph.documentsMissing.length || !ph.modulesMissing.length) v.push('a declared reference that does not exist was not reported as missing');
+
+    // --- Weakest link across the four kinds ----------------------------------------------------
+    for (const c of report.capabilities) {
+      if (c.singlePointKinds.length && c.state === 'RESILIENT') {
+        v.push(`'${c.capability}' has ${c.singlePointKinds.length} single-point kind(s) and reported RESILIENT — three well-spread kinds do not outvote one that is not`);
+      }
+      if (c.unexaminedKinds.length && c.state !== 'UNKNOWN') {
+        v.push(`'${c.capability}' has an unexamined dependency kind and did not report unknown`);
+      }
+      if (!c.reason) v.push(`'${c.capability}' states no reason for its state`);
+    }
+
+    // --- A state nothing can reach is not a state ----------------------------------------------
+    const resilientFixture = ir.governanceCapabilityResilience({
+      controls, now: 0,
+      capabilities: {
+        spread: {
+          title: 'a capability with more than one of everything',
+          // Two controls from DIFFERENT boards. Two from the same board is one accountable body,
+          // which is the finding this control exists to make, so the fixture would fail — as it did.
+          controls: ['APP-FIT-DECISION-QUALITY', 'APP-FIT-LIFECYCLE-DEFAULT-DENY'],
+          documents: ['docs/architecture-governance.md', 'docs/adaptive-governance.md'],
+          modules: ['src/assurance/institutional.js', 'src/assurance/epistemic.js'],
+        },
+      },
+    });
+    if (resilientFixture.capabilities[0].state !== 'RESILIENT') {
+      v.push(`a capability with two of every kind reported '${resilientFixture.capabilities[0].state}' — a state nothing can reach is not a state`);
+    }
+    // …and BLOCKED is reachable, but only where governance already required resilience.
+    const required = ir.governanceCapabilityResilience({
+      controls, now: 0,
+      capabilities: {
+        mandated: {
+          title: 'a capability the governance model requires to be resilient',
+          controls: ['APP-FIT-DECISION-QUALITY'], documents: ['docs/architecture-governance.md'],
+          modules: ['src/assurance/epistemic.js'], governanceModelRequiresResilience: true,
+        },
+      },
+    });
+    if (required.capabilities[0].state !== 'BLOCKED') v.push('a single point in a capability governance requires to be resilient did not block');
+    if (!required.blocksInstitutionalReadiness) v.push('a blocked governance capability did not block institutional readiness');
+
+    // --- The existing invariant is untouched ---------------------------------------------------
+    if (Object.keys(ir.INVARIANT_CLAUSES).length !== 6) v.push('the six-clause global invariant was altered by the governance-resilience extension');
+    const global = ir.evaluateGlobalInvariant({ controls, now: 400 * 24 * 3600_000 });
+    if (!global.blocksInstitutionalReadiness) v.push('the constitutional invariant stopped blocking institutional readiness');
+    if (global.authorizes !== false) v.push('the global invariant claims authority');
+
+    // --- Boundaries and refusals ---------------------------------------------------------------
+    if (!report.machineDetectable || !report.humanJudgementRequired) v.push('the resilience report does not state which findings are observed and which need a human');
+    if (!/SHOULD live in more than one/.test(report.humanJudgementRequired)) v.push('the report does not admit that whether one module is too few is a judgement');
+    if (report.producesInstitutionalVerdict !== false) v.push('the resilience report claims to produce an institutional verdict');
+    if (report.authorizes !== false || !report.failClosed) v.push('the resilience report claims authority or does not fail closed');
+    if (/\d+\s?%|percent/.test(report.basis)) v.push('governance resilience was rendered as a percentage');
+    for (const c of Object.values(ir.GOVERNANCE_RESILIENCE_STATES)) {
+      if (!ep.EPISTEMIC_STATES[c.epistemic]) v.push('a governance resilience state maps to no epistemic state');
+    }
+
+    // --- Determinism ----------------------------------------------------------------------------
+    if (JSON.stringify(ir.governanceCapabilityResilience({ controls, now: 0 })) !== JSON.stringify(report)) {
+      v.push('governance resilience evaluation is not deterministic');
+    }
+  }),
+
   fit('APP-FIT-SPECIFICATION-COMPLIANCE', 'A specification nobody wrote requirements for is unknown, not compliant', (v) => {
     const adr = require('../src/architecture/adr-governance');
     const ep = require('../src/assurance/epistemic');

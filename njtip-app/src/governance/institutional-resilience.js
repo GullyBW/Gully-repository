@@ -1089,6 +1089,212 @@ function controlEffectivenessClause(capability, { observations = null, controls 
 }
 
 // The invariant, evaluated across all four clauses for every critical capability.
+// --- Phase 18.1 Batch 7: the invariant applied to the governance machinery itself -----------------
+//
+// The global invariant has been evaluated against the five constitutional capabilities since ADR-0009.
+// What nothing asked was whether the governance machinery that evaluates it is itself resilient. A
+// phase that builds a requirement register, a merge register, a compliance dashboard and a decision
+// assurance chain has built four new things an institution would depend on, and the invariant's own
+// question applies to them:
+//
+//     no critical capability may depend on a single person, a single process,
+//     a single document, or a single system
+//
+// Four kinds, mapped onto what is actually observable about a control:
+//
+//   person    how many distinct accountable bodies stand behind it
+//   process   how many distinct controls would notice if it broke
+//   document  how many governed documents record it
+//   system    how many modules implement it
+//
+// THE GOVERNANCE BOUNDARY, and it is the reason this is a separate function rather than six more
+// capabilities bolted into CRITICAL_CAPABILITIES. A violation against a constitutional capability
+// BLOCKS institutional readiness, because ADR-0009 says so. Nothing in the governance model says a
+// single-point dependency in the platform's own tooling does the same, and inventing that here would
+// be a silent change to governance semantics. So this reports GOVERNANCE_REVIEW_REQUIRED and leaves
+// the decision where it belongs. Resilience findings are evidence for a board, not a verdict.
+const GOVERNANCE_RESILIENCE_STATES = {
+  RESILIENT: {
+    epistemic: 'RESOLVED', blocking: false, requiresGovernanceReview: false,
+    means: 'More than one of every kind this capability depends on. No single loss removes it.',
+  },
+  SINGLE_POINT_OBSERVED: {
+    epistemic: 'BROKEN', blocking: false, requiresGovernanceReview: true,
+    means: 'A dependency of some kind has exactly one instance. Observed structurally, and what to do about it is a governance judgement rather than a build failure.',
+  },
+  BLOCKED: {
+    epistemic: 'BROKEN', blocking: true, requiresGovernanceReview: true,
+    means: 'A single point of failure in a capability the governance model requires to be resilient. This is the only state that blocks, and only where existing governance already said so.',
+  },
+  UNKNOWN: {
+    epistemic: 'UNKNOWN', blocking: false, requiresGovernanceReview: true,
+    means: 'Nothing was supplied to evaluate this capability against. Not resilient, not fragile — unexamined.',
+  },
+};
+
+// The four kinds the invariant names, and what having exactly one of each would cost.
+const SINGLE_POINT_KINDS = {
+  person: {
+    asks: 'How many distinct accountable bodies stand behind this capability?',
+    ifSingle: 'One board holds it. If that board lapses, is reorganised or simply does not meet, nothing else is accountable and the capability continues unattended.',
+  },
+  process: {
+    asks: 'How many distinct controls would notice if this capability stopped working?',
+    ifSingle: 'One control is the only thing that would notice. A control nothing checks is a control nobody knows has stopped.',
+  },
+  document: {
+    asks: 'How many governed documents record this capability?',
+    ifSingle: 'One document carries it. A document is a single point of failure in exactly the way a server is, and it is the kind institutions notice last.',
+  },
+  system: {
+    asks: 'How many modules implement this capability?',
+    ifSingle: 'One module implements it. Not necessarily wrong — a small capability should live in one place — which is why this is reported for judgement rather than treated as a fault.',
+  },
+};
+
+// Declared, never inferred. Each entry says which controls, documents and modules carry it; a
+// capability that named none of those would report UNKNOWN rather than passing by having nothing
+// checked about it.
+const GOVERNANCE_CAPABILITIES = {
+  'requirements-traceability': {
+    title: 'Every specification requirement traces to what implements and verifies it',
+    controls: ['APP-FIT-REQUIREMENTS-TRACEABILITY', 'APP-FIT-SPECIFICATION-COMPLIANCE'],
+    documents: ['docs/architecture-governance.md', 'docs/adr/0012-decision-package-merge-and-specification-traceability.md'],
+    modules: ['src/architecture/adr-governance.js'],
+    governanceModelRequiresResilience: false,
+  },
+  'merge-governance': {
+    title: 'Requirements merged into one implementation are recorded and justified',
+    controls: ['APP-FIT-MERGE-GOVERNANCE', 'APP-FIT-ADR-GOVERNANCE'],
+    documents: ['docs/architecture-governance.md', 'docs/adr/0012-decision-package-merge-and-specification-traceability.md'],
+    modules: ['src/architecture/adr-governance.js'],
+    governanceModelRequiresResilience: false,
+  },
+  'decision-assurance': {
+    title: 'An executive recommendation can be walked back to what authorises it',
+    controls: ['APP-FIT-DECISION-QUALITY', 'APP-FIT-DECISION-EXPLAINABILITY', 'APP-FIT-DECISION-SUPPORT'],
+    documents: ['docs/institutional-intelligence.md', 'docs/adaptive-governance.md'],
+    modules: ['src/assurance/institutional.js', 'src/assurance/epistemic.js'],
+    governanceModelRequiresResilience: false,
+  },
+  'epistemic-integrity': {
+    title: 'Unknown is never reported as pass, anywhere in the platform',
+    controls: ['APP-FIT-EPISTEMIC-INTEGRITY', 'APP-FIT-DECISION-EXPLAINABILITY', 'APP-FIT-SPECIFICATION-COMPLIANCE'],
+    documents: ['docs/architecture-governance.md'],
+    modules: ['src/assurance/epistemic.js'],
+    governanceModelRequiresResilience: false,
+  },
+  'duplication-prevention': {
+    title: 'A second framework cannot be built without an architectural authority saying so',
+    controls: ['APP-FIT-DUPLICATE-FRAMEWORK', 'APP-FIT-SPECIFICATION-EVOLUTION'],
+    documents: ['docs/architecture-governance.md'],
+    modules: ['src/architecture/drift-prevention.js'],
+    governanceModelRequiresResilience: false,
+  },
+};
+
+// Applies the invariant's single-point clause to the platform's own governance machinery.
+// Deterministic, fail-closed on missing evidence, and it authorises nothing.
+function governanceCapabilityResilience({ controls = [], capabilities = GOVERNANCE_CAPABILITIES, now = 0 } = {}) {
+  const fs2 = require('fs');
+  const path2 = require('path');
+  const raci = require('./raci');
+  const { EPISTEMIC_STATES, weakest, machineBoundary } = require('../assurance/epistemic');
+  const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+  const root = path2.join(__dirname, '..', '..');
+
+  const rows = Object.keys(capabilities).sort().map((id) => {
+    const spec = capabilities[id];
+    // A control that did not run is not evidence. Counting declared controls rather than executed
+    // ones would let a capability look watched by naming a control that no longer exists.
+    const running = (spec.controls || []).filter((c) => ran.has(c));
+    const declaredNotRunning = (spec.controls || []).filter((c) => !ran.has(c));
+    const existingDocs = (spec.documents || []).filter((d) => fs2.existsSync(path2.join(root, d)));
+    const missingDocs = (spec.documents || []).filter((d) => !fs2.existsSync(path2.join(root, d)));
+    const existingModules = (spec.modules || []).filter((m) => fs2.existsSync(path2.join(root, m)));
+    const missingModules = (spec.modules || []).filter((m) => !fs2.existsSync(path2.join(root, m)));
+    const bodies = [...new Set(raci.controlOwnership(running).controls
+      .map((c) => c.governanceBoard).filter(Boolean))];
+
+    const counts = { person: bodies.length, process: running.length, document: existingDocs.length, system: existingModules.length };
+    const kinds = Object.keys(SINGLE_POINT_KINDS).map((kind) => {
+      const count = counts[kind];
+      const state = count === 0 ? 'UNKNOWN' : count === 1 ? 'SINGLE_POINT_OBSERVED' : 'RESILIENT';
+      return {
+        kind, ...SINGLE_POINT_KINDS[kind], count,
+        state, ...GOVERNANCE_RESILIENCE_STATES[state],
+        detail: count === 0 ? `nothing of this kind is recorded, so whether the capability is resilient to losing one is unexamined`
+          : count === 1 ? SINGLE_POINT_KINDS[kind].ifSingle
+            : `${count} recorded — losing one leaves ${count - 1}`,
+      };
+    });
+
+    // Weakest link across the four kinds, then translated back. A capability with one single point
+    // is single-pointed regardless of how well spread the other three are.
+    const worstEpistemic = weakest(kinds.map((k) => GOVERNANCE_RESILIENCE_STATES[k.state].epistemic));
+    let state = worstEpistemic === 'RESOLVED' ? 'RESILIENT'
+      : worstEpistemic === 'UNKNOWN' ? 'UNKNOWN' : 'SINGLE_POINT_OBSERVED';
+    // …and only the governance model can escalate that to BLOCKED. Nothing here decides it.
+    if (state === 'SINGLE_POINT_OBSERVED' && spec.governanceModelRequiresResilience) state = 'BLOCKED';
+
+    const single = kinds.filter((k) => k.state === 'SINGLE_POINT_OBSERVED');
+    const unexamined = kinds.filter((k) => k.state === 'UNKNOWN');
+    return {
+      capability: id, title: spec.title,
+      state, ...GOVERNANCE_RESILIENCE_STATES[state],
+      kinds, counts,
+      singlePointKinds: single.map((k) => k.kind),
+      unexaminedKinds: unexamined.map((k) => k.kind),
+      controlsRunning: running, controlsDeclaredNotRunning: declaredNotRunning,
+      documentsMissing: missingDocs, modulesMissing: missingModules,
+      accountableBodies: bodies,
+      governanceModelRequiresResilience: !!spec.governanceModelRequiresResilience,
+      reason: unexamined.length ? `${unexamined.length} dependency kind(s) have nothing recorded: ${unexamined.map((k) => k.kind).join(', ')}`
+        : single.length ? `${single.length} dependency kind(s) have exactly one instance: ${single.map((k) => k.kind).join(', ')}`
+          : 'more than one instance of every kind this capability depends on',
+    };
+  });
+
+  const of = (state) => rows.filter((r) => r.state === state).map((r) => r.capability);
+  return {
+    invariant: 'No critical capability may depend on a single person, a single process, a single document, or a single system.',
+    appliedTo: 'the governance machinery Phase 18.1 built, rather than the five constitutional capabilities the same invariant has always covered',
+    capabilities: rows, count: rows.length,
+    states: Object.entries(GOVERNANCE_RESILIENCE_STATES).map(([state, s]) => ({ state, ...s })),
+    kinds: Object.entries(SINGLE_POINT_KINDS).map(([kind, k]) => ({ kind, ...k })),
+    epistemicStates: Object.entries(EPISTEMIC_STATES).map(([state, e]) => ({ state, ...e })),
+    resilient: of('RESILIENT'),
+    singlePointObserved: of('SINGLE_POINT_OBSERVED'),
+    blocked: of('BLOCKED'),
+    unknown: of('UNKNOWN'),
+    singlePointDependencies: rows.flatMap((r) => r.singlePointKinds.map((kind) => ({ capability: r.capability, kind, detail: r.kinds.find((k) => k.kind === kind).detail }))),
+    // Only a capability the governance model already requires to be resilient can block. Nothing
+    // observed here changes that, and nothing here authorises anything.
+    blocksInstitutionalReadiness: rows.some((r) => r.state === 'BLOCKED'),
+    governanceReviewRequired: rows.filter((r) => r.requiresGovernanceReview).map((r) => r.capability),
+    ...machineBoundary({
+      observed: [
+        'how many accountable bodies stand behind a capability\'s controls',
+        'how many controls actually ran that would notice it break',
+        'how many governed documents recording it exist on disk',
+        'how many implementing modules exist on disk',
+      ],
+      judged: [
+        'whether a capability that lives in one module SHOULD live in more than one',
+        'whether a second accountable body would add oversight or only add delay',
+        'whether a single-point dependency is acceptable for this capability at this time',
+      ],
+    }),
+    holds: rows.length > 0 && rows.every((r) => r.state === 'RESILIENT'),
+    measurable: rows.length > 0,
+    basis: rows.length
+      ? `${of('RESILIENT').length} resilient, ${of('SINGLE_POINT_OBSERVED').length} with an observed single point, ${of('BLOCKED').length} blocked, ${of('UNKNOWN').length} unexamined, of ${rows.length} governance capability(ies).`
+      : 'No governance capability was supplied. Nothing is reported rather than nothing being wrong.',
+    now, failClosed: true, informationalOnly: true, authorizes: false,
+    note: 'A single-point dependency in the platform\'s own governance machinery is reported for a board to judge, not treated as a build failure. Escalating it to BLOCKED would be a silent change to governance semantics: ADR-0009 says a violation against a CONSTITUTIONAL capability blocks readiness, and says nothing about this. Resilience findings are evidence for a decision, never the decision.',
+  };
+}
+
 function evaluateGlobalInvariant({ assumptions = null, continuity = null, controls = [], instruments = null, authorities = null, observations = null, regions = ['bw-central', 'bw-south', 'bw-north'], now = 0 } = {}) {
   const structural = evaluate({ continuity, controls, regions, instruments });
   const capabilities = Object.keys(CRITICAL_CAPABILITIES).sort().map((id) => {
@@ -1235,6 +1441,7 @@ function report({ continuity = null, controls = [], acceptances = null, now = 0,
 }
 
 module.exports = {
+  GOVERNANCE_RESILIENCE_STATES, SINGLE_POINT_KINDS, GOVERNANCE_CAPABILITIES, governanceCapabilityResilience,
   DEPENDENCY_KINDS, DEPENDENCY_CATEGORIES, CRITICAL_CAPABILITIES, categoryOfKind,
   serviceResilience, regionResilience, personResilience, documentResilience, structuralResilience,
   dataResilience, knowledgeResilience, facilityResilience, legalAuthorityResilience, governanceResilience,

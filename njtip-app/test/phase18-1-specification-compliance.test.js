@@ -247,3 +247,150 @@ test('phase18.1 part 7: the dashboard is deterministic', () => {
   const b = reg.specificationCompliance({ controls: CONTROLS, specifications: ['SPEC-A', 'SPEC-Z'], now: 0 });
   assert.deepEqual(a, b);
 });
+
+// --- Batch 7: the global invariant applied to the governance machinery --------------------------
+//
+// The invariant has been evaluated against the five constitutional capabilities since ADR-0009. What
+// nothing asked was whether the machinery that evaluates it is itself resilient. Phase 18.1 built a
+// requirement register, a merge register, a compliance dashboard and a decision assurance chain —
+// four new things an institution would come to depend on — and the invariant's own question applies:
+// no critical capability may depend on a single person, process, document or system.
+//
+// The answer, recorded rather than smoothed: every one of the five governance capabilities rests on
+// a single accountable body. That is a real finding about this platform and it is left visible.
+
+const ir = require('../src/governance/institutional-resilience');
+
+const RUNNING = [
+  ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+  ...require('../verification/app-fitness').map((f) => ({ id: f.id, pass: true })),
+  ...require('../verification/infra-fitness').map((f) => ({ id: f.id, pass: true })),
+];
+
+test('phase18.1 batch 7: the invariant names four kinds and evaluates all four', () => {
+  assert.deepEqual(Object.keys(ir.SINGLE_POINT_KINDS), ['person', 'process', 'document', 'system']);
+  for (const k of Object.values(ir.SINGLE_POINT_KINDS)) {
+    assert.ok(k.asks.endsWith('?'));
+    assert.ok(k.ifSingle, 'a kind that does not say what one instance costs is decoration');
+  }
+});
+
+test('phase18.1 batch 7: a resilience finding about the platform goes to a board, not to the build', () => {
+  // Escalating this to BLOCKED would be a silent change to governance semantics. ADR-0009 says a
+  // violation against a CONSTITUTIONAL capability blocks readiness, and says nothing about this.
+  assert.equal(ir.GOVERNANCE_RESILIENCE_STATES.SINGLE_POINT_OBSERVED.blocking, false);
+  assert.equal(ir.GOVERNANCE_RESILIENCE_STATES.SINGLE_POINT_OBSERVED.requiresGovernanceReview, true);
+  assert.equal(ir.GOVERNANCE_RESILIENCE_STATES.BLOCKED.blocking, true);
+  assert.equal(ir.GOVERNANCE_RESILIENCE_STATES.UNKNOWN.blocking, false);
+});
+
+test('phase18.1 batch 7: BLOCKED is reachable, but only where governance already required resilience', () => {
+  const mandated = ir.governanceCapabilityResilience({
+    controls: RUNNING, now: 0,
+    capabilities: {
+      mandated: {
+        title: 'a capability the governance model requires to be resilient',
+        controls: ['APP-FIT-DECISION-QUALITY'], documents: ['docs/architecture-governance.md'],
+        modules: ['src/assurance/epistemic.js'], governanceModelRequiresResilience: true,
+      },
+    },
+  });
+  assert.equal(mandated.capabilities[0].state, 'BLOCKED');
+  assert.equal(mandated.blocksInstitutionalReadiness, true);
+
+  // The identical shape, without the governance requirement, does not block.
+  const same = ir.governanceCapabilityResilience({
+    controls: RUNNING, now: 0,
+    capabilities: {
+      same: {
+        title: 'the same shape with no governance requirement',
+        controls: ['APP-FIT-DECISION-QUALITY'], documents: ['docs/architecture-governance.md'],
+        modules: ['src/assurance/epistemic.js'],
+      },
+    },
+  });
+  assert.equal(same.capabilities[0].state, 'SINGLE_POINT_OBSERVED');
+  assert.equal(same.blocksInstitutionalReadiness, false);
+});
+
+test('phase18.1 batch 7: RESILIENT is reachable, so the control is not one nothing can pass', () => {
+  const spread = ir.governanceCapabilityResilience({
+    controls: RUNNING, now: 0,
+    capabilities: {
+      spread: {
+        title: 'two of every kind',
+        controls: ['APP-FIT-DECISION-QUALITY', 'APP-FIT-LIFECYCLE-DEFAULT-DENY'],
+        documents: ['docs/architecture-governance.md', 'docs/adaptive-governance.md'],
+        modules: ['src/assurance/institutional.js', 'src/assurance/epistemic.js'],
+      },
+    },
+  });
+  assert.equal(spread.capabilities[0].state, 'RESILIENT');
+  assert.equal(spread.holds, true);
+});
+
+test('phase18.1 batch 7: nothing supplied means unexamined, never resilient', () => {
+  const blind = ir.governanceCapabilityResilience({ controls: [], now: 0 });
+  assert.equal(blind.holds, false);
+  for (const c of blind.capabilities) {
+    assert.notEqual(c.state, 'RESILIENT');
+    assert.ok(c.unexaminedKinds.includes('process'), 'a capability no control watched reported its watching processes as examined');
+  }
+});
+
+test('phase18.1 batch 7: a declared reference that does not exist neither counts nor hides', () => {
+  const phantom = ir.governanceCapabilityResilience({
+    controls: RUNNING, now: 0,
+    capabilities: {
+      phantom: {
+        title: 'one real document and one never written',
+        controls: ['APP-FIT-DECISION-QUALITY', 'APP-FIT-LIFECYCLE-DEFAULT-DENY'],
+        documents: ['docs/architecture-governance.md', 'docs/never-written.md'],
+        modules: ['src/assurance/epistemic.js', 'src/assurance/nowhere.js'],
+      },
+    },
+  });
+  const c = phantom.capabilities[0];
+  assert.equal(c.counts.document, 1, 'a reference to nothing inflated the count and hid a single point');
+  assert.equal(c.counts.system, 1);
+  assert.ok(c.singlePointKinds.includes('document'));
+  assert.deepEqual(c.documentsMissing, ['docs/never-written.md']);
+});
+
+test('phase18.1 batch 7: the honest finding — every governance capability rests on one board', () => {
+  const report = ir.governanceCapabilityResilience({ controls: RUNNING, now: 0 });
+  assert.equal(report.count, 5);
+  assert.equal(report.holds, false, 'this is recorded rather than smoothed');
+  for (const c of report.capabilities) {
+    assert.equal(c.counts.person, 1);
+    assert.ok(c.singlePointKinds.includes('person'));
+  }
+  // …and it is a matter for a board rather than a build failure.
+  assert.equal(report.blocksInstitutionalReadiness, false);
+  assert.equal(report.governanceReviewRequired.length, 5);
+  assert.ok(report.singlePointDependencies.length >= 5);
+  // Every declared reference resolves, or the report itself would be the anti-pattern it detects.
+  for (const c of report.capabilities) {
+    assert.deepEqual(c.documentsMissing, [], `'${c.capability}' declares a document that does not exist`);
+    assert.deepEqual(c.modulesMissing, [], `'${c.capability}' declares a module that does not exist`);
+    assert.deepEqual(c.controlsDeclaredNotRunning, [], `'${c.capability}' declares a control that did not run`);
+  }
+});
+
+test('phase18.1 batch 7: the six-clause constitutional invariant is untouched and still blocks', () => {
+  assert.equal(Object.keys(ir.INVARIANT_CLAUSES).length, 6);
+  const global = ir.evaluateGlobalInvariant({ controls: RUNNING, now: 400 * 24 * 3600_000 });
+  assert.equal(global.blocksInstitutionalReadiness, true);
+  assert.equal(global.authorizes, false);
+});
+
+test('phase18.1 batch 7: the resilience report is deterministic, fails closed and authorises nothing', () => {
+  const a = ir.governanceCapabilityResilience({ controls: RUNNING, now: 0 });
+  const b = ir.governanceCapabilityResilience({ controls: RUNNING, now: 0 });
+  assert.deepEqual(a, b);
+  assert.equal(a.failClosed, true);
+  assert.equal(a.authorizes, false);
+  assert.equal(a.producesInstitutionalVerdict, false);
+  assert.doesNotMatch(a.basis, /%|percent/);
+  for (const s of Object.values(ir.GOVERNANCE_RESILIENCE_STATES)) assert.ok(ep.EPISTEMIC_STATES[s.epistemic]);
+});
