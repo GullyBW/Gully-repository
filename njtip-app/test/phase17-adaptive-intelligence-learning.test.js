@@ -1187,13 +1187,67 @@ const MERGE_BASE = {
   compatibilityImpact: 'additive for readers',
   implementationStrategy: 'union of the field lists',
   recordedBy: 'Architecture Review Board',
+  // Phase 18.1 Part 2 added seven further fields, each refused when absent.
+  specificationReferences: ['Spec A §1', 'Spec B §2'],
+  mergedCapability: 'Decision Intelligence',
+  affectedModules: ['src/somewhere.js'],
+  callerImpact: 'breaking for assemblers, additive for readers',
+  requirementFieldMapping: { 'Spec A Part 1': ['fieldA'], 'Spec B Part 2': ['fieldB'] },
+  verificationStrategy: 'structural, by mergeVerification()',
+  unresolvedSemanticQuestions: ['whether fieldA means what Spec A intended'],
+  approvedBy: 'Oversight Board',
 };
+
+test('phase18.1: recording a merge and approving one are different acts, and nobody approves itself', () => {
+  const reg = new adrGov.MergeRegister({ clock: () => 0 });
+  // This platform performs the first act and never the second.
+  assert.throws(() => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', approvedBy: undefined }), (e) => e.failClosed === true);
+  // NO SUBSYSTEM MAY APPROVE ITSELF — the platform's oldest rule, applied to merges.
+  assert.throws(
+    () => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', approvedBy: 'Architecture Review Board' }),
+    (e) => e.failClosed === true && /self-approval/.test(e.message),
+  );
+  assert.equal(reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012' }).selfApproved, false);
+});
+
+test('phase18.1: a requirement absorbed but mapped to nothing was dropped, not merged', () => {
+  const reg = new adrGov.MergeRegister({ clock: () => 0 });
+  assert.throws(
+    () => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', requirementFieldMapping: { 'Spec A Part 1': ['fieldA'] } }),
+    (e) => e.failClosed === true,
+  );
+  assert.throws(
+    () => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', requirementFieldMapping: { 'Spec A Part 1': ['fieldA'], 'Spec B Part 2': [] } }),
+    (e) => e.failClosed === true,
+  );
+});
+
+test('phase18.1: each Part 2 field is refused when absent', () => {
+  const reg = new adrGov.MergeRegister({ clock: () => 0 });
+  for (const field of ['mergedCapability', 'callerImpact', 'requirementFieldMapping', 'verificationStrategy']) {
+    assert.throws(() => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', [field]: undefined }), (e) => e.failClosed === true, field);
+  }
+  assert.throws(() => reg.record('M', { ...MERGE_BASE, adr: 'ADR-0012', affectedModules: [] }), (e) => e.failClosed === true);
+});
+
+test('phase18.1: the platform merge records its capability, modules, approval and open questions', () => {
+  const m = adrGov.seedPlatformMerges(new adrGov.MergeRegister({ clock: () => 0 })).merge('MERGE-0001');
+  assert.equal(m.mergedCapability, 'Decision Intelligence');
+  assert.ok(m.affectedModules.length >= 2, 'a merge that changed three files and records one is unreviewable');
+  assert.equal(m.selfApproved, false);
+  assert.ok(m.unresolvedSemanticQuestions.length > 0,
+    'a merge that claims to have settled everything is a merge nobody checked');
+  for (const requirement of m.mergedRequirements) {
+    assert.ok(Array.isArray(m.requirementFieldMapping[requirement]) && m.requirementFieldMapping[requirement].length, requirement);
+  }
+});
 
 test('phase18.1: the merge schema applies from ADR-0012, where the first merge was recorded', () => {
   assert.equal(adrGov.MERGE_SCHEMA_FROM, 12);
   assert.deepEqual(
     adrGov.MERGE_SCHEMA.map((s) => s.field),
-    ['mergedRequirements', 'mergeRationale', 'compatibilityImpact', 'implementationStrategy'],
+    ['mergedRequirements', 'mergeRationale', 'compatibilityImpact', 'implementationStrategy',
+      'verificationStrategy', 'unresolvedSemanticQuestions'],
   );
   for (const s of adrGov.MERGE_SCHEMA) assert.ok(s.heading && s.why, s.field);
   // The ADR that establishes the tier satisfies it. A rule its own ADR does not meet is the

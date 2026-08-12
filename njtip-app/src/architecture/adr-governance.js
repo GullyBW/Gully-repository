@@ -88,6 +88,8 @@ const MERGE_SCHEMA = [
   { field: 'mergeRationale', heading: 'Merge rationale', why: 'Why one implementation rather than several. A merge made for convenience and one made to prevent duplication look identical afterwards.' },
   { field: 'compatibilityImpact', heading: 'Compatibility impact', why: 'What existing callers of the merged surfaces have to change, and what they do not.' },
   { field: 'implementationStrategy', heading: 'Implementation strategy', why: 'How the requirements were combined, so a reader can check that each one is still satisfied rather than taking it on trust.' },
+  { field: 'verificationStrategy', heading: 'Verification strategy', why: 'How anybody confirms the merged implementation still satisfies each absorbed requirement. Without it, the merge is verified by whoever performed it.' },
+  { field: 'unresolvedSemanticQuestions', heading: 'Unresolved semantic questions', why: 'What the merge could not settle. Structural verification proves a requirement maps to a field; it cannot prove the field means what the specification intended, and the questions that remain open belong in the record rather than in somebody\'s head.' },
 ];
 
 // Sections whose content must actually be measurable — a threshold, a count, a percentage or a
@@ -429,6 +431,10 @@ class MergeRegister {
     mergedRequirements = [], into, rationale, architecturalJustification,
     affectedContexts = [], rejectedAlternatives = [], compatibilityImpact, implementationStrategy,
     adr, recordedBy, at = null,
+    // Phase 18.1, Part 2. Seven fields the first version did not carry.
+    specificationReferences = [], mergedCapability = null, affectedModules = [],
+    callerImpact = null, requirementFieldMapping = null, verificationStrategy = null,
+    unresolvedSemanticQuestions = [], approvedBy = null, approvedAt = null,
   } = {}) {
     const fail = (msg) => { const e = new Error(msg); e.failClosed = true; throw e; };
     if (!id) fail('a merge record must have an identifier');
@@ -447,11 +453,40 @@ class MergeRegister {
     if (!compatibilityImpact) fail('a merge must state what existing callers have to change, and what they do not');
     if (!implementationStrategy) fail('a merge must state how the requirements were combined, so a reader can check each is still satisfied rather than taking it on trust');
     if (!recordedBy) fail('a merge record must name who recorded it');
+    // --- Phase 18.1, Part 2 ------------------------------------------------------------------
+    if (!mergedCapability) fail('a merge must name the enduring capability it produced — a merge into "some module" cannot be planned against or retired');
+    if (!Array.isArray(affectedModules) || !affectedModules.length) {
+      fail('a merge must name every module it touched. `into` names where the requirements landed; a merge that changed three files and records one is a merge nobody can review.');
+    }
+    if (!callerImpact) {
+      fail('a merge must state its CALLER impact separately from its compatibility impact — "additive for readers, breaking for assemblers" is two facts, and collapsing them is how one of them gets missed');
+    }
+    if (!requirementFieldMapping || typeof requirementFieldMapping !== 'object') {
+      fail('a merge must map each absorbed requirement to what now satisfies it — without it, "the requirements were merged" is a claim nobody can check');
+    }
+    for (const r of mergedRequirements) {
+      if (!Array.isArray(requirementFieldMapping[r]) || !requirementFieldMapping[r].length) {
+        fail(`'${r}' is recorded as absorbed and the mapping says nothing satisfies it — a requirement that maps to nothing was dropped, not merged`);
+      }
+    }
+    if (!verificationStrategy) fail('a merge must state how anybody confirms it still satisfies each absorbed requirement, or the merge is verified by whoever performed it');
+    // Approval is a HUMAN act and is recorded separately from the engineering record. A merge
+    // recorded by an engineer and approved by nobody is a merge that happened, not one that was
+    // agreed — and the register keeps those apart rather than letting `recordedBy` imply both.
+    if (!approvedBy) fail('a merge must name the human authority that approved it — recording a merge and approving one are different acts, and this platform performs only the first');
+    if (approvedBy === recordedBy) {
+      fail(`'${approvedBy}' both recorded and approved this merge — that is a self-approval, and no subsystem may approve itself`);
+    }
 
     const rec = {
       id, mergedRequirements: [...mergedRequirements], into, rationale, architecturalJustification,
       affectedContexts: [...affectedContexts], rejectedAlternatives: [...rejectedAlternatives],
       compatibilityImpact, implementationStrategy, adr, recordedBy, at: at ?? this._clock(),
+      specificationReferences: [...specificationReferences], mergedCapability,
+      affectedModules: [...affectedModules], callerImpact,
+      requirementFieldMapping: JSON.parse(JSON.stringify(requirementFieldMapping)),
+      verificationStrategy, unresolvedSemanticQuestions: [...unresolvedSemanticQuestions],
+      approvedBy, approvedAt, selfApproved: approvedBy === recordedBy,
     };
     this._merges.set(id, rec);
     return { ...rec };
@@ -516,6 +551,28 @@ const PLATFORM_MERGES = [
     implementationStrategy: 'The union of the three field lists was taken, each specification\'s terminology mapped onto an existing field name where one covered it, and a new field added only where none did. Two fields were made structural rather than documentary: evidenceStrength is a four-grade enum, and forecastConfidence is required exactly when the grade is projected and refused otherwise.',
     adr: 'ADR-0012',
     recordedBy: 'Architecture Review Board',
+    // --- Phase 18.1, Part 2 -----------------------------------------------------------------
+    specificationReferences: ['Phase 17 §Part 15', 'Phase 17 §Part 17', 'Phase 18 §Part 7'],
+    mergedCapability: 'Decision Intelligence',
+    affectedModules: [
+      'src/assurance/institutional.js',
+      'verification/app-fitness.js',
+      'test/phase15-government-sustainability-decisions.test.js',
+    ],
+    callerImpact: 'Breaking for assemblers, additive for readers — two different facts about two different audiences. Every in-repository caller of decisionPackage was updated in the same change; an external caller passing the Phase 15 eight-field shape is refused fail-closed with the missing field named, which is an actionable error rather than a silently thinner package.',
+    requirementFieldMapping: {
+      'Phase 17 Part 15': ['supportingEvidence', 'assumptions', 'confidence', 'alternativesConsidered', 'legalDependencies', 'historicalOutcomes', 'forecastConfidence', 'validationHistory'],
+      'Phase 17 Part 17': ['confidence', 'supportingEvidence', 'assumptions', 'risks', 'uncertainties', 'historicalOutcomes', 'governanceOwner'],
+      'Phase 18 Part 7': ['supportingEvidence', 'assumptions', 'confidence', 'historicalOutcomes', 'legalDependencies', 'governanceOwner', 'risks', 'institutionalImpacts', 'alternativesConsidered', 'predictedConsequences', 'validationHistory', 'constitutionalImplications'],
+    },
+    verificationStrategy: 'Structural, by mergeVerification(): each absorbed requirement is mapped to fields, and every field is checked against the guard\'s required set. APP-FIT-MERGE-GOVERNANCE fails if any mapped field stops being required. This proves the fields exist and are enforced; it does not prove they mean what the specifications intended, which is recorded below as unresolved.',
+    unresolvedSemanticQuestions: [
+      'Whether `institutionalImpacts` satisfies what Phase 18 Part 7 meant by "organizational impacts", or whether the specification intended impacts on people rather than on institutions. Mapped on the reading that they are the same; a reader who disagrees should say so.',
+      'Whether `risks` satisfies Phase 18 Part 7\'s "implementation risks" specifically, or whether implementation risk is narrower than the risk field currently collects.',
+      'Whether Phase 17 Part 15\'s "evidence chain" is satisfied by `supportingEvidence` alone, or requires the nine-hop explanation chain to be attached to each package. Phase 18.1 Part 8 revisits this.',
+    ],
+    approvedBy: 'Oversight Board',
+    approvedAt: 0,
     at: 0,
   },
 ];

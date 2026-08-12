@@ -1218,7 +1218,277 @@ function architectureIntelligence({
   };
 }
 
+// --- Specification evolution governance (Phase 18.1, Part 9) -----------------------------------------
+//
+// A specification arrives claiming to be new. Sometimes it is. More often it extends something that
+// exists, and occasionally it redefines something somebody already owns — and the third case is the
+// one that does damage, because it looks exactly like the first from inside a specification document.
+//
+// The failure this prevents is specific. A specification says "implement X". Nobody notices that X
+// is already owned by a context with different responsibilities, so X gets built twice, and the two
+// copies disagree eighteen months later during an audit.
+//
+// Two refusals shape it:
+//
+//   A LEGITIMATE EXTENSION IS NOT A CONFLICT. Most specifications extend, and a classifier that
+//   flagged every one would be turned off within a week. `compatible-extension` is the expected
+//   answer and is not a finding.
+//
+//   ONLY A REDEFINITION OF SOMETHING OWNED REQUIRES HUMAN REVIEW. Not similarity, not overlap of
+//   subject matter — a claim on a responsibility that is already somebody's.
+const EVOLUTION_CLASSES = {
+  UNKNOWN: {
+    requiresHumanReview: false, blocking: false,
+    means: 'Not enough was declared about the proposal to classify it. Nobody has looked — which is not the same as it being safe.',
+  },
+  'compatible-extension': {
+    requiresHumanReview: false, blocking: false,
+    means: 'Adds to an existing module within its existing responsibility. The normal case, and not a finding.',
+  },
+  clarification: {
+    requiresHumanReview: false, blocking: false,
+    means: 'Restates or sharpens something already implemented. No structural change.',
+  },
+  'merge-candidate': {
+    requiresHumanReview: true, blocking: false,
+    means: 'Substantially covered by an existing requirement. Implementing it separately would duplicate; merging it needs an ADR.',
+  },
+  'responsibility-conflict': {
+    requiresHumanReview: true, blocking: true,
+    means: 'Claims a responsibility a bounded context already holds. Two contexts owning one responsibility is how they diverge.',
+  },
+  'ownership-conflict': {
+    requiresHumanReview: true, blocking: true,
+    means: 'Assigns an accountable owner other than the one the accountability record names.',
+  },
+  'governance-conflict': {
+    requiresHumanReview: true, blocking: true,
+    means: 'Changes who approves something, which is a constitutional question rather than an engineering one.',
+  },
+  'api-responsibility-conflict': {
+    requiresHumanReview: true, blocking: true,
+    means: 'Redefines what an existing HTTP surface is for. Callers depend on the old meaning and nothing tells them it changed.',
+  },
+  'bounded-context-conflict': {
+    requiresHumanReview: true, blocking: true,
+    means: 'Proposes a new bounded context, or moves a module between contexts. Baseline v1.7 froze the context set; changing it needs an ADR.',
+  },
+  'framework-duplication-candidate': {
+    requiresHumanReview: true, blocking: false,
+    means: 'Looks like an engine that already exists. A CANDIDATE — similarity is evidence, not a verdict, and only confirmed duplication blocks.',
+  },
+  'requires-adr': {
+    requiresHumanReview: true, blocking: true,
+    means: 'A structural change to something the baseline froze. Not refused — recorded, decided and approved before it is built.',
+  },
+};
+
+function specificationEvolution({ proposals = [], requirements = null, now = 0 } = {}) {
+  const contextMap = require('./context-map');
+  const ownershipModule = require('../governance/ownership');
+  const contexts = new Set(contextMap.ids());
+  const owners = new Map();
+  for (const s of ownershipModule.subsystems()) {
+    const o = ownershipModule.describe(s);
+    owners.set(s, o);
+  }
+  const declared = requirements && typeof requirements.requirements === 'function' ? requirements.requirements() : [];
+
+  const rows = proposals.map((p) => {
+    const findings = [];
+    const classify = (cls, evidence) => findings.push({ class: cls, ...EVOLUTION_CLASSES[cls], evidence });
+
+    // 1. A new bounded context, or a module moving between contexts. Baseline v1.7 froze the set.
+    if (p.introducesContext && !contexts.has(p.introducesContext)) {
+      classify('bounded-context-conflict', `'${p.introducesContext}' is not one of the ${contexts.size} contexts Baseline v1.7 froze — a new context needs an ADR proving it unavoidable`);
+    }
+    if (p.movesModule && p.movesModule.from && p.movesModule.to && p.movesModule.from !== p.movesModule.to) {
+      classify('bounded-context-conflict', `'${p.movesModule.module}' would move from '${p.movesModule.from}' to '${p.movesModule.to}'`);
+    }
+
+    // 2. A responsibility another context already holds.
+    if (p.claimsResponsibility && p.context) {
+      const held = (p.existingResponsibilities || {})[p.claimsResponsibility];
+      if (held && held !== p.context) {
+        classify('responsibility-conflict', `'${p.claimsResponsibility}' is already the responsibility of '${held}', and this proposal assigns it to '${p.context}'`);
+      }
+    }
+
+    // 3. An owner other than the accountability record's. Derived, never taken on the proposal's word.
+    if (p.assignsOwner && p.context && owners.has(p.context)) {
+      const recorded = owners.get(p.context).operationalOwner;
+      if (recorded && recorded !== p.assignsOwner) {
+        classify('ownership-conflict', `the accountability record names '${recorded}' as operational owner of '${p.context}'; this proposal names '${p.assignsOwner}'`);
+      }
+    }
+
+    // 4. A change to who approves. Constitutional rather than engineering.
+    if (p.changesApprovalAuthority) {
+      classify('governance-conflict', `approval authority would change to '${p.changesApprovalAuthority}' — who approves is a constitutional question`);
+    }
+
+    // 5. An existing endpoint given a new meaning.
+    if (p.redefinesEndpoint) {
+      classify('api-responsibility-conflict', `'${p.redefinesEndpoint}' already exists and this proposal changes what it is for; callers depend on the old meaning`);
+    }
+
+    // 6. An engine that already exists. A CANDIDATE — similarity is evidence, not a verdict.
+    if (p.resemblesEngine) {
+      classify('framework-duplication-candidate', `resembles the existing '${p.resemblesEngine}' engine — this is a candidate for human architectural review, not a confirmed duplicate`);
+    }
+
+    // 7. Substantially covered by a declared requirement.
+    const covered = p.coversRequirement ? declared.find((r) => r.id === p.coversRequirement) : null;
+    if (covered) {
+      classify('merge-candidate', `substantially covered by '${covered.id}' (${covered.specification} ${covered.section}); implementing separately would duplicate it`);
+    } else if (p.coversRequirement) {
+      classify('UNKNOWN', `this proposal claims to cover '${p.coversRequirement}', which is not in the requirement register — nothing here can say whether it duplicates anything`);
+    }
+
+    // 8. The ordinary case, and it must remain ordinary.
+    if (!findings.length) {
+      if (p.extendsModule) classify('compatible-extension', `adds to '${p.extendsModule}' within its existing responsibility`);
+      else if (p.clarifies) classify('clarification', `restates '${p.clarifies}' without structural change`);
+      else classify('UNKNOWN', 'the proposal declares nothing that could be compared against the existing architecture — not examined, which is not the same as safe');
+    }
+
+    const blocking = findings.filter((f) => f.blocking);
+    const review = findings.filter((f) => f.requiresHumanReview);
+    const unclassified = findings.some((f) => f.class === 'UNKNOWN');
+    // Weakest link: a proposal is as acceptable as its worst finding. And a proposal nothing could
+    // be said about is UNKNOWN — never acceptable. "Nobody could classify it" and "it is fine" are
+    // the two readings this verdict exists to keep apart.
+    const verdict = blocking.length ? 'BLOCKED'
+      : review.length ? 'HUMAN-REVIEW-REQUIRED'
+        : unclassified ? 'UNKNOWN'
+          : 'ACCEPTABLE';
+    return {
+      proposal: p.id || 'unnamed', specification: p.specification || null, section: p.section || null,
+      findings, classes: [...new Set(findings.map((f) => f.class))],
+      verdict,
+      blocking: blocking.map((f) => f.class),
+      requiresHumanReview: review.length > 0,
+      reason: blocking.length
+        ? `${blocking.length} finding(s) redefine something that already has an owner: ${blocking.map((f) => f.class).join(', ')}. Blocked until resolved through architectural governance — not refused, decided.`
+        : review.length ? `${review.length} finding(s) need a human architectural judgement before implementation`
+          : unclassified ? `nothing could be compared against the existing architecture, so this proposal is UNKNOWN rather than acceptable: ${findings.map((f) => f.evidence).join('; ')}`
+            : findings.map((f) => f.evidence).join('; '),
+    };
+  });
+
+  const blocked = rows.filter((r) => r.verdict === 'BLOCKED');
+  const review = rows.filter((r) => r.verdict === 'HUMAN-REVIEW-REQUIRED');
+  return {
+    proposals: rows, count: rows.length,
+    classes: Object.entries(EVOLUTION_CLASSES).map(([cls, c]) => ({ class: cls, ...c })),
+    blocked: blocked.map((r) => ({ proposal: r.proposal, classes: r.blocking })),
+    humanReviewRequired: review.map((r) => r.proposal),
+    acceptable: rows.filter((r) => r.verdict === 'ACCEPTABLE').map((r) => r.proposal),
+    unknown: rows.filter((r) => r.verdict === 'UNKNOWN').map((r) => r.proposal),
+    anyBlocked: blocked.length > 0,
+    measurable: rows.length > 0,
+    basis: rows.length
+      ? `${rows.length} proposal(s): ${rows.filter((r) => r.verdict === 'ACCEPTABLE').length} acceptable, ${rows.filter((r) => r.verdict === 'UNKNOWN').length} UNKNOWN because nothing could be compared, ${review.length} needing human architectural judgement, ${blocked.length} blocked on a responsibility that already has an owner.`
+      : 'No specification proposal was supplied. Nothing has been classified, which is not the same as nothing conflicting.',
+    now, informationalOnly: true, authorizes: false,
+    note: 'A legitimate extension is not a conflict, and compatible-extension is the expected answer rather than a finding — a classifier that flagged every specification would be switched off within a week. Only a claim on a responsibility somebody already holds blocks, and blocking means "decided through governance before it is built", not "refused".',
+  };
+}
+
+// --- Duplicate framework intelligence (Phase 18.1, Part 4) -------------------------------------------
+//
+// Extends architecture intelligence with the question it could not ask: is this capability already
+// implemented somewhere else?
+//
+// The whole design turns on one refusal, because getting it wrong in either direction is expensive:
+//
+//   SIMILARITY IS EVIDENCE, NOT A VERDICT. Two modules that both compute a rate over a register look
+//   identical to any structural check and may be entirely different capabilities. A tool that
+//   declared them duplicates would be wrong constantly and would be ignored; one that never flagged
+//   them would be useless. So similarity produces a CANDIDATE, and only a human architectural
+//   judgement — recorded — produces CONFIRMED_DUPLICATION. Only the confirmed state blocks.
+const OVERLAP_STATES = {
+  NO_OVERLAP: { blocking: false, confirmed: false, means: 'No shared responsibility, ownership or surface was found between these two.' },
+  POSSIBLE_OVERLAP: { blocking: false, confirmed: false, means: 'Structural evidence of overlap. Evidence, not a verdict — two modules can share a shape and do different jobs.' },
+  GOVERNANCE_REVIEW_REQUIRED: { blocking: false, confirmed: false, means: 'Enough overlap that a human architectural judgement is needed. Still not a duplicate until somebody says so.' },
+  CONFIRMED_DUPLICATION: { blocking: true, confirmed: true, means: 'A named architectural authority examined the pair and recorded that they are the same capability. This is the only state that blocks.' },
+};
+
+// The dimensions overlap can appear on. Each says what evidence looks like, because "these seem
+// similar" is not something anybody can act on.
+const OVERLAP_DIMENSIONS = {
+  responsibility: { evidence: 'both declared as owning the same named responsibility' },
+  ownership: { evidence: 'both accountable to the same authority for the same subject' },
+  registry: { evidence: 'both hold a register of the same kind of record' },
+  decisionFramework: { evidence: 'both produce an artefact a board acts on' },
+  validationLogic: { evidence: 'both validate the same rule' },
+  calculation: { evidence: 'both derive the same figure' },
+  api: { evidence: 'both expose an endpoint for the same question' },
+  boundedContext: { evidence: 'both claimed by the same bounded context for the same purpose' },
+};
+
+function duplicationAnalysis({ candidates = [], confirmations = [], now = 0 } = {}) {
+  const confirmedPairs = new Map();
+  for (const c of confirmations) {
+    if (!c || !c.pair || !c.confirmedBy || !c.rationale) continue;
+    confirmedPairs.set([...c.pair].sort().join('|'), c);
+  }
+
+  const rows = candidates.map((c) => {
+    const key = [...(c.pair || [])].sort().join('|');
+    const dimensions = (c.dimensions || []).filter((d) => OVERLAP_DIMENSIONS[d]);
+    const confirmation = confirmedPairs.get(key) || null;
+
+    // Confirmed only by a recorded human judgement. Never by a count of shared dimensions.
+    const state = confirmation ? 'CONFIRMED_DUPLICATION'
+      : !dimensions.length ? 'NO_OVERLAP'
+        : dimensions.length >= 3 ? 'GOVERNANCE_REVIEW_REQUIRED'
+          : 'POSSIBLE_OVERLAP';
+
+    return {
+      pair: c.pair, dimensions,
+      dimensionEvidence: dimensions.map((d) => ({ dimension: d, ...OVERLAP_DIMENSIONS[d] })),
+      state, ...OVERLAP_STATES[state],
+      confirmedBy: confirmation ? confirmation.confirmedBy : null,
+      confirmationRationale: confirmation ? confirmation.rationale : null,
+      // The sentence that keeps a candidate from being read as a verdict.
+      evidence: dimensions.length
+        ? `overlap on ${dimensions.length} dimension(s): ${dimensions.map((d) => OVERLAP_DIMENSIONS[d].evidence).join('; ')}`
+        : 'no shared dimension was declared',
+      whyNotConfirmed: confirmation ? null
+        : 'structural similarity only. Two modules can share a shape and do different jobs, so this is a candidate for human architectural review rather than a duplicate.',
+      recommendation: confirmation
+        ? `Confirmed by ${confirmation.confirmedBy}: ${confirmation.rationale}. Resolve by merging under an ADR, or record an explicit acceptance.`
+        : dimensions.length >= 3 ? 'Refer to the Architecture Review Board: enough overlap that somebody should decide.'
+          : dimensions.length ? 'Note and revisit if either side grows.' : 'No action.',
+    };
+  });
+
+  const confirmed = rows.filter((r) => r.state === 'CONFIRMED_DUPLICATION');
+  const review = rows.filter((r) => r.state === 'GOVERNANCE_REVIEW_REQUIRED');
+  return {
+    pairs: rows, count: rows.length,
+    states: Object.entries(OVERLAP_STATES).map(([state, s]) => ({ state, ...s })),
+    dimensions: Object.entries(OVERLAP_DIMENSIONS).map(([dimension, d]) => ({ dimension, ...d })),
+    confirmedDuplication: confirmed.map((r) => ({ pair: r.pair, confirmedBy: r.confirmedBy, rationale: r.confirmationRationale })),
+    governanceReviewRequired: review.map((r) => r.pair),
+    possibleOverlap: rows.filter((r) => r.state === 'POSSIBLE_OVERLAP').map((r) => r.pair),
+    noOverlap: rows.filter((r) => r.state === 'NO_OVERLAP').map((r) => r.pair),
+    // Only confirmed duplication blocks. A candidate does not.
+    anyConfirmedDuplication: confirmed.length > 0,
+    blocks: confirmed.length > 0,
+    measurable: rows.length > 0,
+    basis: rows.length
+      ? `${rows.length} pair(s) examined: ${confirmed.length} confirmed duplicate(s), ${review.length} needing architectural review, ${rows.filter((r) => r.state === 'POSSIBLE_OVERLAP').length} with structural overlap only.`
+      : 'No candidate pair was supplied. Nothing was examined for duplication, which is not the same as nothing being duplicated.',
+    now, informationalOnly: true, authorizes: false,
+    note: 'Similarity is evidence, not a verdict. Two modules that both compute a rate over a register look identical to any structural check and may be entirely different capabilities — so structural overlap produces a CANDIDATE, and only a recorded human architectural judgement produces CONFIRMED_DUPLICATION. Only the confirmed state blocks.',
+  };
+}
+
 module.exports = {
+  EVOLUTION_CLASSES, specificationEvolution,
+  OVERLAP_STATES, OVERLAP_DIMENSIONS, duplicationAnalysis,
   COUPLING_BASELINE, ARCHITECTURE_RISKS, RISK_PROXIMITY, architectureIntelligence,
   DRIFT_KINDS, DRIFT_CLASSES, classOfKind, assertDistinctResponses,
   FORECAST_DIMENSIONS, forecastInterval, adaptiveGovernanceAnalytics,

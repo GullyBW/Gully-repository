@@ -176,3 +176,145 @@ test('phase18.1: an empty register distinguishes having no requirements from not
   assert.match(empty.basis, /has not written them down/);
   assert.equal(empty.authorizes, false);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 9 — specification evolution governance.
+//
+// A specification arrives claiming to be new. Sometimes it is. More often it extends something that
+// exists, and occasionally it redefines something somebody already owns — and the third case does
+// the damage, because from inside a specification document it looks exactly like the first.
+// ---------------------------------------------------------------------------------------------
+
+const dp = require('../src/architecture/drift-prevention');
+const own = require('../src/governance/ownership');
+
+test('phase18.1: the ordinary case stays ordinary — a legitimate extension neither blocks nor needs review', () => {
+  for (const ordinary of ['compatible-extension', 'clarification']) {
+    assert.equal(dp.EVOLUTION_CLASSES[ordinary].blocking, false, ordinary);
+    assert.equal(dp.EVOLUTION_CLASSES[ordinary].requiresHumanReview, false,
+      'a classifier that flags every legitimate extension will be switched off within a week');
+  }
+  const report = dp.specificationEvolution({ proposals: [{ id: 'P-EXT', extendsModule: 'src/assurance/institutional.js' }], now: 0 });
+  assert.equal(report.proposals[0].verdict, 'ACCEPTABLE');
+  assert.equal(report.anyBlocked, false);
+});
+
+test('phase18.1: a proposal nothing could be said about is UNKNOWN, never acceptable', () => {
+  const report = dp.specificationEvolution({ proposals: [{ id: 'P-BLANK' }], now: 0 });
+  assert.equal(report.proposals[0].verdict, 'UNKNOWN');
+  assert.ok(report.unknown.includes('P-BLANK'));
+  assert.ok(!report.acceptable.includes('P-BLANK'),
+    '"nobody could classify it" and "it is fine" are the two readings this verdict keeps apart');
+});
+
+test('phase18.1: a claim on something already owned blocks, and blocking means decided, not refused', () => {
+  const cases = [
+    [{ id: 'C1', introducesContext: 'a-brand-new-context' }, 'bounded-context-conflict'],
+    [{ id: 'C2', movesModule: { module: 'src/x.js', from: 'assurance', to: 'observability' } }, 'bounded-context-conflict'],
+    [{ id: 'C3', context: 'assurance', claimsResponsibility: 'evidence-grading', existingResponsibilities: { 'evidence-grading': 'observability' } }, 'responsibility-conflict'],
+    [{ id: 'C4', context: own.subsystems()[0], assignsOwner: 'Department of Nobody' }, 'ownership-conflict'],
+    [{ id: 'C5', changesApprovalAuthority: 'Somebody Else' }, 'governance-conflict'],
+    [{ id: 'C6', redefinesEndpoint: '/api/governance/readiness' }, 'api-responsibility-conflict'],
+  ];
+  for (const [proposal, expected] of cases) {
+    const row = dp.specificationEvolution({ proposals: [proposal], now: 0 }).proposals[0];
+    assert.ok(row.classes.includes(expected), `${proposal.id} → ${row.classes.join(', ')}`);
+    assert.equal(row.verdict, 'BLOCKED', proposal.id);
+    assert.match(row.reason, /not refused, decided/);
+  }
+});
+
+test('phase18.1: a duplication candidate needs review and does not block', () => {
+  const report = dp.specificationEvolution({ proposals: [{ id: 'C7', resemblesEngine: 'architectureIntelligence' }], now: 0 });
+  assert.equal(report.proposals[0].verdict, 'HUMAN-REVIEW-REQUIRED');
+  assert.equal(report.anyBlocked, false, 'only confirmed duplication may block');
+  assert.match(report.proposals[0].findings[0].evidence, /not a confirmed duplicate/);
+});
+
+test('phase18.1: a merge candidate is only detectable against a registered requirement', () => {
+  const reg = new adr.RequirementRegister({ clock: () => 0 });
+  reg.declare('REQ-1', {
+    specification: 'Phase 18.1', section: 'Part 9', statement: 'classify specification evolution',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+  });
+  assert.ok(dp.specificationEvolution({ proposals: [{ id: 'C8', coversRequirement: 'REQ-1' }], requirements: reg, now: 0 })
+    .proposals[0].classes.includes('merge-candidate'));
+
+  // A claim to cover something the register has never heard of proves nothing either way.
+  const phantom = dp.specificationEvolution({ proposals: [{ id: 'C9', coversRequirement: 'REQ-NEVER' }], requirements: reg, now: 0 });
+  assert.ok(!phantom.proposals[0].classes.includes('merge-candidate'));
+  assert.ok(phantom.proposals[0].classes.includes('UNKNOWN'));
+});
+
+test('phase18.1: an evolution analysis over no proposals is not a clean one', () => {
+  const empty = dp.specificationEvolution({ proposals: [], now: 0 });
+  assert.equal(empty.measurable, false);
+  assert.equal(empty.anyBlocked, false);
+  assert.match(empty.basis, /not the same as nothing conflicting/);
+  assert.equal(empty.authorizes, false);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 4 — duplicate framework intelligence. Similarity is evidence, not a verdict.
+// ---------------------------------------------------------------------------------------------
+
+test('phase18.1: exactly one overlap state blocks, and it is the confirmed one', () => {
+  assert.equal(Object.keys(dp.OVERLAP_STATES).length, 4);
+  const blocking = Object.entries(dp.OVERLAP_STATES).filter(([, s]) => s.blocking).map(([id]) => id);
+  assert.deepEqual(blocking, ['CONFIRMED_DUPLICATION']);
+  assert.equal(dp.OVERLAP_STATES.POSSIBLE_OVERLAP.blocking, false);
+  assert.equal(dp.OVERLAP_STATES.GOVERNANCE_REVIEW_REQUIRED.blocking, false);
+  assert.match(dp.OVERLAP_STATES.POSSIBLE_OVERLAP.means, /not a verdict/);
+});
+
+test('phase18.1: structural overlap alone never confirms, however much of it there is', () => {
+  const report = dp.duplicationAnalysis({
+    candidates: [
+      { pair: ['a.js', 'b.js'], dimensions: [] },
+      { pair: ['c.js', 'd.js'], dimensions: ['registry'] },
+      { pair: ['e.js', 'f.js'], dimensions: ['registry', 'calculation', 'api', 'validationLogic'] },
+    ],
+    now: 0,
+  });
+  assert.equal(report.blocks, false);
+  assert.equal(report.anyConfirmedDuplication, false);
+  assert.equal(report.pairs.find((p) => p.pair[0] === 'a.js').state, 'NO_OVERLAP');
+  assert.equal(report.pairs.find((p) => p.pair[0] === 'c.js').state, 'POSSIBLE_OVERLAP');
+
+  const heavy = report.pairs.find((p) => p.pair[0] === 'e.js');
+  assert.equal(heavy.state, 'GOVERNANCE_REVIEW_REQUIRED', 'four shared dimensions still is not a verdict');
+  assert.match(heavy.whyNotConfirmed, /can share a shape and do different jobs/);
+});
+
+test('phase18.1: a recorded human judgement confirms, and only then does it block', () => {
+  const report = dp.duplicationAnalysis({
+    candidates: [{ pair: ['g.js', 'h.js'], dimensions: ['registry', 'calculation'] }],
+    confirmations: [{ pair: ['g.js', 'h.js'], confirmedBy: 'Architecture Review Board', rationale: 'the same capability under two names' }],
+    now: 0,
+  });
+  assert.equal(report.blocks, true, 'a state nothing can reach is not a state');
+  assert.equal(report.pairs[0].confirmedBy, 'Architecture Review Board');
+  assert.ok(report.pairs[0].confirmationRationale);
+  assert.equal(report.pairs[0].whyNotConfirmed, null);
+});
+
+test('phase18.1: a confirmation with no attributor or no rationale confirms nothing', () => {
+  for (const confirmation of [
+    { pair: ['g.js', 'h.js'], rationale: 'they look alike' },
+    { pair: ['g.js', 'h.js'], confirmedBy: 'Architecture Review Board' },
+  ]) {
+    const report = dp.duplicationAnalysis({
+      candidates: [{ pair: ['g.js', 'h.js'], dimensions: ['registry', 'calculation'] }],
+      confirmations: [confirmation], now: 0,
+    });
+    assert.equal(report.blocks, false, 'a verdict with no reason is indistinguishable from a guess');
+  }
+});
+
+test('phase18.1: a duplication analysis over no pairs is not a clean bill of health', () => {
+  const empty = dp.duplicationAnalysis({ candidates: [], now: 0 });
+  assert.equal(empty.measurable, false);
+  assert.equal(empty.blocks, false);
+  assert.match(empty.basis, /not the same as nothing being duplicated/);
+  assert.equal(empty.authorizes, false);
+});

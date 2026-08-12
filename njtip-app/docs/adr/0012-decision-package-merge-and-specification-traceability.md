@@ -309,6 +309,49 @@ satisfied by anything: `evidenceStrength` is an enum of four grades rather than 
 `forecastConfidence` is required exactly when the grade is `projected` and refused otherwise, so a
 confidence figure never describes a forecast that does not exist.
 
+## Verification strategy
+
+Structural, and the boundary is stated rather than implied.
+
+`mergeVerification()` maps each absorbed requirement to the fields that satisfy it and checks every
+field against the guard's required set. `APP-FIT-MERGE-GOVERNANCE` fails if any mapped field stops
+being required, so a later change that quietly drops `constitutionalImplications` breaks the build
+rather than the record.
+
+That proves the fields exist and are enforced. It does not prove they mean what the three
+specifications intended, and the section below records what remains open rather than leaving the
+verification to imply a completeness it does not have.
+
+Three checks carry it:
+
+- `APP-FIT-MERGE-GOVERNANCE` — the merge is registered, cites a resolvable ADR, and every absorbed
+  requirement maps to at least one field the guard requires.
+- `APP-FIT-DECISION-SUPPORT` — the guard requires exactly 17 fields and refuses a package missing
+  any of them, with six mutations proving each refusal is real.
+- `APP-FIT-REQUIREMENTS-TRACEABILITY` — the requirement register can express each of the three as a
+  declared requirement mapping to this implementation.
+
+## Unresolved semantic questions
+
+Three, recorded because a merge that claims to have settled everything is a merge nobody checked.
+
+**Does `institutionalImpacts` satisfy Phase 18 Part 7's "organizational impacts"?** Mapped on the
+reading that they are the same thing. A reader who thinks the specification meant impacts on *people*
+— workload, morale, role change — rather than on institutions should say so, because the current
+field collects the second and the packages are written accordingly.
+
+**Does `risks` satisfy Phase 18 Part 7's "implementation risks" specifically?** The existing field
+collects risk of any kind. Implementation risk is arguably narrower, and a package that names a
+governance risk and no implementation risk currently satisfies the guard.
+
+**Is Phase 17 Part 15's "evidence chain" satisfied by `supportingEvidence` alone?** The specification
+says chain, and the field holds a list. The nine-hop explanation machinery exists elsewhere in the
+platform and is not attached to decision packages. Phase 18.1 Part 8 revisits this directly; until
+it does, the mapping is a reading rather than a settled fact.
+
+None of the three blocks the merge. All three are the kind of thing that is obvious to whoever
+performed the merge and invisible six months later, which is why they are here.
+
 ## Review schedule
 
 Reviewed by the Architecture Review Board every 12 months, next due 2027-08-07, and immediately on

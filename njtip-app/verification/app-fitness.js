@@ -4869,6 +4869,169 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-SPECIFICATION-EVOLUTION', 'A legitimate extension is not a conflict, and a proposal nobody could classify is UNKNOWN rather than acceptable', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+    const own = require('../src/governance/ownership');
+
+    // --- Eleven classes; only a claim on something already owned blocks ----------------------
+    for (const required of ['UNKNOWN', 'compatible-extension', 'clarification', 'merge-candidate',
+      'responsibility-conflict', 'ownership-conflict', 'governance-conflict',
+      'api-responsibility-conflict', 'bounded-context-conflict', 'framework-duplication-candidate', 'requires-adr']) {
+      if (!dp.EVOLUTION_CLASSES[required]) v.push(`evolution class '${required}' is not defined`);
+    }
+    for (const [id, c] of Object.entries(dp.EVOLUTION_CLASSES)) {
+      if (!c.means || typeof c.blocking !== 'boolean' || typeof c.requiresHumanReview !== 'boolean') {
+        v.push(`evolution class '${id}' does not say what it means or whether it blocks and needs review`);
+      }
+    }
+    // THE RULE THAT KEEPS THIS USABLE: the ordinary case must not block or demand review, or the
+    // classifier gets switched off within a week.
+    for (const ordinary of ['compatible-extension', 'clarification']) {
+      if (dp.EVOLUTION_CLASSES[ordinary].blocking) v.push(`'${ordinary}' blocks — a classifier that flags every legitimate extension will be turned off`);
+      if (dp.EVOLUTION_CLASSES[ordinary].requiresHumanReview) v.push(`'${ordinary}' demands human review, though it is the expected answer`);
+    }
+    // A duplication CANDIDATE must not block; only confirmation does, and that is Part 4's job.
+    if (dp.EVOLUTION_CLASSES['framework-duplication-candidate'].blocking) {
+      v.push('a framework duplication CANDIDATE blocks — similarity is evidence, not a verdict');
+    }
+    if (dp.EVOLUTION_CLASSES.UNKNOWN.blocking) v.push('UNKNOWN blocks, which would stop every unclassifiable proposal rather than reporting it as unexamined');
+
+    // --- The ordinary case is acceptable ----------------------------------------------------
+    const extension = dp.specificationEvolution({ proposals: [{ id: 'P-EXT', extendsModule: 'src/assurance/institutional.js' }], now: 0 });
+    if (extension.proposals[0].verdict !== 'ACCEPTABLE') v.push(`a proposal extending an existing module was '${extension.proposals[0].verdict}' rather than acceptable`);
+    if (extension.anyBlocked) v.push('a compatible extension blocked');
+
+    // --- A proposal nothing could be said about is UNKNOWN, never acceptable -----------------
+    const blank = dp.specificationEvolution({ proposals: [{ id: 'P-BLANK' }], now: 0 });
+    if (blank.proposals[0].verdict === 'ACCEPTABLE') {
+      v.push('a proposal declaring nothing was reported acceptable — "nobody could classify it" and "it is fine" are the two readings this verdict exists to keep apart');
+    }
+    if (blank.proposals[0].verdict !== 'UNKNOWN') v.push(`an unclassifiable proposal reported '${blank.proposals[0].verdict}'`);
+    if (!blank.unknown.includes('P-BLANK')) v.push('an unclassifiable proposal was not counted as unknown');
+    if (blank.acceptable.includes('P-BLANK')) v.push('an unclassifiable proposal was counted as acceptable');
+
+    // --- Each blocking class fires on its own crafted counterexample -------------------------
+    const cases = [
+      [{ id: 'C1', introducesContext: 'a-brand-new-context' }, 'bounded-context-conflict', 'a proposal introducing a context Baseline v1.7 did not freeze'],
+      [{ id: 'C2', movesModule: { module: 'src/x.js', from: 'assurance', to: 'observability' } }, 'bounded-context-conflict', 'a proposal moving a module between contexts'],
+      [{ id: 'C3', context: 'assurance', claimsResponsibility: 'evidence-grading', existingResponsibilities: { 'evidence-grading': 'observability' } }, 'responsibility-conflict', 'a proposal claiming a responsibility another context holds'],
+      [{ id: 'C4', context: own.subsystems()[0], assignsOwner: 'Department of Nobody' }, 'ownership-conflict', 'a proposal naming an owner the accountability record does not'],
+      [{ id: 'C5', changesApprovalAuthority: 'Somebody Else' }, 'governance-conflict', 'a proposal changing who approves'],
+      [{ id: 'C6', redefinesEndpoint: '/api/governance/readiness' }, 'api-responsibility-conflict', 'a proposal redefining an existing endpoint'],
+    ];
+    for (const [proposal, expected, description] of cases) {
+      const row = dp.specificationEvolution({ proposals: [proposal], now: 0 }).proposals[0];
+      if (!row.classes.includes(expected)) v.push(`${description} was not classified as '${expected}' — it came out as ${row.classes.join(', ')}`);
+      if (row.verdict !== 'BLOCKED') v.push(`${description} did not block`);
+      if (!/not refused, decided/.test(row.reason)) v.push(`a blocked proposal does not say that blocking means decided through governance rather than refused`);
+    }
+
+    // --- A duplication candidate needs review and does NOT block -----------------------------
+    const candidate = dp.specificationEvolution({ proposals: [{ id: 'C7', resemblesEngine: 'architectureIntelligence' }], now: 0 });
+    if (candidate.proposals[0].verdict !== 'HUMAN-REVIEW-REQUIRED') v.push('a framework duplication candidate did not require human review');
+    if (candidate.anyBlocked) v.push('a duplication CANDIDATE blocked — only confirmed duplication may');
+    if (!/not a confirmed duplicate/.test(candidate.proposals[0].findings[0].evidence)) {
+      v.push('a duplication candidate does not say it is a candidate rather than a verdict');
+    }
+
+    // --- A merge candidate is only detectable against a REGISTERED requirement ---------------
+    const adr = require('../src/architecture/adr-governance');
+    const reg = new adr.RequirementRegister({ clock: () => 0 });
+    reg.declare('REQ-1', {
+      specification: 'Phase 18.1', section: 'Part 9', statement: 'classify specification evolution',
+      artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    });
+    const merge = dp.specificationEvolution({ proposals: [{ id: 'C8', coversRequirement: 'REQ-1' }], requirements: reg, now: 0 });
+    if (!merge.proposals[0].classes.includes('merge-candidate')) v.push('a proposal covering a registered requirement was not flagged as a merge candidate');
+    // …and a claim to cover something NOT in the register is unknown, not a merge candidate.
+    const phantom = dp.specificationEvolution({ proposals: [{ id: 'C9', coversRequirement: 'REQ-NEVER' }], requirements: reg, now: 0 });
+    if (phantom.proposals[0].classes.includes('merge-candidate')) v.push('a proposal claiming to cover an unregistered requirement was called a merge candidate — nothing could say whether it duplicates anything');
+    if (!phantom.proposals[0].classes.includes('UNKNOWN')) v.push('a claim to cover an unregistered requirement was not reported as unknown');
+
+    // --- An empty analysis is not a clean one -----------------------------------------------
+    const empty = dp.specificationEvolution({ proposals: [], now: 0 });
+    if (empty.measurable) v.push('an analysis over no proposals reported itself measurable');
+    if (empty.anyBlocked) v.push('an analysis over no proposals reported a block');
+    if (!/not the same as nothing conflicting/.test(empty.basis)) v.push('an empty evolution analysis does not say that silence is not evidence');
+    if (empty.authorizes !== false) v.push('the specification evolution report claims authority');
+  }),
+
+  fit('APP-FIT-DUPLICATE-FRAMEWORK', 'Similarity is evidence, not a verdict — only a recorded human judgement confirms a duplicate', (v) => {
+    const dp = require('../src/architecture/drift-prevention');
+
+    // --- Four states, exactly one of which blocks and exactly one of which is confirmed ------
+    for (const required of ['NO_OVERLAP', 'POSSIBLE_OVERLAP', 'GOVERNANCE_REVIEW_REQUIRED', 'CONFIRMED_DUPLICATION']) {
+      if (!dp.OVERLAP_STATES[required]) v.push(`overlap state '${required}' is not defined`);
+    }
+    if (Object.keys(dp.OVERLAP_STATES).length !== 4) v.push('the overlap model does not carry exactly four states');
+    const blocking = Object.entries(dp.OVERLAP_STATES).filter(([, s]) => s.blocking).map(([id]) => id);
+    if (blocking.length !== 1 || blocking[0] !== 'CONFIRMED_DUPLICATION') {
+      v.push(`${blocking.length} overlap state(s) block (${blocking.join(', ')}) — only CONFIRMED_DUPLICATION should`);
+    }
+    const confirmed = Object.entries(dp.OVERLAP_STATES).filter(([, s]) => s.confirmed).map(([id]) => id);
+    if (confirmed.length !== 1) v.push('more than one overlap state counts as confirmed');
+    if (dp.OVERLAP_STATES.POSSIBLE_OVERLAP.blocking || dp.OVERLAP_STATES.GOVERNANCE_REVIEW_REQUIRED.blocking) {
+      v.push('a duplication candidate blocks architectural acceptance — similarity is evidence, not a verdict');
+    }
+    if (!/not a verdict/.test(dp.OVERLAP_STATES.POSSIBLE_OVERLAP.means)) v.push('the possible-overlap state does not say it is evidence rather than a verdict');
+    for (const [id, d] of Object.entries(dp.OVERLAP_DIMENSIONS)) {
+      if (!d.evidence) v.push(`overlap dimension '${id}' says nothing about what its evidence looks like`);
+    }
+
+    // --- Structural overlap alone never confirms, however much of it there is ----------------
+    const structural = dp.duplicationAnalysis({
+      candidates: [
+        { pair: ['a.js', 'b.js'], dimensions: [] },
+        { pair: ['c.js', 'd.js'], dimensions: ['registry'] },
+        { pair: ['e.js', 'f.js'], dimensions: ['registry', 'calculation', 'api', 'validationLogic'] },
+      ],
+      now: 0,
+    });
+    if (structural.blocks) v.push('structural overlap alone blocked architectural acceptance');
+    if (structural.anyConfirmedDuplication) v.push('a pair was confirmed as duplicate with no human judgement recorded');
+    if (structural.confirmedDuplication.length) v.push('similarity produced a confirmation');
+    const heavy = structural.pairs.find((p) => p.pair[0] === 'e.js');
+    if (heavy.state !== 'GOVERNANCE_REVIEW_REQUIRED') v.push(`a pair overlapping on four dimensions reported '${heavy.state}' rather than needing review`);
+    if (heavy.state === 'CONFIRMED_DUPLICATION') v.push('four shared dimensions confirmed a duplicate without anybody deciding');
+    if (!heavy.whyNotConfirmed || !/can share a shape and do different jobs/.test(heavy.whyNotConfirmed)) {
+      v.push('an unconfirmed candidate does not say why structural similarity is not enough');
+    }
+    if (structural.pairs.find((p) => p.pair[0] === 'a.js').state !== 'NO_OVERLAP') v.push('a pair with no shared dimension was not reported as having no overlap');
+    if (structural.pairs.find((p) => p.pair[0] === 'c.js').state !== 'POSSIBLE_OVERLAP') v.push('a pair with one shared dimension was not reported as possibly overlapping');
+
+    // --- A RECORDED human judgement confirms, and only then does it block --------------------
+    const withConfirmation = dp.duplicationAnalysis({
+      candidates: [{ pair: ['g.js', 'h.js'], dimensions: ['registry', 'calculation'] }],
+      confirmations: [{ pair: ['g.js', 'h.js'], confirmedBy: 'Architecture Review Board', rationale: 'the same capability under two names' }],
+      now: 0,
+    });
+    if (!withConfirmation.blocks) v.push('a confirmed duplicate did not block — a state nothing can reach is not a state');
+    if (!withConfirmation.anyConfirmedDuplication) v.push('a recorded confirmation did not produce a confirmed duplicate');
+    const row = withConfirmation.pairs[0];
+    if (row.confirmedBy !== 'Architecture Review Board') v.push('a confirmed duplicate does not name who confirmed it');
+    if (!row.confirmationRationale) v.push('a confirmed duplicate carries no rationale');
+    if (row.whyNotConfirmed !== null) v.push('a confirmed duplicate still explains why it is not confirmed');
+
+    // --- A confirmation missing its attribution or rationale confirms nothing ----------------
+    for (const [confirmation, label] of [
+      [{ pair: ['g.js', 'h.js'], rationale: 'they look alike' }, 'a confirmation with nobody named as confirming it was accepted'],
+      [{ pair: ['g.js', 'h.js'], confirmedBy: 'Architecture Review Board' }, 'a confirmation with no rationale was accepted — a verdict with no reason is indistinguishable from a guess'],
+    ]) {
+      const weak = dp.duplicationAnalysis({
+        candidates: [{ pair: ['g.js', 'h.js'], dimensions: ['registry', 'calculation'] }],
+        confirmations: [confirmation], now: 0,
+      });
+      if (weak.blocks) v.push(label);
+    }
+
+    // --- An empty analysis is not a clean bill of health -------------------------------------
+    const empty = dp.duplicationAnalysis({ candidates: [], now: 0 });
+    if (empty.measurable) v.push('an analysis over no pairs reported itself measurable');
+    if (empty.blocks) v.push('an analysis over no pairs blocked');
+    if (!/not the same as nothing being duplicated/.test(empty.basis)) v.push('an empty duplication analysis does not say that examining nothing is not evidence of nothing');
+    if (empty.authorizes !== false) v.push('the duplication analysis claims authority');
+  }),
+
   fit('APP-FIT-REQUIREMENTS-TRACEABILITY', 'A missing required element is BLOCKED, never a percentage, and a broken mapping is worse than none', (v) => {
     const adr = require('../src/architecture/adr-governance');
     const contextMap = require('../src/architecture/context-map');
@@ -5047,6 +5210,13 @@ module.exports = [
       rationale: 'because they describe one artefact', architecturalJustification: 'one guard, not two',
       compatibilityImpact: 'additive for readers', implementationStrategy: 'union of the field lists',
       recordedBy: 'Architecture Review Board',
+      // Phase 18.1, Part 2: seven further fields, each refused when absent.
+      specificationReferences: ['Spec A §1', 'Spec B §2'], mergedCapability: 'Decision Intelligence',
+      affectedModules: ['src/somewhere.js'], callerImpact: 'breaking for assemblers, additive for readers',
+      requirementFieldMapping: { 'Spec A Part 1': ['fieldA'], 'Spec B Part 2': ['fieldB'] },
+      verificationStrategy: 'structural, by mergeVerification()',
+      unresolvedSemanticQuestions: ['whether fieldA means what Spec A intended'],
+      approvedBy: 'Oversight Board',
     };
     const refuses = (spec, label) => {
       const reg = new adr.MergeRegister({ clock: () => 0 });
@@ -5062,6 +5232,27 @@ module.exports = [
     refuses({ ...base, adr: 'ADR-0012', compatibilityImpact: undefined }, 'a merge that does not say what existing callers must change was accepted');
     refuses({ ...base, adr: 'ADR-0012', implementationStrategy: undefined }, 'a merge that does not say how the requirements were combined was accepted');
     refuses({ ...base, adr: 'ADR-0012', recordedBy: undefined }, 'a merge was recorded with nobody named as having recorded it');
+    // --- Phase 18.1, Part 2: the seven fields the first version did not carry ----------------
+    refuses({ ...base, adr: 'ADR-0012', mergedCapability: undefined }, 'a merge naming no enduring capability was accepted — a merge into "some module" cannot be planned against or retired');
+    refuses({ ...base, adr: 'ADR-0012', affectedModules: [] }, 'a merge naming no affected modules was accepted — a merge that changed three files and records one is a merge nobody can review');
+    refuses({ ...base, adr: 'ADR-0012', callerImpact: undefined }, 'a merge stating no CALLER impact was accepted — "additive for readers, breaking for assemblers" is two facts and collapsing them loses one');
+    refuses({ ...base, adr: 'ADR-0012', requirementFieldMapping: undefined }, 'a merge with no requirement-to-field mapping was accepted, so "the requirements were merged" is a claim nobody can check');
+    refuses({ ...base, adr: 'ADR-0012', verificationStrategy: undefined }, 'a merge stating no verification strategy was accepted, leaving it verified by whoever performed it');
+    refuses({ ...base, adr: 'ADR-0012', approvedBy: undefined }, 'a merge approved by nobody was accepted — recording a merge and approving one are different acts');
+    // A requirement absorbed but mapped to nothing was DROPPED, not merged.
+    refuses(
+      { ...base, adr: 'ADR-0012', requirementFieldMapping: { 'Spec A Part 1': ['fieldA'] } },
+      'a merge whose mapping omits one of its absorbed requirements was accepted — a requirement that maps to nothing was dropped, not merged',
+    );
+    refuses(
+      { ...base, adr: 'ADR-0012', requirementFieldMapping: { 'Spec A Part 1': ['fieldA'], 'Spec B Part 2': [] } },
+      'a merge mapping a requirement to an empty field list was accepted',
+    );
+    // NO SUBSYSTEM MAY APPROVE ITSELF — the platform's oldest rule, applied to merges.
+    refuses(
+      { ...base, adr: 'ADR-0012', approvedBy: 'Architecture Review Board' },
+      'the same body both recorded and approved a merge, which is a self-approval',
+    );
     // …and a complete one is accepted, or the register is unusable.
     const ok = new adr.MergeRegister({ clock: () => 0 });
     if (!ok.record('M', { ...base, adr: 'ADR-0012' })) v.push('a complete merge record was refused, so nothing could ever be registered');
@@ -5084,6 +5275,23 @@ module.exports = [
     const index = register.requirementIndex();
     for (const requirement of ['Phase 17 Part 15', 'Phase 17 Part 17', 'Phase 18 Part 7']) {
       if (!index.has(requirement)) v.push(`'${requirement}' was merged into the decision package and the register does not say so`);
+    }
+    // Every absorbed requirement maps to at least one field, and the mapping covers all of them.
+    const platform = register.merge('MERGE-0001');
+    if (platform.selfApproved) v.push('the platform merge was approved by the body that recorded it');
+    if (!platform.mergedCapability) v.push('the platform merge names no enduring capability');
+    if (platform.affectedModules.length < 2) v.push('the platform merge touched several files and records fewer than two');
+    if (!platform.unresolvedSemanticQuestions.length) {
+      v.push('the platform merge records no unresolved semantic question — a merge that claims to have settled everything is a merge nobody checked');
+    }
+    for (const requirement of platform.mergedRequirements) {
+      const mapped = platform.requirementFieldMapping[requirement];
+      if (!Array.isArray(mapped) || !mapped.length) v.push(`'${requirement}' is recorded as absorbed with nothing mapped to it`);
+      for (const field of mapped || []) {
+        if (!Object.prototype.hasOwnProperty.call(inst.DECISION_PACKAGE_FIELDS, field)) {
+          v.push(`'${requirement}' maps to '${field}', which the decision package does not require — the mapping points at a field that is not enforced`);
+        }
+      }
     }
 
     // --- Part 6: every absorbed requirement still maps to fields that exist ------------------
