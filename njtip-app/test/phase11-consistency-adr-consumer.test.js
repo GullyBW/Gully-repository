@@ -113,9 +113,9 @@ test('ADR: an unmeasurable success criterion fails validation', () => {
   assert.ok(vague.violations.some((x) => /no measurable value/.test(x)));
   const ok = probe('p95 latency under 500 ms across a 30-day window.');
   assert.strictEqual(ok.valid, true, ok.violations.join('; '));
-  // A new ADR is held to the newest tier in force. Phase 12 made that 'governance'; Phase 18.1
-  // added 'merge' from ADR-0012, so a probe numbered 98 now sits above the merge cutover too.
-  assert.strictEqual(ok.schema, 'merge');
+  // A new ADR is held to the newest UNCONDITIONAL tier in force, which Phase 12 made 'governance'.
+  // Phase 18.1's merge tier applies to decisions that RECORD a merge, not to every later decision.
+  assert.strictEqual(ok.schema, 'governance');
 });
 
 test('ADR: lifecycle and architectural debt are queryable', () => {

@@ -1252,8 +1252,12 @@ test('phase18.1: the merge schema applies from ADR-0012, where the first merge w
   for (const s of adrGov.MERGE_SCHEMA) assert.ok(s.heading && s.why, s.field);
   // The ADR that establishes the tier satisfies it. A rule its own ADR does not meet is the
   // weakest possible version of that rule.
-  assert.equal(adrGov.schemaNameFor(12), 'merge');
-  assert.equal(adrGov.schemaNameFor(11), 'governance', 'earlier ADRs are never retrofitted');
+  // The tier is CONDITIONAL: an ADR is held to it when it declares that it records a merge, not
+  // merely because it was written after 0012. The first version applied it by number and
+  // immediately demanded four merge sections of ADR-0013, which records no merge.
+  assert.equal(adrGov.schemaNameFor(12, { recordsMerge: true }), 'merge');
+  assert.equal(adrGov.schemaNameFor(12, { recordsMerge: false }), 'governance');
+  assert.equal(adrGov.schemaNameFor(11, { recordsMerge: true }), 'governance', 'earlier ADRs are never retrofitted');
 });
 
 test('phase18.1: a merge citing no ADR, or an ADR nobody wrote, is refused', () => {

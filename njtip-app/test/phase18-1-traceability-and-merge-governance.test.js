@@ -318,3 +318,179 @@ test('phase18.1: a duplication analysis over no pairs is not a clean bill of hea
   assert.match(empty.basis, /not the same as nothing being duplicated/);
   assert.equal(empty.authorizes, false);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Part 10 — capability-centric roadmap.
+//
+// A second capability axis, in the module that already had one. ADR-0013 records why that is not a
+// duplicate: CAPABILITY_MAP describes what the justice system can do for a citizen; this describes
+// what the platform delivers to an engineer planning against it. Disjoint sets, different audiences,
+// one shared change history.
+// ---------------------------------------------------------------------------------------------
+
+const cap = require('../src/capability/model');
+const migration = require('../src/migration/roadmap');
+
+const COMPLETE_CAPABILITY = {
+  name: 'Architecture Governance', description: 'Governs how the architecture is allowed to change',
+  owner: 'Architecture Review Board', contexts: ['assurance'],
+  modules: ['src/architecture/adr-governance.js'], requirements: ['REQ-A'],
+  controls: ['APP-FIT-CAPABILITY-ROADMAP'], adr: 'ADR-0012',
+  documentation: 'docs/architecture-governance.md', declaredBy: 'Architecture Review Board',
+};
+
+function withRequirement() {
+  const r = new adr.RequirementRegister({ clock: () => 0 });
+  r.declare('REQ-A', {
+    specification: 'Phase 18.1', section: 'Part 10', statement: 'capability-centric roadmap',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+  });
+  return r;
+}
+
+test('phase18.1: the two capability axes are disjoint, and neither replaces the other', () => {
+  const business = new Set(Object.keys(cap.CAPABILITY_MAP));
+  assert.ok(business.size > 0, 'Part 10 adds an axis and removes nothing');
+  assert.deepEqual(cap.PLATFORM_CAPABILITIES.filter((c) => business.has(c)), [],
+    'a name in both vocabularies would be one axis recorded twice');
+  assert.ok(cap.PLATFORM_CAPABILITIES.length >= 10);
+});
+
+test('phase18.1: a capability cannot become OPERATIONAL by any machine path', () => {
+  assert.equal(cap.CAPABILITY_LIFECYCLE.OPERATIONAL.machineReachable, false);
+  assert.ok(cap.CAPABILITY_LIFECYCLE.OPERATIONAL.requires.includes('humanAuthorization'));
+
+  const requirements = withRequirement();
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  reg.declare('architecture-governance', COMPLETE_CAPABILITY);
+  const verified = reg.lifecycle('architecture-governance', { controls: CONTROLS, requirements, now: 0 });
+  assert.equal(verified.state, 'VERIFIED', 'every verification dimension holds');
+  assert.notEqual(verified.state, 'OPERATIONAL');
+  assert.match(verified.reason, /no test can establish it/);
+
+  // …and it is reachable when a human is recorded as saying so, or the state is decoration.
+  const authorised = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  authorised.declare('architecture-governance', { ...COMPLETE_CAPABILITY, humanAuthorization: { by: 'Oversight Board', at: 0 } });
+  assert.equal(authorised.lifecycle('architecture-governance', { controls: CONTROLS, requirements, now: 0 }).state, 'OPERATIONAL');
+});
+
+test('phase18.1: a module existing is implementation, not verification', () => {
+  const requirements = withRequirement();
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  reg.declare('module-only', { ...COMPLETE_CAPABILITY, controls: [], requirements: [] });
+  const lifecycle = reg.lifecycle('module-only', { controls: CONTROLS, requirements, now: 0 });
+  assert.equal(lifecycle.state, 'IMPLEMENTING');
+  assert.notEqual(lifecycle.state, 'VERIFIED');
+
+  const maturity = reg.maturity('module-only', { controls: CONTROLS, requirements, now: 0 });
+  assert.ok(maturity.blocked.includes('verificationCoverage'), 'nothing would fail if it stopped working');
+  assert.ok(maturity.blocked.includes('specificationCoverage'), 'it exists because somebody built it');
+  assert.equal(maturity.scored, false, 'nine dimensions with different evidence are never summed');
+});
+
+test('phase18.1: operational readiness stays UNKNOWN, whatever else is true', () => {
+  const requirements = withRequirement();
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  reg.declare('architecture-governance', COMPLETE_CAPABILITY);
+  const readiness = reg.maturity('architecture-governance', { controls: CONTROLS, requirements, now: 0 })
+    .dimensions.find((d) => d.dimension === 'operationalReadiness');
+  assert.equal(readiness.state, 'UNKNOWN');
+  assert.match(readiness.detail, /passing test is not evidence/);
+});
+
+test('phase18.1: capability declarations are refused when they say nothing actionable', () => {
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  assert.throws(() => reg.declare('C', { name: 'X', declaredBy: 'ARB' }), (e) => e.failClosed === true);
+  assert.throws(() => reg.declare('C', { name: 'X', description: 'd' }), (e) => e.failClosed === true);
+  // This platform records a human statement and never makes one.
+  assert.throws(
+    () => reg.declare('C', { name: 'X', description: 'd', declaredBy: 'ARB', humanAuthorization: {} }),
+    (e) => e.failClosed === true,
+  );
+});
+
+test('phase18.1: dependencies are declared with a reason, an owner and a justification', () => {
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  for (const id of ['A', 'B']) reg.declare(id, { name: id, description: 'd', owner: 'Architecture Review Board', contexts: ['assurance'], declaredBy: 'ARB' });
+  assert.throws(() => reg.dependOn('A', 'A', { rationale: 'r', owner: 'o', justification: 'j' }), (e) => e.failClosed === true);
+  for (const field of ['rationale', 'owner', 'justification']) {
+    const spec = { rationale: 'r', owner: 'o', justification: 'j', [field]: undefined };
+    assert.throws(() => reg.dependOn('A', 'B', spec), (e) => e.failClosed === true, field);
+  }
+  assert.ok(reg.dependOn('A', 'B', { rationale: 'A reads B', owner: 'ARB', justification: 'ADR-0012' }));
+});
+
+test('phase18.1: a dependency cycle is a violation and blocks the capabilities in it', () => {
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  for (const id of ['A', 'B', 'C']) reg.declare(id, { name: id, description: 'd', owner: 'Architecture Review Board', contexts: ['assurance'], declaredBy: 'ARB' });
+  reg.dependOn('A', 'B', { rationale: 'r', owner: 'ARB', justification: 'j' });
+  reg.dependOn('B', 'C', { rationale: 'r', owner: 'ARB', justification: 'j' });
+  reg.dependOn('C', 'A', { rationale: 'r', owner: 'ARB', justification: 'j' });
+  reg.dependOn('A', 'GHOST', { rationale: 'r', owner: 'ARB', justification: 'j' });
+
+  const analysis = reg.dependencyAnalysis();
+  assert.equal(analysis.hasCycles, true);
+  assert.ok(analysis.missingTargets.some((t) => t.target === 'GHOST'));
+  assert.ok(analysis.violations.length >= 2);
+  assert.equal(reg.lifecycle('A', { controls: CONTROLS, now: 0 }).state, 'BLOCKED');
+  // Concentration is reported, not judged — a foundational capability with many dependents is normal.
+  assert.match(analysis.concentrationNote, /Reported rather than judged/);
+});
+
+test('phase18.1: both roadmap views survive, and the phase history is untouched', () => {
+  const requirements = withRequirement();
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  reg.declare('architecture-governance', COMPLETE_CAPABILITY);
+  const roadmap = reg.roadmap({ controls: CONTROLS, requirements, now: 0 });
+
+  assert.equal(roadmap.viewsSynchronized, true);
+  assert.equal(roadmap.phaseView.items, migration.ids().length, 'Part 10 adds an axis and deletes no history');
+  assert.equal(roadmap.phaseView.waves, Object.keys(migration.waves()).length);
+  assert.equal(roadmap.capabilityView.count, reg.capabilities().length);
+  assert.equal(roadmap.declarative, true);
+  assert.equal(roadmap.authorizes, false);
+});
+
+test('phase18.1: requirement and capability are traceable in both directions', () => {
+  const requirements = withRequirement();
+  requirements.declare('REQ-ORPHAN', {
+    specification: 'Phase 18.1', section: 'Part 10', statement: 'a requirement no capability claims',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+  });
+  const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  reg.declare('architecture-governance', COMPLETE_CAPABILITY);
+  assert.ok(reg.roadmap({ controls: CONTROLS, requirements, now: 0 }).requirementsWithoutCapability.includes('REQ-ORPHAN'));
+
+  const bare = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  bare.declare('bare', { name: 'Bare', description: 'd', declaredBy: 'ARB' });
+  const bareRoadmap = bare.roadmap({ controls: CONTROLS, now: 0 });
+  for (const finding of ['capabilitiesWithoutOwner', 'capabilitiesWithoutRequirement', 'capabilitiesWithoutImplementation']) {
+    assert.ok(bareRoadmap[finding].includes('bare'), finding);
+  }
+
+  // One requirement claimed by two capabilities cannot have one implementation responsibility.
+  const contested = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+  for (const id of ['X', 'Y']) {
+    contested.declare(id, { name: id, description: 'd', owner: 'Architecture Review Board', contexts: ['assurance'], requirements: ['REQ-A'], declaredBy: 'ARB' });
+  }
+  assert.equal(contested.roadmap({ controls: CONTROLS, requirements, now: 0 }).conflictingCapabilityClaims.length, 1);
+});
+
+test('phase18.1: an empty capability register distinguishes no capabilities from undeclared ones', () => {
+  const empty = new cap.PlatformCapabilityRegistry({ clock: () => 0 }).roadmap({ controls: CONTROLS, now: 0 });
+  assert.equal(empty.measurable, false);
+  assert.match(empty.basis, /has not declared them/);
+});
+
+test('phase18.1: the merge ADR tier is conditional on recording a merge, not on a number', () => {
+  // The first version applied it by number and immediately demanded four merge sections of
+  // ADR-0013, which records no merge. The platform's own ADR control caught that.
+  const catalogue = adr.validateCatalogue();
+  const twelve = catalogue.adrs.find((a) => a.number === 12);
+  const thirteen = catalogue.adrs.find((a) => a.number === 13);
+  assert.equal(twelve.schema, 'merge');
+  assert.equal(twelve.recordsMerge, 'MERGE-0001');
+  assert.equal(thirteen.schema, 'governance', 'ADR-0013 records no merge and is not held to the merge schema');
+  assert.equal(thirteen.recordsMerge, null);
+  assert.ok(catalogue.adrs.every((a) => a.valid), catalogue.adrs.filter((a) => !a.valid).map((a) => a.file).join(', '));
+});

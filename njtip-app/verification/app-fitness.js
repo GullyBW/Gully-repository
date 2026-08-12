@@ -4869,6 +4869,161 @@ module.exports = [
     if (!quiet.safe) v.push('an absence scenario with nobody absent reported findings');
   }),
 
+  fit('APP-FIT-CAPABILITY-ROADMAP', 'A capability is not verified because a module exists, and cannot become operational without a human saying so', (v) => {
+    const cap = require('../src/capability/model');
+    const adr = require('../src/architecture/adr-governance');
+    const migration = require('../src/migration/roadmap');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- The two axes are declared apart, and the vocabulary lives in one place --------------
+    if (!Array.isArray(cap.PLATFORM_CAPABILITIES) || cap.PLATFORM_CAPABILITIES.length < 10) {
+      v.push('the platform capability vocabulary is missing or shorter than the ten Phase 18.1 names');
+    }
+    // The business axis and the platform axis must stay disjoint. A name in both would be the
+    // duplication this module's comment argues it is not.
+    const business = new Set(Object.keys(cap.CAPABILITY_MAP));
+    const overlap = cap.PLATFORM_CAPABILITIES.filter((c) => business.has(c));
+    if (overlap.length) v.push(`${overlap.join(', ')} appears in both the business and platform capability vocabularies — the two axes must stay disjoint or they are one axis recorded twice`);
+    if (!Object.keys(cap.CAPABILITY_MAP).length) v.push('the business capability map was emptied — Part 10 adds an axis and removes nothing');
+
+    // --- Lifecycle: OPERATIONAL is structurally unreachable by machine -----------------------
+    for (const required of ['UNKNOWN', 'PROPOSED', 'DEFINED', 'IMPLEMENTING', 'VERIFIED', 'OPERATIONAL', 'DEPRECATED', 'BLOCKED']) {
+      if (!cap.CAPABILITY_LIFECYCLE[required]) v.push(`capability lifecycle state '${required}' is not defined`);
+    }
+    const unreachable = Object.entries(cap.CAPABILITY_LIFECYCLE).filter(([, s]) => s.machineReachable === false).map(([id]) => id);
+    if (!unreachable.includes('OPERATIONAL')) {
+      v.push('OPERATIONAL is marked machine-reachable — whether an institution runs something is a fact about people and no test can establish it');
+    }
+    if (!cap.CAPABILITY_LIFECYCLE.OPERATIONAL.requires.includes('humanAuthorization')) {
+      v.push('OPERATIONAL does not require a recorded human authorization');
+    }
+    if (!cap.CAPABILITY_LIFECYCLE.VERIFIED.requires.includes('controls')) v.push('VERIFIED does not require executable controls, so a module existing would be enough');
+    if (!cap.CAPABILITY_LIFECYCLE.VERIFIED.requires.includes('requirements')) v.push('VERIFIED does not require an authorising requirement');
+
+    // --- Nine maturity dimensions, never summed ---------------------------------------------
+    if (Object.keys(cap.MATURITY_DIMENSIONS).length !== 9) v.push('capability maturity does not carry exactly nine dimensions');
+    for (const [id, d] of Object.entries(cap.MATURITY_DIMENSIONS)) {
+      if (!d.asks || !d.asks.endsWith('?') || !d.ifUnknown) v.push(`maturity dimension '${id}' does not state its question or what not knowing it costs`);
+    }
+    if (cap.MATURITY_STATES.UNKNOWN.examined) v.push('UNKNOWN maturity was marked as examined');
+    if (cap.MATURITY_STATES.UNKNOWN.satisfied) v.push('UNKNOWN maturity was marked as satisfied');
+    if (!cap.MATURITY_STATES.NOT_APPLICABLE.examined) v.push('NOT_APPLICABLE was marked unexamined — saying a dimension does not apply is different from having no answer');
+
+    // --- Declaration refusals ----------------------------------------------------------------
+    const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    const refuses = (fn, label) => {
+      let refused = false;
+      try { fn(); } catch (e) { refused = !!e.failClosed; }
+      if (!refused) v.push(label);
+    };
+    refuses(() => reg.declare('C', { name: 'X', declaredBy: 'ARB' }), 'a capability with no description was accepted — an identifier and a name say nothing a planner could act on');
+    refuses(() => reg.declare('C', { name: 'X', description: 'd' }), 'a capability was declared with nobody named as declaring it');
+    refuses(() => reg.declare('C', { name: 'X', description: 'd', declaredBy: 'ARB', humanAuthorization: {} }),
+      'an operational authorization with nobody named as giving it was accepted — this platform records a human statement and never makes one');
+
+    // --- THE POINT: a fully evidenced capability reaches VERIFIED and stops there ------------
+    const requirements = new adr.RequirementRegister({ clock: () => 0 });
+    requirements.declare('REQ-A', {
+      specification: 'Phase 18.1', section: 'Part 10', statement: 'capability-centric roadmap',
+      artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    });
+    const complete = {
+      name: 'Architecture Governance', description: 'Governs how the architecture is allowed to change',
+      owner: 'Architecture Review Board', contexts: ['assurance'],
+      modules: ['src/architecture/adr-governance.js'], requirements: ['REQ-A'],
+      controls: ['APP-FIT-CAPABILITY-ROADMAP'], adr: 'ADR-0012',
+      documentation: 'docs/architecture-governance.md', declaredBy: 'Architecture Review Board',
+    };
+    reg.declare('architecture-governance', complete);
+    const verified = reg.lifecycle('architecture-governance', { controls, requirements, now: 0 });
+    if (verified.state !== 'VERIFIED') v.push(`a fully evidenced capability reported '${verified.state}' — a state nothing can reach is not a state`);
+    if (verified.state === 'OPERATIONAL') v.push('a capability became OPERATIONAL with no human authorization recorded');
+    if (!/no test can establish it/.test(verified.reason)) v.push('a verified capability does not say why it is not operational');
+    if (verified.operationalRequiresHuman !== true) v.push('the lifecycle does not state that operational status requires a human');
+
+    // …and it becomes OPERATIONAL only when a human is recorded as saying so.
+    const authorised = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    authorised.declare('architecture-governance', { ...complete, humanAuthorization: { by: 'Oversight Board', at: 0 } });
+    if (authorised.lifecycle('architecture-governance', { controls, requirements, now: 0 }).state !== 'OPERATIONAL') {
+      v.push('a capability with a recorded human authorization did not reach OPERATIONAL — the state is unreachable in both directions');
+    }
+
+    // --- A MODULE EXISTING IS NOT VERIFICATION ----------------------------------------------
+    const moduleOnly = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    moduleOnly.declare('module-only', { ...complete, controls: [], requirements: [] });
+    const shallow = moduleOnly.lifecycle('module-only', { controls, requirements, now: 0 });
+    if (shallow.state === 'VERIFIED') v.push('a capability with modules but no control and no requirement was VERIFIED — existing is not working');
+    if (shallow.state !== 'IMPLEMENTING') v.push(`a capability with modules and an owner reported '${shallow.state}' rather than IMPLEMENTING`);
+    const shallowMaturity = moduleOnly.maturity('module-only', { controls, requirements, now: 0 });
+    if (!shallowMaturity.blocked.includes('verificationCoverage')) v.push('a capability nothing enforces did not report its verification coverage as blocked');
+    if (!shallowMaturity.blocked.includes('specificationCoverage')) v.push('a capability no requirement authorises did not report its specification coverage as blocked');
+    if (shallowMaturity.scored !== false) v.push('nine maturity dimensions were summed into a score');
+    // Operational readiness is UNKNOWN and stays unknown, whatever else is true.
+    const readiness = shallowMaturity.dimensions.find((d) => d.dimension === 'operationalReadiness');
+    if (readiness.state !== 'UNKNOWN') v.push('operational readiness was given a verdict with no human statement recorded');
+    if (!/no test can establish/.test(readiness.detail) && !/passing test is not evidence/.test(readiness.detail)) {
+      v.push('operational readiness does not say that a passing test is not evidence an institution runs something');
+    }
+
+    // --- Dependencies are declared, never inferred, and a cycle is a violation ---------------
+    const graph = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    for (const id of ['A', 'B', 'C']) graph.declare(id, { name: id, description: 'd', owner: 'Architecture Review Board', contexts: ['assurance'], declaredBy: 'ARB' });
+    refuses(() => graph.dependOn('A', 'A', { rationale: 'r', owner: 'o', justification: 'j' }), 'a capability was permitted to depend on itself');
+    refuses(() => graph.dependOn('A', 'B', { owner: 'o', justification: 'j' }), 'a dependency with no rationale was accepted — one that cannot be challenged cannot be removed');
+    refuses(() => graph.dependOn('A', 'B', { rationale: 'r', justification: 'j' }), 'a dependency with nobody accountable for it was accepted');
+    refuses(() => graph.dependOn('A', 'B', { rationale: 'r', owner: 'o' }), 'a dependency with no architectural justification was accepted');
+    graph.dependOn('A', 'B', { rationale: 'A reads B', owner: 'ARB', justification: 'ADR-0012' });
+    graph.dependOn('B', 'C', { rationale: 'B reads C', owner: 'ARB', justification: 'ADR-0012' });
+    graph.dependOn('C', 'A', { rationale: 'C reads A', owner: 'ARB', justification: 'ADR-0012' });
+    graph.dependOn('A', 'GHOST', { rationale: 'A reads something undeclared', owner: 'ARB', justification: 'none' });
+    const analysis = graph.dependencyAnalysis();
+    if (!analysis.hasCycles) v.push('a three-capability cycle was not detected — neither capability can be planned before the other');
+    if (!analysis.missingTargets.some((t) => t.target === 'GHOST')) v.push('a dependency on an undeclared capability was not reported');
+    if (analysis.violations.length < 2) v.push('a cycle and a missing target produced fewer than two violations');
+    if (graph.lifecycle('A', { controls, now: 0 }).state !== 'BLOCKED') v.push('a capability in a dependency cycle was not BLOCKED');
+    // Concentration is reported, not judged — a foundational capability with many dependents is normal.
+    if (!/Reported rather than judged/.test(analysis.concentrationNote)) v.push('dependency concentration is presented as a finding rather than as an observation');
+
+    // --- Both views survive, and the phase history is untouched -----------------------------
+    const roadmap = reg.roadmap({ controls, requirements, now: 0 });
+    if (!roadmap.viewsSynchronized) v.push('the two roadmap views are not reported as synchronized');
+    if (roadmap.phaseView.items !== migration.ids().length) v.push('the phase view no longer reports the migration items — Part 10 adds an axis and deletes no history');
+    if (!roadmap.phaseView.waves) v.push('the phase view lost its wave structure');
+    if (roadmap.capabilityView.count !== reg.capabilities().length) v.push('the capability view disagrees with the register');
+    if (roadmap.authorizes !== false) v.push('the capability roadmap claims authority');
+    if (roadmap.declarative !== true) v.push('the capability roadmap does not declare that its mappings are declared rather than inferred');
+
+    // --- Requirement ↔ capability, both directions ------------------------------------------
+    requirements.declare('REQ-ORPHAN', {
+      specification: 'Phase 18.1', section: 'Part 10', statement: 'a requirement no capability claims',
+      artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    });
+    const bothWays = reg.roadmap({ controls, requirements, now: 0 });
+    if (!bothWays.requirementsWithoutCapability.includes('REQ-ORPHAN')) v.push('a requirement no capability claims was not reported');
+    const bare = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    bare.declare('bare', { name: 'Bare', description: 'd', declaredBy: 'ARB' });
+    const bareRoadmap = bare.roadmap({ controls, now: 0 });
+    if (!bareRoadmap.capabilitiesWithoutOwner.includes('bare')) v.push('a capability with no owner was not reported');
+    if (!bareRoadmap.capabilitiesWithoutRequirement.includes('bare')) v.push('a capability no requirement authorises was not reported');
+    if (!bareRoadmap.capabilitiesWithoutImplementation.includes('bare')) v.push('a capability with no module was not reported');
+    // A requirement claimed by two capabilities cannot have one implementation responsibility.
+    const contested = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    contested.declare('X', { name: 'X', description: 'd', owner: 'Architecture Review Board', contexts: ['assurance'], requirements: ['REQ-A'], declaredBy: 'ARB' });
+    contested.declare('Y', { name: 'Y', description: 'd', owner: 'Architecture Review Board', contexts: ['assurance'], requirements: ['REQ-A'], declaredBy: 'ARB' });
+    if (!contested.roadmap({ controls, requirements, now: 0 }).conflictingCapabilityClaims.length) {
+      v.push('one requirement claimed by two capabilities was not reported — it cannot have one implementation responsibility');
+    }
+
+    // --- An empty register says what it does not know ---------------------------------------
+    const empty = new cap.PlatformCapabilityRegistry({ clock: () => 0 }).roadmap({ controls, now: 0 });
+    if (empty.measurable) v.push('an empty capability register reported itself measurable');
+    if (!/has not declared them/.test(empty.basis)) v.push('an empty capability register does not distinguish having no capabilities from not declaring them');
+  }),
+
   fit('APP-FIT-SPECIFICATION-EVOLUTION', 'A legitimate extension is not a conflict, and a proposal nobody could classify is UNKNOWN rather than acceptable', (v) => {
     const dp = require('../src/architecture/drift-prevention');
     const own = require('../src/governance/ownership');
@@ -6834,10 +6989,19 @@ module.exports = [
     if (!vague.violations.some((x) => /no measurable value/.test(x))) v.push('the measurability failure was not named');
     const measurable = probe('p95 latency stays under 500 ms across a 30-day window; 108 invariants hold.');
     if (!measurable.valid) v.push('a genuinely measurable criterion was rejected: ' + measurable.violations.join('; '));
-    // A new ADR is held to the newest tier in force. Phase 12 made that 'governance'; Phase 18.1
-    // added 'merge' from ADR-0012, because a merge that is recorded only in a commit message is
-    // indistinguishable afterwards from a requirement that was dropped.
-    if (measurable.schema !== 'merge') v.push(`ADR-0099 was held to the '${measurable.schema}' schema rather than the newest tier in force`);
+    // A new ADR is held to the newest UNCONDITIONAL tier in force, which Phase 12 made 'governance'.
+    // Phase 18.1's merge tier is deliberately conditional: it applies to decisions that RECORD a
+    // merge, not to every decision written after ADR-0012. The first version applied it by number
+    // and immediately demanded four merge sections of ADR-0013, which records no merge — the
+    // platform's own ADR control caught that, and this is the corrected expectation.
+    if (measurable.schema !== 'governance') v.push(`ADR-0099 was held to the '${measurable.schema}' schema rather than the newest unconditional tier in force`);
+    // …and an ADR that DOES declare a merge picks up the conditional tier on top.
+    const asMerge = adr.validateParsed(adr.parseText(
+      craft('p95 latency stays under 500 ms across a 30-day window; 108 invariants hold.').replace('- **Status:** Accepted', '- **Status:** Accepted\n- **Records a merge:** MERGE-0099'),
+      { file: '0099-probe.md', number: 99 },
+    ));
+    if (asMerge.schema !== 'merge') v.push('an ADR declaring that it records a merge was not held to the merge schema');
+    if (asMerge.valid) v.push('an ADR declaring a merge but carrying no merge sections was accepted');
     // The real catalogue satisfies the rule, or it is decorative here.
     for (const a of res.adrs.filter((x) => x.schema === 'extended')) {
       const crit = adr.parse(a.file).sections['measurable success criteria'];

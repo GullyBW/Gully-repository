@@ -118,6 +118,11 @@ function parse(file) { return parseText(fs.readFileSync(path.join(ADR_DIR, file)
 function parseText(text, { file = '(in-memory)', number = 0 } = {}) {
   const titleMatch = text.match(/^#\s*ADR-\d{4}:\s*(.+)$/m);
   const statusMatch = text.match(/\*\*Status:\*\*\s*([A-Za-z]+)/);
+  // Phase 18.1, Part 2. A merge is a KIND of decision, not a date. An ADR is held to the merge
+  // schema when it declares that it records one — not merely because it was written after 0012.
+  // The first version of this tier applied by number and immediately demanded four merge sections
+  // of ADR-0013, which records no merge; the platform's own control caught it.
+  const mergeMatch = text.match(/\*\*Records a merge:\*\*\s*(\S+)/);
   const sections = {};
   // Section = a `## Heading` and everything until the next `##`.
   const re = /^##\s+(.+?)\s*$/gm;
@@ -128,19 +133,30 @@ function parseText(text, { file = '(in-memory)', number = 0 } = {}) {
     const end = i + 1 < marks.length ? text.lastIndexOf('\n##', marks[i + 1].start) : text.length;
     sections[marks[i].heading.toLowerCase()] = text.slice(marks[i].start, end).trim();
   }
-  return { file, number, title: titleMatch ? titleMatch[1].trim() : null, status: statusMatch ? statusMatch[1] : null, sections, raw: text };
+  const recordsMerge = mergeMatch ? mergeMatch[1].trim() : null;
+  return {
+    file, number, title: titleMatch ? titleMatch[1].trim() : null,
+    status: statusMatch ? statusMatch[1] : null,
+    recordsMerge: recordsMerge && recordsMerge.toLowerCase() !== 'no' ? recordsMerge : null,
+    sections, raw: text,
+  };
 }
 
 // Which schema applies to an ADR number.
-function schemaFor(number) {
-  if (number >= MERGE_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA, ...GOVERNANCE_SCHEMA, ...MERGE_SCHEMA];
-  if (number >= GOVERNANCE_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA, ...GOVERNANCE_SCHEMA];
+function schemaFor(number, { recordsMerge = false } = {}) {
+  // The merge tier is CONDITIONAL, unlike the four tiers before it. Those apply from a number
+  // onward because they raised the standard for every decision. A merge schema demands four
+  // sections that are meaningless in an ADR recording no merge, so it applies to the decisions that
+  // record one — whenever they were written, and only those.
+  const base = number >= GOVERNANCE_SCHEMA_FROM ? [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA, ...GOVERNANCE_SCHEMA] : null;
+  if (base && recordsMerge && number >= MERGE_SCHEMA_FROM) return [...base, ...MERGE_SCHEMA];
+  if (base) return base;
   if (number >= EXTENDED_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA, ...EXTENDED_SCHEMA];
   if (number >= FULL_SCHEMA_FROM) return [...LEGACY_SCHEMA, ...FULL_SCHEMA];
   return LEGACY_SCHEMA;
 }
-function schemaNameFor(number) {
-  if (number >= MERGE_SCHEMA_FROM) return 'merge';
+function schemaNameFor(number, { recordsMerge = false } = {}) {
+  if (recordsMerge && number >= MERGE_SCHEMA_FROM) return 'merge';
   return number >= GOVERNANCE_SCHEMA_FROM ? 'governance' : number >= EXTENDED_SCHEMA_FROM ? 'extended' : number >= FULL_SCHEMA_FROM ? 'full' : 'legacy';
 }
 
@@ -154,7 +170,7 @@ function validateParsed(adr, { minSectionChars = 40 } = {}) {
   if (!adr.title) violations.push('no `# ADR-NNNN: title` heading');
   if (!adr.status) violations.push('no **Status:** line');
   else if (!STATUSES.includes(adr.status)) violations.push(`unknown status '${adr.status}'`);
-  const schema = schemaFor(adr.number);
+  const schema = schemaFor(adr.number, { recordsMerge: !!adr.recordsMerge });
   for (const s of schema) {
     const body = adr.sections[s.heading.toLowerCase()];
     if (body === undefined) violations.push(`missing required section '${s.heading}'${s.why ? ` — ${s.why}` : ''}`);
@@ -170,9 +186,10 @@ function validateParsed(adr, { minSectionChars = 40 } = {}) {
   }
   return {
     file, number: adr.number, title: adr.title, status: adr.status,
-    schema: schemaNameFor(adr.number),
+    schema: schemaNameFor(adr.number, { recordsMerge: !!adr.recordsMerge }),
     sections: Object.keys(adr.sections),
     supersededBy: supersessionTarget(adr),
+    recordsMerge: adr.recordsMerge || null,
     valid: violations.length === 0, violations,
   };
 }
@@ -250,7 +267,7 @@ const QUALITY_DIMENSIONS = [
 // — "not applicable" — rather than 0. Scoring an ADR-0001 badly for lacking a section that did not
 // exist when it was written would make the report a measure of age rather than of quality.
 function qualityScore(adr, { minSectionChars = 40 } = {}) {
-  const required = new Set(schemaFor(adr.number).map((s) => s.heading));
+  const required = new Set(schemaFor(adr.number, { recordsMerge: !!adr.recordsMerge }).map((s) => s.heading));
   const has = (heading) => {
     const body = adr.sections[heading.toLowerCase()];
     if (body === undefined || body.length < minSectionChars) return false;
@@ -273,7 +290,7 @@ function qualityScore(adr, { minSectionChars = 40 } = {}) {
   // no way back is not "83% good" — it is a decision you cannot reverse, and the mean hides that.
   const weakest = applicable.reduce((w, d) => (w === null || d.score < w.score ? d : w), null);
   return {
-    file: adr.file, number: adr.number, title: adr.title, status: adr.status, schema: schemaNameFor(adr.number),
+    file: adr.file, number: adr.number, title: adr.title, status: adr.status, schema: schemaNameFor(adr.number, { recordsMerge: !!adr.recordsMerge }), recordsMerge: adr.recordsMerge || null,
     dimensions, weakestDimension: weakest ? weakest.dimension : null,
     score: weakest ? weakest.score : null,
     complete: applicable.every((d) => d.score === 1),
@@ -327,7 +344,7 @@ function admit(text, { number, minSectionChars = 40 } = {}) {
   const quality = qualityScore(parsed, { minSectionChars });
   return {
     admitted: validation.valid, rejected: !validation.valid,
-    number: n, title: parsed.title, schema: schemaNameFor(n),
+    number: n, title: parsed.title, schema: schemaNameFor(n, { recordsMerge: !!parsed.recordsMerge }),
     rejections: validation.violations, quality,
     failClosed: true, authorizes: false,
     note: validation.valid

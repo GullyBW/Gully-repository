@@ -130,9 +130,11 @@ test('ADR: the expanded schema applies from 0004 and demands the full record', (
   // the schema they were written to rather than being retrofitted.
   assert.ok(res.adrs.filter((a) => a.number >= 4 && a.number < adr.EXTENDED_SCHEMA_FROM).every((a) => a.schema === 'full'));
   assert.ok(res.adrs.filter((a) => a.number >= adr.EXTENDED_SCHEMA_FROM && a.number < adr.GOVERNANCE_SCHEMA_FROM).every((a) => a.schema === 'extended'));
-  // Phase 18.1 added a fifth tier from 0012, so the governance band is now bounded above.
-  assert.ok(res.adrs.filter((a) => a.number >= adr.GOVERNANCE_SCHEMA_FROM && a.number < adr.MERGE_SCHEMA_FROM).every((a) => a.schema === 'governance'));
-  assert.ok(res.adrs.filter((a) => a.number >= adr.MERGE_SCHEMA_FROM).every((a) => a.schema === 'merge'));
+  // Phase 18.1 added a fifth tier, and it is CONDITIONAL rather than by-number: an ADR is held to
+  // the merge schema when it declares that it records a merge, not merely because it was written
+  // after 0012. ADR-0013 records no merge and stays on the governance schema.
+  assert.ok(res.adrs.filter((a) => a.number >= adr.GOVERNANCE_SCHEMA_FROM && !a.recordsMerge).every((a) => a.schema === 'governance'));
+  assert.ok(res.adrs.filter((a) => a.recordsMerge).every((a) => a.schema === 'merge'));
   assert.ok(res.adrs.filter((a) => a.number < 4).every((a) => a.schema === 'legacy'));
 });
 

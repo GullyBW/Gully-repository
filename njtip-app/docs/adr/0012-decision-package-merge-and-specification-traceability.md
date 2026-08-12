@@ -4,6 +4,7 @@
 - **Date:** 2026-08-07
 - **Deciders:** Architecture Review Board · Oversight Board · Operations Review Board
 - **Review required:** ARB (the merge itself) + OB (the governance rule it establishes)
+- **Records a merge:** MERGE-0001
 
 ## Context
 
