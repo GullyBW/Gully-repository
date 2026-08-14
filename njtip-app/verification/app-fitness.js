@@ -11883,6 +11883,154 @@ module.exports = [
     }).ordered)) v.push('decision package ordering is not deterministic');
   }),
 
+  fit('APP-FIT-SYNTHETIC-CORPUS', 'The requirement corpus is synthetic, says so, and exercises every state the dashboard can report', (v) => {
+    const adr = require('../src/architecture/adr-governance');
+    const controls = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Synthetic, and separated in both directions ------------------------------------------
+    // A corpus entry that could be mistaken for a governed requirement is worse than no corpus: it
+    // would inflate a compliance denominator with material nobody ever required.
+    if (adr.SYNTHETIC_SPECIFICATION !== 'SYNTHETIC-CORPUS') v.push('the synthetic corpus is not named as synthetic');
+    for (const r of adr.SYNTHETIC_REQUIREMENTS) {
+      if (!/^SYN-/.test(r.id)) v.push(`corpus entry '${r.id}' is not prefixed SYN- and could be read as a governed requirement`);
+      if (r.specification && r.specification !== adr.SYNTHETIC_SPECIFICATION) v.push(`corpus entry '${r.id}' declares a specification other than the synthetic one`);
+      if (!r.statement || !r.section) v.push(`corpus entry '${r.id}' does not state what it is or which shape it covers`);
+    }
+    const seeded = adr.seedSyntheticRequirements(new adr.RequirementRegister({ clock: () => 0 }));
+    for (const r of seeded.requirements()) {
+      if (r.specification !== adr.SYNTHETIC_SPECIFICATION) v.push(`seeded requirement '${r.id}' escaped the synthetic specification`);
+    }
+
+    // --- Every state the dashboard can report is exercised by the corpus -----------------------
+    // A dashboard verified only on fixtures is a dashboard whose interesting behaviour is untested.
+    const withEvidence = seeded.specificationCompliance({ controls, now: 0 });
+    const without = seeded.specificationCompliance({ now: 0 });
+    const states = new Set([...withEvidence.requirements, ...without.requirements].map((r) => r.state));
+    for (const required of ['COMPLIANT', 'NON_COMPLIANT', 'EVIDENCE_UNRESOLVED', 'UNKNOWN', 'HUMAN_REVIEW_REQUIRED']) {
+      if (!states.has(required)) v.push(`the synthetic corpus never produces '${required}', so that state is verified only against fixtures`);
+    }
+
+    // --- UNKNOWN is reachable at requirement level, and is not HUMAN_REVIEW_REQUIRED -----------
+    // REQUIREMENT_STATES.UNKNOWN existed for three batches with no code path producing it. A state
+    // nothing can reach is not a state.
+    const unknownRows = without.requirements.filter((r) => r.state === 'UNKNOWN');
+    const humanRows = without.requirements.filter((r) => r.state === 'HUMAN_REVIEW_REQUIRED');
+    if (!unknownRows.length) v.push('no requirement reaches UNKNOWN even with nothing supplied to check against');
+    if (!humanRows.length) v.push('no requirement reaches HUMAN_REVIEW_REQUIRED');
+    if (unknownRows.some((r) => humanRows.some((h) => h.requirement === r.requirement))) {
+      v.push('a requirement is both unknown and awaiting human review — nobody having looked is not the same as a machine having looked as far as it can');
+    }
+    if (!seeded.requirements().some((r) => seeded.verify(r.id, { now: 0 }).state === 'UNKNOWN')) {
+      v.push('the requirement register cannot produce UNKNOWN from any corpus entry');
+    }
+
+    // --- Not supplying evidence differs from supplying none ------------------------------------
+    const notSupplied = seeded.verify('SYN-COMPLIANT', { now: 0 });
+    const suppliedEmpty = seeded.verify('SYN-COMPLIANT', { controls: [], now: 0 });
+    const suppliedFull = seeded.verify('SYN-COMPLIANT', { controls, now: 0 });
+    if (notSupplied.state !== 'UNKNOWN') v.push(`verifying with no control list reported '${notSupplied.state}' — absence of input is not evidence of failure`);
+    if (suppliedEmpty.state !== 'BLOCKED') v.push(`verifying against an empty control list reported '${suppliedEmpty.state}' — a control that did not run is a broken mapping`);
+    if (suppliedFull.state !== 'VERIFIED') v.push(`a fully evidenced corpus entry reported '${suppliedFull.state}' — a state nothing can reach is not a state`);
+    if (notSupplied.state === suppliedEmpty.state) v.push('supplying no control list and supplying an empty one produce the same state');
+
+    // --- The corpus declares nothing that does not exist, except where that is its point -------
+    // SYN-STALE-EVIDENCE and SYN-CONFLICTING-EVIDENCE exist precisely to carry broken declarations.
+    // Every other entry must resolve, or the corpus is testing its own typos.
+    const intentionallyBroken = new Set(['SYN-STALE-EVIDENCE', 'SYN-CONFLICTING-EVIDENCE', 'SYN-NONCOMPLIANT', 'SYN-MISSING-EVIDENCE']);
+    for (const row of withEvidence.requirements) {
+      if (intentionallyBroken.has(row.requirement)) {
+        if (row.state === 'COMPLIANT') v.push(`'${row.requirement}' exists to be non-compliant and reported COMPLIANT`);
+      } else if (row.brokenMappings.length) {
+        v.push(`'${row.requirement}' declares something that does not exist: ${row.brokenMappings.map((b) => b.element).join(', ')} — the corpus is testing its own typos`);
+      }
+    }
+  }),
+
+  fit('APP-FIT-ASSURANCE-API-INTEGRATION', 'The compliance dashboard reaches a caller through the one composition root, with its epistemic states intact', (v) => {
+    const fs2 = require('fs');
+    const path2 = require('path');
+    const serverSrc = fs2.readFileSync(path2.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+    const appSrc = fs2.readFileSync(path2.join(__dirname, '..', 'src', 'app.js'), 'utf8');
+
+    // --- Composed at the one composition root, not required into the route -------------------
+    for (const service of ['specificationCompliance', 'governanceResilience']) {
+      if (!appSrc.includes(`${service},`) && !appSrc.includes(`${service} =`)) v.push(`'${service}' is not composed in src/app.js`);
+      if (!serverSrc.includes(`app.${service}.`)) v.push(`'${service}' is not reached through the composed app`);
+    }
+    if (!appSrc.includes('seedSyntheticRequirements')) v.push('the composed register is not seeded from the synthetic corpus');
+
+    // --- Routes exist and are authorized ------------------------------------------------------
+    const routes = [
+      ['/api/architecture/specification-compliance', 'admin'],
+      ['/api/architecture/requirements-matrix', 'admin'],
+      ['/api/governance/governance-resilience', 'oversight-board'],
+    ];
+    for (const [route, role] of routes) {
+      const line = serverSrc.split('\n').find((l) => l.includes(`p === '${route}'`) || l.includes(`p === '${route}'`));
+      if (!line && !serverSrc.includes(`'${route}'`)) { v.push(`route ${route} is not served`); continue; }
+      const idx = serverSrc.indexOf(`p === '${route}'`);
+      const block = serverSrc.slice(idx, idx + 600);
+      if (!block.includes(`requireRole('${role}')`)) v.push(`${route} does not require the '${role}' role — an assurance surface readable by anyone is an assurance surface nobody governs`);
+    }
+    // A finding that escalates to the Oversight Board is read by the Oversight Board.
+    const gi = serverSrc.indexOf("p === '/api/governance/governance-resilience'");
+    if (gi > 0 && !serverSrc.slice(gi, gi + 300).includes("requireRole('oversight-board')")) {
+      v.push('the governance resilience finding is not read by the board it escalates to');
+    }
+
+    // --- The epistemic distinction survives the boundary --------------------------------------
+    // This is the property most easily lost at serialisation: a layer that maps five states onto
+    // ok/not-ok for a caller's convenience destroys what the whole phase exists to preserve.
+    //
+    // The COMPOSED register is used, with a control list assembled here. Calling
+    // `app.specificationCompliance.report()` would be the obvious thing and is wrong: report()
+    // gathers its evidence by running the whole fitness suite, and this check runs inside that
+    // suite, so it re-entered it once per control until the process stopped responding. What this
+    // control must establish is that the composed register reaches a caller with its states intact,
+    // and that is what is exercised here. The HTTP path itself is covered by
+    // test/phase18-1-api-integration.test.js, where running the suite once is affordable.
+    const { createApp } = require('../src/app');
+    const app = createApp();
+    const composed = app.specificationCompliance.register();
+    const controlList = [
+      ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+    const withEvidence = composed.specificationCompliance({ controls: controlList, now: 0 });
+    const without = composed.specificationCompliance({ now: 0 });
+    const seen = new Set([...withEvidence.requirements, ...without.requirements].map((r) => r.state));
+    for (const required of ['COMPLIANT', 'NON_COMPLIANT', 'EVIDENCE_UNRESOLVED', 'UNKNOWN', 'HUMAN_REVIEW_REQUIRED']) {
+      if (!seen.has(required)) v.push(`'${required}' never reaches the application layer`);
+    }
+    if (!without.requirements.some((r) => r.state === 'UNKNOWN')) v.push('a request made with no evidence does not report unknown');
+    // UNKNOWN and HUMAN_REVIEW_REQUIRED share an epistemic state and are different facts.
+    const u = new Set(without.requirements.filter((r) => r.state === 'UNKNOWN').map((r) => r.requirement));
+    const h = new Set(without.requirements.filter((r) => r.state === 'HUMAN_REVIEW_REQUIRED').map((r) => r.requirement));
+    if (![...u].every((x) => !h.has(x))) v.push('UNKNOWN and HUMAN_REVIEW_REQUIRED were collapsed into one set');
+    if (!u.size || !h.size) v.push('one of UNKNOWN or HUMAN_REVIEW_REQUIRED never appears, so the distinction is untested at this layer');
+
+    // --- Refusals survive too ------------------------------------------------------------------
+    const resilience = require('../src/governance/institutional-resilience')
+      .governanceCapabilityResilience({ controls: controlList, now: 0 });
+    for (const report of [withEvidence, resilience]) {
+      if (report.authorizes !== false) v.push('an assurance report reaching a caller claims authority');
+      if (report.producesInstitutionalVerdict !== false) v.push('an assurance report reaching a caller claims an institutional verdict');
+      if (/\d+\s?%|percent/.test(String(report.basis))) v.push('an assurance report reaching a caller renders a percentage');
+    }
+    if (resilience.blocksInstitutionalReadiness) v.push('a governance resilience finding blocks readiness at the application layer');
+
+    // --- The version the app reports is the version it is ------------------------------------
+    // It was not: package.json said 1.16.0 and every running instance logged 1.13.0.
+    if (app.cfg.version !== require('../package.json').version) {
+      v.push(`the running app reports version '${app.cfg.version}' and the manifest declares '${require('../package.json').version}' — a version in two places disagrees with itself`);
+    }
+  }),
+
   fit('APP-FIT-GOVERNANCE-RESILIENCE', 'The invariant applies to the machinery that evaluates it, and a single point in the platform\'s own governance goes to a board rather than to the build', (v) => {
     const ir = require('../src/governance/institutional-resilience');
     const ep = require('../src/assurance/epistemic');

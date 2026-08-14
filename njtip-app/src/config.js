@@ -26,7 +26,11 @@ function load(env = process.env) {
     OIDC_SECRET: env.NJTIP_OIDC_SECRET || undefined,
     oidcIssuer: env.NJTIP_OIDC_ISSUER || 'njtip-idp',
     oidcAudience: env.NJTIP_OIDC_AUDIENCE || 'njtip-app',
-    version: '1.13.0',
+    // Read from package.json rather than restated here. It was restated here, and drifted: the
+    // manifest said 1.16.0 while every running instance logged 1.13.0 and every response that
+    // carried a version carried the wrong one. A version in two places is a version that disagrees
+    // with itself the first time one of them is updated.
+    version: require('../package.json').version,
   };
   validate(cfg);
   return cfg;

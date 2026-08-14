@@ -509,6 +509,14 @@ function createApp(overrides = {}) {
   // Phase 14: acceptances of a failing clause of the global invariant. Also empty, for the same
   // reason: an acceptance nobody recorded is not an acceptance.
   institutionalResilience.acceptances = new institutionalResilience.ResilienceAcceptance({ clock: () => Date.now() });
+  // Phase 18.1 close-out: the requirement register, composed here so specification compliance has a
+  // subject. It is seeded with the SYNTHETIC corpus only. No governed requirement of the Republic is
+  // recorded anywhere in this platform, and seeding one from a specification document would be
+  // manufacturing a requirement nobody declared — the exact thing the register refuses.
+  const requirements = adrGovernance.seedSyntheticRequirements(
+    new adrGovernance.RequirementRegister({ clock: () => Date.now() }),
+    { at: 0 },
+  );
   // Stable integration contracts (Part 3) + the component migration roadmap (Part 4). The
   // contract registry is the published interface surface; a boundary crossing without a
   // contract, or a migration item without a rollback, refuses composition.
@@ -653,6 +661,35 @@ function createApp(overrides = {}) {
       };
     },
   };
+  // Phase 18.1 Part 7 + Batch 7. Both are views over registers that already exist; neither holds
+  // state, and both refuse to authorise anything.
+  //
+  // `controls` is passed through rather than defaulted, because the register distinguishes "nothing
+  // was supplied to check against" (UNKNOWN) from "the check ran and the control was absent"
+  // (BLOCKED). A caller asking for compliance without evidence gets UNKNOWN, which is the honest
+  // answer and not an error.
+  const specificationCompliance = {
+    register: () => requirements,
+    report: ({ withEvidence = true, specifications = [], reviews = [], now = null } = {}) => {
+      const controls = withEvidence
+        ? safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })), [])
+        : null;
+      return requirements.specificationCompliance({
+        controls, specifications, reviews, now: now ?? Date.now(),
+      });
+    },
+    matrix: () => requirements.matrix({
+      controls: safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })), []),
+      now: Date.now(),
+    }),
+  };
+  const governanceResilience = {
+    report: ({ now = null } = {}) => institutionalResilience.governanceCapabilityResilience({
+      controls: safeCall(() => [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })), []),
+      now: now ?? Date.now(),
+    }),
+  };
+
   function safeCall(fn, fallback) { try { return fn(); } catch (_) { return fallback; } }
   // Organisational readiness is the one dimension not already in the assurance bundle: it comes
   // from the continuity model rather than from a fitness result.
@@ -726,7 +763,7 @@ function createApp(overrides = {}) {
   // Certificate rotation health: no certificate should be past-due for rotation.
   health.register('certificate-rotation', () => certs.dueForRotation().length === 0);
 
-  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, optimization, crossAgency, controlEffectiveness, controlObservations, trustEvidence, evidenceOnboarding, evidenceConnectors, forecasts, validationWorkshops, architectureBaseline, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
+  return { cfg, metrics, logger, health, tracer, evaluateSlo, session, oidc, auth, authz, iam, architecture, adrGovernance, requirements, specificationCompliance, governanceResilience, assumptions, decisionMemory, improvements, institutional, driftPrevention, ownership, institutionalResilience, optimization, crossAgency, controlEffectiveness, controlObservations, trustEvidence, evidenceOnboarding, evidenceConnectors, forecasts, validationWorkshops, architectureBaseline, rehearsals, raci, contracts, migration, infraAssurance, assurance, observability, correlationGovernance, usability, policyGovernance, digitalIdentity, infraGovernance, legislation, formalVerification, tenants, collaboration, federation, ecosystemFederation, assetGovernance, supplyChain, adaptiveGovernance, eventBus, graph, graphIntel, ai, decisionSupport, orchestration, workflowSim, processGovernance, custody, gis, compliance, privacy, threatIntel, threat, chaos, multiRegion, twin2, twin3, twin4, operationsTwin, resilience, recovery, crisis, servicePortfolio, fabric, metadata, apiRegistry, capability, maturity, devPlatform, capabilityMarketplace, knowledge, cryptoAgility, quantumTransition, sustainability, strategic, evolution: evolutionIntel, govOps, commandCenter, crossDomain: require('./intelligence/cross-domain'), keyManager, objectStore, broker, notifyProviders, cache, secrets, certs, integrations, flags, events, eventRegistry, workflow };
 }
 
 module.exports = { createApp };

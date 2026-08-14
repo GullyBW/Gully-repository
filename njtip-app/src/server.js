@@ -215,6 +215,18 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/ai/pending-decisions') { requireRole('oversight-board'); return json(200, { pending: app.ai.lifecycle.pendingDecisions() }); }
   if (method === 'POST' && (m = p.match(/^\/api\/ai\/inferences\/([^/]+)\/decide$/))) { const u = requireRole('oversight-board'); return json(200, app.ai.lifecycle.decide(dec(m[1]), { by: body.by || u.principal, decision: body.decision, rationale: body.rationale })); }
   if (method === 'GET' && p === '/api/architecture/adr') { requireRole('admin'); return json(200, app.adrGovernance.validateCatalogue()); }
+  // Phase 18.1 Part 7. `?evidence=false` asks for compliance with no verification input supplied,
+  // which is a real question — it is what the register reports when nobody has checked — and it
+  // answers UNKNOWN rather than failing. `specifications` names specifications expected to exist,
+  // so one nobody declared requirements for is reported as unknown rather than silently absent.
+  if (method === 'GET' && p === '/api/architecture/specification-compliance') {
+    requireRole('admin');
+    const expected = (url.searchParams.get('specifications') || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const evidence = url.searchParams.get('evidence');
+    if (evidence !== null && evidence !== 'true' && evidence !== 'false') throw err(400, "evidence must be 'true' or 'false'");
+    return json(200, app.specificationCompliance.report({ withEvidence: evidence !== 'false', specifications: expected }));
+  }
+  if (method === 'GET' && p === '/api/architecture/requirements-matrix') { requireRole('admin'); return json(200, app.specificationCompliance.matrix()); }
   if (method === 'GET' && p === '/api/contracts/consumers') { requireRole('admin'); return json(200, app.contracts.consumers.report()); }
   if (method === 'POST' && p === '/api/contracts/impact') { requireRole('admin'); return json(200, app.contracts.consumers.impactOfChange(body.contract, body.change || {})); }
   if (method === 'GET' && p === '/api/governance/raci') { requireRole('admin'); const f = [...runTwin(), ...runApp(), ...runInfra()]; return json(200, app.raci.report({ fitnessIds: f.map((r) => r.id), fitnessResults: f.map((r) => ({ id: r.id, pass: r.pass })) })); }
@@ -270,6 +282,9 @@ async function route(app, req, url, body) {
   if (method === 'GET' && p === '/api/governance/training') { requireRole('admin'); const o = require('./governance/ownership'); return json(200, o.trainingAssurance({ activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() })); }
   if (method === 'POST' && p === '/api/governance/exercises') { const u = requireRole('admin'); const o = require('./governance/ownership'); return json(201, o.exercises.recordParticipation({ ...(body || {}), by: (body && body.by) || u.principal })); }
   if (method === 'GET' && p === '/api/governance/institutional-resilience') { requireRole('oversight-board'); const o = require('./governance/ownership'); const f = [...runTwin(), ...runApp(), ...runInfra()].map((r) => ({ id: r.id, pass: r.pass })); const continuity = o.knowledgeContinuity({ availability: o.availabilityRegister, activity: o.activity, training: o.training, exercises: o.exercises, now: Date.now() }); return json(200, app.institutionalResilience.report({ continuity, controls: f, acceptances: o.resilienceAcceptances, now: Date.now() })); }
+  // Phase 18.1 Batch 7. The invariant applied to the platform's own governance machinery. Read by the
+  // Oversight Board, which is where a single-point finding about governance goes — it does not block.
+  if (method === 'GET' && p === '/api/governance/governance-resilience') { requireRole('oversight-board'); return json(200, app.governanceResilience.report()); }
   if (method === 'POST' && p === '/api/governance/resilience-acceptances') { const u = requireRole('oversight-board'); const o = require('./governance/ownership'); return json(201, o.resilienceAcceptances.accept({ ...(body || {}), by: (body && body.by) || u.principal })); }
   // --- Phase 13: executive intelligence, operational intelligence, institutional assurance ---
   if (method === 'GET' && p === '/api/assurance/executive-governance') {

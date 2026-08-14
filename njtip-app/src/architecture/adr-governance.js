@@ -830,7 +830,13 @@ class RequirementRegister {
   // Each element is checked against the thing it claims, not against its own presence. A requirement
   // naming a fitness function that does not exist is worse than one naming none, because it reads as
   // covered.
-  verify(id, { controls = [], testFiles = [], now = null } = {}) {
+  // `controls` defaults to null rather than [] on purpose. Not supplying a control list is a
+  // different fact from supplying one that lacks the declared control: the first means nobody
+  // checked, the second means the check was run and the control was not there. Defaulting to []
+  // collapsed them, and a requirement nobody had verified reported BLOCKED — absence of input
+  // rendered as evidence of failure, which is the same error in the same family as the precedent
+  // hop that read a stated absence as a presence.
+  verify(id, { controls = null, testFiles = null, now = null } = {}) {
     const t = now ?? this._clock();
     const r = this._requirements.get(id);
     if (!r) throw new Error('unknown requirement: ' + id);
@@ -838,7 +844,9 @@ class RequirementRegister {
     const contextMap = require('./context-map');
     const ownershipModule = require('../governance/ownership');
 
-    const controlIds = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+    const controlsSupplied = Array.isArray(controls);
+    const controlIds = new Set((controls || []).map((c) => (typeof c === 'string' ? c : c.id)));
+    const testFileList = testFiles || [];
     const adrNumbers = adrFiles().map((f) => Number(path.basename(f).slice(0, 4)));
     const contexts = new Set(contextMap.ids());
     const owners = new Set(ownershipModule.subsystems().flatMap((s) => {
@@ -872,11 +880,14 @@ class RequirementRegister {
         }
         case 'tests': {
           if (!r.tests.length) return { present: false, resolves: null, detail: 'no deterministic test declared' };
-          const missing = r.tests.filter((f) => !testFiles.includes(f) && !fs.existsSync(path.join(__dirname, '..', '..', 'test', f)));
+          const missing = r.tests.filter((f) => !testFileList.includes(f) && !fs.existsSync(path.join(__dirname, '..', '..', 'test', f)));
           return { present: true, resolves: missing.length === 0, detail: missing.length ? `${missing.length} declared test file(s) do not exist: ${missing.join(', ')}` : `${r.tests.length} test file(s) exist` };
         }
         case 'fitness': {
           if (!r.fitness.length) return { present: false, resolves: null, detail: 'no fitness function declared' };
+          // A declared control can only be checked against a supplied list of what ran. With no
+          // list, this is unknown — not failing. The distinction is the whole point.
+          if (!controlsSupplied) return { present: true, resolves: null, unknown: true, detail: `${r.fitness.length} control(s) declared and nothing was supplied to check them against — unknown, not failing` };
           const missing = r.fitness.filter((f) => !controlIds.has(f));
           return { present: true, resolves: missing.length === 0, detail: missing.length ? `${missing.length} declared control(s) did not run: ${missing.join(', ')}` : `${r.fitness.length} control(s) ran on this build` };
         }
@@ -916,12 +927,22 @@ class RequirementRegister {
     const missingRequired = elements.filter((e) => e.required && !e.present);
     const brokenMappings = elements.filter((e) => e.present && e.resolves === false);
     const missingOptional = elements.filter((e) => !e.required && !e.present);
+    // Declared, and could not be checked because nothing was supplied to check it against.
+    const unknownRequired = elements.filter((e) => e.required && e.present && e.unknown === true);
 
     // THE STATE RULE. A missing REQUIRED element or a broken mapping is BLOCKED — never a fraction.
+    // A required element that could not be checked is UNKNOWN, which is neither. The ordering is the
+    // weakest-link rule from src/assurance/epistemic.js: BROKEN dominates UNKNOWN dominates RESOLVED,
+    // so a requirement that is both unverifiable and demonstrably wrong reports the wrongness.
+    //
+    // Until this was written, UNKNOWN was a state nothing could reach — defined in REQUIREMENT_STATES,
+    // documented as "nobody has looked", and produced by no code path. A state nothing can reach is
+    // not a state, and this register had one for three batches.
     const state = r.rejected ? 'REJECTED'
       : missingRequired.length || brokenMappings.length ? 'BLOCKED'
-        : missingOptional.length ? 'PARTIAL'
-          : 'VERIFIED';
+        : unknownRequired.length ? 'UNKNOWN'
+          : missingOptional.length ? 'PARTIAL'
+            : 'VERIFIED';
 
     return {
       requirement: id, specification: r.specification, section: r.section, statement: r.statement,
@@ -931,11 +952,14 @@ class RequirementRegister {
       missingRequired: missingRequired.map((e) => e.element),
       brokenMappings: brokenMappings.map((e) => ({ element: e.element, detail: e.detail })),
       missingOptional: missingOptional.map((e) => e.element),
+      unknownRequired: unknownRequired.map((e) => e.element),
+      verificationInputSupplied: { controls: controlsSupplied, testFiles: Array.isArray(testFiles) },
       reason: r.rejected ? `recorded as rejected: ${r.rejectionRationale}`
         : brokenMappings.length ? `${brokenMappings.length} declared mapping(s) do not resolve — a declaration that points at nothing reads as covered and is not`
           : missingRequired.length ? `${missingRequired.length} REQUIRED element(s) absent for a '${r.artefactType}' requirement: ${missingRequired.map((e) => e.element).join(', ')}. This is BLOCKED, not partially verified.`
-            : missingOptional.length ? `every required element is present; ${missingOptional.length} optional element(s) absent`
-              : 'every element this artefact type requires is present and resolves',
+            : unknownRequired.length ? `${unknownRequired.length} REQUIRED element(s) could not be checked because nothing was supplied to check them against: ${unknownRequired.map((e) => e.element).join(', ')}. Nobody has looked, which is not the same as a failure and is emphatically not a pass.`
+              : missingOptional.length ? `every required element is present; ${missingOptional.length} optional element(s) absent`
+                : 'every element this artefact type requires is present and resolves',
       now: t,
     };
   }
@@ -959,7 +983,10 @@ class RequirementRegister {
   // it holds nothing about. A dashboard that rendered "no requirements declared" as green would be
   // worse than no dashboard, because it would be believed.
   specificationCompliance({
-    controls = [], testFiles = [], modules = [], specifications = [], reviews = [], now = null,
+    // Defaults are null, not [], for the same reason verify()'s are: an empty control list is a
+    // claim that nothing ran, and no control list is a statement that nobody checked. The dashboard
+    // must carry that distinction through or the UNKNOWN state it reports can never be reached.
+    controls = null, testFiles = null, modules = [], specifications = [], reviews = [], now = null,
   } = {}) {
     const t = now ?? this._clock();
     const { EPISTEMIC_STATES, weakest, machineBoundary } = require('../assurance/epistemic');
@@ -1174,7 +1201,108 @@ class RequirementRegister {
   }
 }
 
+// --- Phase 18.1 close-out: a synthetic requirement corpus -----------------------------------------
+//
+// SYNTHETIC ONLY. Every entry below is invented for deterministic verification and describes nothing
+// the Republic of Botswana has ever required, decided or recorded. No entry here is a production
+// requirement, and nothing derived from this corpus authorises anything.
+//
+// It exists because of a limit the Batch 7 close-out audit recorded honestly: the requirement
+// register ships empty, so `specificationCompliance()` had been verified against fixtures and an
+// empty register and had never been run over a populated one. A dashboard exercised only on the
+// empty case is a dashboard whose interesting behaviour is unverified.
+//
+// The identifiers are prefixed SYN- and the specification is named 'SYNTHETIC-CORPUS' so that no
+// reader, and no future aggregation, can mistake a corpus entry for a governed requirement. A
+// control asserts the separation in both directions.
+const SYNTHETIC_SPECIFICATION = 'SYNTHETIC-CORPUS';
+const SYNTHETIC_REQUIREMENTS = [
+  // 1. Compliant, and with complete authoritative evidence (covers corpus shapes 1 and 8): every
+  //    element the executable artefact type requires is present, resolves, and names a real thing.
+  {
+    id: 'SYN-COMPLIANT', section: 'shape 1 + 8 — compliant with complete authoritative evidence',
+    statement: 'A requirement whose every required element is present, resolves, and is owned.',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    implementation: 'src/assurance/epistemic.js', context: 'assurance',
+    owner: 'Office of the Chief Architect', capability: 'epistemic-integrity',
+    adr: 'ADR-0014', tests: ['phase18-1-specification-compliance.test.js'],
+    fitness: ['APP-FIT-EPISTEMIC-INTEGRITY'], mutation: ['unknown-to-pass', 'depth-as-tally'],
+    endpoint: '/api/architecture/specification-compliance',
+    documentation: 'docs/architecture-governance.md', runbook: 'docs/operations/runbook.md',
+    commits: ['synthetic'],
+  },
+  // 2. Non-compliant: declared and never built. The required elements are simply absent.
+  {
+    id: 'SYN-NONCOMPLIANT', section: 'shape 2 — observed non-compliance',
+    statement: 'A requirement that was declared and never implemented.',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    context: 'assurance', owner: 'Office of the Chief Architect',
+  },
+  // 3. Human review required: structurally complete governance artefact whose substantive adequacy
+  //    is not a thing any test establishes.
+  {
+    id: 'SYN-HUMAN-REVIEW', section: 'shape 3 — substantive adequacy is a human matter',
+    statement: 'A governance decision that is structurally complete and substantively unexamined.',
+    artefactType: 'governance', declaredBy: 'Architecture Review Board',
+    context: 'assurance', owner: 'Office of the Chief Architect',
+    documentation: 'docs/architecture-governance.md',
+  },
+  // 4. Unknown: an executable requirement declaring a control, evaluated with no control list. Until
+  //    the close-out this shape was unreachable — REQUIREMENT_STATES.UNKNOWN existed and no code path
+  //    produced it. The corpus carries it so the state stays reachable.
+  {
+    id: 'SYN-UNKNOWN', section: 'shape 4 — declared, and nothing was supplied to check it against',
+    statement: 'A requirement whose verification depends on evidence the caller did not supply.',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    implementation: 'src/assurance/epistemic.js', context: 'assurance',
+    owner: 'Office of the Chief Architect',
+    tests: ['phase18-1-specification-compliance.test.js'],
+    fitness: ['APP-FIT-EPISTEMIC-INTEGRITY'],
+  },
+  // 5. Missing evidence: an architectural change with no ADR behind it. The ADR is REQUIRED for this
+  //    artefact type, so its absence is a missing required element rather than an optional gap.
+  {
+    id: 'SYN-MISSING-EVIDENCE', section: 'shape 5 — a required evidence artefact is absent',
+    statement: 'A structural change with no recorded architectural decision.',
+    artefactType: 'architectural', declaredBy: 'Architecture Review Board',
+    implementation: 'src/assurance/epistemic.js', context: 'assurance',
+    owner: 'Office of the Chief Architect',
+  },
+  // 6. Invalid/stale evidence: every declaration is present and points at things that no longer
+  //    exist. Worse than absent, because the row reads as covered.
+  {
+    id: 'SYN-STALE-EVIDENCE', section: 'shape 6 — declarations that point at nothing',
+    statement: 'A requirement whose implementation, tests and control were renamed or removed.',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    implementation: 'src/assurance/renamed-away.js', context: 'assurance',
+    owner: 'Office of the Chief Architect',
+    tests: ['deleted-in-a-refactor.test.js'], fitness: ['APP-FIT-NO-LONGER-EXISTS'],
+  },
+  // 7. Conflicting evidence: the declarations disagree with one another. The module and the control
+  //    both exist, and the context named is not the context that owns either of them — so the row is
+  //    internally inconsistent rather than merely incomplete.
+  {
+    id: 'SYN-CONFLICTING-EVIDENCE', section: 'shape 7 — declarations that contradict each other',
+    statement: 'A requirement whose declared bounded context does not exist and whose owner holds nothing.',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    implementation: 'src/assurance/epistemic.js', context: 'not-a-bounded-context',
+    owner: 'Committee That Was Never Constituted',
+    tests: ['phase18-1-specification-compliance.test.js'],
+    fitness: ['APP-FIT-EPISTEMIC-INTEGRITY'],
+  },
+];
+
+// Seeds a register with the synthetic corpus. Takes the register rather than creating one, so the
+// caller owns the clock and nothing here holds state between runs.
+function seedSyntheticRequirements(register, { at = 0 } = {}) {
+  for (const r of SYNTHETIC_REQUIREMENTS) {
+    register.declare(r.id, { ...r, specification: SYNTHETIC_SPECIFICATION, at });
+  }
+  return register;
+}
+
 module.exports = {
+  SYNTHETIC_SPECIFICATION, SYNTHETIC_REQUIREMENTS, seedSyntheticRequirements,
   REQUIREMENT_STATES, ARTEFACT_TYPES, TRACE_ELEMENTS, RequirementRegister,
   COMPLIANCE_STATES, COMPLIANCE_FROM_EPISTEMIC,
   ADR_DIR, FULL_SCHEMA, LEGACY_SCHEMA, EXTENDED_SCHEMA, GOVERNANCE_SCHEMA,
