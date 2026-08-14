@@ -159,3 +159,103 @@ no review schedule            → UNSCHEDULED — permanent by inertia rather th
 evidence.
 
 Live: `GET /api/architecture/adr/quality` · `POST /api/architecture/adr/admit` (admin).
+
+## Specification compliance (Phase 18.1 Part 7)
+
+`matrix()` answers *is this requirement verified*. A board asks a different question — *is this
+specification implemented* — and those differ in one way that matters enormously: a specification
+nobody wrote requirements for has a perfectly clean matrix, because a register you never wrote to
+contains no failures.
+
+`specificationCompliance()` is a view over the same register, told which specifications are expected
+to exist, reporting five outcomes:
+
+```
+COMPLIANT            every element the artefact type demands is present and resolves
+NON_COMPLIANT        a required element is absent — checked, and the specification is not met
+EVIDENCE_UNRESOLVED  a declaration points at a file, control, owner or ADR that does not exist
+UNKNOWN              nothing was checked, or nothing was ever declared
+HUMAN_REVIEW_REQUIRED structurally complete, with a question no test can settle
+```
+
+The two most often merged are the two that must not be. **NON_COMPLIANT and UNKNOWN lead to
+different institutional actions** — one is fixed, the other is investigated — so they map to
+different epistemic states and are reported apart. A specification's state is the **weakest** of its
+requirements, never their average.
+
+No percentage is produced anywhere. "80% compliant" cannot distinguish a missing runbook from a
+missing implementation, and a reader who sees 80 stops asking which it was.
+
+### Three facts a control list can carry
+
+The register distinguishes them because collapsing them produced a real defect:
+
+```
+no control list supplied     → UNKNOWN   nobody checked
+empty control list supplied  → BLOCKED   the check ran; the declared control was not there
+full control list supplied   → VERIFIED / PARTIAL / BLOCKED on the evidence
+```
+
+Until close-out, `verify()` defaulted the list to `[]`, so a requirement nobody had verified reported
+BLOCKED — absence of input rendered as evidence of failure.
+
+### The synthetic corpus
+
+The register ships empty, so the dashboard would otherwise be exercised only against fixtures.
+`seedSyntheticRequirements()` seeds seven entries under the specification `SYNTHETIC-CORPUS`, every
+identifier prefixed `SYN-`. **Every entry is invented for verification and describes nothing the
+Republic has ever required, decided or recorded.** `APP-FIT-SYNTHETIC-CORPUS` asserts the separation
+in both directions and that the corpus reaches all five compliance states.
+
+Live: `GET /api/architecture/specification-compliance` (admin) — `?evidence=false` asks what is
+known with nothing supplied and answers UNKNOWN rather than failing; `?specifications=A,B` names
+specifications expected to exist · `GET /api/architecture/requirements-matrix` (admin).
+
+## Epistemic states and contiguous chains
+
+`src/assurance/epistemic.js` holds one vocabulary for the whole platform ([ADR-0014](./adr/0014-shared-epistemic-machinery-and-the-governance-resilience-boundary.md)):
+
+```
+RESOLVED   the evidence exists and establishes the claim
+BROKEN     the evidence was checked and establishes the claim is invalid
+UNKNOWN    the available evidence establishes neither
+```
+
+`UNKNOWN` is a **successful verification outcome** where the evidence genuinely cannot settle the
+question. It is never a pass: it does not satisfy, it is not examined, and it does not continue a
+chain. `weakest()` rolls a set up to its weakest member — BROKEN over UNKNOWN over RESOLVED.
+
+`assuranceChain()` walks a sequential chain and stops at the first unresolved step. Two numbers are
+kept apart on purpose:
+
+```
+contiguousNavigableDepth   how far you walk before the first gap
+resolvedCount              how many steps resolve in total, wherever they sit
+```
+
+A chain broken at step 1 with steps 2–9 intact has depth **0** and a resolved count of **8**.
+Reporting the 8 as depth produced `TRACEABLE THROUGH HOP 8/9` for a decision package with nothing at
+the top of it, which is the percentage this module refuses to print wearing a count.
+`resolvedButUnreachable` names the steps that individually resolve behind a gap.
+
+`machineBoundary()` states, in the output, what a control observed and what it cannot settle:
+
+```
+observation → evidence → human judgement → governance decision      (preserved)
+observation → institutional verdict                                 (refused)
+```
+
+## Governance resilience (Phase 18.1 Batch 7)
+
+The global invariant asks whether a critical capability rests on a single person, process, document
+or system. `governanceCapabilityResilience()` asks it of the governance machinery Phase 18.1 itself
+built. A finding reports `SINGLE_POINT_OBSERVED` and goes to a board; it does **not** block a build.
+`BLOCKED` remains reachable only where the governance model already required resilience —
+ADR-0009's blocking behaviour for constitutional capabilities is untouched.
+
+Current findings, and the remediation requirements they raise, are recorded in
+[`phase18-1-resilience-findings.md`](./phase18-1-resilience-findings.md). All are OPEN; no board has
+reviewed them.
+
+Live: `GET /api/governance/governance-resilience` (oversight-board — a finding that escalates to a
+board is read by that board).

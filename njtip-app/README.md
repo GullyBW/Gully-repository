@@ -78,6 +78,31 @@ ls deploy/k8s/ deploy/pilot/
 > v1.5: [`docs/ecosystem.md`](./docs/ecosystem.md) · v1.4: [`docs/national-platform.md`](./docs/national-platform.md) ·
 > v1.3: [`docs/enterprise-operations.md`](./docs/enterprise-operations.md).
 
+> **Phase 18.1 — architectural governance, specification traceability & framework integrity**
+> (no version bump: the repository takes one minor per *phase*, and Phases 17 and 18 remain
+> incomplete — see [`docs/architecture-governance.md`](./docs/architecture-governance.md)).
+> Phase 16 asked whether the platform could explain the figures a board acts on. Phase 18.1 asks a
+> harder question about the answer: **when the platform cannot establish something, does it say so?**
+> It did not. The decision-explainability chain counted records, so a package whose precedent field
+> honestly read *"no comparable recommendation has been recorded"* resolved that hop and the chain
+> reported "explainable end to end across all 9 hops" for a recommendation with no precedent at all.
+> A stated absence had been read as a presence.
+> So the platform now holds **one epistemic vocabulary** — `RESOLVED` / `BROKEN` / `UNKNOWN`, in
+> `src/assurance/epistemic.js` ([ADR-0014](./docs/adr/0014-shared-epistemic-machinery-and-the-governance-resilience-boundary.md)) —
+> where **a correct UNKNOWN is a successful verification outcome and never a pass**, and
+> `contiguousNavigableDepth` is the walk before the first gap rather than the tally of steps that
+> happen to resolve. A chain broken at step 1 with eight later steps intact has depth **0**.
+> Also: a [specification-compliance dashboard](./docs/architecture-governance.md) where a
+> specification nobody wrote requirements for reports **UNKNOWN rather than clean**, because an empty
+> register is not a clean one; **executive decision quality**, where an alternative that restates the
+> recommendation is raised for a human and never ruled on by the machine — *similarity is evidence,
+> not a verdict*; and the global invariant turned on **the governance machinery that evaluates it**,
+> which found that all five Phase 18.1 capabilities rest on a single accountable body.
+> That finding is recorded rather than removed: **11 single-point dependencies**, none blocking the
+> build, all with the Oversight Board — [`docs/phase18-1-resilience-findings.md`](./docs/phase18-1-resilience-findings.md).
+> Combined gate: **215 invariants** (192 application · 9 infrastructure · 14 Twin), 1,187 tests,
+> 36/36 mutations killed.
+
 ## v1.2 — operational production platform (ports & adapters)
 
 Production concerns are implemented **behind stable ports**, selected only at the composition root
