@@ -517,6 +517,12 @@ const EXERCISE_KINDS = {
   'incident-escalation': { relevantTo: ['responsibleAuthority', 'approvingAuthority'], why: 'Knowing who to wake, and being willing to, is learned by doing it.' },
   'evidence-custody': { relevantTo: ['dataSteward', 'responsibleAuthority'], why: 'A custody error is unrecoverable; the rehearsal is the only safe place to make one.' },
   'emergency-authorization': { relevantTo: ['approvingAuthority'], why: 'Break-glass authority is exercised rarely and under pressure.' },
+  // Added at Phase 18.1 close-out, because the audit could not ask the question. Every governance
+  // capability rested on a single accountable body, `successionPlan()` returned a three-deep chain
+  // for each, and no exercise kind existed that would rehearse one — so "has ARB succession ever
+  // been tested" was not merely unanswered, it was unaskable. A gap nothing can express is a gap
+  // nothing reports.
+  'governance-succession': { relevantTo: ['approvingAuthority', 'responsibleAuthority'], why: 'A succession chain that has never been walked is a design, not a capability. The first time authority transfers should not be the first time anyone has tried.' },
 };
 const EXERCISE_VALIDITY_DAYS = 365;
 // How recently somebody must have acted for their experience to count as current.
@@ -896,7 +902,250 @@ function capabilityEvolution({ snapshots = [], evidence = [], periodDays = null,
   };
 }
 
+// --- Governance succession assurance (Phase 18.1 close-out remediation R6/R9) ---------------------
+//
+// Four things are routinely called "we have succession", and they are not the same thing. Conflating
+// any two of them is how an institution discovers during an outage that its plan was a diagram.
+//
+//   DOCUMENTED  a chain exists, with named holders at each level
+//   EXECUTABLE  every level resolves to a real accountable holder and the chain ends at a body
+//   REHEARSED   somebody has actually walked it, attested by a named human
+//   VERIFIED    a human recorded that the walk achieved authority transfer
+//
+// Each level requires the ones before it. None of them implies the one after. That asymmetry is the
+// whole point: DOCUMENTED is cheap and the platform has it everywhere; REHEARSED is expensive and
+// the platform has it nowhere. A control that reported "succession: yes" would be true of the first
+// and false of the last, and the reader would take the reassuring reading.
+//
+// SUCCESSION DESIGN IS NOT SUCCESSION PROOF.
+const SUCCESSION_ASSURANCE_LEVELS = {
+  DOCUMENTED: {
+    order: 1, establishedBy: 'machine', epistemic: 'RESOLVED',
+    means: 'A chain exists with a named holder at each level.',
+    doesNotEstablish: 'That any of those holders could actually take over.',
+  },
+  EXECUTABLE: {
+    order: 2, establishedBy: 'machine', epistemic: 'RESOLVED',
+    means: 'Every level resolves to a holder the accountability record knows, and the chain terminates at a body rather than a person.',
+    doesNotEstablish: 'That anybody has ever done it.',
+  },
+  REHEARSED: {
+    order: 3, establishedBy: 'record of a human act', epistemic: 'RESOLVED',
+    means: 'A governance-succession exercise is recorded, attested by a named human other than the participant.',
+    doesNotEstablish: 'That the rehearsal worked. An exercise can be run and fail.',
+  },
+  VERIFIED: {
+    order: 4, establishedBy: 'human judgement', epistemic: 'RESOLVED',
+    means: 'A named human recorded that the rehearsal achieved authority transfer at every level walked.',
+    doesNotEstablish: 'That it will work next time, with different people, under real pressure.',
+  },
+};
+const SUCCESSION_ASSURANCE_ORDER = ['DOCUMENTED', 'EXECUTABLE', 'REHEARSED', 'VERIFIED'];
+
+// The stages a governance-succession drill walks. Deterministic and synthetic: this describes a
+// rehearsal shape, and running it proves the shape is walkable — never that anyone has walked it.
+const SUCCESSION_STAGES = [
+  { stage: 'primary-unavailable', asks: 'The primary accountable office cannot act. Does the record say who is next?' },
+  { stage: 'first-successor-assumes', asks: 'Can the first successor assume the authority, and is the transfer recorded?' },
+  { stage: 'first-successor-unavailable', asks: 'The first successor also cannot act. Does the chain continue?' },
+  { stage: 'second-successor-assumes', asks: 'Can the second successor assume the authority?' },
+  { stage: 'second-successor-unavailable', asks: 'The second successor cannot act either. Is there a body to fall back to?' },
+  { stage: 'body-fallback', asks: 'Can the board sit as a body, and does quorum apply rather than a single signature?' },
+  { stage: 'authority-restored', asks: 'When the primary returns, does authority go back, and is the interregnum auditable?' },
+];
+
+// What a drill must exercise beyond the walk itself. Each is checked from the records rather than
+// asserted, and each says plainly what it cannot establish.
+const SUCCESSION_CHECKS = {
+  successionOrder: { asks: 'Is the order unambiguous and stable?', from: 'successionPlan()' },
+  authorityTransfer: { asks: 'Does each level hold the authority the previous one held?', from: 'the accountability record' },
+  raciChange: { asks: 'Does the RACI row change when authority moves?', from: 'raci.matrixFor()' },
+  decisionRights: { asks: 'Can the acting holder take the decisions the office takes?', from: 'raci activities' },
+  quorum: { asks: 'Does the body fallback require a quorum rather than one signature?', from: 'the chain basis' },
+  escalation: { asks: 'Does escalation still terminate at a board during the interregnum?', from: 'escalationPath()' },
+  decisionRecording: { asks: 'Is a decision taken under succession distinguishable from a normal one?', from: 'the governance decision record' },
+  evidenceCustody: { asks: 'Does custody of evidence survive the transfer?', from: 'the custody chain' },
+  auditTrail: { asks: 'Can the interregnum be reconstructed afterwards?', from: 'the recorded exercise' },
+  restoration: { asks: 'Does normal authority resume, or does the acting holder keep it by inertia?', from: 'the chain' },
+};
+
+// Walks a governance succession chain. Uses the shared first-break walker rather than a private one:
+// a succession chain IS a sequential assurance chain, and a second traversal engine here would be
+// the duplication ADR-0014 exists to prevent.
+function successionExercise(subsystem, { role = 'approvingAuthority', unavailable = [], exercises = null, now = 0 } = {}) {
+  const { assuranceChain, machineBoundary } = require('../assurance/epistemic');
+  const raci = require('./raci');
+  const plan = successionPlan(subsystem, role);
+  const o = OWNERSHIP[subsystem];
+  const boardName = BOARDS[o.governanceBoard].name;
+  const holders = plan.chain.map((c) => c.holder);
+  const out = new Set(unavailable);
+
+  // Everyone the accountability record actually knows about.
+  const known = new Set(subsystems().flatMap((s) => {
+    const d = describe(s);
+    return [d.operationalOwner, d.approvingAuthority, d.responsibleAuthority, d.dataSteward, d.board && d.board.name].filter(Boolean);
+  }));
+  // A deputy is named by rule rather than held as a subsystem role, so it is known if it is named.
+  for (const c of plan.chain) if (c.basis === 'named deputy' && c.holder) known.add(c.holder);
+
+  // Walk the stages. A stage resolves when the record answers it; it is BROKEN when the record
+  // answers it wrongly, and UNKNOWN when nothing in the record settles it.
+  const acting = () => holders.find((h) => !out.has(h)) || null;
+  const steps = SUCCESSION_STAGES.map((s) => {
+    const level = { 'first-successor-assumes': 1, 'second-successor-assumes': 2, 'body-fallback': 2 }[s.stage];
+    switch (s.stage) {
+      case 'primary-unavailable':
+      case 'first-successor-unavailable':
+      case 'second-successor-unavailable': {
+        const idx = { 'primary-unavailable': 0, 'first-successor-unavailable': 1, 'second-successor-unavailable': 2 }[s.stage];
+        const next = plan.chain[idx + 1] || null;
+        return {
+          step: s.stage, ...s,
+          state: next ? 'RESOLVED' : (plan.chain[idx].holder === boardName ? 'RESOLVED' : 'BROKEN'),
+          detail: next ? `next is '${next.holder}' (${next.basis})`
+            : plan.chain[idx].holder === boardName ? 'the chain has reached the body, which is the terminal authority'
+              : 'the chain runs out with no body behind it',
+          ifBroken: 'The chain ends in a person, so it can end in nobody.',
+          resolvedFrom: 'successionPlan()',
+        };
+      }
+      case 'first-successor-assumes':
+      case 'second-successor-assumes': {
+        const c = plan.chain[level];
+        const holder = c && c.holder;
+        return {
+          step: s.stage, ...s,
+          state: !holder ? 'BROKEN' : !known.has(holder) ? 'UNKNOWN' : out.has(holder) ? 'BROKEN' : 'RESOLVED',
+          detail: !holder ? 'no holder is named at this level'
+            : !known.has(holder) ? `'${holder}' is named and holds nothing the accountability record knows — whether they could assume the authority is unestablished`
+              : out.has(holder) ? `'${holder}' is also unavailable`
+                : `'${holder}' assumes the authority as ${c.basis}`,
+          ifBroken: 'Authority stops here and the office is unfilled.',
+          resolvedFrom: 'the accountability record',
+        };
+      }
+      case 'body-fallback': {
+        const terminal = plan.chain[plan.chain.length - 1];
+        const quorate = /quorum/.test(String(terminal.basis));
+        return {
+          step: s.stage, ...s,
+          state: !plan.terminatesAtBoard ? 'BROKEN' : quorate ? 'RESOLVED' : 'UNKNOWN',
+          detail: !plan.terminatesAtBoard ? 'the chain does not terminate at a body'
+            : quorate ? `'${terminal.holder}' sits as a body, quorum required — a quorate board and a chair acting alone are different authorities`
+              : `'${terminal.holder}' is the terminal authority and nothing states whether a quorum is required`,
+          ifBroken: 'The fallback is a person with a board\'s title.',
+          resolvedFrom: 'the chain basis',
+        };
+      }
+      case 'authority-restored': {
+        // Restoration is not a thing the record can settle. A chain says who acts while the primary
+        // is away; nothing in it says the primary gets the office back, and "acting" roles becoming
+        // permanent by inertia is a real institutional failure mode.
+        return {
+          step: s.stage, ...s,
+          state: 'UNKNOWN',
+          detail: 'nothing recorded states that authority returns to the primary, or how the interregnum is closed — a succession chain describes who acts, not how acting ends',
+          ifBroken: 'An acting holder keeps the office by inertia and nobody decided that.',
+          resolvedFrom: 'a recorded restoration procedure, which does not exist',
+        };
+      }
+      default:
+        return { step: s.stage, ...s, state: 'UNKNOWN', detail: 'unrecognised stage', ifBroken: null, resolvedFrom: null };
+    }
+  });
+
+  const walk = assuranceChain(steps, { subject: `${subsystem}/${role}`, now });
+
+  // The four levels. Each is established independently; none is inferred from another.
+  const documented = plan.chain.length > 0 && plan.chain.every((c) => !!c.holder);
+  const executable = documented && plan.chain.every((c) => known.has(c.holder)) && plan.terminatesAtBoard;
+  const rehearsalRecords = exercises && typeof exercises.participation === 'function'
+    ? exercises.participation().filter((r) => r.exercise === 'governance-succession')
+    : [];
+  const rehearsed = rehearsalRecords.length > 0;
+  // A rehearsal that HAPPENED is not a rehearsal that WORKED, and that gap is where the two top
+  // levels differ. REHEARSED counts any recorded walk, including one that failed — a failed drill is
+  // evidence and belongs in the record. VERIFIED needs a completed outcome attested by somebody
+  // other than the person who took part, because self-reported success attests nothing.
+  const verifiedRecords = rehearsalRecords.filter((r) => r.outcome === 'completed' && r.by && r.by !== r.person);
+  const verified = verifiedRecords.length > 0;
+
+  const attained = executable ? (rehearsed ? (verified ? 'VERIFIED' : 'REHEARSED') : 'EXECUTABLE') : documented ? 'DOCUMENTED' : null;
+  const nextLevel = attained ? SUCCESSION_ASSURANCE_ORDER[SUCCESSION_ASSURANCE_ORDER.indexOf(attained) + 1] || null : 'DOCUMENTED';
+
+  return {
+    subsystem, role, plan, stages: walk.steps, walk,
+    levels: SUCCESSION_ASSURANCE_ORDER.map((id) => ({
+      level: id, ...SUCCESSION_ASSURANCE_LEVELS[id],
+      attained: SUCCESSION_ASSURANCE_LEVELS[id].order <= (attained ? SUCCESSION_ASSURANCE_LEVELS[attained].order : 0),
+    })),
+    documented, executable, rehearsed, verified,
+    attainedLevel: attained, nextLevel,
+    rehearsalCount: rehearsalRecords.length,
+    checks: Object.entries(SUCCESSION_CHECKS).map(([check, c]) => ({ check, ...c })),
+    // The RACI row moves with the authority; reported so a reader can see it does.
+    raciUnderSuccession: (() => {
+      try {
+        const m = raci.matrixFor(subsystem);
+        return { subsystem, activities: m.rows.length, accountableNow: plan.chain[0].holder, accountableIfUnavailable: plan.chain[1].holder };
+      } catch (_) { return null; }
+    })(),
+    escalationStillTerminates: (() => { try { return escalationPath(subsystem).terminatesAt === o.governanceBoard; } catch (_) { return null; } })(),
+    contiguousNavigableDepth: walk.contiguousNavigableDepth,
+    resolvedCount: walk.resolvedCount,
+    stoppedAt: walk.stoppedAt,
+    ...machineBoundary({
+      observed: [
+        'whether a chain exists and names a holder at every level',
+        'whether each named holder appears in the accountability record',
+        'whether the chain terminates at a body and whether quorum is stated',
+        'whether any governance-succession exercise has been recorded',
+      ],
+      judged: [
+        'whether a rehearsal actually achieved authority transfer',
+        'whether the people named would in fact act under real pressure',
+        'whether an interregnum was closed properly',
+      ],
+    }),
+    now, informationalOnly: true, authorizes: false,
+    note: 'DOCUMENTED, EXECUTABLE, REHEARSED and VERIFIED are established separately and none implies the next. A chain that walks cleanly on paper proves the paper, and this platform has never recorded a governance-succession rehearsal — so no subsystem is above EXECUTABLE, and reporting one as resilient on the strength of its diagram would be the substitution this whole model exists to refuse.',
+  };
+}
+
+// Every subsystem's succession assurance, weakest-first. Nothing aggregates to a score.
+function successionAssurance({ role = 'approvingAuthority', exercises = null, now = 0 } = {}) {
+  const rows = subsystems().map((s) => {
+    const r = successionExercise(s, { role, exercises, now });
+    return {
+      subsystem: s, attainedLevel: r.attainedLevel, nextLevel: r.nextLevel,
+      documented: r.documented, executable: r.executable, rehearsed: r.rehearsed, verified: r.verified,
+      contiguousNavigableDepth: r.contiguousNavigableDepth, stoppedAt: r.stoppedAt,
+      rehearsalCount: r.rehearsalCount,
+    };
+  });
+  const at = (level) => rows.filter((r) => r.attainedLevel === level).map((r) => r.subsystem);
+  return {
+    role, subsystems: rows, count: rows.length,
+    levels: SUCCESSION_ASSURANCE_ORDER.map((id) => ({ level: id, ...SUCCESSION_ASSURANCE_LEVELS[id], subsystems: at(id) })),
+    documented: rows.filter((r) => r.documented).length,
+    executable: rows.filter((r) => r.executable).length,
+    rehearsed: rows.filter((r) => r.rehearsed).length,
+    verified: rows.filter((r) => r.verified).length,
+    neverRehearsed: rows.filter((r) => !r.rehearsed).map((r) => r.subsystem),
+    // The weakest level any subsystem has reached. Never a mean, never a percentage.
+    weakestLevel: SUCCESSION_ASSURANCE_ORDER.find((l) => rows.some((r) => r.attainedLevel === l)) || null,
+    basis: rows.length
+      ? `${rows.filter((r) => r.documented).length} documented, ${rows.filter((r) => r.executable).length} executable, ${rows.filter((r) => r.rehearsed).length} rehearsed, ${rows.filter((r) => r.verified).length} verified, of ${rows.length} subsystem(s).`
+      : 'No subsystem was examined.',
+    now, informationalOnly: true, authorizes: false,
+    note: 'A documented chain is not a rehearsed one. This platform has recorded no governance-succession rehearsal, so the rehearsed and verified counts are zero and are reported as zero rather than omitted.',
+  };
+}
+
 module.exports = {
+  SUCCESSION_ASSURANCE_LEVELS, SUCCESSION_ASSURANCE_ORDER, SUCCESSION_STAGES, SUCCESSION_CHECKS,
+  successionExercise, successionAssurance,
   CAPABILITY_DOMAINS, CAPABILITY_LEVELS, CAPABILITY_ORDER, capabilityMaturity, maturityEvolution, capabilityEvolution,
   OWNERSHIP, BOARDS, ROLES, DEPUTY_ROLES, DEPUTY_RULE, DEPUTY_OVERRIDES, REVIEW_CADENCE_DAYS,
   subsystems, describe, boards, escalationPath, accountabilityFor, validate, model,

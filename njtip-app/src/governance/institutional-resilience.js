@@ -1193,6 +1193,150 @@ const GOVERNANCE_CAPABILITIES = {
   },
 };
 
+// --- Governance capability drift (Phase 18.1 close-out debt) --------------------------------------
+//
+// GOVERNANCE_CAPABILITIES is hand-declared, and the close-out audit recorded the consequence
+// honestly: nothing noticed a sixth governance capability being built and left out of the list. A
+// register that silently under-reports is worse than one that reports nothing, because its
+// completeness is assumed.
+//
+// The obvious fix — derive membership from the bounded context — was tried and rejected on the
+// evidence. 83 controls sit in the `assurance` and `governance-oversight` contexts and 10 are
+// claimed by a governance capability. Sweeping in all 83 would not make the register authoritative;
+// it would make "governance capability" mean "anything in two contexts", which is not a capability
+// model at all.
+//
+// So the declaration stays explicit and drift is DETECTED instead, from the one thing that is
+// actually derivable: which controls exercise a module a governance capability claims. A control
+// that requires `src/architecture/adr-governance.js` is governance machinery whether or not anybody
+// remembered to add it. That is read from the source rather than inferred from a name, because a
+// naming convention is a convention and a require is a fact.
+const CAPABILITY_DRIFT_KINDS = {
+  UNDECLARED_CAPABILITY_MEMBER: {
+    epistemic: 'UNKNOWN', requiresGovernanceReview: true, blocking: false,
+    means: 'A control exercises a module a governance capability claims, and no capability claims the control. Either the capability list is stale or the control belongs somewhere else — a machine cannot tell which.',
+  },
+  STALE_CONTROL_REFERENCE: {
+    epistemic: 'BROKEN', requiresGovernanceReview: false, blocking: false,
+    means: 'A capability declares a control that does not exist. Checked, and wrong.',
+  },
+  STALE_MODULE_REFERENCE: {
+    epistemic: 'BROKEN', requiresGovernanceReview: false, blocking: false,
+    means: 'A capability declares a module that is not on disk.',
+  },
+  DUPLICATE_CLAIM: {
+    epistemic: 'UNKNOWN', requiresGovernanceReview: true, blocking: false,
+    means: 'Two capabilities claim the same control. Shared machinery is legitimate; two capabilities being one capability is not, and only a human can say which this is.',
+  },
+  EMPTY_DECLARATION: {
+    epistemic: 'BROKEN', requiresGovernanceReview: false, blocking: false,
+    means: 'A capability declares no control or no module, so nothing about it can be verified.',
+  },
+};
+
+// Which controls exercise which module, read from the fitness source. Deterministic, and narrow on
+// purpose: it answers "does this control require this file", not "does this control matter to this
+// capability", which is a judgement.
+function controlsExercisingModules(modules = []) {
+  const fs2 = require('fs');
+  const path2 = require('path');
+  const root = path2.join(__dirname, '..', '..');
+  const sources = ['verification/app-fitness.js', 'verification/infra-fitness.js']
+    .map((f) => path2.join(root, f)).filter((f) => fs2.existsSync(f));
+  const wanted = modules.map((m) => m.replace(/^src\//, '').replace(/\.js$/, ''));
+  const byControl = new Map();
+  for (const file of sources) {
+    const text = fs2.readFileSync(file, 'utf8');
+    // Split on the control declarations themselves. Each block runs to the next one.
+    const marks = [...text.matchAll(/^ {2}fit\('([A-Z0-9-]+)'/gm)];
+    for (let i = 0; i < marks.length; i += 1) {
+      const id = marks[i][1];
+      const block = text.slice(marks[i].index, i + 1 < marks.length ? marks[i + 1].index : text.length);
+      const hits = wanted.filter((m) => block.includes(`/${m}'`) || block.includes(`/${m}")`) || block.includes(`${m}'`));
+      if (hits.length) byControl.set(id, [...new Set(hits)]);
+    }
+  }
+  return byControl;
+}
+
+function governanceCapabilityDrift({ controls = [], capabilities = GOVERNANCE_CAPABILITIES, now = 0 } = {}) {
+  const fs2 = require('fs');
+  const path2 = require('path');
+  const { EPISTEMIC_STATES, weakest, machineBoundary } = require('../assurance/epistemic');
+  const root = path2.join(__dirname, '..', '..');
+  const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
+  const entries = Object.entries(capabilities);
+
+  const declaredControls = new Map();
+  for (const [id, spec] of entries) {
+    for (const c of spec.controls || []) {
+      if (!declaredControls.has(c)) declaredControls.set(c, []);
+      declaredControls.get(c).push(id);
+    }
+  }
+  const declaredModules = [...new Set(entries.flatMap(([, s]) => s.modules || []))];
+  const exercising = controlsExercisingModules(declaredModules);
+
+  const findings = [];
+  const add = (kind, detail, subject) => findings.push({ kind, subject, ...CAPABILITY_DRIFT_KINDS[kind], detail });
+
+  for (const [id, spec] of entries) {
+    if (!(spec.controls || []).length || !(spec.modules || []).length) {
+      add('EMPTY_DECLARATION', `'${id}' declares ${(spec.controls || []).length} control(s) and ${(spec.modules || []).length} module(s)`, id);
+    }
+    for (const c of spec.controls || []) {
+      if (ran.size && !ran.has(c)) add('STALE_CONTROL_REFERENCE', `'${id}' declares control '${c}', which did not run`, id);
+    }
+    for (const m of spec.modules || []) {
+      if (!fs2.existsSync(path2.join(root, m))) add('STALE_MODULE_REFERENCE', `'${id}' declares module '${m}', which is not on disk`, id);
+    }
+  }
+  for (const [control, owners] of declaredControls) {
+    if (owners.length > 1) add('DUPLICATE_CLAIM', `'${control}' is claimed by ${owners.join(' and ')}`, control);
+  }
+  // The finding the close-out debt was actually about.
+  for (const [control, modules] of exercising) {
+    if (!declaredControls.has(control)) {
+      add('UNDECLARED_CAPABILITY_MEMBER', `'${control}' exercises ${modules.join(', ')} and no governance capability claims it`, control);
+    }
+  }
+
+  const byKind = Object.fromEntries(Object.keys(CAPABILITY_DRIFT_KINDS).map((k) => [k, findings.filter((f) => f.kind === k).length]));
+  const state = findings.length ? weakest(findings.map((f) => CAPABILITY_DRIFT_KINDS[f.kind].epistemic)) : 'RESOLVED';
+  return {
+    findings, count: findings.length, byKind,
+    kinds: Object.entries(CAPABILITY_DRIFT_KINDS).map(([kind, k]) => ({ kind, ...k })),
+    epistemicStates: Object.entries(EPISTEMIC_STATES).map(([s2, e]) => ({ state: s2, ...e })),
+    state,
+    declaredCapabilities: entries.map(([id]) => id),
+    declaredControlCount: declaredControls.size,
+    modulesWatched: declaredModules,
+    controlsExercisingWatchedModules: [...exercising.keys()],
+    undeclared: findings.filter((f) => f.kind === 'UNDECLARED_CAPABILITY_MEMBER').map((f) => f.subject),
+    requiresGovernanceReview: findings.some((f) => f.requiresGovernanceReview),
+    // Drift is reported, never repaired. Adding a control to a capability is a statement about what
+    // the capability IS, and that is a declaration somebody makes rather than one a checker infers.
+    blocksInstitutionalReadiness: false,
+    ...machineBoundary({
+      observed: [
+        'a declared control that did not run',
+        'a declared module that is not on disk',
+        'the same control claimed by two capabilities',
+        'a control that requires a watched module and is claimed by nobody',
+      ],
+      judged: [
+        'whether an unclaimed control belongs to an existing capability, to a new one, or to neither',
+        'whether two capabilities claiming one control are actually one capability',
+      ],
+    }),
+    basis: findings.length
+      ? `${findings.length} drift finding(s): ${Object.entries(byKind).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')}.`
+      : `no drift: ${declaredControls.size} declared control(s), ${declaredModules.length} watched module(s), and every control exercising a watched module is claimed.`,
+    now, informationalOnly: true, authorizes: false,
+    note: 'The declaration stays explicit because deriving governance-capability membership from the bounded context would sweep in 83 controls and make the term mean "anything in two contexts". What is derived instead is drift: which controls exercise a watched module and are claimed by nobody. That is reported for a human to place, never placed automatically.',
+  };
+}
+
 // Applies the invariant's single-point clause to the platform's own governance machinery.
 // Deterministic, fail-closed on missing evidence, and it authorises nothing.
 function governanceCapabilityResilience({ controls = [], capabilities = GOVERNANCE_CAPABILITIES, now = 0 } = {}) {
@@ -1442,6 +1586,7 @@ function report({ continuity = null, controls = [], acceptances = null, now = 0,
 
 module.exports = {
   GOVERNANCE_RESILIENCE_STATES, SINGLE_POINT_KINDS, GOVERNANCE_CAPABILITIES, governanceCapabilityResilience,
+  CAPABILITY_DRIFT_KINDS, controlsExercisingModules, governanceCapabilityDrift,
   DEPENDENCY_KINDS, DEPENDENCY_CATEGORIES, CRITICAL_CAPABILITIES, categoryOfKind,
   serviceResilience, regionResilience, personResilience, documentResilience, structuralResilience,
   dataResilience, knowledgeResilience, facilityResilience, legalAuthorityResilience, governanceResilience,

@@ -11883,6 +11883,174 @@ module.exports = [
     }).ordered)) v.push('decision package ordering is not deterministic');
   }),
 
+  fit('APP-FIT-GOVERNANCE-SUCCESSION', 'A documented succession chain is not a rehearsed one, and this platform has never rehearsed one', (v) => {
+    const own = require('../src/governance/ownership');
+
+    // --- Four levels, and none of them implies the next ---------------------------------------
+    for (const required of ['DOCUMENTED', 'EXECUTABLE', 'REHEARSED', 'VERIFIED']) {
+      if (!own.SUCCESSION_ASSURANCE_LEVELS[required]) v.push(`succession assurance level '${required}' is not defined`);
+    }
+    for (const [id, l] of Object.entries(own.SUCCESSION_ASSURANCE_LEVELS)) {
+      if (!l.means || !l.doesNotEstablish) v.push(`level '${id}' does not state what it means or what it fails to establish`);
+      if (!['machine', 'record of a human act', 'human judgement'].includes(l.establishedBy)) v.push(`level '${id}' does not say how it is established`);
+    }
+    // The two top levels cannot both be machine-established, or the distinction is decorative.
+    if (own.SUCCESSION_ASSURANCE_LEVELS.VERIFIED.establishedBy !== 'human judgement') {
+      v.push('VERIFIED succession is established by a machine — whether a rehearsal achieved authority transfer is a judgement');
+    }
+    // A governance-succession exercise kind must exist, or the gap is unaskable rather than open.
+    if (!own.EXERCISE_KINDS['governance-succession']) {
+      v.push('no governance-succession exercise kind exists, so "has succession ever been rehearsed" cannot be asked at all');
+    }
+
+    // --- The chain walks, and stops where the record stops ------------------------------------
+    const walked = own.successionExercise('assurance', { now: 0 });
+    if (own.SUCCESSION_STAGES.length !== 7) v.push('the succession drill does not walk seven stages');
+    if (walked.stages.length !== own.SUCCESSION_STAGES.length) v.push('a declared succession stage was not walked');
+    if (!walked.documented) v.push('the assurance subsystem has no documented succession chain');
+    if (!walked.executable) v.push('a documented chain names a holder the accountability record does not know');
+    // THE FINDING, asserted rather than smoothed. If this ever fails, somebody has recorded a
+    // rehearsal — which is good news, and the control should then be updated deliberately.
+    if (walked.rehearsed) v.push('a governance-succession rehearsal is recorded and this control still asserts none exists — update the control deliberately rather than letting it drift');
+    if (walked.attainedLevel !== 'EXECUTABLE') v.push(`succession assurance for 'assurance' reports '${walked.attainedLevel}' rather than EXECUTABLE`);
+    if (walked.nextLevel !== 'REHEARSED') v.push('the next unattained succession level is not reported');
+
+    // --- Restoration is not something the record settles ---------------------------------------
+    const restore = walked.stages.find((s) => s.step === 'authority-restored');
+    if (!restore || restore.state !== 'UNKNOWN') v.push('authority restoration was reported as established — a succession chain says who acts, not how acting ends');
+    if (walked.contiguousNavigableDepth !== 6) v.push(`the succession walk reported depth ${walked.contiguousNavigableDepth} rather than stopping at restoration`);
+    if (walked.stoppedAt !== 'authority-restored') v.push(`the walk stopped at '${walked.stoppedAt}'`);
+
+    // --- Every level is reachable, and they are distinct ---------------------------------------
+    const reg = (recs) => { const e = new own.ExerciseRegister({ clock: () => 0 }); recs.forEach((r) => e.recordParticipation(r)); return e; };
+    const drill = { person: 'ARB Vice-Chair', exercise: 'governance-succession', at: 0 };
+    const failed = own.successionExercise('assurance', { exercises: reg([{ ...drill, by: 'Oversight Board', outcome: 'failed' }]), now: 0 });
+    if (failed.attainedLevel !== 'REHEARSED') v.push(`a recorded but failed drill reported '${failed.attainedLevel}' — a failed rehearsal is evidence and belongs in the record`);
+    if (failed.verified) v.push('a failed rehearsal was reported as verified');
+    const passed = own.successionExercise('assurance', { exercises: reg([{ ...drill, by: 'Oversight Board', outcome: 'completed' }]), now: 0 });
+    if (passed.attainedLevel !== 'VERIFIED') v.push(`an attested completed drill reported '${passed.attainedLevel}' — a level nothing can reach is not a level`);
+    const selfAttested = own.successionExercise('assurance', { exercises: reg([{ ...drill, by: 'ARB Vice-Chair', outcome: 'completed' }]), now: 0 });
+    if (selfAttested.verified) v.push('a self-attested rehearsal reached VERIFIED — self-reported success attests nothing');
+
+    // --- Failure at each level is detectable ---------------------------------------------------
+    const chain = walked.plan.chain.map((c) => c.holder);
+    const primaryOut = own.successionExercise('assurance', { unavailable: [chain[0]], now: 0 });
+    if (primaryOut.stages.find((s) => s.step === 'first-successor-assumes').state !== 'RESOLVED') {
+      v.push('the first successor could not assume authority when the primary was unavailable');
+    }
+    const twoOut = own.successionExercise('assurance', { unavailable: [chain[0], chain[1]], now: 0 });
+    if (twoOut.stages.find((s) => s.step === 'first-successor-assumes').state !== 'BROKEN') {
+      v.push('an unavailable first successor was not reported as broken at their own stage');
+    }
+    const allOut = own.successionExercise('assurance', { unavailable: chain, now: 0 });
+    if (allOut.stages.find((s) => s.step === 'second-successor-assumes').state !== 'BROKEN') {
+      v.push('a chain with every holder unavailable still reported the body assuming authority');
+    }
+
+    // --- Quorum, escalation and RACI move with the authority ----------------------------------
+    const body = walked.stages.find((s) => s.step === 'body-fallback');
+    if (body.state !== 'RESOLVED' || !/quorum/i.test(body.detail)) v.push('the body fallback does not require a quorum — a quorate board and a chair acting alone are different authorities');
+    // Structural, because no behavioural fixture exists: all thirty chains state a quorum, so a
+    // mutation making the stage unconditionally RESOLVED is invisible to any input this estate can
+    // produce. What must hold is that the stage is DERIVED from whether the chain terminates at a
+    // body and whether a quorum is stated, rather than asserted. A stage that cannot report anything
+    // but success is not a check.
+    const ownSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'governance', 'ownership.js'), 'utf8');
+    const fallbackIdx = ownSrc.indexOf("case 'body-fallback':");
+    const fallbackBlock = fallbackIdx > 0 ? ownSrc.slice(fallbackIdx, fallbackIdx + 900) : '';
+    const stateLine = (fallbackBlock.match(/state: [^\n]+/) || [''])[0];
+    if (!/terminatesAtBoard/.test(stateLine)) v.push('the body-fallback stage does not derive its state from whether the chain terminates at a body');
+    if (!/quorate/.test(stateLine)) v.push('the body-fallback stage does not derive its state from whether a quorum is stated — it would report success for a board that is a person with a title');
+    if (!/const quorate = /.test(fallbackBlock)) v.push('the body-fallback stage does not compute whether a quorum is required');
+    if (walked.escalationStillTerminates !== true) v.push('escalation does not still terminate at a board during an interregnum');
+    if (!walked.raciUnderSuccession || walked.raciUnderSuccession.accountableIfUnavailable === walked.raciUnderSuccession.accountableNow) {
+      v.push('the RACI accountable party does not change when authority moves');
+    }
+    if (Object.keys(own.SUCCESSION_CHECKS).length < 10) v.push('the succession drill declares fewer than the ten checks it must exercise');
+
+    // --- The estate-wide picture, and its refusals ---------------------------------------------
+    const estate = own.successionAssurance({ now: 0 });
+    if (estate.count !== 30) v.push('not every bounded context was examined for succession');
+    if (estate.rehearsed !== 0) v.push('a rehearsal count above zero contradicts an estate with no recorded exercises');
+    if (estate.weakestLevel !== 'EXECUTABLE') v.push(`the weakest succession level across the estate is '${estate.weakestLevel}'`);
+    if (/\d+\s?%|percent/.test(estate.basis)) v.push('succession assurance was rendered as a percentage');
+    if (estate.authorizes !== false || walked.authorizes !== false) v.push('a succession report claims authority');
+    if (walked.producesInstitutionalVerdict !== false) v.push('a succession report claims an institutional verdict');
+  }),
+
+  fit('APP-FIT-GOVERNANCE-CAPABILITY-DRIFT', 'A governance capability nobody declared is reported, not adopted', (v) => {
+    const ir = require('../src/governance/institutional-resilience');
+    const ep = require('../src/assurance/epistemic');
+    const controls = [
+      ...require('./app-fitness').map((f) => ({ id: f.id, pass: true })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id, pass: true })),
+    ];
+
+    // --- Five drift kinds, and what each one costs ---------------------------------------------
+    for (const required of ['UNDECLARED_CAPABILITY_MEMBER', 'STALE_CONTROL_REFERENCE', 'STALE_MODULE_REFERENCE', 'DUPLICATE_CLAIM', 'EMPTY_DECLARATION']) {
+      if (!ir.CAPABILITY_DRIFT_KINDS[required]) v.push(`drift kind '${required}' is not detected`);
+    }
+    for (const [id, k] of Object.entries(ir.CAPABILITY_DRIFT_KINDS)) {
+      if (!k.means) v.push(`drift kind '${id}' does not say what it means`);
+      if (!ep.EPISTEMIC_STATES[k.epistemic]) v.push(`drift kind '${id}' maps to no epistemic state`);
+      if (k.blocking) v.push(`drift kind '${id}' blocks the build — placing a control in a capability is a declaration somebody makes, not one a checker infers`);
+    }
+    // The two that need a human are the two a machine genuinely cannot settle.
+    if (!ir.CAPABILITY_DRIFT_KINDS.UNDECLARED_CAPABILITY_MEMBER.requiresGovernanceReview) {
+      v.push('an unclaimed control needs no human — but whether it belongs to an existing capability, a new one, or neither is exactly a judgement');
+    }
+    if (ir.CAPABILITY_DRIFT_KINDS.STALE_CONTROL_REFERENCE.epistemic !== 'BROKEN') v.push('a declared control that does not exist is not reported as broken');
+    if (ir.CAPABILITY_DRIFT_KINDS.UNDECLARED_CAPABILITY_MEMBER.epistemic !== 'UNKNOWN') v.push('an unclaimed control is reported as broken rather than unknown — nobody having placed it is not a defect in it');
+
+    const drift = ir.governanceCapabilityDrift({ controls, now: 0 });
+    if (drift.blocksInstitutionalReadiness) v.push('governance capability drift blocks institutional readiness');
+    if (drift.authorizes !== false) v.push('the drift report claims authority');
+
+    // --- THE POINT: each kind is actually detectable -------------------------------------------
+    const probe = (caps) => ir.governanceCapabilityDrift({ controls, capabilities: caps, now: 0 });
+    const real = { controls: ['APP-FIT-EPISTEMIC-INTEGRITY'], modules: ['src/assurance/epistemic.js'], title: 't' };
+
+    const stale = probe({ a: { ...real, controls: ['APP-FIT-DOES-NOT-EXIST'] } });
+    if (!stale.byKind.STALE_CONTROL_REFERENCE) v.push('a capability declaring a control that did not run was not detected');
+    const staleModule = probe({ a: { ...real, modules: ['src/assurance/nowhere.js'] } });
+    if (!staleModule.byKind.STALE_MODULE_REFERENCE) v.push('a capability declaring a module that is not on disk was not detected');
+    const empty = probe({ a: { title: 't', controls: [], modules: [] } });
+    if (!empty.byKind.EMPTY_DECLARATION) v.push('a capability declaring nothing was not detected');
+    const dup = probe({ a: real, b: { ...real, title: 'u' } });
+    if (!dup.byKind.DUPLICATE_CLAIM) v.push('two capabilities claiming one control was not detected');
+    // Undeclared: a watched module exercised by controls no capability claims.
+    const undeclared = probe({ a: { title: 't', controls: ['APP-FIT-EPISTEMIC-INTEGRITY'], modules: ['src/architecture/adr-governance.js'] } });
+    if (!undeclared.byKind.UNDECLARED_CAPABILITY_MEMBER) v.push('a control exercising a watched module and claimed by nobody was not detected — this is the debt the control exists for');
+
+    // --- A complete declaration reports clean, or the control is one nothing can pass ----------
+    // The claim set is built from the controls that actually exercise the module, which is what a
+    // complete declaration means. Hand-listing them made the fixture wrong the first time: raci.js
+    // is exercised by two controls and the fixture claimed one, so the detector correctly reported
+    // drift against a fixture asserting there was none.
+    const watched = 'src/governance/raci.js';
+    const complete = [...ir.controlsExercisingModules([watched]).keys()];
+    const clean = probe({ solo: { title: 't', controls: complete, modules: [watched] } });
+    if (clean.count !== 0) {
+      v.push(`a capability claiming every control that exercises its module reported ${clean.count} drift finding(s): ${clean.findings.map((f) => f.kind).join(', ')} — a control nothing can pass proves nothing`);
+    }
+    if (clean.state !== 'RESOLVED') v.push('a complete declaration did not report resolved');
+    if (!complete.length) v.push('no control exercises the watched module, so the clean case is vacuous');
+
+    // --- Derivation is not adoption ------------------------------------------------------------
+    // The detector must not quietly widen the declared set. Membership is a statement about what a
+    // capability IS, and nothing here may make it.
+    const before = Object.keys(ir.GOVERNANCE_CAPABILITIES).length;
+    ir.governanceCapabilityDrift({ controls, now: 0 });
+    if (Object.keys(ir.GOVERNANCE_CAPABILITIES).length !== before) v.push('running drift detection changed the declared capability set');
+    for (const id of drift.undeclared) {
+      if (Object.values(ir.GOVERNANCE_CAPABILITIES).some((c) => (c.controls || []).includes(id))) {
+        v.push(`'${id}' is reported as undeclared and is declared — the report contradicts the register`);
+      }
+    }
+    if (!drift.machineDetectable || !drift.humanJudgementRequired) v.push('the drift report does not state which findings are observed and which need a human');
+    if (/\d+\s?%|percent/.test(drift.basis)) v.push('capability drift was rendered as a percentage');
+  }),
+
   fit('APP-FIT-SYNTHETIC-CORPUS', 'The requirement corpus is synthetic, says so, and exercises every state the dashboard can report', (v) => {
     const adr = require('../src/architecture/adr-governance');
     const controls = [
