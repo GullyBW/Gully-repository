@@ -259,3 +259,97 @@ reviewed them.
 
 Live: `GET /api/governance/governance-resilience` (oversight-board — a finding that escalates to a
 board is read by that board).
+
+## Capability evidence quality (Stage A)
+
+The `evidenceQuality` maturity dimension was a stub. It read *"grading them against evidence quality
+is not yet wired to this registry"* and counted controls — which is the specific failure the
+dimension exists to prevent. Five weak controls are not better evidence than one authoritative one,
+and ten stale references are not twice as good as five.
+
+Ten dimensions, never summed: presence · authority · provenance · freshness · integrity ·
+completeness · reproducibility · consistency · scope · ownership. Five grades:
+
+```
+NO_EVIDENCE    nothing supports the claim — an absence in the record   → UNKNOWN
+WEAK           somebody looked and found little                        → UNKNOWN
+INCOMPLETE     part of what the claim requires is covered              → UNKNOWN
+CONFLICTING    the pieces contradict each other                        → BROKEN
+AUTHORITATIVE  present, attributable, traceable, consistent            → RESOLVED
+```
+
+`NO_EVIDENCE` and `WEAK` are kept apart because nobody having looked is a different institutional
+fact from somebody having looked and found little. `CONFLICTING` is the grade most often lost:
+contradictory evidence gets averaged into "partial" and the contradiction disappears.
+
+Aggregation is to the **weakest** dimension. Nine authoritative dimensions do not pay for one
+conflicting one, and no single score is produced. **Evidence never promotes a capability** — the
+grader reports, the lifecycle decides state, and `OPERATIONAL` remains machine-unreachable.
+
+## Capability ↔ module reverse index (Stage B)
+
+The registry always answered *which modules implement this capability*. Nothing answered the
+reverse, and the reverse is where drift lives. Five findings:
+
+```
+MISSING_MODULE            a claimed module is not on disk              → BROKEN
+UNIMPLEMENTED_CAPABILITY  no module where implementation is required   → BROKEN
+DUPLICATE_MAPPING         the same module declared twice               → BROKEN
+ORPHAN_MODULE             a watched module no capability claims        → UNKNOWN
+SHARED_MODULE             one module serving several capabilities      → UNKNOWN
+```
+
+Orphans are reported only over **watched paths** the caller declares: scanning the whole tree would
+report every file as an orphan, which is true and useless. The index is a **traceability**
+mechanism — `establishesVerification` is `false`, because a module existing says nothing about
+whether the capability works.
+
+## Business ↔ platform cross-axis mapping (Stage C)
+
+Governed by [ADR-0013](./adr/0013-two-capability-axes-and-capability-centric-planning.md): the axes
+relate without merging. Mappings are **declared, never inferred** — deriving one from name
+similarity would be the "similarity is a verdict" error Phase 18.1 Part 4 forbids. A declaration
+naming no declarer is refused as an inference.
+
+Five relations (`supports`, `enables`, `depends-on`, `governed-by`, `evidenced-by`) and five states:
+
+```
+MAPPED                  a declared relationship                        → RESOLVED
+INTENTIONALLY_UNMAPPED  recorded as deliberately unmapped, with reason → RESOLVED
+MAPPING_REQUIRED        something requires a mapping and none exists   → BROKEN
+AMBIGUOUS               structural similarity nobody has declared      → UNKNOWN
+UNMAPPED                no mapping and no statement that none is wanted → UNKNOWN
+```
+
+One-to-many and many-to-one are both legitimate. Lack of a mapping is **not** a failure unless a
+requirement says it must be mapped.
+
+## Governance succession assurance
+
+Four things get called "we have succession" and they are not the same thing:
+
+```
+DOCUMENTED  a chain exists with a named holder at each level     machine
+EXECUTABLE  every holder is known and the chain ends at a body   machine
+REHEARSED   somebody walked it, attested by a named human        record of a human act
+VERIFIED    a human recorded that authority actually transferred human judgement
+```
+
+Each requires the ones before it; **none implies the one after**. The estate reports **30 documented,
+30 executable, 0 rehearsed, 0 verified**. The drill walks seven stages and stops at six: the
+seventh, `authority-restored`, is UNKNOWN and stays UNKNOWN, because a succession chain says who
+acts while the primary is away and nothing says how acting ends.
+
+**SUCCESSION DESIGN IS NOT SUCCESSION PROOF.**
+
+## Governance capability drift
+
+`GOVERNANCE_CAPABILITIES` stays explicitly declared. Deriving membership from the bounded context
+was tried and rejected on the evidence: 83 controls sit in the two governance contexts and 10 are
+claimed, so sweeping them in would make "governance capability" mean "anything in two contexts".
+
+What is derived instead is **drift** — which controls require a module a capability claims, read
+from the source, because a require is a fact and a naming convention is a convention. Current
+state: **35 findings** (33 undeclared members, 2 duplicate claims), UNKNOWN, governance review
+required, blocking nothing. Placing a control in a capability is a statement about what the
+capability *is*, so the detector reports rather than adopts.

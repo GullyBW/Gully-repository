@@ -11883,6 +11883,208 @@ module.exports = [
     }).ordered)) v.push('decision package ordering is not deterministic');
   }),
 
+  fit('APP-FIT-CAPABILITY-EVIDENCE-QUALITY', 'Evidence is graded across ten dimensions and never counted, and no grade promotes a capability', (v) => {
+    const cap = require('../src/capability/model');
+    const ep = require('../src/assurance/epistemic');
+
+    // --- Ten dimensions, five grades -----------------------------------------------------------
+    if (Object.keys(cap.EVIDENCE_QUALITY_DIMENSIONS).length !== 10) v.push('evidence quality does not carry exactly ten dimensions');
+    for (const [id, d] of Object.entries(cap.EVIDENCE_QUALITY_DIMENSIONS)) {
+      if (!d.asks || !d.asks.endsWith('?') || !d.ifUnknown) v.push(`evidence dimension '${id}' does not state its question or what not knowing it costs`);
+    }
+    for (const required of ['NO_EVIDENCE', 'WEAK', 'INCOMPLETE', 'CONFLICTING', 'AUTHORITATIVE']) {
+      if (!cap.EVIDENCE_GRADES[required]) v.push(`evidence grade '${required}' is not defined`);
+    }
+    // The two most often merged. Nobody having looked is a different fact from having looked and
+    // found little, and only one of them tells you the evidence was examined.
+    if (cap.EVIDENCE_GRADES.NO_EVIDENCE.humanJudgementNeeded === cap.EVIDENCE_GRADES.WEAK.humanJudgementNeeded) {
+      v.push('NO_EVIDENCE and WEAK carry identical semantics — an absence and a thin finding are different institutional facts');
+    }
+    if (cap.EVIDENCE_GRADES.CONFLICTING.epistemic !== 'BROKEN') v.push('contradictory evidence is not reported as broken');
+    if (cap.EVIDENCE_GRADES.NO_EVIDENCE.epistemic !== 'UNKNOWN') v.push('absent evidence is reported as broken rather than unknown');
+    if (cap.EVIDENCE_GRADES.AUTHORITATIVE.epistemic !== 'RESOLVED') v.push('authoritative evidence does not resolve');
+    for (const g of Object.values(cap.EVIDENCE_GRADES)) if (!ep.EPISTEMIC_STATES[g.epistemic]) v.push('an evidence grade maps to no epistemic state');
+    // Only one grade establishes anything.
+    const establishing = Object.entries(cap.EVIDENCE_GRADES).filter(([, g]) => g.establishes).map(([id]) => id);
+    if (JSON.stringify(establishing) !== JSON.stringify(['AUTHORITATIVE'])) v.push(`${establishing.join(', ') || 'nothing'} establishes a claim — only authoritative evidence should`);
+
+    const controls = [
+      ...require('./app-fitness').map((f) => ({ id: f.id })),
+      ...require('./infra-fitness').map((f) => ({ id: f.id })),
+    ];
+    const reqs = { requirements: () => [{ id: 'REQ-A' }] };
+    const full = {
+      id: 'probe', name: 'Probe', owner: 'Office of the Chief Architect', declaredBy: 'Architecture Review Board',
+      at: 0, contexts: ['assurance'], modules: ['src/assurance/epistemic.js'],
+      controls: ['APP-FIT-EPISTEMIC-INTEGRITY'], requirements: ['REQ-A'],
+    };
+    const q = (c, opts = {}) => cap.capabilityEvidenceQuality(c, { controls, requirements: reqs, now: 0, ...opts });
+
+    // --- Every grade is reachable, or the vocabulary is decoration ----------------------------
+    if (q(full).overall !== 'AUTHORITATIVE') v.push(`a fully evidenced capability graded '${q(full).overall}' — a grade nothing can reach is not a grade`);
+    if (cap.capabilityEvidenceQuality({}, { now: 0 }).overall !== 'NO_EVIDENCE') v.push('a capability declaring nothing did not grade as having no evidence');
+    if (q({ ...full, owner: 'Committee That Does Not Exist' }).overall !== 'CONFLICTING') v.push('an owner the accountability record does not know did not produce a conflict');
+    if (q({ ...full, modules: ['src/gone.js'] }).overall !== 'CONFLICTING') v.push('a declared module that is gone did not produce a conflict');
+    if (q(full, { now: 400 * 24 * 3600_000 }).overall !== 'WEAK') v.push('evidence older than the freshness window did not weaken');
+    if (q({ ...full, requirements: ['REQ-MISSING'] }).conflicting.length === 0) v.push('a requirement that does not resolve in the register produced no inconsistency');
+
+    // --- Not supplying evidence differs from supplying none -----------------------------------
+    const notSupplied = cap.capabilityEvidenceQuality(full, { requirements: reqs, now: 0 });
+    const repro = notSupplied.dimensions.find((d) => d.dimension === 'reproducibility');
+    if (repro.grade !== 'NO_EVIDENCE') v.push('reproducibility with no control results supplied was graded as something other than absent');
+    const emptySupplied = cap.capabilityEvidenceQuality(full, { controls: [], requirements: reqs, now: 0 });
+    if (emptySupplied.dimensions.find((d) => d.dimension === 'reproducibility').grade !== 'CONFLICTING') {
+      v.push('a declared control that did not run was not reported as contradicting the declaration');
+    }
+
+    // --- Never summed, never a score ------------------------------------------------------------
+    const graded = q(full);
+    if ('score' in graded || 'evidenceScore' in graded || 'quality' in graded) v.push('evidence quality exposes a single score — an average lets a strong dimension pay for a missing one');
+    if (/\d+\s?%|percent/.test(graded.basis)) v.push('evidence quality was rendered as a percentage');
+    // Weakest link: one conflicting dimension is not outvoted by nine authoritative ones.
+    const oneBad = q({ ...full, owner: 'Nobody' });
+    if (oneBad.authoritative.length < 5) v.push('the probe is not discriminating: too few dimensions remain authoritative to prove the weakest link rule');
+    if (oneBad.overall !== 'CONFLICTING') v.push('nine authoritative dimensions outvoted one conflicting one');
+
+    // --- Evidence never promotes ---------------------------------------------------------------
+    if (graded.promotes !== false) v.push('evidence quality claims to promote a capability');
+    if (graded.authorizes !== false) v.push('evidence quality claims authority');
+    if (!graded.machineDetectable || !graded.humanJudgementRequired) v.push('evidence quality does not state which findings are observed and which need a human');
+
+    // --- The maturity dimension is wired to it, not stubbed ------------------------------------
+    const reg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    reg.declare('wired', { name: 'W', description: 'd', declaredBy: 'ARB', owner: 'Office of the Chief Architect', contexts: ['assurance'], modules: ['src/assurance/epistemic.js'], controls: ['APP-FIT-EPISTEMIC-INTEGRITY'], requirements: ['REQ-A'] });
+    const m = reg.maturity('wired', { controls, requirements: reqs, now: 0 });
+    const eq = m.dimensions.find((d) => d.dimension === 'evidenceQuality');
+    if (!eq.evidenceQuality) v.push('the evidenceQuality maturity dimension is not wired to the grader — it counted controls and called the count a grade');
+    if (/not yet wired/.test(String(eq.detail))) v.push('the evidenceQuality maturity dimension is still a stub');
+    if (eq.evidenceQuality.dimensions.length !== 10) v.push('the wired dimension does not carry all ten evidence dimensions');
+    if (eq.state !== 'VERIFIED') v.push(`a fully evidenced capability reported evidenceQuality '${eq.state}'`);
+    if (m.scored === true || 'maturityScore' in m) v.push('capability maturity produced a single score');
+
+    // …and the maturity STATE must follow the GRADE, not the control count. Wiring the grader in and
+    // then deriving the state from `controls.length` would leave every assertion above true while
+    // a capability with a ghost owner still reported VERIFIED — which is the stub with extra steps.
+    const bad = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    bad.declare('ghost', { name: 'G', description: 'd', declaredBy: 'ARB', owner: 'Committee That Does Not Exist', contexts: ['assurance'], modules: ['src/assurance/epistemic.js'], controls: ['APP-FIT-EPISTEMIC-INTEGRITY'], requirements: ['REQ-A'] });
+    const badEq = bad.maturity('ghost', { controls, requirements: reqs, now: 0 }).dimensions.find((d) => d.dimension === 'evidenceQuality');
+    if (badEq.evidenceQuality.overall !== 'CONFLICTING') v.push('a capability whose owner holds nothing did not grade as conflicting');
+    if (badEq.state !== 'BLOCKED') v.push(`a capability with conflicting evidence reported maturity state '${badEq.state}' — the state does not follow the grade, so evidence is still being counted rather than graded`);
+    const noneReg = new cap.PlatformCapabilityRegistry({ clock: () => 0 });
+    noneReg.declare('bare', { name: 'B', description: 'd', declaredBy: 'ARB', owner: 'Office of the Chief Architect', contexts: ['assurance'] });
+    const bareEq = noneReg.maturity('bare', { controls, requirements: reqs, now: 0 }).dimensions.find((d) => d.dimension === 'evidenceQuality');
+    if (bareEq.state === 'VERIFIED') v.push('a capability declaring no module, control or requirement reported verified evidence quality');
+  }),
+
+  fit('APP-FIT-CAPABILITY-MODULE-INDEX', 'The reverse index finds drift in both directions and makes nothing verified', (v) => {
+    const cap = require('../src/capability/model');
+    const ep = require('../src/assurance/epistemic');
+
+    for (const required of ['MISSING_MODULE', 'ORPHAN_MODULE', 'UNIMPLEMENTED_CAPABILITY', 'SHARED_MODULE', 'DUPLICATE_MAPPING']) {
+      if (!cap.REVERSE_INDEX_FINDINGS[required]) v.push(`reverse-index finding '${required}' is not detected`);
+    }
+    for (const [id, k] of Object.entries(cap.REVERSE_INDEX_FINDINGS)) {
+      if (!k.means) v.push(`reverse-index finding '${id}' does not say what it means`);
+      if (!ep.EPISTEMIC_STATES[k.epistemic]) v.push(`reverse-index finding '${id}' maps to no epistemic state`);
+    }
+    // An orphan is unknown, not broken: a module nobody claimed may belong to nothing.
+    if (cap.REVERSE_INDEX_FINDINGS.ORPHAN_MODULE.epistemic !== 'UNKNOWN') v.push('an unclaimed module is reported as broken rather than unknown');
+    if (!cap.REVERSE_INDEX_FINDINGS.ORPHAN_MODULE.requiresHuman) v.push('an orphan module needs no human — but whether it should belong to a capability is exactly a judgement');
+    if (cap.REVERSE_INDEX_FINDINGS.MISSING_MODULE.epistemic !== 'BROKEN') v.push('a claimed module that is gone is not reported as broken');
+    if (!cap.REVERSE_INDEX_FINDINGS.SHARED_MODULE.requiresHuman) v.push('a shared module needs no human — shared machinery and two capabilities that are one look identical');
+
+    const idx = (caps, watched = []) => cap.capabilityModuleIndex({ capabilities: caps, watchedPaths: watched, now: 0 });
+    const real = { id: 'a', modules: ['src/assurance/epistemic.js'] };
+
+    // --- Each finding is detectable ------------------------------------------------------------
+    if (!idx([{ id: 'a', modules: ['src/nope.js'] }]).byKind.MISSING_MODULE) v.push('a capability claiming a module that is gone was not detected');
+    if (!idx([{ id: 'a', modules: [] }]).byKind.UNIMPLEMENTED_CAPABILITY) v.push('a capability with no implementing module was not detected');
+    if (!idx([real, { id: 'b', modules: ['src/assurance/epistemic.js'] }]).byKind.SHARED_MODULE) v.push('one module serving two capabilities was not detected');
+    if (!idx([{ id: 'a', modules: ['src/assurance/epistemic.js', 'src/assurance/epistemic.js'] }]).byKind.DUPLICATE_MAPPING) v.push('a module declared twice was not detected');
+    if (!idx([real], ['src/assurance']).byKind.ORPHAN_MODULE) v.push('a module under a watched path claimed by nobody was not detected');
+
+    // --- A complete index reports clean ---------------------------------------------------------
+    const fs2 = require('fs'); const path2 = require('path');
+    const dir = 'src/assurance';
+    const every = fs2.readdirSync(path2.join(__dirname, '..', dir)).filter((f) => f.endsWith('.js')).map((f) => `${dir}/${f}`);
+    const clean = idx([{ id: 'all', modules: every }], [dir]);
+    if (clean.count !== 0) v.push(`a capability claiming every module under a watched path reported ${clean.count} finding(s): ${clean.findings.map((f) => f.kind).join(', ')}`);
+    if (clean.state !== 'RESOLVED') v.push('a complete index did not report resolved');
+
+    // --- Traceability, never maturity -----------------------------------------------------------
+    if (clean.establishesVerification !== false) v.push('the reverse index claims to establish verification — a module existing says nothing about whether a capability works');
+    if (clean.promotes !== false) v.push('the reverse index claims to promote a capability');
+    if (clean.authorizes !== false) v.push('the reverse index claims authority');
+    if (/\d+\s?%|percent/.test(clean.basis)) v.push('the reverse index was rendered as a percentage');
+    // An unwatched tree reports nothing rather than reporting everything as an orphan.
+    if (idx([real]).byKind.ORPHAN_MODULE) v.push('orphans were reported with no watched path supplied — scanning the whole tree would report every file as an orphan');
+  }),
+
+  fit('APP-FIT-CROSS-AXIS-MAPPING', 'Business and platform capabilities are related without being merged, and similarity never becomes a mapping', (v) => {
+    const cap = require('../src/capability/model');
+
+    // --- ADR-0013 holds ------------------------------------------------------------------------
+    const m = cap.crossAxisMapping({ now: 0 });
+    if (!m.axesDisjoint) v.push('a name appears on both capability axes — ADR-0013 requires them disjoint');
+    if (m.mergesAxes !== false) v.push('the mapping claims to merge the two axes');
+    if (m.businessAxis.length !== Object.keys(cap.CAPABILITY_MAP).length) v.push('the business axis was resized by the mapping');
+    if (m.platformAxis.length !== cap.PLATFORM_CAPABILITIES.length) v.push('the platform axis was resized by the mapping');
+
+    for (const required of ['MAPPED', 'INTENTIONALLY_UNMAPPED', 'MAPPING_REQUIRED', 'AMBIGUOUS', 'UNMAPPED']) {
+      if (!cap.MAPPING_STATES[required]) v.push(`mapping state '${required}' is not defined`);
+    }
+    // Ambiguity needs a human. A structural hint that resolved itself would be similarity acting as
+    // a verdict, which Phase 18.1 Part 4 forbids.
+    if (!cap.MAPPING_STATES.AMBIGUOUS.requiresHuman) v.push('an ambiguous mapping resolves without a human — whether two capabilities are materially the same is a judgement');
+    if (cap.MAPPING_STATES.AMBIGUOUS.epistemic !== 'UNKNOWN') v.push('an ambiguous mapping is not reported as unknown');
+    if (cap.MAPPING_STATES.UNMAPPED.epistemic !== 'UNKNOWN') v.push('an unmapped capability is reported as failing — lack of a mapping is not a failure unless something requires one');
+    if (cap.MAPPING_STATES.MAPPING_REQUIRED.epistemic !== 'BROKEN') v.push('a required mapping that is missing is not reported as broken');
+    if (cap.MAPPING_STATES.INTENTIONALLY_UNMAPPED.epistemic !== 'RESOLVED') v.push('a deliberate decision not to map is treated as an absence');
+    if (Object.keys(cap.MAPPING_RELATIONS).length < 5) v.push('fewer than five relation kinds are available');
+
+    const b = Object.keys(cap.CAPABILITY_MAP);
+    const p = cap.PLATFORM_CAPABILITIES;
+    const map = (mappings, extra = {}) => cap.crossAxisMapping({ mappings, now: 0, ...extra });
+
+    // --- Cardinality: both directions are legitimate --------------------------------------------
+    const oneToMany = map([
+      { business: b[0], platform: p[0], relation: 'supports', declaredBy: 'ARB' },
+      { business: b[0], platform: p[1], relation: 'enables', declaredBy: 'ARB' },
+    ]);
+    if (!oneToMany.oneToMany.includes(b[0])) v.push('one business capability mapping to two platform capabilities was not recorded as one-to-many');
+    const manyToOne = map([
+      { business: b[0], platform: p[0], relation: 'supports', declaredBy: 'ARB' },
+      { business: b[1], platform: p[0], relation: 'supports', declaredBy: 'ARB' },
+    ]);
+    if (!manyToOne.manyToOne.includes(p[0])) v.push('two business capabilities mapping to one platform capability was not recorded as many-to-one');
+
+    // --- Declarations are refused when they are inferences ---------------------------------------
+    const refused = map([
+      { business: b[0], platform: p[0], relation: 'supports' },
+      { business: b[0], platform: p[0], relation: 'is-a-bit-like', declaredBy: 'ARB' },
+      { business: 'Not A Business Capability', platform: p[0], relation: 'supports', declaredBy: 'ARB' },
+      { business: b[0], platform: 'Not A Platform Capability', relation: 'supports', declaredBy: 'ARB' },
+    ]);
+    if (refused.invalid.length !== 4) v.push(`${4 - refused.invalid.length} invalid mapping declaration(s) were accepted`);
+    if (!refused.invalid.some((x) => /must name who declared it/.test(x.reason))) v.push('a mapping with no declarer was accepted — an undeclared relationship between two axes is an inference');
+
+    // --- Similarity is raised, never acted on ----------------------------------------------------
+    const bare = map([]);
+    if (!bare.ambiguous.length) v.push('no structural candidate was raised for any unmapped business capability, so the ambiguity path is untested');
+    for (const row of bare.rows.filter((r) => r.state === 'AMBIGUOUS')) {
+      if (!row.ambiguityReason) v.push(`'${row.business}' is ambiguous and states no reason`);
+      if (row.mappings.length) v.push(`'${row.business}' was mapped by similarity — similarity is evidence that somebody should look, never a mapping`);
+    }
+    // Intentionally unmapped is different from unmapped, and needs a reason.
+    const deliberate = map([{ business: b[0], platform: p[0], relation: 'supports', declaredBy: 'ARB', intentionallyUnmapped: true, reason: 'served manually today, deliberately' }]);
+    if (deliberate.rows.find((r) => r.business === b[0]).state !== 'MAPPED') v.push('a declared mapping was overridden by an intentionally-unmapped flag');
+    const required = map([], { requiredMappings: [b[0]] });
+    if (required.rows.find((r) => r.business === b[0]).state !== 'MAPPING_REQUIRED') v.push('a business capability whose mapping is required did not report the requirement');
+
+    if (m.authorizes !== false) v.push('the cross-axis mapping claims authority');
+    if (/\d+\s?%|percent/.test(m.basis)) v.push('cross-axis mapping was rendered as a percentage');
+  }),
+
   fit('APP-FIT-GOVERNANCE-SUCCESSION', 'A documented succession chain is not a rehearsed one, and this platform has never rehearsed one', (v) => {
     const own = require('../src/governance/ownership');
 
