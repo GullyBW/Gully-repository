@@ -27,5 +27,11 @@
 | [PROVIDER_MANUAL.md](./PROVIDER_MANUAL.md) | Provider guide |
 | [CUSTOMER_MANUAL.md](./CUSTOMER_MANUAL.md) | Customer guide |
 
+## Third-party project documentation
+
+| Doc | Contents |
+| --- | --- |
+| [kronos/](./kronos/README.md) | [Kronos](https://github.com/shiyu-coder/Kronos) financial K-line foundation model: architecture, API, fine-tuning, web UI, tests |
+
 API reference, module catalogue and environment variables live in the root
 [`README.md`](../README.md) and [`.env.example`](../.env.example).
