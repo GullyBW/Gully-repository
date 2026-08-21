@@ -12085,6 +12085,169 @@ module.exports = [
     if (/\d+\s?%|percent/.test(m.basis)) v.push('cross-axis mapping was rendered as a percentage');
   }),
 
+  fit('APP-FIT-SUCCESSION-STATE-MACHINE', 'Every succession state is reachable, every invalid transition fails closed, and no machine reaches VERIFIED', (v) => {
+    const own = require('../src/governance/ownership');
+    const S = own.SUCCESSION_EXERCISE_STATES;
+
+    // --- Four states, ordered, each saying what it does not establish -------------------------
+    const order = Object.keys(S);
+    if (JSON.stringify(order) !== JSON.stringify(['PLANNED', 'REHEARSED', 'VERIFIED', 'AUTHORITY_RESTORED'])) {
+      v.push(`the succession lifecycle is ${order.join(' -> ')}`);
+    }
+    for (const [id, st] of Object.entries(S)) {
+      if (!st.means || !st.doesNotEstablish) v.push(`state '${id}' does not say what it means or what it fails to establish`);
+      if (!Array.isArray(st.requires) || !st.requires.length) v.push(`state '${id}' requires no evidence, so it can be entered by asserting it`);
+    }
+    // The top two are human-established. A machine reaching either is the failure this prevents.
+    if (S.VERIFIED.establishedBy !== 'human judgement') v.push('VERIFIED is established by a machine');
+    if (S.AUTHORITY_RESTORED.establishedBy !== 'human judgement') v.push('AUTHORITY_RESTORED is established by a machine');
+
+    // --- Transitions are declared, and only the declared ones exist ---------------------------
+    const declared = own.SUCCESSION_TRANSITIONS.map((t) => `${t.from}->${t.to}`);
+    if (JSON.stringify(declared) !== JSON.stringify(['null->PLANNED', 'PLANNED->REHEARSED', 'REHEARSED->VERIFIED', 'VERIFIED->AUTHORITY_RESTORED'])) {
+      v.push(`the declared transitions are ${declared.join(', ')}`);
+    }
+    for (const t of own.SUCCESSION_TRANSITIONS) if (!t.why) v.push(`transition ${t.from}->${t.to} states no reason`);
+
+    const CRIT = [{ id: 'k', description: 'the drill did what it said', met: (r) => r.evidence.REHEARSED.actions.includes('a') }];
+    const planned = (reg, id = 'E') => reg.plan(id, {
+      scenario: 's', capability: 'c', responsibleAuthority: 'Architecture Review Board',
+      intendedSuccessor: 'ARB Vice-Chair', scope: 'x', prerequisites: ['p'], declaredBy: 'Oversight Board',
+    });
+    const fresh = () => new own.SuccessionExerciseRegister({ clock: () => 0 });
+    // An ADVANCING logical clock for the full-lifecycle fixture. A constant clock puts restoration
+    // at tick 0, before the markers recorded during the rehearsal, and TTAR correctly reports the
+    // sequence as out of order — which is the check working, and a fixture bug.
+    const advancing = () => { let tick = 0; const r = new own.SuccessionExerciseRegister({ clock: () => tick }); r.tick = (n) => { tick = n; }; return r; };
+    const refuses = (label, fn) => {
+      let closed = false;
+      try { fn(); } catch (e) { closed = e.failClosed === true; }
+      if (!closed) v.push(label);
+    };
+
+    // --- THE VALID PATH: every state is genuinely reachable -----------------------------------
+    const reg = advancing();
+    reg.tick(10); planned(reg);
+    if (reg.get('E').state !== 'PLANNED') v.push('an exercise could not reach PLANNED');
+    reg.tick(40);
+    reg.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'Runner', authorityUnavailableAt: 12, initiatedAt: 15, successorConfirmedAt: 22 });
+    if (reg.get('E').state !== 'REHEARSED') v.push('an exercise could not reach REHEARSED');
+    reg.tick(50);
+    reg.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'sha256:synthetic' });
+    if (reg.get('E').state !== 'VERIFIED') v.push('an exercise could not reach VERIFIED — a state nothing can reach is not a state');
+    reg.tick(60);
+    reg.restore('E', { restoredTo: 'Architecture Review Board', restoredBy: 'Oversight Board', restorationEvent: 'resumed at the next quorate sitting', governanceConfirmation: 'minuted' });
+    if (reg.get('E').state !== 'AUTHORITY_RESTORED') v.push('an exercise could not reach AUTHORITY_RESTORED');
+    if (reg.get('E').history.length !== 4) v.push('the transition history does not record every step');
+
+    // --- THE INVALID PATHS: each skips a state and each must fail closed ----------------------
+    refuses('PLANNED -> VERIFIED was permitted, skipping the rehearsal entirely',
+      () => { const r = fresh(); planned(r); r.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' }); });
+    refuses('PLANNED -> AUTHORITY_RESTORED was permitted',
+      () => { const r = fresh(); planned(r); r.restore('E', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' }); });
+    refuses('REHEARSED -> AUTHORITY_RESTORED was permitted, skipping verification',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R' }); r.restore('E', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' }); });
+    refuses('a verified exercise was moved backwards to PLANNED',
+      () => { const r = fresh(); planned(r); r.plan('E', { scenario: 's', capability: 'c', responsibleAuthority: 'A', intendedSuccessor: 'B', scope: 'x', prerequisites: ['p'], declaredBy: 'OB' }); });
+
+    // --- REHEARSED IS NOT VERIFIED -------------------------------------------------------------
+    refuses('the exercise runner verified their own exercise',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'Runner' }); r.verify('E', { criteria: CRIT, evaluator: 'Runner', decision: 'verified', evidenceIntegrity: 'd' }); });
+    // Two guards refuse this — the explicit evaluator check and the generic evidence gate, which
+    // also requires the field. Either alone is enough, so the explicit one is a redundant guard
+    // rather than the only thing standing between the register and an unsigned verification. It is
+    // kept because it says WHY in the error, and the assertion below holds whichever one fires.
+    refuses('verification with no named evaluator was accepted',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R' }); r.verify('E', { criteria: CRIT, evaluator: null, decision: 'verified', evidenceIntegrity: 'd' }); });
+    if (!own.SUCCESSION_EXERCISE_STATES.VERIFIED.requires.includes('evaluator')) {
+      v.push('the VERIFIED evidence schema does not require an evaluator, so only one guard stands between the register and an unsigned verification');
+    }
+    refuses('a failed rehearsal was verified as successful',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'failed', failures: [{ mode: 'insufficient-quorum' }], runBy: 'R' }); r.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' }); });
+    refuses('verification was granted with a declared criterion unmet',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R' }); r.verify('E', { criteria: [{ id: 'k', met: () => false }], evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' }); });
+    // A participant record alone establishes nothing.
+    const partOnly = fresh(); planned(partOnly);
+    partOnly.rehearse('E', { participants: ['ARB Vice-Chair'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R' });
+    if (partOnly.get('E').state === 'VERIFIED') v.push('participation alone reached VERIFIED');
+
+    // --- Automated evidence is not verification ------------------------------------------------
+    const auto = partOnly.automatedEvidence('E', { criteria: CRIT });
+    if (auto.status !== 'AUTOMATED_EVIDENCE_READY') v.push(`a passing drill reported '${auto.status}' — the automated path is unreachable`);
+    if (auto.establishesVerification !== false) v.push('automated evidence claims to establish verification');
+    if (auto.humanVerificationRequired !== 'HUMAN_VERIFICATION') v.push('automated evidence does not state that human verification is required');
+    if (Object.keys(own.SUCCESSION_EXERCISE_STATES).includes('AUTOMATED_EVIDENCE_READY')) v.push('AUTOMATED_EVIDENCE_READY is a lifecycle state — a machine can now reach institutional verification');
+
+    // --- Evidence is required, and a field that exists is not evidence -------------------------
+    refuses('an exercise was planned with an empty prerequisite list',
+      () => fresh().plan('Z', { scenario: 's', capability: 'c', responsibleAuthority: 'A', intendedSuccessor: 'B', scope: 'x', prerequisites: [], declaredBy: 'OB' }));
+    refuses('a rehearsal with no stated outcome was accepted',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], failures: [], runBy: 'R' }); });
+    refuses('an unrecognised failure mode was accepted',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'failed', failures: [{ mode: 'invented' }], runBy: 'R' }); });
+    refuses('authority was restored to somebody other than the primary office',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R' }); r.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' }); r.restore('E', { restoredTo: 'ARB Vice-Chair', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' }); });
+    refuses('authority was restored on an exercise evaluated as not-verified',
+      () => { const r = fresh(); planned(r); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'failed', failures: [{ mode: 'approver-unavailable' }], runBy: 'R' }); r.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'not-verified', evidenceIntegrity: 'd' }); r.restore('E', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' }); });
+
+    // …and a failed drill can still be honestly recorded as not-verified. A register that can only
+    // record success is a register that reports success.
+    const failing = fresh(); planned(failing);
+    failing.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'failed', failures: [{ mode: 'communication-failure' }], runBy: 'R' });
+    failing.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'not-verified', evidenceIntegrity: 'd' });
+    if (failing.get('E').state !== 'VERIFIED' || failing.get('E').evidence.VERIFIED.decision !== 'not-verified') {
+      v.push('a failed exercise could not be recorded as evaluated and not verified');
+    }
+
+    // --- Fifteen failure modes, all representable ---------------------------------------------
+    if (Object.keys(own.SUCCESSION_FAILURE_MODES).length < 15) v.push('fewer than fifteen succession failure modes can be represented');
+    for (const mode of Object.keys(own.SUCCESSION_FAILURE_MODES)) {
+      const r = fresh(); planned(r);
+      try { r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'failed', failures: [{ mode }], runBy: 'R' }); }
+      catch (_) { v.push(`failure mode '${mode}' cannot be recorded`); }
+    }
+
+    // --- TTAR: deterministic, and unknown where a marker is missing ----------------------------
+    const t = reg.ttar('E');
+    if (t.state !== 'RESOLVED') v.push(`a fully marked exercise reported TTAR '${t.state}'`);
+    if (t.duration !== 48) v.push(`a 12-to-60 tick lifecycle reported a TTAR of ${t.duration}`);
+    if (t.unit !== 'logical clock ticks') v.push('TTAR is not measured on the logical clock');
+    if (t.informsGovernance !== false) v.push('TTAR informs a governance decision automatically');
+    const partial = fresh(); planned(partial);
+    partial.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R' });
+    const pt = partial.ttar('E');
+    if (pt.state !== 'UNKNOWN' || pt.duration !== null) v.push('TTAR produced a duration from missing markers — a number that looks measured');
+    if (!pt.missing.length) v.push('TTAR did not name the markers it was missing');
+    // Markers recorded out of sequence are not a duration. Restoration cannot precede the outage.
+    const backwards = advancing();
+    backwards.tick(10); planned(backwards);
+    backwards.tick(40); backwards.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R', authorityUnavailableAt: 30, initiatedAt: 20, successorConfirmedAt: 25 });
+    backwards.tick(50); backwards.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' });
+    backwards.tick(60); backwards.restore('E', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' });
+    const bt = backwards.ttar('E');
+    if (bt.state !== 'BROKEN') v.push(`TTAR reported '${bt.state}' for markers recorded out of sequence`);
+    if (bt.duration !== null) v.push('TTAR produced a duration from out-of-order markers — elapsed time between misordered events is not a duration');
+
+    // --- Repeatability -------------------------------------------------------------------------
+    const build = () => {
+      const r = advancing();
+      r.tick(10); planned(r);
+      r.tick(40); r.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R', authorityUnavailableAt: 12, initiatedAt: 15, successorConfirmedAt: 22 });
+      r.tick(50); r.verify('E', { criteria: CRIT, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' });
+      r.tick(60); r.restore('E', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' });
+      return r;
+    };
+    if (JSON.stringify(build().get('E')) !== JSON.stringify(build().get('E'))) v.push('identical inputs produced different exercise records');
+    if (JSON.stringify(build().ttar('E')) !== JSON.stringify(build().ttar('E'))) v.push('TTAR is not deterministic under identical logical-clock inputs');
+    // …and a changed input changes the result, or the determinism above is vacuous.
+    const shifted = advancing();
+    shifted.tick(10); planned(shifted);
+    shifted.tick(40); shifted.rehearse('E', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'R', authorityUnavailableAt: 12, initiatedAt: 30, successorConfirmedAt: 35 });
+    if (JSON.stringify(shifted.ttar('E').segments) === JSON.stringify(build().ttar('E').segments)) {
+      v.push('changing the recorded markers did not change TTAR, so the metric is not measuring them');
+    }
+  }),
+
   fit('APP-FIT-GOVERNANCE-SUCCESSION', 'A documented succession chain is not a rehearsed one, and this platform has never rehearsed one', (v) => {
     const own = require('../src/governance/ownership');
 
@@ -12403,6 +12566,7 @@ module.exports = [
 
   fit('APP-FIT-GOVERNANCE-RESILIENCE', 'The invariant applies to the machinery that evaluates it, and a single point in the platform\'s own governance goes to a board rather than to the build', (v) => {
     const ir = require('../src/governance/institutional-resilience');
+    const own2 = require('../src/governance/ownership');
     const ep = require('../src/assurance/epistemic');
     const controls = [
       ...require('../../njtip-twin/verification/fitness').map((f) => ({ id: f.id, pass: true })),
@@ -12514,6 +12678,36 @@ module.exports = [
     });
     if (required.capabilities[0].state !== 'BLOCKED') v.push('a single point in a capability governance requires to be resilient did not block');
     if (!required.blocksInstitutionalReadiness) v.push('a blocked governance capability did not block institutional readiness');
+
+    // --- Succession evidence contributes to resilience (spec §10) ------------------------------
+    // A capability with more than one of every kind is still not resilient if nobody has ever walked
+    // its succession chain. SUCCESSION DESIGN IS NOT SUCCESSION PROOF.
+    const spreadSpec = {
+      spread: {
+        title: 'two of every kind', contexts: ['assurance'],
+        controls: ['APP-FIT-DECISION-QUALITY', 'APP-FIT-LIFECYCLE-DEFAULT-DENY'],
+        documents: ['docs/architecture-governance.md', 'docs/adaptive-governance.md'],
+        modules: ['src/assurance/institutional.js', 'src/assurance/epistemic.js'],
+      },
+    };
+    const unrehearsed = ir.governanceCapabilityResilience({ controls, capabilities: spreadSpec, now: 0 });
+    if (unrehearsed.capabilities[0].state === 'RESILIENT') {
+      v.push('a capability with two of every kind and no rehearsed succession reported RESILIENT — a plan is not a rehearsal');
+    }
+    if (!unrehearsed.capabilities[0].heldBackBySuccession) v.push('a structurally spread capability was not recorded as held back by its unrehearsed succession');
+    // …and a rehearsed, verified succession lets it through, or the rule is a permanent veto.
+    let tick = 0;
+    const succReg = new own2.SuccessionExerciseRegister({ clock: () => tick });
+    tick = 10; succReg.plan('R', { scenario: 's', capability: 'c', responsibleAuthority: 'Architecture Review Board', intendedSuccessor: 'ARB Vice-Chair', scope: 'x', prerequisites: ['p'], declaredBy: 'OB' });
+    tick = 40; succReg.rehearse('R', { participants: ['p'], actions: ['a'], outcome: 'completed', failures: [], runBy: 'Runner', authorityUnavailableAt: 12, initiatedAt: 15, successorConfirmedAt: 22 });
+    tick = 50; succReg.verify('R', { criteria: [{ id: 'k', met: () => true }], evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' });
+    const rehearsedRun = ir.governanceCapabilityResilience({ controls, capabilities: spreadSpec, successionExercises: succReg, now: 0 });
+    if (rehearsedRun.capabilities[0].state !== 'RESILIENT') {
+      v.push(`a spread capability with a verified succession rehearsal reported '${rehearsedRun.capabilities[0].state}' — a state nothing can reach is not a state`);
+    }
+    // The estate's real position, asserted rather than smoothed.
+    if (report.successionRehearsed.length !== 0) v.push('a governance capability reports a rehearsed succession and this control still asserts none exists — update it deliberately');
+    if (report.successionNeverRehearsed.length !== 5) v.push(`${report.successionNeverRehearsed.length} of 5 governance capabilities report an unrehearsed succession`);
 
     // --- The existing invariant is untouched ---------------------------------------------------
     if (Object.keys(ir.INVARIANT_CLAUSES).length !== 6) v.push('the six-clause global invariant was altered by the governance-resilience extension');

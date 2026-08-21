@@ -1278,6 +1278,21 @@ const SYNTHETIC_REQUIREMENTS = [
     owner: 'Office of the Chief Architect',
     tests: ['deleted-in-a-refactor.test.js'], fitness: ['APP-FIT-NO-LONGER-EXISTS'],
   },
+  // 8. The succession capability, traced through the register the platform already has rather than
+  //    through a separate traceability system. Synthetic like every other entry here: it records
+  //    that the CAPABILITY is traceable, not that any institution has exercised it.
+  {
+    id: 'SYN-SUCCESSION-CAPABILITY', section: 'succession assurance — traceability',
+    statement: 'Institutional succession is modelled as an explicit state machine with evidence at every transition and human verification before VERIFIED.',
+    artefactType: 'executable', declaredBy: 'Architecture Review Board',
+    implementation: 'src/governance/ownership.js', context: 'governance-oversight',
+    owner: 'Oversight Board', capability: 'governance-decision-recording',
+    tests: ['phase19-succession-state-machine.test.js'],
+    fitness: ['APP-FIT-SUCCESSION-STATE-MACHINE', 'APP-FIT-GOVERNANCE-SUCCESSION'],
+    mutation: ['skipped-state', 'bypassed-transition', 'automatic-verification', 'unauthorized-restoration', 'incorrect-ttar', 'ignored-exercise-failure'],
+    documentation: 'docs/architecture-governance.md', runbook: 'docs/operations/runbook.md',
+    commits: ['synthetic'],
+  },
   // 7. Conflicting evidence: the declarations disagree with one another. The module and the control
   //    both exist, and the context named is not the context that owns either of them — so the row is
   //    internally inconsistent rather than merely incomplete.

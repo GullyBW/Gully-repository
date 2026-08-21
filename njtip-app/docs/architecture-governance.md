@@ -353,3 +353,63 @@ from the source, because a require is a fact and a naming convention is a conven
 state: **35 findings** (33 undeclared members, 2 duplicate claims), UNKNOWN, governance review
 required, blocking nothing. Placing a control in a capability is a statement about what the
 capability *is*, so the detector reports rather than adopts.
+
+## The succession exercise state machine
+
+Two different questions were being conflated. `SUCCESSION_ASSURANCE_LEVELS` answers *how well
+assured is this **subsystem's** succession* — a maturity ladder. `SUCCESSION_EXERCISE_STATES`
+answers *how far has **this exercise** got* — an instance lifecycle:
+
+```
+PLANNED → REHEARSED → VERIFIED → AUTHORITY_RESTORED
+```
+
+The ladder **reads** this register rather than keeping its own idea of what has been rehearsed, so
+there is one source of truth. Four transitions are declared and **everything else fails closed**,
+including `PLANNED → VERIFIED`, `PLANNED → AUTHORITY_RESTORED`, `REHEARSED → AUTHORITY_RESTORED` and
+any move backwards. Re-running a drill means declaring a new exercise: an institution that can edit
+its rehearsal history has no rehearsal history.
+
+Each state names the evidence it requires, and **a field that exists but says nothing is not
+evidence** — an empty prerequisite list or an unstated outcome is refused.
+
+### REHEARSED is not VERIFIED
+
+`REHEARSED` records that the exercise was executed, **including that it failed**. `VERIFIED` records
+that a named human other than the runner evaluated the declared criteria against that evidence.
+
+The register refuses: verification by the runner · verification with no evaluator · verifying a
+failed rehearsal as successful · verifying with a declared criterion unmet · restoring authority to
+anyone but the primary office · restoring on a not-verified exercise.
+
+A machine may compute `AUTOMATED_EVIDENCE_READY`. That is deliberately **not** a lifecycle state and
+no code path turns it into one; final verification requires `HUMAN_VERIFICATION`.
+
+### TTAR — Time to Authority Restoration
+
+Measured on the **injected logical clock**, never wall time, across four markers: authority
+unavailable → succession initiated → successor confirmed → authority restored. Reported in ticks
+with per-segment breakdown. `UNKNOWN` where a marker was never recorded — a duration derived from a
+missing marker is a number that looks measured — and `BROKEN` where markers are out of sequence.
+`informsGovernance` is `false`: a measurement never moves a governance decision on its own.
+
+### Succession feeds institutional resilience
+
+A governance capability with more than one of every dependency kind is **still not RESILIENT** if
+nobody has ever walked its succession chain. Succession evidence can hold a capability back; it can
+never make one more resilient than its structure allows.
+
+Current position: **all five governance capabilities report `successionLevel: EXECUTABLE` and
+`successionRehearsed: false`.** Nothing has been rehearsed, and that is recorded rather than
+smoothed.
+
+### What this does and does not establish
+
+```
+SOFTWARE ASSURANCE      the implementation models and validates succession correctly   ✔ verified here
+EXERCISE ASSURANCE      a synthetic exercise completed against defined criteria        ✔ verified here
+INSTITUTIONAL ASSURANCE a real institution has demonstrated this in a real exercise    ✘ NOT established
+```
+
+The third is not implied by the first two. No real succession has occurred, no real authority has
+transferred, and nothing here has exercised production authority.

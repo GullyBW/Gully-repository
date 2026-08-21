@@ -902,6 +902,289 @@ function capabilityEvolution({ snapshots = [], evidence = [], periodDays = null,
   };
 }
 
+// --- The succession exercise state machine --------------------------------------------------------
+//
+// Two different questions were being conflated, and separating them is what this register is for.
+//
+//   SUCCESSION_ASSURANCE_LEVELS answers "how well assured is this SUBSYSTEM's succession" — a
+//   maturity ladder from DOCUMENTED to VERIFIED, computed fresh from the records each time.
+//
+//   SUCCESSION_EXERCISE_STATES, below, answers "how far has THIS EXERCISE got" — an instance
+//   lifecycle that a specific drill moves through, with evidence captured at each step.
+//
+// The ladder READS this register rather than keeping its own idea of what has been rehearsed. One
+// source of truth: an exercise reaching VERIFIED here is what makes a subsystem VERIFIED there.
+//
+// AUTHORITY_RESTORED is the state the walk could never establish. `successionExercise()` reports the
+// `authority-restored` stage as UNKNOWN because a succession chain says who acts while the primary
+// is away and says nothing about how acting ends. That is still true of the CHAIN. What changes here
+// is that an exercise can RECORD a restoration, with evidence, and then the stage is answerable for
+// that exercise — which is the difference between a design and a rehearsal.
+const SUCCESSION_EXERCISE_STATES = {
+  PLANNED: {
+    order: 1, establishedBy: 'machine', terminal: false,
+    means: 'An exercise is declared with a scenario, a capability, a responsible authority and an intended successor. Nothing has happened yet.',
+    doesNotEstablish: 'That the exercise will be run, or that it would succeed.',
+    requires: ['exerciseId', 'scenario', 'capability', 'responsibleAuthority', 'intendedSuccessor', 'scope', 'prerequisites'],
+  },
+  REHEARSED: {
+    order: 2, establishedBy: 'record of a human act', terminal: false,
+    means: 'The exercise was executed and what happened was recorded, including what failed.',
+    doesNotEstablish: 'That it worked. A drill can be run and fail, and the failure is evidence.',
+    requires: ['participants', 'actions', 'outcome', 'failures', 'at'],
+  },
+  VERIFIED: {
+    order: 3, establishedBy: 'human judgement', terminal: false,
+    means: 'The declared verification criteria were evaluated against the rehearsal evidence, and a named human other than the runner recorded the decision.',
+    doesNotEstablish: 'That the institution can do this under real conditions with different people.',
+    requires: ['criteria', 'criteriaResults', 'evaluator', 'decision', 'evidenceIntegrity'],
+  },
+  AUTHORITY_RESTORED: {
+    order: 4, establishedBy: 'human judgement', terminal: true,
+    means: 'Authority returned to the primary office, the interregnum was closed, and a governance body confirmed it.',
+    doesNotEstablish: 'That restoration would be as clean when the absence was not scheduled.',
+    requires: ['restoredTo', 'restoredBy', 'restorationEvent', 'governanceConfirmation', 'at'],
+  },
+};
+
+// Every valid transition, stated rather than implied. Anything not listed here is refused.
+//
+// The reset is deliberate and narrow: an exercise that has been VERIFIED may be re-planned as a NEW
+// exercise, and this register refuses to move a verified record backwards. Re-running a drill means
+// declaring another one, so the history of the first survives. An institution that can edit its
+// rehearsal history has no rehearsal history.
+const SUCCESSION_TRANSITIONS = [
+  { from: null, to: 'PLANNED', why: 'An exercise is declared before it is run.' },
+  { from: 'PLANNED', to: 'REHEARSED', why: 'The declared exercise was executed.' },
+  { from: 'REHEARSED', to: 'VERIFIED', why: 'The rehearsal evidence was evaluated against the criteria by a named human.' },
+  { from: 'VERIFIED', to: 'AUTHORITY_RESTORED', why: 'Authority returned to the primary and a governance body confirmed it.' },
+];
+const SUCCESSION_TRANSITION_INDEX = new Map(SUCCESSION_TRANSITIONS.map((t) => [`${t.from}->${t.to}`, t]));
+
+// The failure conditions a drill must be able to represent. A framework that can only describe
+// success is a framework that reports success.
+const SUCCESSION_FAILURE_MODES = {
+  'successor-unavailable': 'The named successor cannot act.',
+  'nominated-successor-unavailable': 'The successor nominated for this exercise specifically cannot act.',
+  'authority-transfer-rejected': 'The successor declined or was refused the authority.',
+  'approver-unavailable': 'The approver required to confirm the transfer cannot act.',
+  'conflicting-authorities': 'Two holders claim the same authority at once.',
+  'incomplete-succession-record': 'The record of what happened is missing something required.',
+  'expired-authorization': 'The authorization relied on had lapsed.',
+  'invalid-credentials': 'The successor could not establish who they were.',
+  'insufficient-quorum': 'The body could not reach quorum to act.',
+  'corrupted-evidence': 'The exercise evidence does not match what was recorded.',
+  'unavailable-supporting-service': 'A system the capability depends on was down.',
+  'communication-failure': 'The people involved could not reach each other.',
+  'duplicate-succession-attempt': 'The same succession was attempted twice.',
+  'conflicting-succession-attempts': 'Two different successions were attempted for one authority.',
+  'unauthorized-restoration-attempt': 'Authority was taken back by somebody not entitled to restore it.',
+};
+
+// A register of succession exercises. Declared, never inferred; append-only in effect, because a
+// transition rewrites nothing that came before it. Fails closed on every incomplete transition.
+class SuccessionExerciseRegister {
+  constructor({ clock = () => 0 } = {}) { this._clock = clock; this._exercises = new Map(); }
+
+  _fail(msg) { const e = new Error(msg); e.failClosed = true; throw e; }
+
+  // Every transition passes through here, so the state machine has exactly one gate.
+  _assertTransition(from, to) {
+    if (!SUCCESSION_EXERCISE_STATES[to]) this._fail(`'${to}' is not a succession exercise state`);
+    if (!SUCCESSION_TRANSITION_INDEX.has(`${from}->${to}`)) {
+      this._fail(`${from || 'nothing'} -> ${to} is not a valid succession transition. Valid: ${SUCCESSION_TRANSITIONS.map((t) => `${t.from || 'nothing'} -> ${t.to}`).join(', ')}`);
+    }
+  }
+
+  // Every required field must be present AND non-empty. A field that exists and says nothing is how
+  // a state gets marked complete without anything having happened.
+  _assertEvidence(state, evidence) {
+    const required = SUCCESSION_EXERCISE_STATES[state].requires;
+    for (const field of required) {
+      const value = evidence[field];
+      const empty = value === undefined || value === null || value === ''
+        || (Array.isArray(value) && !value.length)
+        || (typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length);
+      // `failures` and `at` are the exceptions: an empty failure list is a real claim, and 0 is a
+      // legitimate logical time.
+      if (field === 'failures' && Array.isArray(value)) continue;
+      if (field === 'at' && Number.isFinite(value)) continue;
+      if (empty) this._fail(`a '${state}' transition requires '${field}' — a state marked complete because a field exists is not evidence`);
+    }
+  }
+
+  plan(exerciseId, {
+    scenario, capability, responsibleAuthority, intendedSuccessor, scope, prerequisites = [],
+    declaredBy, at = null,
+  } = {}) {
+    if (!exerciseId) this._fail('an exercise must have an identifier');
+    if (this._exercises.has(exerciseId)) this._fail(`exercise '${exerciseId}' is already declared — a duplicate succession attempt is a failure mode, not a re-declaration`);
+    if (!declaredBy) this._fail(`'${exerciseId}' must name who declared it`);
+    const t = at ?? this._clock();
+    const evidence = { exerciseId, scenario, capability, responsibleAuthority, intendedSuccessor, scope, prerequisites };
+    this._assertTransition(null, 'PLANNED');
+    this._assertEvidence('PLANNED', evidence);
+    const rec = {
+      exerciseId, state: 'PLANNED', declaredBy, plannedAt: t,
+      evidence: { PLANNED: { ...evidence, declaredBy, at: t } },
+      history: [{ from: null, to: 'PLANNED', at: t, by: declaredBy }],
+      clock: { authorityUnavailableAt: null, initiatedAt: null, successorConfirmedAt: null, restoredAt: null },
+    };
+    this._exercises.set(exerciseId, rec);
+    return this.get(exerciseId);
+  }
+
+  // Records what happened, including what failed. A failed rehearsal is a rehearsal.
+  rehearse(exerciseId, {
+    participants = [], actions = [], outcome, failures = [], runBy,
+    authorityUnavailableAt = null, initiatedAt = null, successorConfirmedAt = null, at = null,
+  } = {}) {
+    const rec = this._exercises.get(exerciseId);
+    if (!rec) this._fail(`unknown exercise '${exerciseId}'`);
+    if (!runBy) this._fail('a rehearsal must name who ran it');
+    if (!['completed', 'failed', 'abandoned'].includes(String(outcome))) {
+      this._fail("a rehearsal outcome must be 'completed', 'failed' or 'abandoned' — an unstated outcome reads as success");
+    }
+    for (const f of failures) {
+      if (!SUCCESSION_FAILURE_MODES[f && f.mode]) this._fail(`'${f && f.mode}' is not a recognised failure mode`);
+    }
+    const t = at ?? this._clock();
+    this._assertTransition(rec.state, 'REHEARSED');
+    const evidence = { participants, actions, outcome, failures, at: t, runBy };
+    this._assertEvidence('REHEARSED', evidence);
+    rec.state = 'REHEARSED';
+    rec.evidence.REHEARSED = evidence;
+    rec.history.push({ from: 'PLANNED', to: 'REHEARSED', at: t, by: runBy });
+    rec.clock.authorityUnavailableAt = authorityUnavailableAt;
+    rec.clock.initiatedAt = initiatedAt;
+    rec.clock.successorConfirmedAt = successorConfirmedAt;
+    return this.get(exerciseId);
+  }
+
+  // What the machine can work out on its own: whether the declared criteria were met. It stops
+  // there. AUTOMATED_EVIDENCE_READY is not a verification and is named so nobody can read it as one.
+  automatedEvidence(exerciseId, { criteria = [], now = null } = {}) {
+    const rec = this._exercises.get(exerciseId);
+    if (!rec) this._fail(`unknown exercise '${exerciseId}'`);
+    const t = now ?? this._clock();
+    const r = rec.evidence.REHEARSED || null;
+    const results = criteria.map((c) => {
+      const met = typeof c.met === 'function' ? !!c.met(rec) : c.met === true;
+      return { criterion: c.id || c.criterion, description: c.description || null, met };
+    });
+    const unresolved = results.filter((x) => !x.met).map((x) => x.criterion);
+    const ready = !!r && r.outcome === 'completed' && results.length > 0 && unresolved.length === 0;
+    return {
+      exerciseId, state: rec.state,
+      criteriaResults: results, unresolvedFindings: unresolved,
+      rehearsalOutcome: r ? r.outcome : null,
+      rehearsalFailures: r ? r.failures.map((f) => f.mode) : [],
+      // The whole point of this method's name.
+      status: ready ? 'AUTOMATED_EVIDENCE_READY' : 'AUTOMATED_EVIDENCE_INCOMPLETE',
+      humanVerificationRequired: 'HUMAN_VERIFICATION',
+      establishesVerification: false, authorizes: false,
+      now: t,
+      note: 'A machine can evaluate whether declared criteria were met. It cannot decide that an institution is ready, and AUTOMATED_EVIDENCE_READY is deliberately not a verification state — no code path turns it into one.',
+    };
+  }
+
+  // VERIFIED needs a human, and not the one who ran the drill.
+  verify(exerciseId, { criteria = [], criteriaResults = null, evaluator, decision, evidenceIntegrity, at = null } = {}) {
+    const rec = this._exercises.get(exerciseId);
+    if (!rec) this._fail(`unknown exercise '${exerciseId}'`);
+    const t = at ?? this._clock();
+    this._assertTransition(rec.state, 'VERIFIED');
+    if (!evaluator) this._fail('verification requires a named evaluator — an unsigned verification is an assertion that somebody agreed');
+    const runBy = rec.evidence.REHEARSED && rec.evidence.REHEARSED.runBy;
+    if (evaluator === runBy) this._fail(`'${evaluator}' ran the exercise and cannot verify it — verification that the runner can generate is not verification`);
+    if (!['verified', 'not-verified'].includes(String(decision))) this._fail("a verification decision must be 'verified' or 'not-verified'");
+    const auto = this.automatedEvidence(exerciseId, { criteria, now: t });
+    const results = criteriaResults || auto.criteriaResults;
+    const evidence = { criteria: criteria.map((c) => c.id || c.criterion), criteriaResults: results, evaluator, decision, evidenceIntegrity };
+    this._assertEvidence('VERIFIED', evidence);
+    // A rehearsal that failed cannot be verified as successful. Fail closed.
+    if (decision === 'verified' && rec.evidence.REHEARSED.outcome !== 'completed') {
+      this._fail(`exercise '${exerciseId}' was recorded as '${rec.evidence.REHEARSED.outcome}' and cannot be verified as successful — a failed exercise represented as verified is the one outcome this register exists to prevent`);
+    }
+    if (decision === 'verified' && auto.unresolvedFindings.length) {
+      this._fail(`${auto.unresolvedFindings.length} declared criterion(s) were not met: ${auto.unresolvedFindings.join(', ')} — verification requires its criteria, not a signature`);
+    }
+    rec.state = 'VERIFIED';
+    rec.evidence.VERIFIED = { ...evidence, at: t, automatedStatus: auto.status };
+    rec.history.push({ from: 'REHEARSED', to: 'VERIFIED', at: t, by: evaluator });
+    return this.get(exerciseId);
+  }
+
+  restore(exerciseId, { restoredTo, restoredBy, restorationEvent, governanceConfirmation, at = null } = {}) {
+    const rec = this._exercises.get(exerciseId);
+    if (!rec) this._fail(`unknown exercise '${exerciseId}'`);
+    const t = at ?? this._clock();
+    this._assertTransition(rec.state, 'AUTHORITY_RESTORED');
+    const evidence = { restoredTo, restoredBy, restorationEvent, governanceConfirmation, at: t };
+    this._assertEvidence('AUTHORITY_RESTORED', evidence);
+    if (rec.evidence.VERIFIED.decision !== 'verified') {
+      this._fail(`exercise '${exerciseId}' was evaluated as '${rec.evidence.VERIFIED.decision}' and authority cannot be restored on it`);
+    }
+    const primary = rec.evidence.PLANNED.responsibleAuthority;
+    if (restoredTo !== primary) {
+      this._fail(`authority was restored to '${restoredTo}' and the primary office is '${primary}' — an acting holder keeping the office is the failure this state exists to detect`);
+    }
+    rec.state = 'AUTHORITY_RESTORED';
+    rec.evidence.AUTHORITY_RESTORED = evidence;
+    rec.history.push({ from: 'VERIFIED', to: 'AUTHORITY_RESTORED', at: t, by: restoredBy });
+    rec.clock.restoredAt = t;
+    return this.get(exerciseId);
+  }
+
+  // Time to Authority Restoration, from the logical clock. Reported in clock units, never wall time,
+  // and UNKNOWN wherever a marker was not recorded. A duration derived from a missing marker would
+  // be a number that looks measured.
+  ttar(exerciseId) {
+    const rec = this._exercises.get(exerciseId);
+    if (!rec) this._fail(`unknown exercise '${exerciseId}'`);
+    const c = rec.clock;
+    const markers = [
+      { marker: 'authority-unavailable', at: c.authorityUnavailableAt },
+      { marker: 'succession-initiated', at: c.initiatedAt },
+      { marker: 'successor-confirmed', at: c.successorConfirmedAt },
+      { marker: 'authority-restored', at: c.restoredAt },
+    ];
+    const missing = markers.filter((m) => !Number.isFinite(m.at)).map((m) => m.marker);
+    const ordered = missing.length ? null : markers.every((m, i) => i === 0 || m.at >= markers[i - 1].at);
+    return {
+      exerciseId, markers, missing,
+      ordered,
+      duration: missing.length || ordered === false ? null : c.restoredAt - c.authorityUnavailableAt,
+      segments: missing.length ? [] : [
+        { segment: 'detection-to-initiation', ticks: c.initiatedAt - c.authorityUnavailableAt },
+        { segment: 'initiation-to-confirmation', ticks: c.successorConfirmedAt - c.initiatedAt },
+        { segment: 'confirmation-to-restoration', ticks: c.restoredAt - c.successorConfirmedAt },
+      ],
+      state: missing.length ? 'UNKNOWN' : ordered === false ? 'BROKEN' : 'RESOLVED',
+      detail: missing.length ? `${missing.length} marker(s) were not recorded: ${missing.join(', ')} — a duration derived from a missing marker is a number that looks measured`
+        : ordered === false ? 'the recorded markers are out of order, so the elapsed time is not a duration'
+          : `${c.restoredAt - c.authorityUnavailableAt} logical tick(s) from authority becoming unavailable to authority being restored`,
+      unit: 'logical clock ticks',
+      // A number never moves a governance decision on its own.
+      informsGovernance: false, authorizes: false,
+      note: 'Measured on the injected logical clock so identical inputs give an identical figure. TTAR is a measurement and not a threshold: nothing here compares it to a target or changes a state because of it.',
+    };
+  }
+
+  get(exerciseId) {
+    const r = this._exercises.get(exerciseId);
+    if (!r) return null;
+    return JSON.parse(JSON.stringify({ ...r, ttarState: undefined }));
+  }
+  exercises() { return [...this._exercises.keys()].sort().map((id) => this.get(id)); }
+  // Exercises that reached a state, for the assurance ladder to read.
+  inState(state) { return this.exercises().filter((e) => e.state === state); }
+  // An exercise counts as rehearsed for a subsystem once it has been run at all.
+  forCapability(capability) { return this.exercises().filter((e) => e.evidence.PLANNED.capability === capability); }
+  states() { return Object.entries(SUCCESSION_EXERCISE_STATES).map(([state, s]) => ({ state, ...s })); }
+  transitions() { return SUCCESSION_TRANSITIONS.map((t) => ({ ...t })); }
+}
+
 // --- Governance succession assurance (Phase 18.1 close-out remediation R6/R9) ---------------------
 //
 // Four things are routinely called "we have succession", and they are not the same thing. Conflating
@@ -1060,9 +1343,28 @@ function successionExercise(subsystem, { role = 'approvingAuthority', unavailabl
   // The four levels. Each is established independently; none is inferred from another.
   const documented = plan.chain.length > 0 && plan.chain.every((c) => !!c.holder);
   const executable = documented && plan.chain.every((c) => known.has(c.holder)) && plan.terminatesAtBoard;
-  const rehearsalRecords = exercises && typeof exercises.participation === 'function'
+  // Two evidence sources, one meaning. The participation register records WHO attended a
+  // governance-succession exercise; the exercise register records WHAT an exercise did and how far
+  // it got. Either establishes that a rehearsal happened, and the ladder reads both rather than
+  // keeping a third idea of what has been rehearsed.
+  const participationRecords = exercises && typeof exercises.participation === 'function'
     ? exercises.participation().filter((r) => r.exercise === 'governance-succession')
     : [];
+  const exerciseRecords = exercises && typeof exercises.exercises === 'function'
+    ? exercises.exercises().filter((e) => e.state !== 'PLANNED')
+    : [];
+  const rehearsalRecords = [
+    ...participationRecords,
+    // An exercise that reached VERIFIED with a positive decision carries its evaluator as the
+    // attesting human, which is exactly what the ladder's VERIFIED level asks for.
+    ...exerciseRecords.map((e) => ({
+      person: e.evidence.REHEARSED ? e.evidence.REHEARSED.runBy : e.declaredBy,
+      exercise: 'governance-succession',
+      at: e.evidence.REHEARSED ? e.evidence.REHEARSED.at : e.plannedAt,
+      by: e.evidence.VERIFIED ? e.evidence.VERIFIED.evaluator : null,
+      outcome: e.evidence.VERIFIED && e.evidence.VERIFIED.decision === 'verified' && e.evidence.REHEARSED.outcome === 'completed' ? 'completed' : 'failed',
+    })),
+  ];
   const rehearsed = rehearsalRecords.length > 0;
   // A rehearsal that HAPPENED is not a rehearsal that WORKED, and that gap is where the two top
   // levels differ. REHEARSED counts any recorded walk, including one that failed — a failed drill is
@@ -1145,6 +1447,7 @@ function successionAssurance({ role = 'approvingAuthority', exercises = null, no
 
 module.exports = {
   SUCCESSION_ASSURANCE_LEVELS, SUCCESSION_ASSURANCE_ORDER, SUCCESSION_STAGES, SUCCESSION_CHECKS,
+  SUCCESSION_EXERCISE_STATES, SUCCESSION_TRANSITIONS, SUCCESSION_FAILURE_MODES, SuccessionExerciseRegister,
   successionExercise, successionAssurance,
   CAPABILITY_DOMAINS, CAPABILITY_LEVELS, CAPABILITY_ORDER, capabilityMaturity, maturityEvolution, capabilityEvolution,
   OWNERSHIP, BOARDS, ROLES, DEPUTY_ROLES, DEPUTY_RULE, DEPUTY_OVERRIDES, REVIEW_CADENCE_DAYS,

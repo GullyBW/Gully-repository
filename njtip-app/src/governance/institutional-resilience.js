@@ -1158,6 +1158,7 @@ const SINGLE_POINT_KINDS = {
 const GOVERNANCE_CAPABILITIES = {
   'requirements-traceability': {
     title: 'Every specification requirement traces to what implements and verifies it',
+    contexts: ['assurance'],
     controls: ['APP-FIT-REQUIREMENTS-TRACEABILITY', 'APP-FIT-SPECIFICATION-COMPLIANCE'],
     documents: ['docs/architecture-governance.md', 'docs/adr/0012-decision-package-merge-and-specification-traceability.md'],
     modules: ['src/architecture/adr-governance.js'],
@@ -1165,6 +1166,7 @@ const GOVERNANCE_CAPABILITIES = {
   },
   'merge-governance': {
     title: 'Requirements merged into one implementation are recorded and justified',
+    contexts: ['assurance'],
     controls: ['APP-FIT-MERGE-GOVERNANCE', 'APP-FIT-ADR-GOVERNANCE'],
     documents: ['docs/architecture-governance.md', 'docs/adr/0012-decision-package-merge-and-specification-traceability.md'],
     modules: ['src/architecture/adr-governance.js'],
@@ -1172,6 +1174,7 @@ const GOVERNANCE_CAPABILITIES = {
   },
   'decision-assurance': {
     title: 'An executive recommendation can be walked back to what authorises it',
+    contexts: ['assurance'],
     controls: ['APP-FIT-DECISION-QUALITY', 'APP-FIT-DECISION-EXPLAINABILITY', 'APP-FIT-DECISION-SUPPORT'],
     documents: ['docs/institutional-intelligence.md', 'docs/adaptive-governance.md'],
     modules: ['src/assurance/institutional.js', 'src/assurance/epistemic.js'],
@@ -1179,6 +1182,7 @@ const GOVERNANCE_CAPABILITIES = {
   },
   'epistemic-integrity': {
     title: 'Unknown is never reported as pass, anywhere in the platform',
+    contexts: ['assurance'],
     controls: ['APP-FIT-EPISTEMIC-INTEGRITY', 'APP-FIT-DECISION-EXPLAINABILITY', 'APP-FIT-SPECIFICATION-COMPLIANCE'],
     documents: ['docs/architecture-governance.md'],
     modules: ['src/assurance/epistemic.js'],
@@ -1186,6 +1190,7 @@ const GOVERNANCE_CAPABILITIES = {
   },
   'duplication-prevention': {
     title: 'A second framework cannot be built without an architectural authority saying so',
+    contexts: ['assurance'],
     controls: ['APP-FIT-DUPLICATE-FRAMEWORK', 'APP-FIT-SPECIFICATION-EVOLUTION'],
     documents: ['docs/architecture-governance.md'],
     modules: ['src/architecture/drift-prevention.js'],
@@ -1339,13 +1344,24 @@ function governanceCapabilityDrift({ controls = [], capabilities = GOVERNANCE_CA
 
 // Applies the invariant's single-point clause to the platform's own governance machinery.
 // Deterministic, fail-closed on missing evidence, and it authorises nothing.
-function governanceCapabilityResilience({ controls = [], capabilities = GOVERNANCE_CAPABILITIES, now = 0 } = {}) {
+function governanceCapabilityResilience({ controls = [], capabilities = GOVERNANCE_CAPABILITIES, successionExercises = null, now = 0 } = {}) {
   const fs2 = require('fs');
   const path2 = require('path');
   const raci = require('./raci');
   const { EPISTEMIC_STATES, weakest, machineBoundary } = require('../assurance/epistemic');
   const ran = new Set(controls.map((c) => (typeof c === 'string' ? c : c.id)));
   const root = path2.join(__dirname, '..', '..');
+
+  // Succession evidence feeds resilience (spec §10). A capability whose succession has never been
+  // rehearsed is not fully resilient merely because a plan exists — SUCCESSION DESIGN IS NOT
+  // SUCCESSION PROOF — so the succession level is reported alongside the four dependency kinds and
+  // a capability above RESILIENT on structure alone is held back to the weaker of the two.
+  const own2 = require('./ownership');
+  const successionFor = (spec) => {
+    const subsystem = (spec.contexts && spec.contexts[0]) || spec.subsystem || null;
+    if (!subsystem) return null;
+    try { return own2.successionExercise(subsystem, { exercises: successionExercises, now }); } catch (_) { return null; }
+  };
 
   const rows = Object.keys(capabilities).sort().map((id) => {
     const spec = capabilities[id];
@@ -1381,6 +1397,15 @@ function governanceCapabilityResilience({ controls = [], capabilities = GOVERNAN
     // …and only the governance model can escalate that to BLOCKED. Nothing here decides it.
     if (state === 'SINGLE_POINT_OBSERVED' && spec.governanceModelRequiresResilience) state = 'BLOCKED';
 
+    // Succession evidence cannot make a capability MORE resilient than its structure allows, and it
+    // can hold one back. A capability with more than one of every kind is still not resilient if
+    // nobody has ever walked its succession chain.
+    const succession = successionFor(spec);
+    const rehearsedSuccession = !!(succession && succession.rehearsed);
+    if (state === 'RESILIENT' && succession && !rehearsedSuccession) {
+      state = 'SINGLE_POINT_OBSERVED';
+    }
+
     const single = kinds.filter((k) => k.state === 'SINGLE_POINT_OBSERVED');
     const unexamined = kinds.filter((k) => k.state === 'UNKNOWN');
     return {
@@ -1393,7 +1418,13 @@ function governanceCapabilityResilience({ controls = [], capabilities = GOVERNAN
       documentsMissing: missingDocs, modulesMissing: missingModules,
       accountableBodies: bodies,
       governanceModelRequiresResilience: !!spec.governanceModelRequiresResilience,
-      reason: unexamined.length ? `${unexamined.length} dependency kind(s) have nothing recorded: ${unexamined.map((k) => k.kind).join(', ')}`
+      successionLevel: succession ? succession.attainedLevel : null,
+      successionRehearsed: rehearsedSuccession,
+      successionSubsystem: succession ? succession.subsystem : null,
+      heldBackBySuccession: state === 'SINGLE_POINT_OBSERVED' && !single.length && !unexamined.length,
+      reason: (state === 'SINGLE_POINT_OBSERVED' && !single.length && !unexamined.length)
+        ? `more than one instance of every kind, and its succession has never been rehearsed — a plan is not a rehearsal`
+        : unexamined.length ? `${unexamined.length} dependency kind(s) have nothing recorded: ${unexamined.map((k) => k.kind).join(', ')}`
         : single.length ? `${single.length} dependency kind(s) have exactly one instance: ${single.map((k) => k.kind).join(', ')}`
           : 'more than one instance of every kind this capability depends on',
     };
@@ -1412,6 +1443,10 @@ function governanceCapabilityResilience({ controls = [], capabilities = GOVERNAN
     blocked: of('BLOCKED'),
     unknown: of('UNKNOWN'),
     singlePointDependencies: rows.flatMap((r) => r.singlePointKinds.map((kind) => ({ capability: r.capability, kind, detail: r.kinds.find((k) => k.kind === kind).detail }))),
+    // Succession contributes to resilience assurance, and its absence is named rather than implied.
+    successionRehearsed: rows.filter((r) => r.successionRehearsed).map((r) => r.capability),
+    successionNeverRehearsed: rows.filter((r) => r.successionLevel && !r.successionRehearsed).map((r) => r.capability),
+    heldBackBySuccession: rows.filter((r) => r.heldBackBySuccession).map((r) => r.capability),
     // Only a capability the governance model already requires to be resilient can block. Nothing
     // observed here changes that, and nothing here authorises anything.
     blocksInstitutionalReadiness: rows.some((r) => r.state === 'BLOCKED'),
