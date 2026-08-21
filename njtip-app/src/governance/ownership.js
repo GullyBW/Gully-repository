@@ -941,8 +941,8 @@ const SUCCESSION_EXERCISE_STATES = {
   },
   AUTHORITY_RESTORED: {
     order: 4, establishedBy: 'human judgement', terminal: true,
-    means: 'Authority returned to the primary office, the interregnum was closed, and a governance body confirmed it.',
-    doesNotEstablish: 'That restoration would be as clean when the absence was not scheduled.',
+    means: 'Two distinct events, both recorded: the primary office resumed the authority, AND the acting arrangement was formally closed. A governance body confirmed both.',
+    doesNotEstablish: 'That the successor ever held the authority well, that the capability survived the gap, or that restoration would be this clean when the absence was not scheduled. Those are separate events with their own records.',
     requires: ['restoredTo', 'restoredBy', 'restorationEvent', 'governanceConfirmation', 'at'],
   },
 };
@@ -980,6 +980,69 @@ const SUCCESSION_FAILURE_MODES = {
   'conflicting-succession-attempts': 'Two different successions were attempted for one authority.',
   'unauthorized-restoration-attempt': 'Authority was taken back by somebody not entitled to restore it.',
 };
+
+// The distinct events a succession passes through. Declared, ordered, and separated on purpose.
+//
+// Asked what AUTHORITY_RESTORED means, the honest answer used to be "several different things". The
+// state required a `restorationEvent` and the rehearsal recorded free-text `actions` — which accepted
+// the string "banana" — so five genuinely different institutional events were indistinguishable:
+//
+//   the successor assumed authority        (somebody else is acting)
+//   the capability kept working            (the service survived the gap)
+//   the original authority returned        (the primary is back)
+//   the interregnum was closed             (the acting arrangement formally ended)
+//   the exercise completed                 (the drill finished, whatever the outcome)
+//
+// Those are not one event. A successor can assume authority and the capability still fail; authority
+// can return without the interregnum being closed, which is how an "acting" arrangement quietly
+// becomes permanent. This vocabulary makes each one recordable and orderable.
+//
+// It is a vocabulary constraint on an existing evidence field, exactly as SUCCESSION_FAILURE_MODES
+// already constrains `failures`. No new state, no new store, no ADR: the lifecycle still has four
+// states and this describes what happens INSIDE them.
+const SUCCESSION_EVENTS = {
+  'authority-unavailable': { order: 1, once: true, means: 'The primary office became unable to act.', distinctFrom: 'Anybody knowing about it yet.' },
+  'succession-initiated': { order: 2, once: true, means: 'Somebody started the succession procedure.', distinctFrom: 'A successor having been found.' },
+  'successor-identified': { order: 3, once: false, means: 'A specific person or body was identified as next.', distinctFrom: 'That person being able or willing to act.' },
+  'credentials-verified': { order: 4, once: false, means: 'The successor established who they were.', distinctFrom: 'Their authority to act being confirmed.' },
+  'governance-conditions-evaluated': { order: 5, once: false, means: 'The conditions the governance model requires were checked.', distinctFrom: 'Those conditions being met.' },
+  'quorum-reached': { order: 6, once: false, means: 'A body reached the quorum needed to act.', distinctFrom: 'That body having decided anything.' },
+  'successor-assumed-authority': { order: 7, once: true, means: 'The successor took up the authority.', distinctFrom: 'The original authority having returned, and from the capability still working.' },
+  'capability-continued': { order: 8, once: false, means: 'The critical capability kept operating through the gap.', distinctFrom: 'Authority having been restored — a capability can survive an interregnum that never properly ends.' },
+  'authority-returned': { order: 9, once: true, means: 'The primary office resumed the authority.', distinctFrom: 'The acting arrangement having been formally closed.' },
+  'interregnum-closed': { order: 10, once: true, means: 'The acting arrangement was formally ended and recorded.', distinctFrom: 'Authority having returned — an acting holder keeping the office by inertia is exactly this gap.' },
+};
+const SUCCESSION_EVENT_ORDER = Object.keys(SUCCESSION_EVENTS);
+
+// Validates a recorded event sequence. Fails closed on anything that could not have happened.
+//
+// Two orderings are enforced and they are different. The LOGICAL CLOCK must not go backwards, and
+// the DECLARED ORDER must not either — an event log where credentials are verified before a
+// successor is identified is internally impossible whatever its timestamps say.
+function validateEventSequence(events = []) {
+  const problems = [];
+  const seen = new Map();
+  let lastAt = -Infinity;
+  let lastOrder = 0;
+  events.forEach((e, i) => {
+    const spec = SUCCESSION_EVENTS[e && e.event];
+    if (!spec) { problems.push(`event ${i}: '${e && e.event}' is not a recognised succession event`); return; }
+    if (!Number.isFinite(e.at)) { problems.push(`event ${i} ('${e.event}') carries no logical timestamp`); return; }
+    if (e.at < lastAt) problems.push(`event ${i} ('${e.event}') is timestamped ${e.at}, before the event preceding it at ${lastAt} — a sequence that runs backwards is not a sequence`);
+    if (spec.order < lastOrder) problems.push(`'${e.event}' is recorded after an event that can only follow it — the sequence is internally impossible whatever its timestamps say`);
+    const count = (seen.get(e.event) || 0) + 1;
+    seen.set(e.event, count);
+    if (spec.once && count > 1) problems.push(`'${e.event}' is recorded ${count} times and can only happen once — a replayed event is not a second occurrence`);
+    lastAt = e.at;
+    lastOrder = Math.max(lastOrder, spec.order);
+  });
+  return {
+    events: events.map((e, i) => ({ position: i + 1, ...e, ...(SUCCESSION_EVENTS[e && e.event] || {}) })),
+    problems, valid: problems.length === 0,
+    recorded: [...seen.keys()],
+    vocabulary: Object.entries(SUCCESSION_EVENTS).map(([event, spec]) => ({ event, ...spec })),
+  };
+}
 
 // A register of succession exercises. Declared, never inferred; append-only in effect, because a
 // transition rewrites nothing that came before it. Fails closed on every incomplete transition.
@@ -1036,7 +1099,7 @@ class SuccessionExerciseRegister {
 
   // Records what happened, including what failed. A failed rehearsal is a rehearsal.
   rehearse(exerciseId, {
-    participants = [], actions = [], outcome, failures = [], runBy,
+    participants = [], actions = [], outcome, failures = [], runBy, events = [],
     authorityUnavailableAt = null, initiatedAt = null, successorConfirmedAt = null, at = null,
   } = {}) {
     const rec = this._exercises.get(exerciseId);
@@ -1048,9 +1111,16 @@ class SuccessionExerciseRegister {
     for (const f of failures) {
       if (!SUCCESSION_FAILURE_MODES[f && f.mode]) this._fail(`'${f && f.mode}' is not a recognised failure mode`);
     }
+    // Actions are drawn from the declared event vocabulary. They used to be free text, and free text
+    // accepted 'banana' as an action performed during a succession rehearsal.
+    for (const a of actions) {
+      if (!SUCCESSION_EVENTS[a]) this._fail(`'${a}' is not a recognised succession event — one of ${SUCCESSION_EVENT_ORDER.join(', ')}`);
+    }
+    const seq = validateEventSequence(events);
+    if (events.length && !seq.valid) this._fail(`the recorded event sequence could not have happened: ${seq.problems.join('; ')}`);
     const t = at ?? this._clock();
     this._assertTransition(rec.state, 'REHEARSED');
-    const evidence = { participants, actions, outcome, failures, at: t, runBy };
+    const evidence = { participants, actions, outcome, failures, at: t, runBy, events: [...events] };
     this._assertEvidence('REHEARSED', evidence);
     rec.state = 'REHEARSED';
     rec.evidence.REHEARSED = evidence;
@@ -1115,16 +1185,38 @@ class SuccessionExerciseRegister {
     return this.get(exerciseId);
   }
 
-  restore(exerciseId, { restoredTo, restoredBy, restorationEvent, governanceConfirmation, at = null } = {}) {
+  restore(exerciseId, {
+    restoredTo, restoredBy, restorationEvent, governanceConfirmation,
+    restorationEvents = ['authority-returned', 'interregnum-closed'], at = null,
+  } = {}) {
     const rec = this._exercises.get(exerciseId);
     if (!rec) this._fail(`unknown exercise '${exerciseId}'`);
     const t = at ?? this._clock();
     this._assertTransition(rec.state, 'AUTHORITY_RESTORED');
-    const evidence = { restoredTo, restoredBy, restorationEvent, governanceConfirmation, at: t };
+    const evidence = { restoredTo, restoredBy, restorationEvent, governanceConfirmation, at: t, restorationEvents: [...restorationEvents] };
     this._assertEvidence('AUTHORITY_RESTORED', evidence);
     if (rec.evidence.VERIFIED.decision !== 'verified') {
       this._fail(`exercise '${exerciseId}' was evaluated as '${rec.evidence.VERIFIED.decision}' and authority cannot be restored on it`);
     }
+    // AUTHORITY_RESTORED now means something specific: the primary resumed the office AND the acting
+    // arrangement was formally closed. Both events must be recorded, and the successor must actually
+    // have assumed authority first — restoring authority nobody ever took is not a restoration.
+    const recorded = (rec.evidence.REHEARSED.events || []).map((e) => e.event);
+    const actionsTaken = new Set([...(rec.evidence.REHEARSED.actions || []), ...recorded]);
+    if (!actionsTaken.has('successor-assumed-authority')) {
+      this._fail(`exercise '${exerciseId}' records no 'successor-assumed-authority' event — authority cannot be restored from a transfer that never happened`);
+    }
+    for (const required of ['authority-returned', 'interregnum-closed']) {
+      if (!restorationEvents.includes(required)) {
+        this._fail(`restoration requires a '${required}' event — 'the primary is back' and 'the acting arrangement was formally ended' are different events, and an acting holder keeping the office by inertia is exactly the gap between them`);
+      }
+    }
+    const restorationSeq = validateEventSequence([
+      ...(rec.evidence.REHEARSED.events || []),
+      ...restorationEvents.map((e) => ({ event: e, at: t })),
+    ]);
+    if (!restorationSeq.valid) this._fail(`the restoration sequence could not have happened: ${restorationSeq.problems.join('; ')}`);
+
     const primary = rec.evidence.PLANNED.responsibleAuthority;
     if (restoredTo !== primary) {
       this._fail(`authority was restored to '${restoredTo}' and the primary office is '${primary}' — an acting holder keeping the office is the failure this state exists to detect`);
@@ -1448,6 +1540,7 @@ function successionAssurance({ role = 'approvingAuthority', exercises = null, no
 module.exports = {
   SUCCESSION_ASSURANCE_LEVELS, SUCCESSION_ASSURANCE_ORDER, SUCCESSION_STAGES, SUCCESSION_CHECKS,
   SUCCESSION_EXERCISE_STATES, SUCCESSION_TRANSITIONS, SUCCESSION_FAILURE_MODES, SuccessionExerciseRegister,
+  SUCCESSION_EVENTS, SUCCESSION_EVENT_ORDER, validateEventSequence,
   successionExercise, successionAssurance,
   CAPABILITY_DOMAINS, CAPABILITY_LEVELS, CAPABILITY_ORDER, capabilityMaturity, maturityEvolution, capabilityEvolution,
   OWNERSHIP, BOARDS, ROLES, DEPUTY_ROLES, DEPUTY_RULE, DEPUTY_OVERRIDES, REVIEW_CADENCE_DAYS,

@@ -413,3 +413,75 @@ INSTITUTIONAL ASSURANCE a real institution has demonstrated this in a real exerc
 
 The third is not implied by the first two. No real succession has occurred, no real authority has
 transferred, and nothing here has exercised production authority.
+
+## Two state models, and why they are not one
+
+Two different questions are asked about succession, and collapsing them loses the answer to both.
+
+| | **Capability assurance ladder** | **Succession exercise lifecycle** |
+|---|---|---|
+| Subject | a **subsystem** | a **specific exercise** |
+| Question | how well assured is its succession? | how far did this drill get? |
+| States | `DOCUMENTED → EXECUTABLE → REHEARSED → VERIFIED` | `PLANNED → REHEARSED → VERIFIED → AUTHORITY_RESTORED` |
+| Authoritative for | nothing — it is **derived** | **exercise state** |
+| Storage | none; computed fresh each call | `SuccessionExerciseRegister` |
+
+They share the words REHEARSED and VERIFIED and mean different things by them. A subsystem is
+REHEARSED on the ladder because *some* exercise was run against it; an exercise is REHEARSED because
+*it* was run. The ladder is a property of an institution, the lifecycle a property of an event.
+
+**One source of truth.** The ladder reads the exercise register; it never keeps its own record of
+what has been rehearsed. A contradiction between them — an exercise at REHEARSED while the ladder
+claims VERIFIED — is therefore a **defect, not a disagreement**, and `capabilityResilienceView()`
+reports a `contradictions` list that should always be empty precisely so that one would be seen.
+
+## What AUTHORITY_RESTORED means
+
+Asked what it meant, the honest answer used to be "several different things". The rehearsal recorded
+free-text `actions` — which accepted the string `"banana"` — so five genuinely different
+institutional events were indistinguishable:
+
+```
+successor assumed authority   somebody else is acting
+capability continued          the service survived the gap
+authority returned            the primary is back
+interregnum closed            the acting arrangement formally ended
+exercise completed            the drill finished, whatever the outcome
+```
+
+A successor can assume authority and the capability still fail. Authority can return without the
+interregnum being closed — which is how an "acting" arrangement quietly becomes permanent.
+
+`SUCCESSION_EVENTS` is a declared, ordered vocabulary making each recordable. This is a **vocabulary
+constraint on an existing evidence field**, exactly as `SUCCESSION_FAILURE_MODES` already constrains
+`failures` — four lifecycle states, no new store, and no ADR.
+
+`AUTHORITY_RESTORED` now means **two events, both recorded**: `authority-returned` *and*
+`interregnum-closed`. Restoration is refused where no `successor-assumed-authority` event exists —
+authority cannot be restored from a transfer that never happened.
+
+### Evidence ordering
+
+Two orderings are enforced and they differ. The **logical clock** must not run backwards, and the
+**declared order** must not either — credentials verified before a successor is identified is
+internally impossible whatever its timestamps say. Fails closed on: reversed timestamps · impossible
+declared order · replayed once-only events · missing timestamps · unrecognised events. Equal
+timestamps are legitimate: a logical clock need not advance between two recorded facts.
+
+## Capability resilience view
+
+A **derived view**, not a register (`derived: true`, `isRegister: false`) — it stores nothing, because
+a table like this held as state is how a second source of truth appears.
+
+```
+STRONG    rehearsed, verified by a named human, and authority restored with both events
+ADEQUATE  rehearsed and verified; restoration never demonstrated
+WEAK      a successor and a procedure exist and nobody has walked them
+CRITICAL  no successor, or a succession walked and failed
+```
+
+Verified-but-never-restored is `ADEQUATE`, not `STRONG`: showing a successor can take over is not
+showing that authority comes back. A failed rehearsal is `CRITICAL`, not `WEAK` — worse news than an
+unrehearsed one, not the same news.
+
+**Current position: all five governance capabilities are `WEAK`.** None has been rehearsed.

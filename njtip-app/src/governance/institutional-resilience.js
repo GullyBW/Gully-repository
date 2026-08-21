@@ -1342,6 +1342,122 @@ function governanceCapabilityDrift({ controls = [], capabilities = GOVERNANCE_CA
   };
 }
 
+// --- Phase 10: the capability resilience view -----------------------------------------------------
+//
+// A DERIVED VIEW, not a register. It holds nothing, stores nothing and creates no evidence: every
+// column is read from the exercise register, the succession ladder and the dependency analysis that
+// already exist. Building a table like this as a store is how a second source of truth appears.
+//
+// The two state models it draws on are deliberately kept apart and both are shown:
+//
+//   ASSURANCE LADDER   DOCUMENTED -> EXECUTABLE -> REHEARSED -> VERIFIED
+//     how well assured a SUBSYSTEM's succession is, derived from evidence
+//
+//   EXERCISE LIFECYCLE PLANNED -> REHEARSED -> VERIFIED -> AUTHORITY_RESTORED
+//     how far a SPECIFIC EXERCISE got, and the authoritative record of that
+//
+// The ladder DERIVES from the exercise register. It never holds its own copy, which is why a
+// contradiction between them is a bug rather than a disagreement — and `contradictions` below exists
+// to catch it if one ever appears.
+const RESILIENCE_VIEW_STATES = {
+  STRONG: { epistemic: 'RESOLVED', means: 'Succession is rehearsed, verified by a named human, and authority was restored with both restoration events recorded.' },
+  ADEQUATE: { epistemic: 'UNKNOWN', means: 'Succession was rehearsed and verified, and restoration has not been demonstrated.' },
+  WEAK: { epistemic: 'UNKNOWN', means: 'A successor and a procedure exist and nobody has ever walked them. A plan is not a rehearsal.' },
+  CRITICAL: { epistemic: 'BROKEN', means: 'No successor, or a succession that was walked and failed.' },
+  UNKNOWN: { epistemic: 'UNKNOWN', means: 'Nothing was supplied to assess this capability against.' },
+};
+
+function capabilityResilienceView({ capabilities = GOVERNANCE_CAPABILITIES, controls = [], successionExercises = null, now = 0 } = {}) {
+  const own2 = require('./ownership');
+  const { EPISTEMIC_STATES, machineBoundary } = require('../assurance/epistemic');
+
+  const rows = Object.keys(capabilities).sort().map((id) => {
+    const spec = capabilities[id];
+    const subsystem = (spec.contexts && spec.contexts[0]) || spec.subsystem || null;
+    let plan = null; let ladder = null;
+    try { plan = subsystem ? own2.successionPlan(subsystem) : null; } catch (_) { plan = null; }
+    try { ladder = subsystem ? own2.successionExercise(subsystem, { exercises: successionExercises, now }) : null; } catch (_) { ladder = null; }
+
+    // The exercise register is authoritative for exercise state. The view reads it; it does not
+    // recompute it, and it does not keep a copy.
+    const mine = successionExercises && typeof successionExercises.exercises === 'function'
+      ? successionExercises.exercises().filter((e) => e.evidence.PLANNED.capability === id || e.evidence.PLANNED.capability === subsystem)
+      : [];
+    const latest = mine.length ? mine[mine.length - 1] : null;
+    const rehearsed = !!(latest && latest.evidence.REHEARSED);
+    const verified = !!(latest && latest.evidence.VERIFIED && latest.evidence.VERIFIED.decision === 'verified');
+    const restored = !!(latest && latest.state === 'AUTHORITY_RESTORED');
+    const failedRehearsal = !!(latest && latest.evidence.REHEARSED && latest.evidence.REHEARSED.outcome !== 'completed');
+    const ttar = latest && restored && successionExercises ? successionExercises.ttar(latest.exerciseId) : null;
+
+    const state = !plan ? 'UNKNOWN'
+      : !plan.chain[1] || !plan.chain[1].holder ? 'CRITICAL'
+        : failedRehearsal || (latest && latest.evidence.VERIFIED && latest.evidence.VERIFIED.decision === 'not-verified') ? 'CRITICAL'
+          : restored && verified ? 'STRONG'
+            : verified ? 'ADEQUATE'
+              : 'WEAK';
+
+    // A contradiction between the two models. It should be impossible by construction — the ladder
+    // derives from this same register — so if it ever appears it is a defect and says so.
+    const contradiction = (ladder && ladder.rehearsed && !rehearsed && mine.length)
+      ? `the assurance ladder reports a rehearsal and the exercise register holds none for '${id}'`
+      : (verified && ladder && ladder.attainedLevel === 'EXECUTABLE' && !ladder.rehearsed && mine.length)
+        ? `exercise '${latest.exerciseId}' is VERIFIED and the ladder reports '${ladder.attainedLevel}' — the ladder is not deriving from the register`
+        : null;
+
+    return {
+      capability: id, title: spec.title || null, subsystem,
+      primaryAuthority: plan ? plan.chain[0].holder : null,
+      successor: plan && plan.chain[1] ? plan.chain[1].holder : null,
+      successionProcedure: plan ? `${plan.depth}-deep chain terminating at ${plan.terminatesAtBoard ? 'a body' : 'a person'}` : null,
+      // Assurance ladder (subsystem maturity) and exercise lifecycle (instance), side by side.
+      assuranceLadderLevel: ladder ? ladder.attainedLevel : null,
+      exerciseState: latest ? latest.state : null,
+      exerciseId: latest ? latest.exerciseId : null,
+      rehearsed, verified, authorityRestored: restored,
+      restorationEvidence: latest && latest.evidence.AUTHORITY_RESTORED
+        ? latest.evidence.AUTHORITY_RESTORED.restorationEvents : null,
+      ttar: ttar && ttar.state === 'RESOLVED' ? ttar.duration : null,
+      ttarState: ttar ? ttar.state : 'UNKNOWN',
+      unresolvedFailures: latest && latest.evidence.REHEARSED ? latest.evidence.REHEARSED.failures.map((f) => f.mode) : [],
+      exerciseCount: mine.length,
+      repeatedFailures: mine.filter((e) => e.evidence.REHEARSED && e.evidence.REHEARSED.outcome !== 'completed').length,
+      state, ...RESILIENCE_VIEW_STATES[state],
+      contradiction,
+      flags: [
+        ...(!plan || !plan.chain[1] || !plan.chain[1].holder ? ['no-successor'] : []),
+        ...(!plan ? ['no-succession-procedure'] : []),
+        ...(!rehearsed ? ['unrehearsed-succession'] : []),
+        ...(latest && latest.evidence.VERIFIED && latest.evidence.VERIFIED.decision === 'not-verified' ? ['failed-verification'] : []),
+        ...(failedRehearsal ? ['failed-rehearsal'] : []),
+        ...(mine.filter((e) => e.evidence.REHEARSED && e.evidence.REHEARSED.outcome !== 'completed').length > 1 ? ['repeated-succession-failures'] : []),
+      ],
+    };
+  });
+
+  const of = (st) => rows.filter((r) => r.state === st).map((r) => r.capability);
+  return {
+    rows, count: rows.length,
+    states: Object.entries(RESILIENCE_VIEW_STATES).map(([state, spec]) => ({ state, ...spec })),
+    epistemicStates: Object.entries(EPISTEMIC_STATES).map(([s2, e]) => ({ state: s2, ...e })),
+    strong: of('STRONG'), adequate: of('ADEQUATE'), weak: of('WEAK'), critical: of('CRITICAL'), unknown: of('UNKNOWN'),
+    // Should always be empty. It exists so that if the two models ever diverge, something says so.
+    contradictions: rows.filter((r) => r.contradiction).map((r) => ({ capability: r.capability, contradiction: r.contradiction })),
+    flagged: rows.filter((r) => r.flags.length).map((r) => ({ capability: r.capability, flags: r.flags })),
+    // Derived, never stored. This view owns nothing.
+    derived: true, isRegister: false, authorizes: false, informationalOnly: true,
+    ...machineBoundary({
+      observed: ['whether a successor is named', 'whether an exercise was recorded and how far it got', 'whether restoration events were recorded', 'the logical-clock duration between recorded markers'],
+      judged: ['whether a rehearsed succession would hold under real conditions', 'whether a restoration time is acceptable for this capability'],
+    }),
+    basis: rows.length
+      ? `${of('STRONG').length} strong, ${of('ADEQUATE').length} adequate, ${of('WEAK').length} weak, ${of('CRITICAL').length} critical, ${of('UNKNOWN').length} unknown, of ${rows.length} capability(ies).`
+      : 'no capability was supplied',
+    now,
+    note: 'A derived view over the exercise register, the succession ladder and the dependency analysis. It stores nothing: a table like this held as state is how a second source of truth appears. The assurance ladder and the exercise lifecycle are shown side by side and are never merged — one is subsystem maturity, the other is the state of a specific drill.',
+  };
+}
+
 // Applies the invariant's single-point clause to the platform's own governance machinery.
 // Deterministic, fail-closed on missing evidence, and it authorises nothing.
 function governanceCapabilityResilience({ controls = [], capabilities = GOVERNANCE_CAPABILITIES, successionExercises = null, now = 0 } = {}) {
@@ -1622,6 +1738,7 @@ function report({ continuity = null, controls = [], acceptances = null, now = 0,
 module.exports = {
   GOVERNANCE_RESILIENCE_STATES, SINGLE_POINT_KINDS, GOVERNANCE_CAPABILITIES, governanceCapabilityResilience,
   CAPABILITY_DRIFT_KINDS, controlsExercisingModules, governanceCapabilityDrift,
+  RESILIENCE_VIEW_STATES, capabilityResilienceView,
   DEPENDENCY_KINDS, DEPENDENCY_CATEGORIES, CRITICAL_CAPABILITIES, categoryOfKind,
   serviceResilience, regionResilience, personResilience, documentResilience, structuralResilience,
   dataResilience, knowledgeResilience, facilityResilience, legalAuthorityResilience, governanceResilience,

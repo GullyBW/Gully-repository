@@ -257,3 +257,160 @@ test('resilience: the five declared governance capabilities have never rehearsed
   assert.equal(r.successionRehearsed.length, 0);
   for (const c of r.capabilities) assert.equal(c.successionLevel, 'EXECUTABLE');
 });
+
+// --- Phase 4: what AUTHORITY_RESTORED actually means --------------------------------------------
+//
+// Asked what it meant, the honest answer was "several different things". The state required a
+// `restorationEvent` and the rehearsal recorded free-text `actions` that accepted the string
+// "banana", so five genuinely different institutional events were indistinguishable: the successor
+// assuming authority, the capability surviving, the primary returning, the acting arrangement being
+// closed, and the drill finishing. A successor can assume authority and the capability still fail,
+// and authority can return without the interregnum being closed — which is how an "acting"
+// arrangement quietly becomes permanent.
+
+test('events: the vocabulary separates the five events that used to be one string', () => {
+  for (const e of ['successor-assumed-authority', 'capability-continued', 'authority-returned', 'interregnum-closed']) {
+    assert.ok(own.SUCCESSION_EVENTS[e], `'${e}' is not a declared event`);
+    assert.ok(own.SUCCESSION_EVENTS[e].distinctFrom, `'${e}' does not say what it is distinct from`);
+  }
+  // The two that must not be conflated, ordered apart.
+  assert.ok(own.SUCCESSION_EVENTS['authority-returned'].order < own.SUCCESSION_EVENTS['interregnum-closed'].order);
+  assert.ok(own.SUCCESSION_EVENTS['successor-assumed-authority'].order < own.SUCCESSION_EVENTS['authority-returned'].order);
+  assert.match(own.SUCCESSION_EXERCISE_STATES.AUTHORITY_RESTORED.means, /two distinct events/i);
+});
+
+test('events: free text is no longer an action', () => {
+  const r = advancing(); plan(r);
+  refuses(() => r.rehearse('SYN-SUCC-001', { participants: ['p'], actions: ['banana'], outcome: 'completed', failures: [], runBy: 'R' }));
+});
+
+test('restoration: authority cannot be restored from a transfer that never happened', () => {
+  const r = advancing();
+  r.tick(10); plan(r);
+  r.tick(40); r.rehearse('SYN-SUCC-001', { participants: ['p'], actions: ['succession-initiated'], outcome: 'completed', failures: [], runBy: 'R' });
+  // A criterion the drill actually met, so verification succeeds and the refusal under test is the
+  // restoration one rather than an unmet-criteria one.
+  const initiated = [{ id: 'initiated', met: (x) => x.evidence.REHEARSED.actions.includes('succession-initiated') }];
+  r.tick(50); r.verify('SYN-SUCC-001', { criteria: initiated, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' });
+  r.tick(60);
+  refuses(() => r.restore('SYN-SUCC-001', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' }));
+});
+
+test('restoration: the primary returning is not the interregnum closing', () => {
+  const r = advancing();
+  r.tick(10); plan(r);
+  r.tick(40); r.rehearse('SYN-SUCC-001', { participants: ['p'], actions: ACTIONS, outcome: 'completed', failures: [], runBy: 'R' });
+  r.tick(50); r.verify('SYN-SUCC-001', { criteria: CRITERIA, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' });
+  r.tick(60);
+  refuses(() => r.restore('SYN-SUCC-001', {
+    restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e',
+    governanceConfirmation: 'g', restorationEvents: ['authority-returned'],
+  }));
+});
+
+// --- Phase 5: evidence ordering -----------------------------------------------------------------
+
+test('ordering: an impossible chronology fails closed', () => {
+  const seq = (events) => {
+    const r = advancing(); plan(r);
+    return () => r.rehearse('SYN-SUCC-001', { participants: ['p'], actions: ['succession-initiated'], outcome: 'completed', failures: [], runBy: 'R', events });
+  };
+  refuses(seq([{ event: 'succession-initiated', at: 9 }, { event: 'authority-unavailable', at: 2 }]));   // reversed
+  refuses(seq([{ event: 'credentials-verified', at: 1 }, { event: 'succession-initiated', at: 2 }]));    // impossible order
+  refuses(seq([{ event: 'authority-unavailable', at: 1 }, { event: 'authority-unavailable', at: 2 }]));  // replayed
+  refuses(seq([{ event: 'authority-unavailable' }]));                                                    // missing timestamp
+  refuses(seq([{ event: 'not-a-real-event', at: 1 }]));                                                  // corrupted
+});
+
+test('ordering: a well-formed sequence is accepted, and equal ticks are legitimate', () => {
+  const r = advancing(); plan(r);
+  r.rehearse('SYN-SUCC-001', {
+    participants: ['p'], actions: ['succession-initiated'], outcome: 'completed', failures: [], runBy: 'R',
+    events: [{ event: 'authority-unavailable', at: 1 }, { event: 'succession-initiated', at: 1 }, { event: 'successor-assumed-authority', at: 3 }],
+  });
+  assert.equal(r.get('SYN-SUCC-001').state, 'REHEARSED');
+  assert.equal(own.validateEventSequence([{ event: 'authority-unavailable', at: 1 }, { event: 'succession-initiated', at: 1 }]).valid, true);
+});
+
+// --- Phase 2: the two models derive, never duplicate --------------------------------------------
+
+test('models: the ladder derives from the exercise register rather than duplicating it', () => {
+  const before = own.successionExercise('assurance', { now: 0 });
+  assert.equal(before.rehearsed, false);
+  const after = own.successionExercise('assurance', { exercises: fullLifecycle(), now: 0 });
+  assert.equal(after.rehearsed, true, 'a verified exercise did not reach the ladder');
+  assert.equal(after.attainedLevel, 'VERIFIED');
+  // The two vocabularies stay different.
+  assert.notDeepEqual(own.SUCCESSION_ASSURANCE_ORDER, Object.keys(own.SUCCESSION_EXERCISE_STATES));
+});
+
+// --- Phase 10: the derived resilience view ------------------------------------------------------
+
+const VIEW_CAPS = {
+  probe: { title: 'p', contexts: ['assurance'], controls: ['APP-FIT-DECISION-QUALITY'], documents: ['docs/architecture-governance.md'], modules: ['src/assurance/epistemic.js'] },
+};
+function probeRegister(outcome, decision) {
+  let tick = 0;
+  const r = new own.SuccessionExerciseRegister({ clock: () => tick });
+  tick = 10; r.plan('X', { scenario: 's', capability: 'probe', responsibleAuthority: 'Architecture Review Board', intendedSuccessor: 'ARB Vice-Chair', scope: 'x', prerequisites: ['p'], declaredBy: 'OB' });
+  tick = 40; r.rehearse('X', { participants: ['p'], actions: ['successor-assumed-authority', 'capability-continued'], outcome, failures: outcome === 'completed' ? [] : [{ mode: 'insufficient-quorum' }], runBy: 'R', authorityUnavailableAt: 12, initiatedAt: 15, successorConfirmedAt: 22 });
+  tick = 50; r.verify('X', { criteria: [{ id: 'k', met: () => true }], evaluator: 'Auditor General', decision, evidenceIntegrity: 'd' });
+  if (decision === 'verified') { tick = 60; r.restore('X', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' }); }
+  return r;
+}
+const viewRow = (reg) => ir.capabilityResilienceView({ capabilities: VIEW_CAPS, controls: [{ id: 'APP-FIT-DECISION-QUALITY', pass: true }], successionExercises: reg, now: 0 }).rows[0];
+
+test('view: every resilience state is reachable', () => {
+  assert.equal(viewRow(probeRegister('completed', 'verified')).state, 'STRONG');
+  assert.equal(viewRow(probeRegister('failed', 'not-verified')).state, 'CRITICAL');
+  assert.equal(viewRow(null).state, 'WEAK');
+});
+
+test('view: it is derived and owns nothing', () => {
+  const full = ir.capabilityResilienceView({ controls: [], now: 0 });
+  assert.equal(full.derived, true);
+  assert.equal(full.isRegister, false);
+  assert.equal(full.authorizes, false);
+  assert.deepEqual(full.contradictions, [], 'the ladder and the register disagree');
+  assert.doesNotMatch(full.basis, /%|percent/);
+});
+
+test('view: the five governance capabilities are weak and that is recorded', () => {
+  const CONTROLS = [
+    ...require('../verification/app-fitness').map((f) => ({ id: f.id, pass: true })),
+    ...require('../verification/infra-fitness').map((f) => ({ id: f.id, pass: true })),
+  ];
+  const full = ir.capabilityResilienceView({ controls: CONTROLS, now: 0 });
+  assert.equal(full.weak.length, 5);
+  assert.equal(full.strong.length, 0);
+  for (const r of full.rows) assert.ok(r.flags.includes('unrehearsed-succession'));
+});
+
+// --- Phase 14: the failure path -----------------------------------------------------------------
+
+test('failure path: the platform refuses to claim success when conditions are not met', () => {
+  const r = advancing();
+  r.tick(10); plan(r);
+  // The drill runs and the quorum is never reached.
+  r.tick(40); r.rehearse('SYN-SUCC-001', {
+    participants: ['ARB Vice-Chair'], actions: ['succession-initiated', 'successor-identified'],
+    outcome: 'failed', failures: [{ mode: 'insufficient-quorum' }, { mode: 'approver-unavailable' }], runBy: 'Runner',
+    authorityUnavailableAt: 12, initiatedAt: 15,
+  });
+  // Automated evidence must not be ready.
+  const auto = r.automatedEvidence('SYN-SUCC-001', { criteria: CRITERIA });
+  assert.equal(auto.status, 'AUTOMATED_EVIDENCE_INCOMPLETE');
+  assert.ok(auto.unresolvedFindings.length > 0);
+  // Verification as successful is refused; recording the failure honestly is not.
+  r.tick(50);
+  refuses(() => r.verify('SYN-SUCC-001', { criteria: CRITERIA, evaluator: 'Auditor General', decision: 'verified', evidenceIntegrity: 'd' }));
+  r.verify('SYN-SUCC-001', { criteria: CRITERIA, evaluator: 'Auditor General', decision: 'not-verified', evidenceIntegrity: 'd' });
+  // Restoration is refused on a failed exercise.
+  r.tick(60);
+  refuses(() => r.restore('SYN-SUCC-001', { restoredTo: 'Architecture Review Board', restoredBy: 'OB', restorationEvent: 'e', governanceConfirmation: 'g' }));
+  // TTAR stays UNKNOWN — restoration never happened.
+  assert.equal(r.ttar('SYN-SUCC-001').state, 'UNKNOWN');
+  // And the ladder does not credit it as verified.
+  const ladder = own.successionExercise('assurance', { exercises: r, now: 0 });
+  assert.equal(ladder.verified, false);
+});
