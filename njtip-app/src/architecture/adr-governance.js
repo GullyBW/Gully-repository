@@ -1293,6 +1293,21 @@ const SYNTHETIC_REQUIREMENTS = [
     documentation: 'docs/architecture-governance.md', runbook: 'docs/operations/runbook.md',
     commits: ['synthetic'],
   },
+  // 9. R9 readiness. Traced through the existing register, and deliberately recorded as an
+  //    executable requirement whose institutional counterpart is OPEN: the software is traceable,
+  //    the rehearsal has not happened.
+  {
+    id: 'SYN-R9-READINESS', section: 'R9 — controlled real ARB succession rehearsal',
+    statement: 'A controlled real ARB succession rehearsal is prepared, gated on eighteen prerequisites, and fails closed until a governance body approves it.',
+    artefactType: 'executable', declaredBy: 'Oversight Board',
+    implementation: 'src/governance/ownership.js', context: 'governance-oversight',
+    owner: 'Oversight Board', capability: 'governance-decision-recording',
+    tests: ['phase19-r9-readiness.test.js'],
+    fitness: ['APP-FIT-R9-READINESS'],
+    mutation: ['unsupplied-gate-ready', 'approval-not-required', 'evaluator-not-independent', 'production-event-accepted', 'ready-claims-institutional-assurance', 'pre-validation-records-counted'],
+    documentation: 'docs/r9-readiness-package.md', runbook: 'docs/operations/runbook.md',
+    commits: ['synthetic'],
+  },
   // 7. Conflicting evidence: the declarations disagree with one another. The module and the control
   //    both exist, and the context named is not the context that owns either of them — so the row is
   //    internally inconsistent rather than merely incomplete.

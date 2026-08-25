@@ -12085,6 +12085,106 @@ module.exports = [
     if (/\d+\s?%|percent/.test(m.basis)) v.push('cross-axis mapping was rendered as a percentage');
   }),
 
+  fit('APP-FIT-R9-READINESS', 'The R9 rehearsal is prepared but not approved, READY is not permission, and no path leads to a production event', (v) => {
+    const own = require('../src/governance/ownership');
+
+    // --- Three exercise classes, and only one of them is R9 -----------------------------------
+    for (const cls of ['SIMULATION', 'REHEARSAL', 'PRODUCTION_EVENT']) {
+      if (!own.EXERCISE_CLASSES[cls]) v.push(`exercise class '${cls}' is not defined`);
+    }
+    if (own.EXERCISE_CLASSES.SIMULATION.producesInstitutionalEvidence) v.push('a machine-generated simulation claims to produce institutional evidence');
+    if (own.EXERCISE_CLASSES.REHEARSAL.realAuthority) v.push('a rehearsal moves real authority — then it is not a rehearsal');
+    if (!own.EXERCISE_CLASSES.PRODUCTION_EVENT.realAuthority) v.push('a production event does not move real authority');
+    if (own.R9_EXERCISE.exerciseClass !== 'REHEARSAL') v.push(`R9 is classified '${own.R9_EXERCISE.exerciseClass}' rather than a rehearsal`);
+    if (own.R9_EXERCISE.notAProductionAuthorizationEvent !== true) v.push('the R9 definition does not state that it is not a production authorization event');
+
+    // --- Eighteen prerequisites, every one critical and every one stating its source ----------
+    if (Object.keys(own.R9_PREREQUISITES).length !== 18) v.push(`the readiness gate carries ${Object.keys(own.R9_PREREQUISITES).length} prerequisites rather than eighteen`);
+    for (const [id, p2] of Object.entries(own.R9_PREREQUISITES)) {
+      if (!p2.asks || !p2.asks.endsWith('?') || !p2.from) v.push(`prerequisite '${id}' does not state its question or where it is answered from`);
+    }
+
+    const reg = () => new own.SuccessionExerciseRegister({ clock: () => 0 });
+    const approved = { ...own.R9_EXERCISE, governanceApproval: { by: 'Oversight Board', at: 0, minute: 'synthetic' } };
+    const gate = (d, opts = {}) => own.r9ReadinessGate(d, { register: reg(), now: 0, ...opts });
+
+    // --- FAILS CLOSED ---------------------------------------------------------------------------
+    const nothing = own.r9ReadinessGate(null, { now: 0 });
+    if (nothing.state !== 'UNKNOWN') v.push(`no definition supplied reported '${nothing.state}' — nobody having prepared anything is not a failure and is emphatically not ready`);
+    if (nothing.mayProceed) v.push('an unprepared exercise may proceed');
+    if (!nothing.failClosed) v.push('the readiness gate does not fail closed');
+
+    // --- READY is reachable, or the gate is one nothing can pass -------------------------------
+    if (gate(approved).state !== 'READY') v.push(`a fully prepared and approved exercise reported '${gate(approved).state}' — a state nothing can reach is not a state`);
+
+    // --- THE HONEST POSITION: prepared, and not approved --------------------------------------
+    const asDeclared = gate(own.R9_EXERCISE);
+    if (asDeclared.state !== 'NOT_READY') v.push(`R9 as declared reports '${asDeclared.state}' — no governance body has approved it and this control asserts that`);
+    if (!asDeclared.blockingPrerequisites.includes('governanceApprovalRecorded')) {
+      v.push('R9 is blocked by something other than the missing governance approval — investigate before changing this control');
+    }
+    if (asDeclared.blockingPrerequisites.length !== 1) {
+      v.push(`R9 is blocked by ${asDeclared.blockingPrerequisites.length} prerequisites: ${asDeclared.blockingPrerequisites.join(', ')}`);
+    }
+    if (own.R9_EXERCISE.governanceApproval) v.push('the R9 definition carries a governance approval — an approval nobody gave is fabricated evidence');
+
+    // --- Each critical prerequisite genuinely blocks -------------------------------------------
+    const breaks = [
+      ['governanceBodyDefined', { governanceBody: null }],
+      ['successorIdentified', { successor: 'Somebody Not In The Chain' }],
+      ['scenarioDefined', { scenario: null }],
+      ['objectivesDefined', { objectives: [] }],
+      ['successCriteriaDefined', { successCriteria: [] }],
+      ['failureCriteriaDefined', { failureCriteria: [] }],
+      ['evaluatorIdentified', { evaluator: null }],
+      ['evaluatorIndependent', { evaluator: 'ARB Vice-Chair' }],
+      ['participantsIdentified', { participants: [] }],
+      ['humanAccountabilityDefined', { accountableFor: null }],
+      ['exerciseBoundariesDeclared', { boundaries: [] }],
+      ['noProductionAuthorityChange', { exerciseClass: 'PRODUCTION_EVENT' }],
+    ];
+    for (const [prereq, mutation] of breaks) {
+      const g = gate({ ...approved, ...mutation });
+      if (g.state === 'READY') v.push(`removing ${Object.keys(mutation)[0]} left the gate READY — the '${prereq}' prerequisite is decoration`);
+      if (!g.blockingPrerequisites.includes(prereq)) v.push(`removing ${Object.keys(mutation)[0]} did not block on '${prereq}'`);
+    }
+    // An expected sequence that could not have happened blocks too.
+    const badSeq = gate({ ...approved, expectedEventSequence: [{ event: 'credentials-verified', at: 1 }, { event: 'succession-initiated', at: 2 }] });
+    if (!badSeq.blockingPrerequisites.includes('evidenceVocabularyValid')) v.push('an impossible expected event sequence did not block readiness');
+    if (!gate({ ...approved }, { register: null }).blockingPrerequisites.includes('evidenceCollectionEnabled')) {
+      v.push('a gate with no register to record into reported evidence collection as enabled');
+    }
+
+    // --- READY IS NOT PERMISSION, AND NOT RESILIENCE -------------------------------------------
+    const ready = gate(approved);
+    if (ready.isPermission !== false) v.push('a READY gate claims to be permission to proceed');
+    if (ready.establishesInstitutionalAssurance !== false) v.push('a READY gate claims institutional assurance');
+    if (ready.authorizes !== false) v.push('the readiness gate claims authority');
+    if (!ready.machineDetectable || !ready.humanJudgementRequired) v.push('the gate does not state which findings are observed and which need a human');
+    if (!/whether the institution should run this exercise now/.test(ready.humanJudgementRequired)) {
+      v.push('the gate does not admit that whether to run the exercise is a human decision');
+    }
+    if (/\d+\s?%|percent/.test(ready.basis)) v.push('readiness was rendered as a percentage');
+
+    // --- Part 11: evidence data quality ---------------------------------------------------------
+    const empty = own.successionEvidenceQuality(reg(), { now: 0 });
+    if (empty.count !== 0) v.push('the register holds records between runs');
+    if (!/no pre-validation record persists anywhere/.test(empty.basis)) v.push('the data-quality report does not state that no pre-validation record persists');
+    if (empty.rewritesHistory !== false) v.push('the data-quality report rewrites history');
+    // A record carrying an action outside the vocabulary is marked and excluded, never repaired.
+    const tainted = reg();
+    tainted.plan('T', { scenario: 's', capability: 'c', responsibleAuthority: 'A', intendedSuccessor: 'B', scope: 'x', prerequisites: ['p'], declaredBy: 'OB' });
+    // Injected directly, as a record arriving from outside would: the register itself refuses it.
+    const rec = tainted._exercises.get('T');
+    rec.state = 'REHEARSED';
+    rec.evidence.REHEARSED = { participants: ['p'], actions: ['banana'], outcome: 'completed', failures: [], at: 0, runBy: 'R', events: [] };
+    const q = own.successionEvidenceQuality(tainted, { now: 0 });
+    if (!q.preValidation.includes('T')) v.push('a record carrying an action outside the vocabulary was not marked as pre-validation');
+    if (q.excludedFromAssurance.indexOf('T') === -1) v.push('a pre-validation record was not excluded from assurance metrics');
+    if (q.exercises[0].contributesToAssurance) v.push('a pre-validation record contributes to assurance');
+    if (q.exercises[0].unvalidatedActions.join() !== 'banana') v.push('the pre-validation record was rewritten rather than marked — an institution that edits its evidence so it passes has no evidence');
+  }),
+
   fit('APP-FIT-SUCCESSION-EVIDENCE-ORDERING', 'Succession events are a declared vocabulary in an enforced order, and the two state models never contradict each other', (v) => {
     const own = require('../src/governance/ownership');
     const ir = require('../src/governance/institutional-resilience');

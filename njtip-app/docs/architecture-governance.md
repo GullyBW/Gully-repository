@@ -485,3 +485,41 @@ showing that authority comes back. A failed rehearsal is `CRITICAL`, not `WEAK` 
 unrehearsed one, not the same news.
 
 **Current position: all five governance capabilities are `WEAK`.** None has been rehearsed.
+
+## R9 — controlled real ARB succession rehearsal
+
+The full package is [`r9-readiness-package.md`](./r9-readiness-package.md). Summary of the
+governance position:
+
+**Status: NOT_READY, blocked on exactly one prerequisite — `governanceApprovalRecorded`.**
+
+17 of 18 prerequisites are satisfied. No governance body has approved the exercise taking place, and
+this platform records such an approval rather than making one. The gate is correct to refuse.
+
+Three exercise classes are distinguished and only one is R9:
+
+```
+SIMULATION       machine-generated · establishes software assurance only
+REHEARSAL        real people, no real authority moves · this is R9
+PRODUCTION_EVENT real authority actually transferred · no path to one exists here
+```
+
+READY is a statement about **preparation**, not permission, and `establishesInstitutionalAssurance`
+is `false` on every readiness result.
+
+### Known limitation: context granularity
+
+Succession resilience is evaluated against the existing assurance chain at coarse context
+granularity — all five governance capabilities resolve to the `assurance` subsystem and therefore
+share one succession chain. **This does not block R9**, which exercises the ARB chain specifically,
+and it is recorded as technical debt rather than redesigned. No ADR is warranted: no architectural
+boundary changes.
+
+### Historical evidence quality
+
+The pre-vocabulary `actions` field accepted free text — the "banana" finding. An audit of the tree
+found **no persisted pre-validation succession record**: the register is in-memory and built per run,
+and the only out-of-vocabulary values on disk are two deliberate negative-test fixtures.
+`successionEvidenceQuality()` marks any record arriving from outside as `PRE_VALIDATION` and excludes
+it from assurance metrics **without rewriting it** — an institution that edits its evidence so it
+passes has no evidence.

@@ -1044,6 +1044,282 @@ function validateEventSequence(events = []) {
   };
 }
 
+// --- R9: exercise classification and boundaries ---------------------------------------------------
+//
+// Three things get called "an exercise" and only one of them is what R9 is. The platform must never
+// confuse them, because the evidence each produces supports a different claim.
+const EXERCISE_CLASSES = {
+  SIMULATION: {
+    realParticipants: false, realAuthority: false, producesInstitutionalEvidence: false,
+    means: 'Machine-generated. Validates that the software models succession correctly.',
+    establishes: 'Software assurance only.',
+  },
+  REHEARSAL: {
+    realParticipants: true, realAuthority: false, producesInstitutionalEvidence: true,
+    means: 'Real people walk the procedure without real authority moving. This is what R9 is.',
+    establishes: 'Exercise assurance, and the evidence a governance body needs for institutional assurance.',
+  },
+  PRODUCTION_EVENT: {
+    realParticipants: true, realAuthority: true, producesInstitutionalEvidence: true,
+    means: 'Authority actually transferred because the primary was actually unavailable.',
+    establishes: 'What happened. This platform never creates one and has no path to.',
+  },
+};
+
+// What a rehearsal must not do. Checked structurally rather than trusted.
+const EXERCISE_BOUNDARIES = {
+  'no-production-authority-change': 'No real administrative authority is issued, altered or revoked.',
+  'no-live-permission-change': 'No governance permission in the running system is modified.',
+  'no-real-case-data': 'No real case record is read, written or referenced.',
+  'no-government-action': 'Nothing outside this platform is triggered.',
+  'evidence-marked-synthetic-or-rehearsal': 'Every record produced states which class of exercise made it.',
+};
+
+// --- R9 readiness gate ----------------------------------------------------------------------------
+//
+// Eighteen prerequisites. The gate answers READY, NOT_READY or UNKNOWN and it fails closed: a
+// prerequisite nobody supplied is UNKNOWN, never satisfied, and any critical prerequisite missing
+// makes the whole gate NOT_READY. A gate that reported READY because nobody had filled anything in
+// would be worse than no gate.
+const R9_PREREQUISITES = {
+  governanceBodyDefined: { critical: true, asks: 'Is the governance body whose succession is being exercised named?', from: 'the exercise definition' },
+  primaryAuthorityIdentified: { critical: true, asks: 'Is the primary accountable office identified?', from: 'the accountability record' },
+  successorIdentified: { critical: true, asks: 'Is a successor identified?', from: 'successionPlan()' },
+  successionProcedureExists: { critical: true, asks: 'Does a succession procedure exist to walk?', from: 'successionPlan()' },
+  scenarioDefined: { critical: true, asks: 'Is there a scenario to exercise?', from: 'the exercise definition' },
+  objectivesDefined: { critical: true, asks: 'Does the exercise state what it is for?', from: 'the exercise definition' },
+  successCriteriaDefined: { critical: true, asks: 'Is it stated what would count as success?', from: 'the exercise definition' },
+  failureCriteriaDefined: { critical: true, asks: 'Is it stated what would count as failure?', from: 'the exercise definition' },
+  evaluatorIdentified: { critical: true, asks: 'Is an evaluator named who is not a participant?', from: 'the exercise definition' },
+  evaluatorIndependent: { critical: true, asks: 'Is the evaluator distinct from everyone exercising the role?', from: 'the exercise definition' },
+  participantsIdentified: { critical: true, asks: 'Is it known who takes part?', from: 'the exercise definition' },
+  evidenceCollectionEnabled: { critical: true, asks: 'Is there a register to record the exercise into?', from: 'the supplied register' },
+  evidenceVocabularyValid: { critical: true, asks: 'Is the expected event sequence drawn from the declared vocabulary and in a possible order?', from: 'validateEventSequence()' },
+  deterministicClockAvailable: { critical: true, asks: 'Is a logical clock available, so TTAR is reproducible?', from: 'the supplied register' },
+  governanceApprovalRecorded: { critical: true, asks: 'Has a governance body approved the exercise taking place?', from: 'the exercise definition' },
+  humanAccountabilityDefined: { critical: true, asks: 'Is it recorded who is accountable for the exercise and its assessment?', from: 'the exercise definition' },
+  exerciseBoundariesDeclared: { critical: true, asks: 'Are the boundaries declared, including that no production authority changes?', from: 'the exercise definition' },
+  noProductionAuthorityChange: { critical: true, asks: 'Is the exercise classified as a rehearsal rather than a production event?', from: 'the exercise definition' },
+};
+
+const R9_READINESS_STATES = {
+  READY: { epistemic: 'RESOLVED', mayProceed: true, means: 'Every critical prerequisite is satisfied. The exercise can be scheduled; whether it should be is a governance decision.' },
+  NOT_READY: { epistemic: 'BROKEN', mayProceed: false, means: 'A critical prerequisite was checked and is absent or wrong.' },
+  UNKNOWN: { epistemic: 'UNKNOWN', mayProceed: false, means: 'Nothing was supplied to assess readiness against. Not ready, and not a failure — nobody has prepared anything yet.' },
+};
+
+// Evaluates whether an ARB succession rehearsal is prepared enough to begin. It never schedules one,
+// and READY is a statement about preparation rather than permission.
+function r9ReadinessGate(definition = null, { register = null, subsystem = 'assurance', now = 0 } = {}) {
+  const { EPISTEMIC_STATES, machineBoundary } = require('../assurance/epistemic');
+  const d = definition || {};
+  const supplied = !!definition;
+  let plan = null;
+  try { plan = subsystem ? successionPlan(subsystem) : null; } catch (_) { plan = null; }
+
+  const participants = Array.isArray(d.participants) ? d.participants : [];
+  const expected = Array.isArray(d.expectedEventSequence) ? d.expectedEventSequence : [];
+  const seq = expected.length ? validateEventSequence(expected) : null;
+  const boundaries = Array.isArray(d.boundaries) ? d.boundaries : [];
+
+  // Each prerequisite: satisfied / broken / unknown. Nothing supplied means unknown, never satisfied.
+  const assess = (id, satisfied, detail) => ({
+    prerequisite: id, ...R9_PREREQUISITES[id],
+    state: !supplied ? 'UNKNOWN' : satisfied === null ? 'UNKNOWN' : satisfied ? 'RESOLVED' : 'BROKEN',
+    satisfied: supplied && satisfied === true,
+    detail: !supplied ? 'no exercise definition was supplied' : detail,
+  });
+
+  const rows = [
+    assess('governanceBodyDefined', !!d.governanceBody, d.governanceBody ? `'${d.governanceBody}'` : 'no governance body is named'),
+    assess('primaryAuthorityIdentified', !!d.primaryAuthority && !!plan && plan.chain[0].holder === d.primaryAuthority,
+      !d.primaryAuthority ? 'no primary authority is named'
+        : !plan ? 'no succession plan exists for this subsystem'
+          : plan.chain[0].holder === d.primaryAuthority ? `'${d.primaryAuthority}' is the primary in the accountability record`
+            : `'${d.primaryAuthority}' is named and the record holds '${plan.chain[0].holder}'`),
+    assess('successorIdentified', !!d.successor && !!plan && plan.chain.some((c) => c.holder === d.successor),
+      !d.successor ? 'no successor is named' : !plan ? 'no succession plan exists'
+        : plan.chain.some((c) => c.holder === d.successor) ? `'${d.successor}' appears in the succession chain`
+          : `'${d.successor}' is named and does not appear in the succession chain`),
+    assess('successionProcedureExists', !!plan && plan.depth > 1, plan ? `${plan.depth}-deep chain terminating at ${plan.terminatesAtBoard ? 'a body' : 'a person'}` : 'no procedure exists'),
+    assess('scenarioDefined', !!d.scenario, d.scenario ? 'a scenario is stated' : 'no scenario is stated'),
+    assess('objectivesDefined', Array.isArray(d.objectives) && d.objectives.length > 0, `${(d.objectives || []).length} objective(s)`),
+    assess('successCriteriaDefined', Array.isArray(d.successCriteria) && d.successCriteria.length > 0, `${(d.successCriteria || []).length} success criterion(s)`),
+    assess('failureCriteriaDefined', Array.isArray(d.failureCriteria) && d.failureCriteria.length > 0, `${(d.failureCriteria || []).length} failure criterion(s)`),
+    assess('evaluatorIdentified', !!d.evaluator, d.evaluator ? `'${d.evaluator}'` : 'no evaluator is named'),
+    assess('evaluatorIndependent', !!d.evaluator && !participants.includes(d.evaluator),
+      !d.evaluator ? 'no evaluator is named'
+        : participants.includes(d.evaluator) ? `'${d.evaluator}' is both evaluator and participant — verification the participant can generate is not verification`
+          : `'${d.evaluator}' takes no part in the exercise`),
+    assess('participantsIdentified', participants.length > 0, `${participants.length} participant(s)`),
+    assess('evidenceCollectionEnabled', !!register && typeof register.plan === 'function', register ? 'a succession exercise register was supplied' : 'no register was supplied, so nothing could be recorded'),
+    assess('evidenceVocabularyValid', seq ? seq.valid : null,
+      !seq ? 'no expected event sequence is declared' : seq.valid ? `${expected.length} event(s), all declared and in a possible order` : seq.problems.join('; ')),
+    assess('deterministicClockAvailable', !!register && typeof register._clock === 'function', register ? 'the register carries an injected clock' : 'no register was supplied'),
+    assess('governanceApprovalRecorded', !!(d.governanceApproval && d.governanceApproval.by && d.governanceApproval.at !== undefined),
+      d.governanceApproval && d.governanceApproval.by ? `approved by '${d.governanceApproval.by}'` : 'no governance body has approved this exercise taking place'),
+    assess('humanAccountabilityDefined', !!(d.accountableFor && d.accountableFor.exercise && d.accountableFor.assessment),
+      d.accountableFor && d.accountableFor.exercise ? `exercise: '${d.accountableFor.exercise}'; assessment: '${d.accountableFor.assessment}'` : 'nobody is recorded as accountable for the exercise or its assessment'),
+    assess('exerciseBoundariesDeclared', Object.keys(EXERCISE_BOUNDARIES).every((b) => boundaries.includes(b)),
+      `${boundaries.length} of ${Object.keys(EXERCISE_BOUNDARIES).length} boundaries declared${boundaries.length ? '' : ' — an exercise with no declared boundaries is not a controlled one'}`),
+    assess('noProductionAuthorityChange', d.exerciseClass === 'REHEARSAL',
+      d.exerciseClass === 'REHEARSAL' ? 'classified as a rehearsal: real people, no real authority moving'
+        : d.exerciseClass === 'PRODUCTION_EVENT' ? 'classified as a production event — this platform has no path to one and refuses to prepare one'
+          : `classified as '${d.exerciseClass || 'nothing'}'`),
+  ];
+
+  const broken = rows.filter((r) => r.state === 'BROKEN');
+  const unknown = rows.filter((r) => r.state === 'UNKNOWN');
+  const criticalBroken = broken.filter((r) => r.critical);
+  const criticalUnknown = unknown.filter((r) => r.critical);
+
+  // FAIL CLOSED. Broken beats unknown beats ready, and any critical gap stops the gate.
+  const state = criticalBroken.length ? 'NOT_READY'
+    : criticalUnknown.length ? 'UNKNOWN'
+      : 'READY';
+
+  return {
+    exerciseId: d.exerciseId || null, subsystem,
+    prerequisites: rows, count: rows.length,
+    states: Object.entries(R9_READINESS_STATES).map(([st, spec]) => ({ state: st, ...spec })),
+    epistemicStates: Object.entries(EPISTEMIC_STATES).map(([s2, e]) => ({ state: s2, ...e })),
+    state, ...R9_READINESS_STATES[state],
+    satisfied: rows.filter((r) => r.satisfied).map((r) => r.prerequisite),
+    broken: broken.map((r) => ({ prerequisite: r.prerequisite, detail: r.detail })),
+    unknown: unknown.map((r) => r.prerequisite),
+    blockingPrerequisites: [...criticalBroken, ...criticalUnknown].map((r) => r.prerequisite),
+    exerciseClass: d.exerciseClass || null,
+    exerciseClasses: Object.entries(EXERCISE_CLASSES).map(([cls, spec]) => ({ class: cls, ...spec })),
+    boundaries: Object.entries(EXERCISE_BOUNDARIES).map(([b, means]) => ({ boundary: b, means, declared: boundaries.includes(b) })),
+    ...machineBoundary({
+      observed: ['whether each prerequisite is recorded', 'whether the named holders appear in the accountability record', 'whether the expected event sequence is possible', 'whether the evaluator is also a participant'],
+      judged: ['whether the scenario is a realistic one', 'whether the success criteria are the right ones', 'whether the institution should run this exercise now'],
+    }),
+    // READY is a statement about PREPARATION. It is not permission, and it is not a claim that the
+    // institution is resilient — that remains a human governance decision after the exercise.
+    isPermission: false, establishesInstitutionalAssurance: false, authorizes: false, informationalOnly: true,
+    basis: `${rows.filter((r) => r.satisfied).length} of ${rows.length} prerequisite(s) satisfied; ${criticalBroken.length} critical broken, ${criticalUnknown.length} critical unknown.`,
+    now, failClosed: true,
+    note: 'READY means the exercise is prepared, not that it is authorised or that the institution is resilient. A prerequisite nobody supplied is UNKNOWN rather than satisfied, and any critical gap stops the gate — a readiness gate that reported READY because nobody had filled anything in would be worse than none.',
+  };
+}
+
+// --- The R9 exercise definition -------------------------------------------------------------------
+//
+// Declared here because it is a governance artefact rather than a test fixture: a board reads this
+// before deciding whether the exercise may run. Every name in it is a ROLE from the accountability
+// record, not a person — this platform records offices and the humans who hold them are named by the
+// institution when the exercise is scheduled.
+//
+// It is classified REHEARSAL. Real people walk the procedure and no real authority moves.
+const R9_EXERCISE = {
+  exerciseId: 'R9-ARB-SUCCESSION-001',
+  exerciseClass: 'REHEARSAL',
+  governanceBody: 'Architecture Review Board',
+  subsystem: 'assurance',
+  primaryAuthority: 'Architecture Review Board',
+  successor: 'ARB Vice-Chair',
+  scenario: 'The ARB chair becomes unavailable without notice during an open architecture decision window, with an ADR awaiting approval and an invariant breach under review.',
+  objectives: [
+    'Establish whether the recorded succession chain can actually be walked by the people named in it.',
+    'Establish whether authority transfer is recognised by the parties who must act on it.',
+    'Establish whether the interregnum can be closed cleanly, rather than an acting holder keeping the office by inertia.',
+    'Produce evidence a governance body can assess, rather than a report that asserts success.',
+  ],
+  successCriteria: [
+    'The successor was identified from the recorded chain without reference to anyone outside it.',
+    'The successor could establish their authority to the parties who needed to act on it.',
+    'A quorate decision was reached under succession.',
+    'The critical capability continued through the interregnum.',
+    'Authority returned to the primary and the acting arrangement was formally closed, as two recorded events.',
+  ],
+  failureCriteria: [
+    'The successor could not be reached or declined.',
+    'No quorum could be formed.',
+    'A party refused to recognise the transferred authority.',
+    'The interregnum could not be formally closed.',
+    'The evaluator could not determine from the evidence whether the exercise succeeded.',
+  ],
+  // Independent by construction: the evaluator holds no role in the exercise.
+  evaluator: 'Auditor General',
+  participants: ['ARB Vice-Chair', 'Architecture Review Board', 'Office of the Chief Architect'],
+  accountableFor: { exercise: 'Oversight Board', assessment: 'Oversight Board' },
+  // The approved sequence for THIS exercise. It is the ARB procedure's order, not a generic one.
+  expectedEventSequence: [
+    { event: 'authority-unavailable', at: 0 },
+    { event: 'succession-initiated', at: 0 },
+    { event: 'successor-identified', at: 0 },
+    { event: 'credentials-verified', at: 0 },
+    { event: 'governance-conditions-evaluated', at: 0 },
+    { event: 'quorum-reached', at: 0 },
+    { event: 'successor-assumed-authority', at: 0 },
+    { event: 'capability-continued', at: 0 },
+    { event: 'authority-returned', at: 0 },
+    { event: 'interregnum-closed', at: 0 },
+  ],
+  boundaries: Object.keys(EXERCISE_BOUNDARIES),
+  plannedEvidence: [
+    'participant role and the office they stood in for each event',
+    'logical timestamp per event, from the exercise clock',
+    'the decision taken under succession and who took it',
+    'evaluator observations and any deviation from the expected sequence',
+    'any failure mode encountered, from the declared vocabulary',
+  ],
+  // EMPTY until a board records it. An approval nobody gave is not an approval, and this is the
+  // prerequisite that keeps the gate from reporting READY on the strength of a well-written plan.
+  governanceApproval: null,
+  status: 'AWAITING_GOVERNANCE_APPROVAL',
+  notAProductionAuthorizationEvent: true,
+};
+
+// --- Part 11: evidence data quality ----------------------------------------------------------------
+//
+// Before the event vocabulary existed, `actions` was free text and accepted the string "banana". No
+// record predating validation is held anywhere — the register is in-memory and built per run — but a
+// record could still arrive from outside, and one that predates validation must not quietly count.
+//
+// Nothing here rewrites history. A record that was invalid when written stays exactly as written and
+// is marked, because an institution that edits its own evidence to make it pass has no evidence.
+function successionEvidenceQuality(register, { now = 0 } = {}) {
+  const { machineBoundary } = require('../assurance/epistemic');
+  const exercises = register && typeof register.exercises === 'function' ? register.exercises() : [];
+  const rows = exercises.map((e) => {
+    const actions = (e.evidence.REHEARSED && e.evidence.REHEARSED.actions) || [];
+    const unvalidated = actions.filter((a) => !SUCCESSION_EVENTS[a]);
+    const events = (e.evidence.REHEARSED && e.evidence.REHEARSED.events) || [];
+    const seq = events.length ? validateEventSequence(events) : { valid: true, problems: [] };
+    const preValidation = unvalidated.length > 0 || !seq.valid;
+    return {
+      exerciseId: e.exerciseId, state: e.state,
+      unvalidatedActions: unvalidated,
+      sequenceProblems: seq.problems,
+      // The classification, and the consequence of it.
+      quality: preValidation ? 'PRE_VALIDATION' : 'VOCABULARY_VALIDATED',
+      contributesToAssurance: !preValidation,
+      detail: preValidation
+        ? `${unvalidated.length} action(s) outside the declared vocabulary${seq.problems.length ? ` and ${seq.problems.length} sequence problem(s)` : ''} — recorded before the vocabulary existed, preserved as written, and excluded from assurance metrics`
+        : 'every action and event is drawn from the declared vocabulary',
+    };
+  });
+  const pre = rows.filter((r) => r.quality === 'PRE_VALIDATION');
+  return {
+    exercises: rows, count: rows.length,
+    preValidation: pre.map((r) => r.exerciseId),
+    validated: rows.filter((r) => r.quality === 'VOCABULARY_VALIDATED').map((r) => r.exerciseId),
+    excludedFromAssurance: pre.map((r) => r.exerciseId),
+    ...machineBoundary({
+      observed: ['whether every recorded action is in the declared vocabulary', 'whether a recorded event sequence is possible'],
+      judged: ['whether a pre-validation record describes something that actually happened'],
+    }),
+    rewritesHistory: false, authorizes: false, informationalOnly: true,
+    basis: rows.length
+      ? `${rows.length - pre.length} vocabulary-validated, ${pre.length} pre-validation, of ${rows.length} exercise(s).`
+      : 'no exercise is recorded. The register holds nothing between runs, so no pre-validation record persists anywhere in this platform.',
+    now,
+    note: 'Pre-validation records are marked and excluded from assurance metrics, never rewritten. An institution that edits its own evidence so it passes has no evidence, and a record that was invalid when it was written stays exactly as written.',
+  };
+}
+
 // A register of succession exercises. Declared, never inferred; append-only in effect, because a
 // transition rewrites nothing that came before it. Fails closed on every incomplete transition.
 class SuccessionExerciseRegister {
@@ -1541,6 +1817,8 @@ module.exports = {
   SUCCESSION_ASSURANCE_LEVELS, SUCCESSION_ASSURANCE_ORDER, SUCCESSION_STAGES, SUCCESSION_CHECKS,
   SUCCESSION_EXERCISE_STATES, SUCCESSION_TRANSITIONS, SUCCESSION_FAILURE_MODES, SuccessionExerciseRegister,
   SUCCESSION_EVENTS, SUCCESSION_EVENT_ORDER, validateEventSequence,
+  EXERCISE_CLASSES, EXERCISE_BOUNDARIES, R9_PREREQUISITES, R9_READINESS_STATES, r9ReadinessGate, successionEvidenceQuality,
+  R9_EXERCISE,
   successionExercise, successionAssurance,
   CAPABILITY_DOMAINS, CAPABILITY_LEVELS, CAPABILITY_ORDER, capabilityMaturity, maturityEvolution, capabilityEvolution,
   OWNERSHIP, BOARDS, ROLES, DEPUTY_ROLES, DEPUTY_RULE, DEPUTY_OVERRIDES, REVIEW_CADENCE_DAYS,
