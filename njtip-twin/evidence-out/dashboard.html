@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NJTIP Twin — Architecture Compliance Dashboard</title>
+<style>
+:root{--bg:#fff;--fg:#111;--mut:#666;--card:#f6f7f9;--ok:#1e874b;--warn:#b8860b;--bad:#c0392b;--line:#e3e6ea}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1216;--fg:#e8eaed;--mut:#9aa0a6;--card:#171b21;--line:#2a2f36}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:1000px;margin:0 auto;padding:24px}
+.banner{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;color:var(--mut);font-size:13px}
+h1{font-size:20px;margin:16px 0 4px}h2{font-size:15px;margin:22px 0 8px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.big{font-size:26px;font-weight:700}.mut{color:var(--mut);font-size:12px}
+.row{display:flex;align-items:center;gap:10px;margin:6px 0}.lbl{flex:0 0 160px}.val{flex:0 0 130px;text-align:right;font-variant-numeric:tabular-nums}
+.track{flex:1;height:10px;background:var(--line);border-radius:6px;overflow:hidden}.fill{display:block;height:100%}
+.fill.ok{background:var(--ok)}.fill.warn{background:var(--warn)}.fill.bad{background:var(--bad)}
+.chip{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;margin:2px;color:#fff}.chip.ok{background:var(--ok)}.chip.bad{background:var(--bad)}
+table{border-collapse:collapse}.cell{width:20px;height:20px;text-align:center;color:#fff;font-size:11px;border:1px solid var(--bg)}.cell.ok{background:var(--ok)}.cell.bad{background:var(--bad)}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin:2px}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
+code{background:var(--line);padding:1px 5px;border-radius:4px;font-size:12px}
+</style></head><body><div class="wrap">
+<div class="banner"><b>SYNTHETIC DATA ONLY.</b> Engineering evidence for human review — <b>not a production go-live approval</b>. Legal, constitutional, judicial, governance, and ethical decisions remain human.</div>
+<h1>Architecture Compliance Dashboard</h1>
+<div class="mut">Twin v0.2.0 · digest <code>3a3a190770ae0d97…</code> · generated 2026-07-23T20:55:33.197Z</div>
+<h2>Scorecards</h2>
+<div class="grid">
+  <div class="card"><div class="big">100%</div><div class="mut">Architecture compliance (14/14)</div></div>
+  <div class="card"><div class="big">100%</div><div class="mut">Requirements enforced (cov 100%)</div></div>
+  <div class="card"><div class="big">35/35</div><div class="mut">Adversarial resisted</div></div>
+  <div class="card"><div class="big">9/9</div><div class="mut">Chaos experiments</div></div>
+  <div class="card"><div class="big">4/4</div><div class="mut">Formal proofs</div></div>
+  <div class="card"><div class="big">L6</div><div class="mut">Maturity (cap 6; 7–10 human)</div></div>
+</div>
+<h2>Posture</h2>
+<div><span class="chip ok">Security: PASS</span> <span class="chip ok">Privacy: PASS</span> <span class="chip ok">Governance: PASS</span> <span class="chip ok">Drift-free: PASS</span></div>
+<h2>Fitness heat map (O=ok, C/H severity)</h2>
+<table><tr><td class="cell ok" title="FIT-ZONE-ISOLATION">C</td><td class="cell ok" title="FIT-IDENTITY-MINIMIZATION">C</td><td class="cell ok" title="FIT-LEAST-PRIVILEGE">C</td><td class="cell ok" title="FIT-POLICY-ENFORCEMENT">C</td><td class="cell ok" title="FIT-ZERO-TRUST">C</td><td class="cell ok" title="FIT-SECURE-DATA-FLOWS">C</td><td class="cell ok" title="FIT-ENCRYPTION">C</td><td class="cell ok" title="FIT-AUDITABILITY">C</td><td class="cell ok" title="FIT-GOVERNANCE">C</td><td class="cell ok" title="FIT-CHAIN-OF-CUSTODY">C</td><td class="cell ok" title="FIT-EMERGENCY">C</td><td class="cell ok" title="FIT-BACKUP">H</td><td class="cell ok" title="FIT-TIME-INTEGRITY">H</td><td class="cell ok" title="FIT-TRACEABILITY-COVERAGE">C</td></tr></table>
+<div class="mut">No failed fitness functions.</div>
+<h2>Adversarial simulation outcomes (35/35)</h2><div><span class="dot ok" title="SIM-01-COMPROMISED-OPERATOR"></span><span class="dot ok" title="SIM-02-INSIDER-CROSS-ZONE"></span><span class="dot ok" title="SIM-03-METADATA-ANALYSIS"></span><span class="dot ok" title="SIM-04-DOS"></span><span class="dot ok" title="SIM-05-PRIVILEGE-ESCALATION"></span><span class="dot ok" title="SIM-06-IDENTITY-SPOOFING"></span><span class="dot ok" title="SIM-07-POLICY-BYPASS"></span><span class="dot ok" title="SIM-08-MISCONFIGURED-INFRA"></span><span class="dot ok" title="SIM-09-DATA-EXFILTRATION"></span><span class="dot ok" title="SIM-10-GOVERNANCE-FAILURE"></span><span class="dot ok" title="SIM-11-COMPONENT-FAILURE"></span><span class="dot ok" title="SIM-12-DISASTER-RECOVERY"></span><span class="dot ok" title="SIM-20-SUPPLY-CHAIN"></span><span class="dot ok" title="SIM-21-API-ABUSE"></span><span class="dot ok" title="SIM-22-CERTIFICATE-COMPROMISE"></span><span class="dot ok" title="SIM-23-DNS-ATTACK"></span><span class="dot ok" title="SIM-24-CREDENTIAL-STUFFING"></span><span class="dot ok" title="SIM-25-RANSOMWARE"></span><span class="dot ok" title="SIM-26-FIRMWARE-COMPROMISE"></span><span class="dot ok" title="SIM-27-INSIDER-MALWARE"></span><span class="dot ok" title="SIM-28-COLLUSION"></span><span class="dot ok" title="SIM-14-EMERGENCY-PRIVILEGE-ABUSE"></span><span class="dot ok" title="SIM-15-UNAUTHORIZED-DATA-MODIFICATION"></span><span class="dot ok" title="SIM-16-EVIDENCE-TAMPERING"></span><span class="dot ok" title="SIM-17-PRIVILEGE-MISUSE"></span><span class="dot ok" title="SIM-18-CORRUPT-REVIEWER"></span><span class="dot ok" title="SIM-19-SOD-VIOLATION"></span><span class="dot ok" title="SIM-32-POLICY-CONFLICT"></span><span class="dot ok" title="SIM-33-DELAYED-APPROVAL"></span><span class="dot ok" title="SIM-34-INVALID-GOVERNANCE-DECISION"></span><span class="dot ok" title="SIM-29-HARDWARE-FAILURE"></span><span class="dot ok" title="SIM-35-REGIONAL-OUTAGE"></span><span class="dot ok" title="SIM-30-BACKUP-CORRUPTION"></span><span class="dot ok" title="SIM-31-TIME-SYNC-FAILURE"></span><span class="dot ok" title="SIM-36-RESOURCE-EXHAUSTION"></span></div>
+<h2>Compliance framework coverage (illustrative)</h2><div class="row"><span class="lbl">ISO-27001</span><span class="track"><span class="fill ok" style="width:100%"></span></span><span class="val">13/13 (100%)</span></div><div class="row"><span class="lbl">ISO-27701</span><span class="track"><span class="fill ok" style="width:100%"></span></span><span class="val">1/1 (100%)</span></div><div class="row"><span class="lbl">NIST-CSF</span><span class="track"><span class="fill ok" style="width:100%"></span></span><span class="val">13/13 (100%)</span></div><div class="row"><span class="lbl">NIST-800-53</span><span class="track"><span class="fill ok" style="width:100%"></span></span><span class="val">13/13 (100%)</span></div><div class="row"><span class="lbl">CIS</span><span class="track"><span class="fill ok" style="width:100%"></span></span><span class="val">8/8 (100%)</span></div><div class="row"><span class="lbl">OWASP-ASVS</span><span class="track"><span class="fill ok" style="width:100%"></span></span><span class="val">8/8 (100%)</span></div>
+<h2>CI/CD verification history — requirements-enforced trend</h2><div style="color:var(--ok)"><svg width="220" height="40" viewBox="0 0 220 40" role="img" aria-label="trend"><polyline points="0.0,0.0" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>
+<div class="mut">1 run(s) recorded.</div>
+<h2>Evidence status</h2>
+<div class="card mut">Digest <code>3a3a190770ae0d9797b37ccc1af370233b623d9f9f7517a88959fe98b9151c0b</code><br>Signature (Ed25519, synthetic): <code>D1OWJBaoaqh5nfqp6WjBrZnj4ecwnsg8…</code><br>Archive integrity: <b>VERIFIED</b> · Timestamp seq: 0</div>
+</div></body></html>

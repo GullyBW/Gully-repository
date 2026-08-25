@@ -1,0 +1,19 @@
+{
+  "name": "njtip-digital-engineering-twin",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Digital Engineering Twin & Continuous Verification / Engineering Assurance Platform for NJTIP — synthetic-data-only, zero runtime dependencies, deterministic. Converts approved architecture into continuously verifiable behaviour and signed, machine-verifiable evidence. NOT a production system.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test",
+    "verify": "node scripts/verify.js",
+    "simulate": "node scripts/simulate.js",
+    "ci": "node scripts/ci.js",
+    "verify-evidence": "node scripts/verify-evidence.js",
+    "bench": "node scripts/bench.js",
+    "gov": "node scripts/gov.js"
+  },
+  "license": "SEE-BLUEPRINT",
+  "dependencies": {},
+  "devDependencies": {}
+}

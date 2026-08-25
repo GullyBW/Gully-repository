@@ -1,0 +1,38 @@
+# Continuous Verification for the NJTIP Digital Engineering Twin.
+# Scoped to njtip-twin/** so it never interferes with the marketplace CI (ci.yml).
+# Synthetic data only; zero dependencies. The continuous-verification gate BLOCKS
+# the build if any critical architecture invariant fails or any adversarial
+# scenario is not resisted. Evidence is generated regardless and uploaded.
+name: NJTIP Twin — Continuous Verification
+
+on:
+  push:
+    paths: ['njtip-twin/**']
+  pull_request:
+    paths: ['njtip-twin/**']
+
+jobs:
+  continuous-verification:
+    name: Architecture verification + adversarial simulation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: njtip-twin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Unit + fitness + adversarial tests
+        run: node --test
+      - name: Continuous verification gate (blocks on invariant/scenario failure)
+        run: node scripts/ci.js
+      - name: Upload evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: njtip-twin-evidence
+          path: |
+            njtip-twin/evidence-out/evidence.json
+            njtip-twin/evidence-out/REVIEW-REPORT.md
+          if-no-files-found: warn

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: njtip-app
+  namespace: njtip-independent
+  labels: { app.kubernetes.io/name: njtip-app }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: njtip-app }
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

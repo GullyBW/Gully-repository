@@ -1,0 +1,39 @@
+# Canary deployment for controlled pilot rollout. A small canary tracks the same Service
+# selector so a fraction of traffic hits the new version; promote by scaling the canary up
+# and the stable down (or via a mesh traffic split). Feature exposure is additionally gated
+# by the feature-flag adapter (src/adapters/flags.js) per pilot cohort — belt and braces.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: njtip-app-canary
+  namespace: njtip-independent
+  labels: { app.kubernetes.io/name: njtip-app, app.kubernetes.io/part-of: njtip, track: canary }
+spec:
+  replicas: 1            # ~ small % of total; scale up to promote
+  selector:
+    matchLabels: { app.kubernetes.io/name: njtip-app, track: canary }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: njtip-app, njtip.zone: independent, track: canary }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: njtip-app
+          image: REGISTRY/njtip-app:CANARY_TAG   # the version under evaluation
+          ports: [{ containerPort: 8087, name: http }]
+          envFrom:
+            - configMapRef: { name: njtip-config }
+            - secretRef: { name: njtip-secrets }
+          env:
+            - { name: NJTIP_PILOT_COHORT, value: "pilot-internal" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, initialDelaySeconds: 3, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]

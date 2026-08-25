@@ -1,0 +1,4 @@
+**/node_modules
+**/data/*.json
+**/evidence-out/*.json
+**/.git

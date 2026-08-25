@@ -1,0 +1,12 @@
+{
+  "feed": "sample-offline-threat-feed",
+  "version": "2026.1",
+  "source": "SYNTHETIC / OFFLINE — illustrative only; no live connectivity",
+  "note": "Attack MODELS as metadata (not executable code). Engineers implement mapped simulations.",
+  "techniques": [
+    { "id": "TT-001", "name": "Token replay against session", "mapsToSim": "SIM-24-CREDENTIAL-STUFFING" },
+    { "id": "TT-002", "name": "Dependency confusion", "mapsToSim": "SIM-20-SUPPLY-CHAIN" },
+    { "id": "TT-003", "name": "Time-based side channel on intake", "mapsToSim": null, "suggestedSim": "SIM-XX-TIMING-SIDE-CHANNEL" },
+    { "id": "TT-004", "name": "Coerced custodian quorum", "mapsToSim": "SIM-10-GOVERNANCE-FAILURE" }
+  ]
+}

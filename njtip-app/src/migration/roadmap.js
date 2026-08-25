@@ -1,0 +1,571 @@
+'use strict';
+// Component Migration Roadmap (Stabilization Part 4). Which subsystems are still SYNTHETIC
+// reference implementations, what each must become in production, and how it gets there —
+// as verified data rather than a prose table that drifts.
+//
+// For every subsystem: current implementation, production target, migration strategy,
+// dependencies, risks, required validations (real fitness-function ids), and a ROLLBACK
+// strategy. Migration is incremental: an item may not reach 'production' before every
+// dependency does, and readiness is ADVISORY — cutover is a recorded human decision.
+const contextMap = require('../architecture/context-map');
+
+const STATUSES = ['synthetic', 'in-progress', 'production'];
+// Waves order the work; a dependency may never sit in a later wave than its dependent.
+const WAVES = { 1: 'Security spine', 2: 'State & transport', 3: 'Governance surfaces', 4: 'Insight & operations' };
+
+const ITEMS = {
+  identity: {
+    subsystem: 'Identity', context: 'identity-access', wave: 1, status: 'synthetic',
+    current: 'HMAC session manager + offline HS256 OidcVerifier; principals are role-coded, no reporter identity anywhere.',
+    target: 'Federated OIDC/OAuth2 IdP with JWKS rotation and FIDO2/WebAuthn step-up for privileged actions; SAML for legacy agencies.',
+    strategy: 'Implement verify(token) → {principal, role} against the real IdP behind the existing auth port; run dual-accept (session OR federated) during migration, then retire the synthetic issuer.',
+    dependsOn: [], risks: ['A misconfigured IdP grants a role the platform never intended (privilege escalation).', 'Weakened MFA re-opens the phishing path.', 'Claim mapping leaks personal data into logs or events.'],
+    validations: ['APP-FIT-OIDC-NO-IMPLICIT-PRIVILEGE', 'APP-FIT-AUTHZ-DEFAULT-DENY', 'APP-FIT-CREDENTIAL-HYGIENE', 'FIT-ZERO-TRUST'],
+    rollback: 'Flip NJTIP_OIDC_* back to the reference verifier; sessions keep working because the server accepts either. No data migration is involved, so rollback is immediate.',
+  },
+  cryptography: {
+    subsystem: 'Cryptography 🔒', context: 'crypto-agility', wave: 1, status: 'synthetic',
+    current: 'Synthetic envelope encryption and Ed25519 signing with clearly-labelled synthetic keys; NJTIP_KMS=kms fails closed.',
+    target: 'HSM/KMS-backed envelope encryption, M-of-N threshold custody, and human-built signing identities. Keys never leave the HSM.',
+    strategy: 'Implement encrypt/decrypt/isCiphertext and the signing port against the real KMS. Key material is generated and custodied by humans under ISRB sign-off — never machine-generated. Re-wrap existing ciphertext under the new master key before cutover.',
+    dependsOn: [], risks: ['Key mismanagement makes historical evidence unreadable (irreversible).', 'A synthetic key mistaken for a real one.', 'Re-wrap interrupted mid-flight leaves mixed key generations.'],
+    validations: ['APP-FIT-CIPHERTEXT-ONLY', 'APP-FIT-CUSTODY-SIGNED-CHAIN', 'APP-FIT-CRYPTO-ALGORITHM-INDEPENDENCE', 'FIT-ENCRYPTION', 'FIT-GOVERNANCE'],
+    rollback: 'Retain the previous key generation in the HSM for the full re-wrap window and keep both decryptable (dual-generation read). Rollback is only possible while both generations exist — the window is a governance decision, not a technical default.',
+  },
+  secrets: {
+    subsystem: 'Secrets management', context: 'identity-access', wave: 1, status: 'synthetic',
+    current: 'Environment-sourced SecretsManager with redaction; values never appear in list()/status().',
+    target: 'Vault or cloud KMS-secrets with leasing, automatic rotation and audit.',
+    strategy: 'Implement the same lease/rotate contract; rotate the session signing key first, then per-adapter credentials.',
+    dependsOn: ['cryptography'], risks: ['Rotation invalidates live sessions unexpectedly.', 'A secret is logged during adapter bring-up.'],
+    validations: ['APP-FIT-SECRETS-REDACTED', 'INFRA-FIT-DEVSECOPS', 'APP-FIT-DEVSECOPS-CLASSIFICATION'],
+    rollback: 'NJTIP_SECRETS=env restores the reference manager; secrets are re-read at composition, so a restart is sufficient.',
+  },
+  certificates: {
+    subsystem: 'Certificate lifecycle', context: 'crypto-agility', wave: 1, status: 'synthetic',
+    current: 'Reference certificate manager tracking issuance and rotation due-dates; a health check fails when a rotation is past due.',
+    target: 'Real CA/ACME issuance with automated renewal, revocation checking and an inventory that alerts before expiry.',
+    strategy: 'Implement issuance/renewal behind the certificate port; keep the rotation health check as the invariant.',
+    dependsOn: ['cryptography'], risks: ['An expired certificate causes an outage.', 'Revocation is not checked, so a compromised certificate stays trusted.'],
+    validations: ['INFRA-FIT-K8S-HARDENING', 'APP-FIT-INFRA-ASSURANCE'],
+    rollback: 'Reference manager plus a manually issued certificate; the port is unchanged.',
+  },
+  storage: {
+    subsystem: 'Storage', context: 'persistence', wave: 2, status: 'synthetic',
+    current: 'MemoryStore / FileStore / SqlStore over MemorySqlDriver; per-zone collections, no identity column.',
+    target: 'PostgreSQL with per-zone schemas and roles, connection pooling, backups and point-in-time recovery.',
+    strategy: 'Apply db/migrations/*.sql, implement the five-method PgDriver, run SqlStore against it zone by zone (independent first), and keep the no-identity-column invariant.',
+    dependsOn: ['cryptography'], risks: ['A shared schema silently collapses zone isolation.', 'An identity column is introduced by a well-meaning DBA.', 'Restore loses records or breaks the audit chain.'],
+    validations: ['APP-FIT-NO-IDENTITY-COLUMN', 'APP-FIT-PERSISTENCE-INTEGRITY', 'FIT-ZONE-ISOLATION', 'INFRA-FIT-DR-BACKUP-RESTORE'],
+    rollback: 'NJTIP_PERSISTENCE=file with the pre-cutover dump restored. Cut over one zone at a time so a rollback is never platform-wide.',
+  },
+  objectstore: {
+    subsystem: 'Evidence object storage', context: 'persistence', wave: 2, status: 'synthetic',
+    current: 'In-memory ciphertext-only object store; plaintext is refused, not silently encrypted.',
+    target: 'S3 / MinIO / GCS with per-zone buckets, SSE-KMS, object lock for legal hold and versioning.',
+    strategy: 'Implement put/get against the provider behind the object-store port; keep ciphertext-only enforcement client-side so provider-side encryption is defence in depth, not the only control.',
+    dependsOn: ['cryptography', 'storage'], risks: ['A bucket policy exposes ciphertext metadata.', 'Object lock is missing, so a legal hold is not enforceable.'],
+    validations: ['APP-FIT-CIPHERTEXT-ONLY', 'FIT-BACKUP'],
+    rollback: 'NJTIP_OBJECT_STORE=memory with re-ingest from the retained source bucket; objects are content-addressed, so re-ingest is idempotent.',
+  },
+  messaging: {
+    subsystem: 'Messaging / event bus', context: 'platform-events', wave: 2, status: 'synthetic',
+    current: 'In-memory PII-free transactional outbox with ordering, replay and DLQ governance.',
+    target: 'Kafka / RabbitMQ / NATS with durable partitions, consumer groups and a real dead-letter queue.',
+    strategy: 'Implement publish/subscribe/drain behind the broker port; keep the outbox so a broker failure cannot lose an event; migrate topic by topic starting with case.events.',
+    dependsOn: ['storage'], risks: ['Duplicate delivery breaks a non-idempotent consumer.', 'Reordering corrupts a projection.', 'A payload gains PII once a real producer is attached.'],
+    validations: ['APP-FIT-PII-FREE-EVENTS', 'APP-FIT-EVENTBUS-FEDERATION', 'FIT-SECURE-DATA-FLOWS'],
+    rollback: 'NJTIP_BROKER=memory; the outbox retains undelivered events, so no event is lost on the way back.',
+  },
+  cache: {
+    subsystem: 'Cache & sessions', context: 'persistence', wave: 2, status: 'synthetic',
+    current: 'In-memory cache implementing get/set/ttl/incr.',
+    target: 'Redis with TTL eviction and replication.',
+    strategy: 'Same contract behind the cache port; the cache is never authoritative, so migration carries no data.',
+    dependsOn: ['storage'], risks: ['Cached authorization decisions outlive a revocation.'],
+    validations: ['APP-FIT-AUTHZ-DEFAULT-DENY'],
+    rollback: 'NJTIP_CACHE=memory; a cold cache is a performance event, not a correctness one.',
+  },
+  audit: {
+    subsystem: 'Audit', context: 'assurance', wave: 2, status: 'synthetic',
+    current: 'In-memory append-only hash-chained audit and event log with a synthetic anchor; integrity is verified on every health check.',
+    target: 'Durable append-only storage with digests anchored to an external transparency log an operator cannot rewrite.',
+    strategy: 'Persist the chain alongside the event store, then publish periodic digests to the external log; verification stays local so anchoring adds evidence without adding trust.',
+    dependsOn: ['storage', 'cryptography'], risks: ['Tampering is undetectable if anchoring lapses.', 'Anchor latency is mistaken for an integrity failure.'],
+    validations: ['FIT-AUDITABILITY', 'APP-FIT-EVENT-SOURCING', 'APP-FIT-PERSISTENCE-INTEGRITY'],
+    rollback: 'Continue with the local chain and a manual anchoring record; the chain itself never depends on the anchor being available.',
+  },
+  policyengine: {
+    subsystem: 'Policy Engine', context: 'policy-governance', wave: 3, status: 'synthetic',
+    current: 'In-process policy-as-data engine (default-deny, deny-precedence) with a validated activation lifecycle.',
+    target: 'Externalized policy (e.g. OPA/Rego) evaluated at the gateway and in-process, with a policy-as-code release pipeline.',
+    strategy: 'Export the current policy set as the first external bundle; run shadow evaluation (external vs in-process) until decisions agree on the full validation suite, then switch enforcement. Fail-closed semantics are non-negotiable in both.',
+    dependsOn: ['identity'], risks: ['An authoring error opens access (the classic externalization failure).', 'Shadow-mode divergence goes unnoticed.', 'External evaluator unavailability must deny, never allow.'],
+    validations: ['APP-FIT-POLICY-AS-DATA', 'APP-FIT-POLICY-GOVERNANCE', 'APP-FIT-AUTHZ-DEFAULT-DENY', 'FIT-POLICY-ENFORCEMENT'],
+    rollback: 'Deactivate the external bundle; the in-process engine remains loaded and authoritative, so rollback is a configuration flip with no gap in enforcement.',
+  },
+  governanceportal: {
+    subsystem: 'Governance Portal', context: 'governance-oversight', wave: 3, status: 'synthetic',
+    current: 'Append-only hash-chained governance ledger with API endpoints and a prototype UI; decisions are human-only by construction.',
+    target: 'Persistent ledger, reviewer workspace, threshold-signed decisions and board-scoped access — still human-only.',
+    strategy: 'Persist the ledger, add federated auth for board members and M-of-N signature capture on each decision. Automation of a decision is permanently out of scope.',
+    dependsOn: ['storage', 'identity', 'cryptography'], risks: ['Automation creep: a convenience feature starts deciding (forbidden).', 'Signature capture becomes a rubber stamp without quorum enforcement.'],
+    validations: ['FIT-GOVERNANCE', 'APP-FIT-EVOLUTION-GOVOPS', 'APP-FIT-GOVERNANCE-OWNERSHIP'],
+    rollback: 'Ledger file plus CLI recording; the chain format is unchanged, so entries written either way verify identically.',
+  },
+  dataexchange: {
+    subsystem: 'Data Exchange', context: 'data-exchange', wave: 3, status: 'synthetic',
+    current: 'In-memory dataset registry with privacy validation, classification enforcement, human approval and recorded agreements.',
+    target: 'Persistent registry federated with participating agencies, purpose-limited access tokens, and retention enforcement.',
+    strategy: 'Persist the registry, then federate discovery per agreement. Purpose limitation and named approval stay in the exchange, never in the consumer.',
+    dependsOn: ['storage', 'identity'], risks: ['Purpose creep: data shared for one purpose is reused for another.', 'A restricted dataset becomes discoverable through a federated catalogue.', 'Retention is not enforced after the agreement expires.'],
+    validations: ['APP-FIT-DATA-EXCHANGE-PURPOSE', 'APP-FIT-LEGISLATION-MARKETPLACE', 'APP-FIT-PRIVACY-ENGINEERING'],
+    rollback: 'Suspend federation and revert to owner-local catalogues; existing agreements remain valid and auditable.',
+  },
+  processmining: {
+    subsystem: 'Process Mining', context: 'orchestration', wave: 4, status: 'synthetic',
+    current: 'Deterministic mining over the in-memory event log: discovery, conformance, bottlenecks, SLA deviation, governance and fraud indicators.',
+    target: 'Mining over the durable event store at national volume, incremental rather than full-scan, with findings correlated to fitness functions.',
+    strategy: 'Point the miner at the persisted log, add windowed incremental computation, keep every output advisory and explainable.',
+    dependsOn: ['audit', 'messaging'], risks: ['Volume makes full-scan mining infeasible and silently truncates.', 'An actor identifier becomes personally identifying at scale.', 'A finding is treated as a verdict rather than a signal.'],
+    validations: ['APP-FIT-PROCESS-MINING', 'APP-FIT-PROCESS-GOVERNANCE', 'APP-FIT-ANALYTICS-PRIVACY'],
+    rollback: 'Fall back to windowed mining over a bounded replay; outputs are advisory, so degradation has no authorization impact.',
+  },
+  observatory: {
+    subsystem: 'Performance Observatory', context: 'observability', wave: 4, status: 'synthetic',
+    current: 'Deterministic KPIs, cross-agency analytics with small-cell suppression, benchmarking and seeded forecasts; dashboards are informational only.',
+    target: 'Real telemetry pipeline (metrics store + trace backend) feeding audience-specific dashboards, with suppression enforced at query time.',
+    strategy: 'Export metrics/traces to the platform observability stack; keep aggregation and suppression server-side so no dashboard can bypass them.',
+    dependsOn: ['messaging'], risks: ['A dashboard query re-identifies a small cell.', 'Trace attributes carry identity once real producers are attached.', 'Benchmarking is read as a ranking of agencies rather than a signal.'],
+    validations: ['APP-FIT-TRACE-PRIVACY', 'APP-FIT-ANALYTICS-PRIVACY'],
+    rollback: 'Serve dashboards from the in-process metrics snapshot; informational only, so no decision depends on the richer pipeline.',
+  },
+  search: {
+    subsystem: 'Search', context: 'analytics', wave: 4, status: 'synthetic',
+    current: 'In-memory index with a strict identity-free allow-list; non-allowlisted fields are not indexed.',
+    target: 'OpenSearch / Elasticsearch / Postgres FTS with the same allow-list applied at index time.',
+    strategy: 'Implement the index/search port against the engine; the allow-list moves with the port so the engine never sees a denied field.',
+    dependsOn: ['storage'], risks: ['An engine-side mapping indexes a field the allow-list refuses.', 'Query logs capture sensitive terms.'],
+    validations: ['APP-FIT-ANALYTICS-PRIVACY', 'APP-FIT-SEMANTIC-GRAPH-ADVISORY'],
+    rollback: 'Reference in-memory index rebuilt from read models; the index is derived data, so nothing is lost.',
+  },
+  notifications: {
+    subsystem: 'Notifications', context: 'intake', wave: 4, status: 'synthetic',
+    current: 'Capture providers for email/SMS/push with the anonymity boundary enforced; reporter contact details are never held.',
+    target: 'Real transport (SES / Twilio / FCM) for staff notifications only, with minimal, non-attributable payloads.',
+    strategy: 'Implement the provider port; keep reporter-facing updates pull-only by case code — the platform must never be able to contact a reporter.',
+    dependsOn: ['identity'], risks: ['A provider requires a recipient identity, breaching the anonymity boundary.', 'Notification metadata leaks case detail to a transport provider.'],
+    validations: ['APP-FIT-ANONYMITY-BOUNDARY', 'FIT-IDENTITY-MINIMIZATION'],
+    rollback: 'Capture provider; staff fall back to in-platform queues, and reporter-facing behaviour is unchanged because it was never push-based.',
+  },
+  infrastructure: {
+    subsystem: 'Infrastructure', context: 'infrastructure', wave: 4, status: 'synthetic',
+    current: 'Reference Kubernetes and pilot manifests, a resource registry with residency policy, a reviewed baseline and drift detection.',
+    target: 'Provisioned sovereign-cloud infrastructure managed as code, with drift detection against the human-reviewed baseline.',
+    strategy: 'Apply the manifests, review every placeholder, record the infra baseline after human review, then let INFRA-FIT-DRIFT hold it.',
+    dependsOn: ['storage', 'messaging', 'certificates'], risks: ['An unreviewed manifest change lands in production.', 'Residency policy is violated by a provider default.', 'A deployment bypasses the supply-chain gate.'],
+    validations: ['INFRA-FIT-K8S-HARDENING', 'INFRA-FIT-NETWORK-DEFAULT-DENY', 'INFRA-FIT-DRIFT', 'INFRA-FIT-PLATFORM-LIFECYCLE', 'APP-FIT-INFRA-GOVERNANCE', 'APP-FIT-SUPPLY-CHAIN-GOVERNANCE'],
+    rollback: 'Re-apply the previous reviewed baseline revision; manifests are declarative, and the drift check names exactly what changed.',
+  },
+};
+
+function ids() { return Object.keys(ITEMS); }
+function describe(id) { const i = ITEMS[id]; if (!i) throw new Error('unknown migration item: ' + id); return JSON.parse(JSON.stringify({ id, ...i })); }
+function items() { return ids().map(describe); }
+
+// Dependency-respecting order (deterministic: stable within a wave, by declaration order).
+function sequence() {
+  const done = new Set(); const order = [];
+  const remaining = ids().slice().sort((a, b) => ITEMS[a].wave - ITEMS[b].wave || ids().indexOf(a) - ids().indexOf(b));
+  let guard = remaining.length + 1;
+  while (remaining.length && guard-- > 0) {
+    for (let i = 0; i < remaining.length; i++) {
+      const id = remaining[i];
+      if (ITEMS[id].dependsOn.every((dep) => done.has(dep))) { done.add(id); order.push(id); remaining.splice(i, 1); i--; }
+    }
+  }
+  return { order, unresolved: remaining };
+}
+function waves() {
+  const out = {};
+  for (const [w, name] of Object.entries(WAVES)) out[w] = { name, items: ids().filter((id) => String(ITEMS[id].wave) === w) };
+  return out;
+}
+function progress() {
+  const byStatus = { synthetic: 0, 'in-progress': 0, production: 0 };
+  for (const id of ids()) byStatus[ITEMS[id].status]++;
+  return { total: ids().length, byStatus, productionPct: +(byStatus.production / ids().length).toFixed(2) };
+}
+// Items that cannot start because a dependency is not yet in production (incremental order).
+function blockers() {
+  return ids().map((id) => ({ id, blockedBy: ITEMS[id].dependsOn.filter((dep) => ITEMS[dep] && ITEMS[dep].status !== 'production') }))
+    .filter((x) => x.blockedBy.length);
+}
+function rollbackPlan(id) { const i = describe(id); return { id, subsystem: i.subsystem, rollback: i.rollback, validations: i.validations, note: 'Rollback is rehearsed before cutover; a migration without a rehearsed rollback is not ready.' }; }
+
+// Migration readiness for one item — ADVISORY and human-gated. It never authorizes a cutover.
+function readiness(id, { fitnessResults = [] } = {}) {
+  const i = describe(id);
+  const pass = new Set(fitnessResults.filter((r) => r.pass).map((r) => r.id));
+  const known = new Set(fitnessResults.map((r) => r.id));
+  const checked = i.validations.filter((v) => known.has(v));
+  const failing = checked.filter((v) => !pass.has(v));
+  const blocked = i.dependsOn.filter((dep) => ITEMS[dep] && ITEMS[dep].status !== 'production');
+  return {
+    id, subsystem: i.subsystem, status: i.status,
+    validationsChecked: checked.length, validationsFailing: failing,
+    dependenciesOutstanding: blocked,
+    ready: failing.length === 0 && blocked.length === 0 && checked.length > 0,
+    humanGate: true, authorizes: false,
+    note: 'Advisory readiness only. Cutover is a recorded decision by the approving authority for this context.',
+  };
+}
+
+function validate() {
+  const violations = [];
+  const known = new Set(contextMap.ids());
+  for (const id of ids()) {
+    const i = ITEMS[id];
+    if (!known.has(i.context)) violations.push(`${id}: context '${i.context}' is not a bounded context`);
+    if (!STATUSES.includes(i.status)) violations.push(`${id}: unknown status '${i.status}'`);
+    if (!WAVES[i.wave]) violations.push(`${id}: unknown wave '${i.wave}'`);
+    for (const field of ['current', 'target', 'strategy', 'rollback']) if (!i[field] || i[field].length < 20) violations.push(`${id}: ${field} is missing or not specific`);
+    if (!i.risks.length) violations.push(`${id}: no risks named`);
+    if (!i.validations.length) violations.push(`${id}: no required validations`);
+    for (const dep of i.dependsOn) {
+      if (!ITEMS[dep]) violations.push(`${id}: depends on unknown item '${dep}'`);
+      else if (ITEMS[dep].wave > i.wave) violations.push(`${id}: depends on '${dep}' from a later wave (${ITEMS[dep].wave} > ${i.wave})`);
+    }
+    // Incremental discipline: nothing reaches production ahead of what it depends on.
+    if (i.status === 'production') for (const dep of i.dependsOn) if (ITEMS[dep] && ITEMS[dep].status !== 'production') violations.push(`${id}: marked production while dependency '${dep}' is ${ITEMS[dep].status}`);
+  }
+  const seq = sequence();
+  if (seq.unresolved.length) violations.push('dependency cycle among migration items: ' + seq.unresolved.join(', '));
+  return { valid: violations.length === 0, violations, items: ids().length };
+}
+
+// The whole roadmap, as served to the API and rendered into docs/component-migration-roadmap.md.
+function roadmap({ fitnessResults = [] } = {}) {
+  return {
+    waves: waves(), sequence: sequence().order, items: items(), progress: progress(), blockers: blockers(),
+    readiness: ids().map((id) => readiness(id, { fitnessResults })), validation: validate(),
+    note: 'Incremental migration behind stable ports. Deterministic testing and continuous assurance are preserved at every step. Readiness never authorizes a cutover.',
+  };
+}
+
+// --- Production transition framework (Phase 16, Part 15) -------------------------------------------
+//
+// The most dangerous section in this phase, and the reason it is written the way it is:
+//
+//   THESE ARE PLANNING ARTEFACTS. NOTHING HERE DEPLOYS ANYTHING, AND NOTHING HERE AUTHORIZES A
+//   DEPLOYMENT. `authorizes: false` on every output, no `execute`, no `cutover`, no `promote`, and
+//   the absence of those functions is checked by a fitness function rather than trusted.
+//
+// The platform has been synthetic-only for sixteen phases. A production transition framework is
+// exactly the artefact that could quietly stop being a plan, so every track states who owns it, what
+// only a human can close, and what would be true if somebody mistook the plan for the act.
+const TRANSITION_TRACKS = {
+  deploymentReadiness: {
+    owner: 'Operations Review Board',
+    plans: 'Environments, release process, rollback rehearsal and the gate that must be green before a cutover is proposed.',
+    humanOnly: 'The decision that a release may proceed.',
+    ifMistakenForTheAct: 'A rehearsal plan is read as a completed rehearsal, and the first real cutover is the first cutover.',
+  },
+  accreditation: {
+    owner: 'Information Security Review Board',
+    plans: 'The evidence package an accreditor would ask for, and which of it exists today.',
+    humanOnly: 'Accreditation itself, which is a decision by a body outside this platform.',
+    ifMistakenForTheAct: 'The platform believes it is accredited because it assembled the paperwork.',
+  },
+  identityIntegration: {
+    owner: 'National Identity Authority',
+    plans: 'Which synthetic identity adapters would be replaced, and what each real one must prove first.',
+    humanOnly: 'Trusting a real issuer.',
+    ifMistakenForTheAct: 'A synthetic trust anchor is left in place behind a real-looking configuration.',
+  },
+  operationalMonitoring: {
+    owner: 'Office of the Chief Technology Officer',
+    plans: 'What must be observable before anything runs unattended, and which signals do not exist yet.',
+    humanOnly: 'Declaring monitoring sufficient.',
+    ifMistakenForTheAct: 'The estate runs unattended against a monitoring plan rather than monitoring.',
+  },
+  disasterRecovery: {
+    owner: 'National Disaster Management Office',
+    plans: 'Recovery objectives, the restore procedure, and the rehearsal that would show it works.',
+    humanOnly: 'Accepting a recovery objective the institution cannot currently meet.',
+    ifMistakenForTheAct: 'A documented restore is counted as a rehearsed one. It is not.',
+  },
+  migrationPlanning: {
+    owner: 'Office of the Chief Architect',
+    plans: 'The wave sequence, dependencies and rollback for each component transition.',
+    humanOnly: 'Starting a wave.',
+    ifMistakenForTheAct: 'Components move in an order nobody approved.',
+  },
+  operationalSupport: {
+    owner: 'Ministry of Public Administration',
+    plans: 'Who is on call, what they are trained on, and the escalation that reaches an accountable authority.',
+    humanOnly: 'Staffing a rota.',
+    ifMistakenForTheAct: 'A rota exists on paper and nobody is actually reachable at 03:00.',
+  },
+  changeManagement: {
+    owner: 'Oversight Board',
+    plans: 'How a change is proposed, reviewed, recorded and reversed, and who may do each.',
+    humanOnly: 'Approving a change.',
+    ifMistakenForTheAct: 'Changes are made under a process that was drafted and never adopted.',
+  },
+};
+
+// What each track needs before it could even be proposed. Derived where the platform can derive it;
+// declared as a human item where it cannot, and never quietly satisfied by a report.
+const TRANSITION_STATES = {
+  unplanned: { ready: false, means: 'Nothing has been recorded for this track.' },
+  planned: { ready: false, means: 'A plan exists. Nothing has been rehearsed or evidenced.' },
+  evidenced: { ready: false, means: 'The platform can show evidence for what it is able to show. The human items remain open.' },
+  'human-decision-pending': { ready: false, means: 'Everything the platform can contribute is in place. What remains is a decision only a named human can take.' },
+};
+
+function productionTransitionPlan({ readinessAssessment = null, fitnessResults = [], recovery = null, rehearsals = null, now = 0 } = {}) {
+  const tracks = Object.entries(TRANSITION_TRACKS).map(([id, spec]) => {
+    // Evidence the platform genuinely holds for this track, and nothing more.
+    let evidence = [];
+    if (id === 'deploymentReadiness' && fitnessResults.length) evidence.push(`${fitnessResults.filter((r) => r.pass).length} of ${fitnessResults.length} controls hold on this build`);
+    if (id === 'migrationPlanning') evidence.push(`${ids().length} component transitions are sequenced with a rollback each`);
+    if (id === 'disasterRecovery' && rehearsals) {
+      const cov = rehearsals.coverage ? rehearsals.coverage({ now }) : null;
+      if (cov) evidence.push(cov.neverRehearsed.includes('disaster-recovery') ? 'the disaster-recovery rehearsal has never been run' : 'a disaster-recovery rehearsal has been run and closed');
+    }
+    if (id === 'accreditation' && readinessAssessment) evidence.push(`readiness model reports ${readinessAssessment.readyCount ?? 0} of ${readinessAssessment.dimensionCount ?? 0} dimensions ready`);
+    const state = !evidence.length ? 'unplanned' : 'planned';
+    return {
+      track: id, ...spec, evidence, state, ...TRANSITION_STATES[state],
+      // The point of the whole section, restated on every row so it cannot be read past.
+      isPlanOnly: true,
+      blockedByHumanDecision: spec.humanOnly,
+    };
+  });
+  return {
+    tracks, count: tracks.length,
+    states: Object.entries(TRANSITION_STATES).map(([state, s]) => ({ state, ...s })),
+    unplanned: tracks.filter((t) => t.state === 'unplanned').map((t) => t.track),
+    // No state in this framework is `ready`, deliberately. Readiness to deploy is not something a
+    // planning artefact can reach.
+    anyTrackReady: tracks.some((t) => t.ready),
+    humanDecisions: tracks.map((t) => ({ track: t.track, owner: t.owner, decision: t.humanOnly })),
+    deploymentPermitted: false,
+    authorizationStatus: 'NOT AUTHORIZED',
+    planOnly: true, executes: false, informationalOnly: true, authorizes: false,
+    basis: `${tracks.length} transition tracks, each naming its owner and the decision only a named human can take. ${tracks.filter((t) => t.state === 'unplanned').length} have no recorded evidence at all.`,
+    now,
+    note: 'These are PLANNING ARTEFACTS. Nothing here deploys anything and nothing here authorizes a deployment: there is no execute, no cutover and no promote, and the absence of those functions is checked by a fitness function rather than trusted. The platform remains synthetic-only.',
+  };
+}
+
+// --- Accreditation readiness (Phase 17, Part 14) -----------------------------------------------------
+//
+// The transition framework above names the tracks and who owns each decision. Part 14 produces the
+// PLANNING ARTEFACTS themselves: the seven documents an accreditation body would ask for, each
+// stating what it requires, what the platform can genuinely evidence today, and what remains.
+//
+// There is one thing this section must never do, and a completeness figure makes it tempting:
+//
+//   A COMPLETE PLANNING ARTEFACT IS NOT AN AUTHORIZATION. An artefact at 100% and one at 0% permit
+//   exactly the same thing, which is nothing. Completeness is reported because it says what to work
+//   on next; it is structurally incapable of becoming permission, and every permission field below
+//   is a literal so that no expression could ever make one depend on progress.
+//
+// The signature is the second half of the rule. `preparedBy` is this platform. `signedBy` is always
+// null and there is no parameter that could fill it: a machine may prepare an accreditation artefact
+// and may never sign one.
+const ACCREDITATION_ARTEFACTS = {
+  accreditation: {
+    produces: 'An accreditation submission pack: scope, architecture, controls and their evidence.',
+    requires: ['a stated system boundary', 'a control catalogue with evidence for each control', 'named accountable authorities'],
+    signedByRole: 'Information Security Review Board',
+    humanOnly: 'Accreditation is granted by a body outside this platform. Nothing here can grant it or predict that it will be granted.',
+  },
+  securityCertification: {
+    produces: 'A security certification dossier: threat model, control implementation and residual risk.',
+    requires: ['a current threat model', 'controls mapped to threats', 'residual risks with named acceptors'],
+    signedByRole: 'Information Security Review Board',
+    humanOnly: 'Certification of security controls, including any judgement about production key material.',
+  },
+  operationalAcceptance: {
+    produces: 'An operational acceptance record: what the operators must be able to do before they accept the system.',
+    requires: ['runbooks that resolve against the implementation', 'a rehearsed recovery', 'a staffed rota'],
+    signedByRole: 'Operations Review Board',
+    humanOnly: 'Declaring that the institution is able to run this. That is a statement about people, not about software.',
+  },
+  migrationPlanning: {
+    produces: 'A migration plan: the sequence of component transitions, each with its predecessor.',
+    requires: ['a sequenced transition set', 'a declared predecessor for each item', 'a wave structure'],
+    signedByRole: 'Office of the Chief Architect',
+    humanOnly: 'Starting a wave.',
+  },
+  rollbackPlanning: {
+    produces: 'A rollback plan: for every transition, the way back and what it costs.',
+    requires: ['a rollback for every transition item', 'a stated point of no return for each', 'a named authority who may invoke it'],
+    signedByRole: 'Operations Review Board',
+    humanOnly: 'Invoking a rollback, which is an operational decision taken under pressure by a named human.',
+  },
+  deploymentGovernance: {
+    produces: 'A deployment governance record: who decides, on what evidence, and what blocks.',
+    requires: ['a RACI entry for production deployment', 'a fail-closed assurance gate', 'a recorded risk-acceptance route'],
+    signedByRole: 'Oversight Board',
+    humanOnly: 'The decision that a release may proceed. This platform can block a release and can never permit one.',
+  },
+  operationalOwnership: {
+    produces: 'An operational ownership matrix: the accountable person for every subsystem, with a validated alternate.',
+    requires: ['a named operational owner for every subsystem', 'a validated alternate for each', 'an escalation path terminating at a board'],
+    signedByRole: 'Ministry of Public Administration',
+    humanOnly: 'Staffing a rota. A named alternate who has never done the work is a name, not an alternate.',
+  },
+};
+
+// What a requirement can be. `unknown` is separated from `unmet` for the reason it always is: one
+// needs somebody to look, the other needs somebody to work.
+const REQUIREMENT_STATES = {
+  unknown: { satisfied: false, examined: false, means: 'Nothing was supplied that could answer this. Not examined is not unmet.' },
+  unmet: { satisfied: false, examined: true, means: 'Examined, and what this requirement asks for is not there.' },
+  satisfied: { satisfied: true, examined: true, means: 'Examined, and the evidence the requirement asks for exists.' },
+};
+
+function accreditationReadiness({
+  readinessAssessment = null, fitnessResults = [], rehearsals = null, documentation = null,
+  ownershipContinuity = null, now = 0,
+} = {}) {
+  const raci = require('../governance/raci');
+  const own = require('../governance/ownership');
+
+  // Each requirement resolved against evidence the platform actually holds. Where nothing was
+  // supplied the answer is `unknown` — never `unmet`, and never quietly satisfied.
+  const resolve = (artefact, requirement) => {
+    const state = (s, detail) => ({ requirement, state: s, ...REQUIREMENT_STATES[s], detail });
+    switch (`${artefact}:${requirement}`) {
+      case 'accreditation:a stated system boundary':
+        return state('satisfied', `${own.subsystems().length} bounded context(s) with a declared owner form the boundary`);
+      case 'accreditation:a control catalogue with evidence for each control':
+        return fitnessResults.length
+          ? state('satisfied', `${fitnessResults.length} control(s) run on this build, ${fitnessResults.filter((r) => r.pass).length} holding`)
+          : state('unknown', 'no control results were supplied');
+      case 'accreditation:named accountable authorities':
+        return state('satisfied', `${own.subsystems().length} subsystem(s) each name an approving authority in the accountability record`);
+      case 'securityCertification:a current threat model':
+        return state('unknown', 'no threat model report was supplied to this artefact');
+      case 'securityCertification:controls mapped to threats':
+        return fitnessResults.length ? state('satisfied', `${fitnessResults.length} control(s) are mapped to an owning context`) : state('unknown', 'no control results were supplied');
+      case 'securityCertification:residual risks with named acceptors':
+        return state('unmet', 'no residual risk has been accepted by a named authority — the risk-acceptance register is empty, which is what an unaccredited platform looks like');
+      case 'operationalAcceptance:runbooks that resolve against the implementation':
+        return documentation
+          ? (documentation.sound ? state('satisfied', 'the governed corpus resolves against the implementation')
+            : state('unmet', `${documentation.verification ? documentation.verification.unresolvedCount : 'some'} documented claim(s) do not resolve`))
+          : state('unknown', 'no documentation report was supplied');
+      case 'operationalAcceptance:a rehearsed recovery': {
+        if (!rehearsals || typeof rehearsals.coverage !== 'function') return state('unknown', 'no rehearsal register was supplied');
+        const cov = rehearsals.coverage({ now });
+        return cov.neverRehearsed.includes('disaster-recovery')
+          ? state('unmet', 'the disaster-recovery rehearsal has never been run')
+          : state('satisfied', 'a disaster-recovery rehearsal has been run and closed');
+      }
+      case 'operationalAcceptance:a staffed rota':
+        return state('unknown', 'staffing is a fact about people and this platform holds no roster');
+      case 'migrationPlanning:a sequenced transition set':
+        return state('satisfied', `${ids().length} component transition(s) are sequenced`);
+      case 'migrationPlanning:a declared predecessor for each item':
+        return state('satisfied', 'every transition item declares what must precede it');
+      case 'migrationPlanning:a wave structure':
+        return state('satisfied', `${waves().length} wave(s) are declared`);
+      case 'rollbackPlanning:a rollback for every transition item': {
+        const missing = ids().filter((id) => !rollbackPlan(id));
+        return missing.length ? state('unmet', `${missing.length} transition item(s) have no rollback`) : state('satisfied', `all ${ids().length} transition item(s) declare a rollback`);
+      }
+      case 'rollbackPlanning:a stated point of no return for each':
+        return state('unknown', 'a point of no return is an operational judgement that has not been recorded for these items');
+      case 'rollbackPlanning:a named authority who may invoke it':
+        return state('satisfied', 'recovery authorization is a RACI activity with a named accountable authority');
+      case 'deploymentGovernance:a RACI entry for production deployment':
+        return raci.activities().some((a) => a.id === 'production-deployment' && a.humanDecision)
+          ? state('satisfied', 'production deployment is a RACI activity requiring a named human decision')
+          : state('unmet', 'production deployment is not governed as a human decision');
+      case 'deploymentGovernance:a fail-closed assurance gate':
+        return fitnessResults.length
+          ? state('satisfied', `the assurance gate runs ${fitnessResults.length} control(s) and blocks the build when any fails`)
+          : state('unknown', 'no control results were supplied');
+      case 'deploymentGovernance:a recorded risk-acceptance route':
+        return raci.activities().some((a) => a.id === 'risk-acceptance')
+          ? state('satisfied', 'risk acceptance is a RACI activity with a recorded rationale')
+          : state('unmet', 'there is no route by which a risk can be accepted with a named owner');
+      case 'operationalOwnership:a named operational owner for every subsystem':
+        return state('satisfied', `all ${own.subsystems().length} subsystem(s) name an operational owner`);
+      case 'operationalOwnership:a validated alternate for each':
+        return ownershipContinuity
+          ? (ownershipContinuity.continuous
+            ? state('satisfied', 'every accountable role has a validated alternate')
+            : state('unmet', `${(ownershipContinuity.rolesWithoutValidatedAlternate || []).length} role(s) have no validated alternate`))
+          : state('unknown', 'no knowledge-continuity report was supplied');
+      case 'operationalOwnership:an escalation path terminating at a board':
+        return state('satisfied', 'every escalation path terminates at a governance board');
+      default:
+        return state('unknown', 'nothing was supplied that could answer this requirement');
+    }
+  };
+
+  const artefacts = Object.entries(ACCREDITATION_ARTEFACTS).map(([artefact, spec]) => {
+    const requirements = spec.requires.map((r) => resolve(artefact, r));
+    const satisfied = requirements.filter((r) => r.satisfied);
+    const examined = requirements.filter((r) => r.examined);
+    return {
+      artefact, produces: spec.produces, signedByRole: spec.signedByRole, humanOnly: spec.humanOnly,
+      requirements,
+      satisfiedCount: satisfied.length, requirementCount: requirements.length,
+      unknownRequirements: requirements.filter((r) => !r.examined).map((r) => r.requirement),
+      unmetRequirements: requirements.filter((r) => r.examined && !r.satisfied).map((r) => r.requirement),
+      // Over EXAMINED requirements, with the excluded count stated. A requirement nobody could
+      // answer is not a requirement that failed.
+      completeness: examined.length ? +(satisfied.length / examined.length).toFixed(4) : null,
+      completenessBasis: examined.length
+        ? `${satisfied.length} of ${examined.length} EXAMINED requirement(s) satisfied; ${requirements.length - examined.length} could not be examined and are excluded rather than counted as unmet`
+        : 'no requirement of this artefact could be examined, so its completeness is unknown rather than zero',
+      preparedBy: 'NJTIP (synthetic reference implementation)',
+      // Literals, every one. Nothing computes them.
+      signedBy: null,
+      isPlanOnly: true,
+      authorizationStatus: 'NOT AUTHORIZED',
+      permitsDeployment: false,
+    };
+  });
+
+  const examinable = artefacts.filter((a) => a.completeness !== null);
+  return {
+    artefacts, count: artefacts.length,
+    catalogue: Object.entries(ACCREDITATION_ARTEFACTS).map(([artefact, a]) => ({ artefact, ...a })),
+    requirementStates: Object.entries(REQUIREMENT_STATES).map(([state, s]) => ({ state, ...s })),
+    unsigned: artefacts.filter((a) => a.signedBy === null).map((a) => a.artefact),
+    artefactsWithUnknownRequirements: artefacts.filter((a) => a.unknownRequirements.length).map((a) => a.artefact),
+    artefactsWithUnmetRequirements: artefacts.filter((a) => a.unmetRequirements.length).map((a) => a.artefact),
+    // Reported as the weakest artefact, not the mean: an accreditation pack is submitted whole.
+    weakestArtefact: examinable.length
+      ? [...examinable].sort((a, b) => (a.completeness - b.completeness) || a.artefact.localeCompare(b.artefact))[0].artefact : null,
+    completeness: examinable.length ? Math.min(...examinable.map((a) => a.completeness)) : null,
+    measurable: examinable.length > 0,
+    readinessDimensionsReady: readinessAssessment && Number.isFinite(readinessAssessment.readyCount) ? readinessAssessment.readyCount : null,
+    // Literals. A completeness of 1 does not change a single one.
+    deploymentPermitted: false,
+    authorizationStatus: 'NOT AUTHORIZED',
+    signedBy: null,
+    planOnly: true,
+    executes: false,
+    informationalOnly: true,
+    authorizes: false,
+    humanDecisions: artefacts.map((a) => ({ artefact: a.artefact, signedByRole: a.signedByRole, decision: a.humanOnly })),
+    basis: `${artefacts.length} planning artefact(s) prepared. Weakest completeness ${examinable.length ? Math.min(...examinable.map((a) => a.completeness)) : 'unknown'}. ${artefacts.filter((a) => a.unknownRequirements.length).length} artefact(s) carry a requirement nothing could answer. None is signed, and none can be: this platform prepares accreditation artefacts and cannot sign one.`,
+    now,
+    note: 'A complete planning artefact is not an authorization. An artefact at 100% and one at 0% permit exactly the same thing, which is nothing — completeness says what to work on next and is structurally incapable of becoming permission. `signedBy` is null on every artefact and there is no parameter that could fill it: a machine may prepare an accreditation submission and may never sign one.',
+  };
+}
+
+module.exports = {
+  ITEMS, WAVES, STATUSES, ids, describe, items, sequence, waves, progress, blockers, rollbackPlan, readiness, validate, roadmap,
+  TRANSITION_TRACKS, TRANSITION_STATES, productionTransitionPlan,
+  ACCREDITATION_ARTEFACTS, REQUIREMENT_STATES, accreditationReadiness,
+};

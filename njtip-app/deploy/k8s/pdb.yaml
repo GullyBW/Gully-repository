@@ -1,0 +1,10 @@
+# Resilience: keep at least 2 pods serving during voluntary disruptions (node drains, upgrades).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: njtip-app
+  namespace: njtip-independent
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: njtip-app }
