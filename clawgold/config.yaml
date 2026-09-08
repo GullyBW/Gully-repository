@@ -11,13 +11,55 @@ trading:
   # from this and the contract spec in scripts/instrument.py.
   default_stop_distance: 5.0
 
+  # Maximum MARGIN to commit to a single entry, in account currency.
+  # This is what makes a small account workable: it bounds what the broker
+  # holds to OPEN the position, which is a different question from what the
+  # trade risks if the stop is hit.
+  # Final volume = min(what risk allows, what this budget affords).
+  # Set to 0 to disable the cap and size on risk alone.
+  entry_budget: 10.0
+
+  # Account leverage, used for the margin arithmetic above.
+  # At 1:100 a $10 entry CANNOT open the standard 0.01-lot gold minimum
+  # (that needs ~$26.50 at $2650/oz). Run `python claw.py entry-check` to
+  # see whether your numbers work before you rely on them.
+  leverage: 500
+
+# Per-broker contract overrides. The minimum volume and volume step decide
+# whether a small account can trade at all, and they vary by broker:
+# standard accounts stop at 0.01 lots, cent/micro accounts often allow
+# 0.001. Check your broker's contract specification and set it here.
+instruments:
+  XAUUSD:
+    min_volume: 0.01
+    volume_step: 0.01
+
+# Free mode — run the whole system with no paid services.
+# Nothing here calls a paid API: no LiteLLM keys, no Langfuse cloud, no
+# market-data subscription. The signal comes from the technical path
+# (EMA confluence) plus the local keyword sentiment analyser, both of which
+# run offline. If an AI CLI happens to be installed it is still used; free
+# mode only stops the system from REQUIRING anything paid.
+free_mode:
+  enabled: true
+  # Never fall back to a paid LiteLLM API call.
+  allow_paid_llm_fallback: false
+  # Skip the AI research step entirely rather than waiting on tools that
+  # may not be installed. The technical path carries the signal alone.
+  skip_ai_research: false
+  # Refuse to start if a paid service is configured, instead of silently
+  # spending money.
+  strict: true
+
 # Paper broker settings (mode: simulation). Deterministic given the seed,
 # so the test suite and repeated runs produce the same price series.
 paper:
   start_price: 2650.0
   spread: 0.30
   daily_volatility: 0.011
-  leverage: 100
+  # Omit to inherit trading.leverage, so the simulator and the sizing
+  # arithmetic never disagree about what an entry costs.
+  leverage:
   seed: 20260101
 
 # Risk Management Settings

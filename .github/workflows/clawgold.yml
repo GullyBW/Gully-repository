@@ -71,6 +71,19 @@ jobs:
           print('config defaults are safe')
           "
 
+      - name: Confirm the shipped config cannot spend money
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'scripts')
+          import yaml
+          from free_mode import FreeMode
+          free = FreeMode.from_config(yaml.safe_load(open('config.yaml')))
+          assert free.enabled, 'free mode is off in the committed config'
+          assert not free.allow_paid_llm_fallback, 'billed LLM fallback is permitted'
+          print('free mode is on; no paid service can be called')
+          "
+
       - name: Run tests
         # run_tests.py loads modules by path. Plain `unittest discover -s test`
         # can pick up CPython's own stdlib `test` package instead and report a

@@ -11,9 +11,15 @@ from logger import get_logger
 # Every price-to-money conversion comes from the instrument contract spec,
 # so risk numbers here match what the broker will actually charge.
 try:
-    from .instrument import money_risk, normalize_volume, pips_to_price, position_size
+    from .instrument import (
+        get_spec, max_volume_for_margin, min_margin_to_trade, money_risk,
+        normalize_volume, pips_to_price, position_size, required_margin,
+    )
 except ImportError:
-    from instrument import money_risk, normalize_volume, pips_to_price, position_size
+    from instrument import (
+        get_spec, max_volume_for_margin, min_margin_to_trade, money_risk,
+        normalize_volume, pips_to_price, position_size, required_margin,
+    )
 
 try:
     from agent_executor import AgentExecutor
@@ -189,10 +195,92 @@ class RiskManager:
         """Stop distance in price units to assume when a caller gives none."""
         return float(self.config.get('trading', {}).get('default_stop_distance', 5.0))
 
+    @property
+    def leverage(self) -> float:
+        """Account leverage used for margin arithmetic."""
+        return float(self.config.get('trading', {}).get('leverage', 100.0))
+
+    @property
+    def entry_budget(self) -> float:
+        """
+        Maximum margin to commit to a single entry, in the quote currency.
+
+        0 or unset means "no cap" — sizing is then governed by the risk
+        budget alone. Setting it to 10 is what makes a $10-per-entry
+        account possible: it bounds what the broker holds to open the
+        position, which is a different question from what the trade risks.
+        """
+        return float(self.config.get('trading', {}).get('entry_budget', 0.0) or 0.0)
+
+    def entry_feasibility(self, price: float, symbol: Optional[str] = None,
+                          entry_budget: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Can a position be opened at all, given the entry budget?
+
+        Small accounts fail on margin long before they fail on risk, and
+        the failure is a hard broker constraint rather than anything this
+        code can size around. This reports the arithmetic so the answer is
+        visible before a signal fires rather than as a rejected order.
+
+        Returns a dict with:
+            feasible:        bool
+            budget:          the margin cap being applied
+            min_volume:      the broker's smallest position
+            min_margin:      margin needed for that smallest position
+            volume:          largest volume the budget affords (0 if none)
+            shortfall:       how much more margin would be needed (0 if feasible)
+            leverage / price / symbol
+            reason:          plain-language explanation
+        """
+        symbol = symbol or self.config.get('trading', {}).get('symbol', 'XAUUSD')
+        budget = self.entry_budget if entry_budget is None else float(entry_budget)
+        spec = get_spec(symbol)
+        leverage = self.leverage
+
+        min_margin = min_margin_to_trade(symbol, price, leverage)
+
+        if budget <= 0:
+            return {
+                'feasible': True, 'budget': 0.0, 'symbol': symbol, 'price': price,
+                'leverage': leverage, 'min_volume': spec.min_volume,
+                'min_margin': min_margin, 'volume': 0.0, 'shortfall': 0.0,
+                'reason': 'No entry budget set — sizing is governed by risk alone.',
+            }
+
+        volume = max_volume_for_margin(symbol, budget, price, leverage)
+        feasible = volume > 0
+        shortfall = 0.0 if feasible else max(0.0, min_margin - budget)
+
+        if feasible:
+            reason = (
+                f"${budget:,.2f} affords {volume} lots of {symbol} at "
+                f"{price:,.2f} on 1:{leverage:.0f} "
+                f"(margin ${required_margin(symbol, volume, price, leverage):,.2f})."
+            )
+        else:
+            reason = (
+                f"${budget:,.2f} cannot open the smallest {symbol} position. "
+                f"The broker minimum is {spec.min_volume} lots, which needs "
+                f"${min_margin:,.2f} margin at 1:{leverage:.0f} — "
+                f"${shortfall:,.2f} more than the budget. "
+                f"Options: raise the entry budget to ${min_margin:,.2f}, use an "
+                f"account with higher leverage, or use a broker offering a "
+                f"smaller minimum volume (set instruments.{symbol}.min_volume)."
+            )
+
+        return {
+            'feasible': feasible, 'budget': budget, 'symbol': symbol, 'price': price,
+            'leverage': leverage, 'min_volume': spec.min_volume,
+            'min_margin': min_margin, 'volume': volume, 'shortfall': shortfall,
+            'reason': reason,
+        }
+
     def calculate_position_size(self, account_balance: float,
                                 stop_distance: Optional[float] = None,
                                 symbol: Optional[str] = None,
-                                stop_loss_pips: Optional[float] = None) -> float:
+                                stop_loss_pips: Optional[float] = None,
+                                price: Optional[float] = None,
+                                entry_budget: Optional[float] = None) -> float:
         """
         Largest volume whose loss at the stop stays inside the risk budget.
 
@@ -203,6 +291,12 @@ class RiskManager:
             stop_loss_pips: Deprecated alternative to `stop_distance`,
                 converted using the instrument's pip size. Kept so existing
                 callers keep working.
+            price: Current price, needed to convert an entry budget into a
+                volume. Without it the margin cap cannot be applied.
+            entry_budget: Maximum margin to commit to this entry. Defaults
+                to ``trading.entry_budget``. The final volume is the
+                smaller of what risk allows and what margin affords, so a
+                $10 budget can never be talked up by a wide stop.
 
         Returns:
             Volume in lots, rounded down to the broker's volume step.
@@ -231,6 +325,33 @@ class RiskManager:
         # Never exceed the configured hard cap, whatever the budget allows.
         if volume > self.limits.max_position_size:
             volume = normalize_volume(symbol, self.limits.max_position_size)
+
+        # Apply the margin cap. Risk and margin are independent constraints
+        # and the tighter one wins: a $10 entry budget must hold even when
+        # the risk budget would happily fund something larger.
+        budget = self.entry_budget if entry_budget is None else float(entry_budget)
+        if budget > 0:
+            if price is None or price <= 0:
+                logger.warning(
+                    "entry_budget of $%.2f is set but no price was supplied — "
+                    "cannot apply the margin cap, sizing on risk alone", budget,
+                )
+            else:
+                affordable = max_volume_for_margin(symbol, budget, price, self.leverage)
+                if affordable <= 0:
+                    logger.warning(
+                        "Entry budget $%.2f cannot open the minimum %s position "
+                        "(needs $%.2f margin at 1:%.0f) — no trade",
+                        budget, symbol,
+                        min_margin_to_trade(symbol, price, self.leverage), self.leverage,
+                    )
+                    return 0.0
+                if affordable < volume:
+                    logger.info(
+                        "Entry budget $%.2f caps volume at %s (risk allowed %s)",
+                        budget, affordable, volume,
+                    )
+                    volume = affordable
 
         if volume <= 0:
             logger.warning(

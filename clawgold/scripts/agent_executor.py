@@ -493,6 +493,14 @@ class AgentExecutor:
 
         self.config: Dict[str, Any] = kwargs.get('config') or {}
 
+        # Free mode gates the one path here that can cost money.
+        try:
+            from free_mode import FreeMode
+            self._free_mode = FreeMode.from_config(self.config)
+        except ImportError:  # pragma: no cover
+            from types import SimpleNamespace
+            self._free_mode = SimpleNamespace(permits_paid_llm=lambda: True)
+
         agent_cfg = self.config.get('agent', {}) if isinstance(self.config, dict) else {}
         cache_cfg = agent_cfg.get('cache', {}) or {}
         # `or` rather than a dict default: the key can be present but null.
@@ -836,7 +844,24 @@ class AgentExecutor:
 
     def _run_litellm_fallback(self, tool: AgentTool, prompt: str, task: str,
                               timeout: int, start_time: float) -> AgentResult:
-        """Fallback to LiteLLM when CLI is not available."""
+        """
+        Fallback to LiteLLM when the CLI is not available.
+
+        This is the one code path in the system that can spend money, so it
+        is gated on free mode before anything is sent.
+        """
+        if not self._free_mode.permits_paid_llm():
+            return AgentResult(
+                tool=tool.value, task=task, response="",
+                success=False, execution_time=time.time() - start_time,
+                error=(
+                    "Free mode is on, so the billed LiteLLM fallback was not "
+                    "called. Install an AI CLI, or set "
+                    "free_mode.allow_paid_llm_fallback to true to permit "
+                    "paid API calls."
+                ),
+            )
+
         try:
             client = get_llm_client()
             llm_response = client.call(

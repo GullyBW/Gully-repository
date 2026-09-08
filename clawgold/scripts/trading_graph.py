@@ -344,13 +344,31 @@ def validate_node(state: TradingState) -> dict:
             positions = broker.get_positions(symbol)
             balance = float(account.get("balance", 0.0))
 
+            # Price is needed before sizing so the entry budget's margin cap
+            # can be applied — margin depends on price, risk does not.
+            tick = broker.get_tick(symbol)
+            entry_price = None
+            if tick:
+                entry_price = tick["ask"] if signal["direction"] == "BUY" else tick["bid"]
+
+            if rm.entry_budget > 0 and entry_price:
+                check = rm.entry_feasibility(entry_price, symbol=symbol)
+                risk["entry_budget"] = rm.entry_budget
+                risk["margin_required"] = round(
+                    check["min_margin"], 2) if not check["feasible"] else None
+                if not check["feasible"]:
+                    risk["reason"] = check["reason"]
+                    messages.append(f"[validate] rejected — {check['reason']}")
+                    return {"risk": risk, "messages": messages}
+
             # Scale the risk budget by the multiplier, then size once. A
             # multiplier below 1.0 shrinks the position; it can never make
             # the trade larger than the configured risk-per-trade allows,
             # because the multiplier is clamped to 1.5 and can_trade below
             # still enforces the hard caps.
             volume = rm.calculate_position_size(
-                balance * multiplier, stop_distance=stop_distance, symbol=symbol
+                balance * multiplier, stop_distance=stop_distance, symbol=symbol,
+                price=entry_price,
             )
 
             if volume <= 0:
@@ -370,9 +388,8 @@ def validate_node(state: TradingState) -> dict:
             risk["approved"] = bool(allowed)
             risk["reason"] = reason
 
-            tick = broker.get_tick(symbol)
-            if tick and allowed:
-                entry = tick["ask"] if signal["direction"] == "BUY" else tick["bid"]
+            if entry_price and allowed:
+                entry = entry_price
                 sign = 1.0 if signal["direction"] == "BUY" else -1.0
                 signal = {
                     **signal,

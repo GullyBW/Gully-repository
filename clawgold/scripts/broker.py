@@ -480,7 +480,12 @@ class PaperBroker(Broker):
         self.start_price: float = float(paper.get("start_price", 2_650.0))
         self.spread: float = float(paper.get("spread", 0.30))
         self.daily_volatility: float = float(paper.get("daily_volatility", 0.011))
-        self.leverage: float = float(paper.get("leverage", 100.0))
+        # Fall back to the account leverage rather than a separate default:
+        # a paper broker simulating 1:100 while sizing assumes 1:500 would
+        # reject exactly the small entries the config was set up to allow.
+        self.leverage: float = float(
+            paper.get("leverage") or trading.get("leverage") or 100.0
+        )
         self.currency: str = paper.get("currency", "USD")
 
         seed = paper.get("seed", 20260101)

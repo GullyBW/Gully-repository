@@ -273,6 +273,69 @@ def cmd_validate(args):
         print("\n[OK] Configuration is valid!\n")
 
 
+def cmd_entry_check(args):
+    """Report whether the configured entry budget can open a position."""
+    from config_loader import load_config
+    from risk_manager import RiskManager
+    from instrument import get_spec
+    from free_mode import FreeMode
+    from mt5_manager import MT5Manager
+
+    config = load_config()
+    symbol = args.symbol or config['trading'].get('symbol', 'XAUUSD')
+    rm = RiskManager(config)
+    spec = get_spec(symbol)
+
+    # Use a live price unless the caller pinned one.
+    price = args.price
+    if price is None:
+        try:
+            with MT5Manager(config=config) as broker:
+                tick = broker.get_tick(symbol)
+                price = tick['ask'] if tick else None
+        except Exception as exc:
+            print(f"[WARN] Could not read a price ({exc})")
+    if price is None:
+        price = 2650.0
+        print(f"[WARN] Falling back to an assumed price of {price}")
+
+    budget = args.budget if args.budget is not None else rm.entry_budget
+    check = rm.entry_feasibility(price, symbol=symbol, entry_budget=budget)
+
+    print(f"\n[ENTRY CHECK] {symbol}")
+    print("=" * 70)
+    print(f"  Price              : {price:,.2f}")
+    print(f"  Account leverage   : 1:{check['leverage']:.0f}")
+    print(f"  Entry budget       : ${check['budget']:,.2f}")
+    print(f"  Broker min volume  : {spec.min_volume} lots "
+          f"({spec.min_volume * spec.contract_size:g} units)")
+    print(f"  Margin for minimum : ${check['min_margin']:,.2f}")
+    print("-" * 70)
+
+    if check['feasible']:
+        volume = check['volume']
+        stop = rm._default_stop_distance()
+        from instrument import money_risk, required_margin
+        print(f"  RESULT             : CAN TRADE")
+        print(f"  Volume affordable  : {volume} lots "
+              f"({volume * spec.contract_size:g} units)")
+        print(f"  Margin held        : ${required_margin(symbol, volume, price, check['leverage']):,.2f}")
+        print(f"  Risk at a ${stop:.2f} stop : ${money_risk(symbol, volume, stop):,.2f}")
+        print(f"  Value per $1 move  : ${volume * spec.contract_size:,.2f}")
+    else:
+        print(f"  RESULT             : CANNOT TRADE")
+        print(f"  Shortfall          : ${check['shortfall']:,.2f}")
+
+    print("-" * 70)
+    print(f"  {check['reason']}")
+    print()
+    print(f"  {FreeMode.from_config(config).describe()}")
+    print()
+
+    if not check['feasible']:
+        sys.exit(1)
+
+
 def cmd_trailing_stop(args):
     """Apply trailing stop to a position."""
     from advanced_trader import AdvancedTrader, TrailingStopConfig
@@ -1948,6 +2011,19 @@ AI Agent System (SubAgent):
     # validate command
     validate_parser = subparsers.add_parser('validate', help='Validate configuration')
     validate_parser.set_defaults(func=cmd_validate)
+
+    # entry-check command
+    entry_parser = subparsers.add_parser(
+        'entry-check',
+        help='Check whether your entry budget can actually open a position',
+    )
+    entry_parser.add_argument('--budget', type=float,
+                              help='Margin budget to test (default: trading.entry_budget)')
+    entry_parser.add_argument('--price', type=float,
+                              help='Price to test against (default: live price)')
+    entry_parser.add_argument('--symbol', type=str,
+                              help='Symbol to test (default: trading.symbol)')
+    entry_parser.set_defaults(func=cmd_entry_check)
 
     # trailing-stop command
     ts_parser = subparsers.add_parser('trailing-stop', help='Apply trailing stop to position')

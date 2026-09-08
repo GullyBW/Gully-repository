@@ -139,6 +139,44 @@ def register_spec(spec: ContractSpec) -> None:
     _SPECS[spec.symbol.upper()] = spec
 
 
+def apply_config_overrides(config: Dict[str, Any]) -> None:
+    """
+    Override contract specs from ``instruments:`` in config.yaml.
+
+    Brokers differ on the two numbers that decide whether a small account
+    can trade at all: the minimum volume and the volume step. A standard
+    account will not go below 0.01 lots; cent and micro accounts often
+    accept 0.001. Because that is a per-broker fact, it belongs in config
+    rather than hard-coded here.
+
+        instruments:
+          XAUUSD:
+            min_volume: 0.001
+            volume_step: 0.001
+    """
+    overrides = (config or {}).get("instruments") or {}
+    for symbol, values in overrides.items():
+        if not isinstance(values, dict):
+            continue
+        base = get_spec(symbol)
+        register_spec(ContractSpec(
+            symbol=symbol.upper(),
+            contract_size=float(values.get("contract_size", base.contract_size)),
+            point=float(values.get("point", base.point)),
+            pip=float(values.get("pip", base.pip)),
+            min_volume=float(values.get("min_volume", base.min_volume)),
+            max_volume=float(values.get("max_volume", base.max_volume)),
+            volume_step=float(values.get("volume_step", base.volume_step)),
+            digits=int(values.get("digits", base.digits)),
+            quote_currency=values.get("quote_currency", base.quote_currency),
+        ))
+        logger.info(
+            "Contract spec for %s overridden from config: min_volume=%s step=%s",
+            symbol.upper(), values.get("min_volume", base.min_volume),
+            values.get("volume_step", base.volume_step),
+        )
+
+
 def refresh_from_broker(symbol: str, symbol_info: object) -> ContractSpec:
     """
     Overwrite a spec from a broker's live symbol_info.
@@ -231,6 +269,56 @@ def position_size(symbol: str, balance: float, risk_fraction: float,
     if volume < spec.min_volume:
         return 0.0
     return min(volume, spec.max_volume)
+
+
+def required_margin(symbol: str, volume: float, price: float,
+                    leverage: float) -> float:
+    """
+    Margin a broker will hold to open `volume` lots at `price`.
+
+    Args:
+        symbol: Broker symbol.
+        volume: Position size in lots.
+        price: Entry price.
+        leverage: Account leverage, e.g. 500 for 1:500.
+
+    Returns:
+        Margin required in the quote currency.
+    """
+    spec = get_spec(symbol)
+    return (abs(volume) * spec.contract_size * price) / max(leverage, 1.0)
+
+
+def max_volume_for_margin(symbol: str, margin_budget: float, price: float,
+                          leverage: float) -> float:
+    """
+    Largest volume whose margin fits inside `margin_budget`.
+
+    This is the constraint that decides whether a small account can open a
+    position at all. It is separate from — and often tighter than — the
+    risk budget: risk asks "how much can I lose", margin asks "can I open
+    it in the first place".
+
+    Returns:
+        Volume in lots, rounded down to the volume step. 0.0 when the
+        budget cannot cover the broker's minimum volume.
+    """
+    spec = get_spec(symbol)
+    if margin_budget <= 0 or price <= 0:
+        return 0.0
+
+    raw = (margin_budget * max(leverage, 1.0)) / (spec.contract_size * price)
+    steps = int(raw / spec.volume_step)
+    volume = round(steps * spec.volume_step, 8)
+
+    if volume < spec.min_volume:
+        return 0.0
+    return min(volume, spec.max_volume)
+
+
+def min_margin_to_trade(symbol: str, price: float, leverage: float) -> float:
+    """Margin needed for the smallest position this broker will accept."""
+    return required_margin(symbol, get_spec(symbol).min_volume, price, leverage)
 
 
 def normalize_volume(symbol: str, volume: float) -> float:

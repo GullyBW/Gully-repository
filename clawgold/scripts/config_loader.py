@@ -54,6 +54,17 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
             os.environ["DEFAULT_STOP_DISTANCE"].strip()
         )
 
+    if "ENTRY_BUDGET" in os.environ:
+        trading["entry_budget"] = _parse_value(os.environ["ENTRY_BUDGET"].strip())
+
+    if "LEVERAGE" in os.environ:
+        trading["leverage"] = _parse_value(os.environ["LEVERAGE"].strip())
+
+    if "FREE_MODE" in os.environ:
+        config.setdefault("free_mode", {})["enabled"] = (
+            os.environ["FREE_MODE"].strip().lower() in {"1", "true", "yes", "on"}
+        )
+
     if "MT5_LOGIN" in os.environ:
         mt5["login"] = int(os.environ["MT5_LOGIN"].strip())
     if "MT5_PASSWORD" in os.environ:
@@ -96,7 +107,24 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
 
-    return _apply_env_overrides(config)
+    config = _apply_env_overrides(config)
+
+    # Contract specs are per-broker facts (minimum volume, volume step) and
+    # decide whether a small account can open a position at all, so they are
+    # applied as soon as config is read rather than at first trade.
+    try:
+        try:
+            from .instrument import apply_config_overrides
+        except ImportError:
+            from instrument import apply_config_overrides
+        apply_config_overrides(config)
+    except Exception as exc:  # pragma: no cover - defensive
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not apply instrument overrides: %s", exc
+        )
+
+    return config
 
 
 def get_shared_executor(config: Dict[str, Any]):
