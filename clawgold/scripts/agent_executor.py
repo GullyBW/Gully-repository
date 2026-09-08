@@ -45,8 +45,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 
 from logger import get_logger
-from llm_client import get_llm_client
 from rich_logger import get_rich_logger
+
+# The LiteLLM fallback is optional. Guarding the import keeps tool discovery,
+# caching and metrics working on a machine that only has the CLI binaries.
+try:
+    from llm_client import get_llm_client
+    LLM_CLIENT_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the environment
+    LLM_CLIENT_AVAILABLE = False
+
+    def get_llm_client():
+        raise RuntimeError("LiteLLM is not installed. Run: pip install litellm")
 
 logger = get_logger(__name__)
 rich_logger = get_rich_logger()
@@ -445,6 +455,21 @@ class AgentExecutor:
     def __init__(self, cache_dir: str = "data/agent_cache",
                  cache_ttl_hours: int = 4,
                  db_path: str = "data/agent_history.db", **kwargs):
+        # Callers in risk_manager and advanced_trader construct this as
+        # AgentExecutor(config) — passing the config dict positionally into
+        # cache_dir. That raised inside Path() and was swallowed by their
+        # try/except, silently disabling every AI feature. Accept both forms.
+        if isinstance(cache_dir, dict):
+            kwargs.setdefault('config', cache_dir)
+            cache_dir = "data/agent_cache"
+
+        self.config: Dict[str, Any] = kwargs.get('config') or {}
+
+        agent_cfg = self.config.get('agent', {}) if isinstance(self.config, dict) else {}
+        cache_cfg = agent_cfg.get('cache', {}) or {}
+        cache_dir = cache_cfg.get('dir', cache_dir)
+        cache_ttl_hours = cache_cfg.get('ttl_hours', cache_ttl_hours)
+
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cache_ttl = cache_ttl_hours
@@ -824,6 +849,48 @@ class AgentExecutor:
             self._record_history(result)
             return result
 
+    def _litellm_fallback_when_no_cli(self, task: str,
+                                      system_prompt: str = "") -> Optional[AgentResult]:
+        """
+        Try LiteLLM when no CLI binary exists at all.
+
+        Walks the configured preferred_tools order so the provider choice
+        still honours config.yaml. Returns None when every provider fails or
+        LiteLLM itself is unusable, so the caller can report that clearly
+        rather than surfacing a stack trace.
+        """
+        prompt = self._build_prompt(task, system_prompt)
+        for tool in self._preferred_tool_order():
+            start = time.time()
+            try:
+                result = self._run_litellm_fallback(
+                    tool, prompt, task, TOOL_COMMANDS[tool]['timeout'], start
+                )
+            except Exception as exc:  # LiteLLM missing, no key, network down
+                logger.debug("LiteLLM fallback for %s unusable: %s", tool.value, exc)
+                continue
+            if result.success:
+                rich_logger.warning(
+                    f"[AgentExecutor] No CLI tools installed — answered via "
+                    f"LiteLLM ({tool.value})."
+                )
+                return result
+        return None
+
+    def _preferred_tool_order(self) -> List[AgentTool]:
+        """Tool order from config.yaml's agent.preferred_tools, then the rest."""
+        preferred = []
+        configured = (self.config or {}).get('agent', {}).get('preferred_tools', []) \
+            if isinstance(getattr(self, 'config', None), dict) else []
+        for name in configured:
+            tool = self._resolve_tool(str(name))
+            if tool is not None and tool not in preferred:
+                preferred.append(tool)
+        for tool in AgentTool:
+            if tool not in preferred:
+                preferred.append(tool)
+        return preferred
+
     def run_best(self, task: str, *,
                  use_cache: bool = True,
                  system_prompt: str = "") -> AgentResult:
@@ -833,10 +900,27 @@ class AgentExecutor:
         """
         ranked = self._rank_tools()
         if not ranked:
+            # No CLI binary is installed. The LiteLLM fallback only used to be
+            # reachable from run() after a tool had been selected, so with an
+            # empty PATH it was never tried at all. Try it here before giving
+            # up, then fail with an error that names the remedy.
+            fallback = self._litellm_fallback_when_no_cli(task, system_prompt)
+            if fallback is not None:
+                return fallback
+
             return AgentResult(
                 tool="none", task=task, response="",
                 success=False, execution_time=0,
-                error="No AI CLI tools available on this system.",
+                error=(
+                    "No AI CLI tool is installed and no LiteLLM provider is "
+                    "configured, so this command has no way to reach a model. "
+                    "Install one of: "
+                    + ", ".join(
+                        f"{t.value} ({TOOL_COMMANDS[t]['install']})" for t in AgentTool
+                    )
+                    + " — or set an API key for LiteLLM. Run 'claw.py agent tools' "
+                    "to see what was detected."
+                ),
             )
 
         for tool_enum in ranked:

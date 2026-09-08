@@ -1,38 +1,48 @@
-import MetaTrader5 as mt5
-import sys
+"""List open positions for the configured symbol."""
+
 import os
+import sys
+
 try:
-    from .config_loader import load_config, DEFAULT_MT5_TERMINAL_PATH
+    from .config_loader import load_config
+    from .instrument import get_spec
+    from .mt5_manager import MT5Manager
 except ImportError:
-    from config_loader import load_config, DEFAULT_MT5_TERMINAL_PATH
+    from config_loader import load_config
+    from instrument import get_spec
+    from mt5_manager import MT5Manager
 
-# Load config
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-config = load_config(CONFIG_FILE)
 
-if config['trading']['mode'] == 'real':
-    path = config.get('mt5', {}).get('terminal_path', DEFAULT_MT5_TERMINAL_PATH)
-    login = config['mt5']['login']
-    password = config['mt5']['password']
-    server = config['mt5']['server']
-    if not mt5.initialize(path, login=login, server=server, password=password):
-        print("MT5 initialize failed.")
-        sys.exit(1)
-    
+
+def main() -> int:
+    config = load_config(CONFIG_FILE)
     symbol = config['trading']['symbol']
-    positions = mt5.positions_get(symbol=symbol)
-    if positions is None:
-        positions = []
-    
-    if positions:
+    spec = get_spec(symbol)
+
+    with MT5Manager(config=config) as broker:
+        positions = broker.get_positions(symbol)
+
+        if not broker.is_live:
+            print("[simulation — paper broker, no real funds]")
+
+        if not positions:
+            print(f"No open positions for {symbol}.")
+            return 0
+
         print(f"Open positions for {symbol}:")
         for pos in positions:
-            type_str = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
-            ounces = pos.volume * 100  # Assuming 1 lot = 100 oz
-            print(f"  {type_str} {ounces:.0f} oz at {pos.price_open:.2f} USD, P/L: {pos.profit:.2f} USD")
-    else:
-        print(f"No open positions for {symbol}.")
-    
-    mt5.shutdown()
-else:
-    print("Real trading mode not enabled in config.yaml.")
+            side = "BUY" if pos['type'] == 0 else "SELL"
+            # contract_size comes from the instrument spec rather than a
+            # hard-coded 100, so this stays correct for other symbols.
+            units = pos['volume'] * spec.contract_size
+            print(
+                f"  #{pos['ticket']} {side} {pos['volume']:.2f} lots "
+                f"({units:,.0f} units) at {pos['price_open']:.2f}, "
+                f"P/L: {pos['profit']:.2f}"
+            )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

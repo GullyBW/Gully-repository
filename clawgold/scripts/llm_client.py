@@ -22,12 +22,22 @@ import sqlite3
 
 from logger import get_logger
 
+logger = get_logger(__name__)
+
+# LiteLLM is the HTTP fallback for when no AI CLI binary is installed. It is
+# optional: raising at import time here took the whole agent layer down with
+# it, so a machine without litellm could not even list its available tools.
+# Import failure is recorded and reported when a call is actually attempted.
+LITELLM_AVAILABLE = True
+LITELLM_IMPORT_ERROR = ""
 try:
     from litellm import completion, get_llm_provider
-except ImportError:
-    raise ImportError("LiteLLM not installed. Run: pip install litellm")
-
-logger = get_logger(__name__)
+except ImportError as exc:  # pragma: no cover - depends on the environment
+    LITELLM_AVAILABLE = False
+    LITELLM_IMPORT_ERROR = str(exc)
+    completion = None
+    get_llm_provider = None
+    logger.debug("LiteLLM not installed (%s) — HTTP fallback unavailable", exc)
 
 
 # ─────────────────────────────────────────────────────────
@@ -162,12 +172,22 @@ class LiteLLMClient:
         Returns:
             LLMResponse object
         """
+        if not LITELLM_AVAILABLE:
+            return LLMResponse(
+                provider=provider, model="unknown", content="",
+                success=False,
+                error=(
+                    "LiteLLM is not installed, so the HTTP fallback is "
+                    f"unavailable ({LITELLM_IMPORT_ERROR}). Run: pip install litellm"
+                ),
+            )
+
         if provider not in PROVIDER_CONFIGS:
             return LLMResponse(
                 provider=provider, model="unknown", content="",
                 success=False, error=f"Unknown provider: {provider}"
             )
-        
+
         config = PROVIDER_CONFIGS[provider]
         model = config["model"]
         retries = max_retries or config["max_retries"]

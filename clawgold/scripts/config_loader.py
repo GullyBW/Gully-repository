@@ -49,6 +49,11 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
     if "RISK_PER_TRADE" in os.environ:
         trading["risk_per_trade"] = _parse_value(os.environ["RISK_PER_TRADE"].strip())
 
+    if "DEFAULT_STOP_DISTANCE" in os.environ:
+        trading["default_stop_distance"] = _parse_value(
+            os.environ["DEFAULT_STOP_DISTANCE"].strip()
+        )
+
     if "MT5_LOGIN" in os.environ:
         mt5["login"] = int(os.environ["MT5_LOGIN"].strip())
     if "MT5_PASSWORD" in os.environ:

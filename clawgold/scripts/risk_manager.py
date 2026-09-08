@@ -8,6 +8,13 @@ from typing import Tuple, Optional, Any, Dict
 from dataclasses import dataclass
 from logger import get_logger
 
+# Every price-to-money conversion comes from the instrument contract spec,
+# so risk numbers here match what the broker will actually charge.
+try:
+    from .instrument import money_risk, normalize_volume, pips_to_price, position_size
+except ImportError:
+    from instrument import money_risk, normalize_volume, pips_to_price, position_size
+
 try:
     from agent_executor import AgentExecutor
     AGENT_AVAILABLE = True
@@ -96,85 +103,140 @@ class RiskManager:
         self.limits.min_margin_level = risk_config.get('min_margin_level', 100.0)
     
     def can_trade(self, symbol: str, action: str, volume: float,
-                  account_info: dict = None, positions: list = None) -> Tuple[bool, str]:
+                  account_info: dict = None, positions: list = None,
+                  stop_distance: Optional[float] = None,
+                  daily_pnl: Optional[float] = None) -> Tuple[bool, str]:
         """
-        Check if a trade should be allowed based on risk rules.
-        
+        Check whether a trade is allowed under the configured risk limits.
+
         Args:
-            symbol: Trading symbol
-            action: BUY or SELL
-            volume: Trade volume in lots
-            account_info: Current account information
-            positions: List of current positions
-        
+            symbol: Trading symbol.
+            action: BUY or SELL.
+            volume: Trade volume in lots.
+            account_info: Current account information.
+            positions: Currently open positions.
+            stop_distance: Distance to the stop in price units (USD/oz for
+                gold). Defaults to ``trading.default_stop_distance``. This
+                is what makes the risk figure real: money at risk is a
+                function of the stop, not of the volume alone.
+            daily_pnl: Realised P&L so far today, if the caller tracks it.
+                When supplied, the daily loss limit is enforced here rather
+                than only in a separate call the execution path could skip.
+
         Returns:
-            Tuple of (allowed: bool, reason: str)
+            (allowed, reason)
         """
-        # Check position size limit
+        if volume <= 0:
+            return False, "Volume must be greater than zero"
+
+        # Position size limit
         if volume > self.limits.max_position_size:
             return False, f"Volume {volume} exceeds max position size {self.limits.max_position_size}"
-        
-        # Check number of positions
+
+        # Concurrent position count
         if positions and len(positions) >= self.limits.max_positions:
             return False, f"Max positions ({self.limits.max_positions}) reached"
-        
-        # Check margin level if account info provided
+
+        # Daily loss limit — checked here so no execution path can bypass it
+        if daily_pnl is not None:
+            allowed, reason = self.check_daily_loss(daily_pnl)
+            if not allowed:
+                return False, reason
+
         if account_info:
+            # Margin level of 0 means "no open positions" in MT5 (and in the
+            # paper broker), which is healthy, not a margin call. Only apply
+            # the floor when margin is actually in use.
             margin_level = account_info.get('margin_level', 0)
-            if margin_level < self.limits.min_margin_level:
-                return False, f"Margin level {margin_level:.2f}% below minimum {self.limits.min_margin_level}%"
-        
-        # Calculate risk for this trade
-        risk_per_trade = self.config['trading'].get('risk_per_trade', 0.01)
-        
-        if account_info:
+            if account_info.get('margin', 0) > 0 and margin_level < self.limits.min_margin_level:
+                return False, (f"Margin level {margin_level:.2f}% below minimum "
+                               f"{self.limits.min_margin_level}%")
+
             balance = account_info.get('balance', 0)
+            risk_per_trade = self.config.get('trading', {}).get('risk_per_trade', 0.01)
             max_risk_amount = balance * risk_per_trade
-            
-            # Estimate trade risk (simplified: 1% move = $10 per 0.01 lot for XAUUSD)
-            # Actually 1 lot XAUUSD ≈ $100 per $1 move
-            # So 0.1 lot = $10 per $1 move
-            estimated_risk = volume * 100  # Simplified risk estimate
-            
+
+            stop = stop_distance if stop_distance is not None else self._default_stop_distance()
+            # Money at risk = volume x contract size x stop distance, from the
+            # instrument's contract spec. The previous `volume * 100`
+            # placeholder ignored the stop entirely, so it under-reported risk
+            # for wide stops and over-reported it for tight ones.
+            estimated_risk = money_risk(symbol, volume, stop)
+
             if estimated_risk > max_risk_amount:
-                return False, f"Estimated risk ${estimated_risk:.2f} exceeds max ${max_risk_amount:.2f}"
-        
+                return False, (
+                    f"Risk ${estimated_risk:.2f} at a ${stop:.2f} stop exceeds the "
+                    f"${max_risk_amount:.2f} budget ({risk_per_trade:.1%} of ${balance:,.2f})"
+                )
+
+            # Total exposure across all open positions plus this one
+            if positions:
+                open_risk = sum(
+                    money_risk(p.get('symbol', symbol), p.get('volume', 0), stop)
+                    for p in positions
+                )
+                total_risk_cap = balance * self.limits.max_total_risk
+                if open_risk + estimated_risk > total_risk_cap:
+                    return False, (
+                        f"Total risk ${open_risk + estimated_risk:.2f} would exceed the "
+                        f"${total_risk_cap:.2f} cap ({self.limits.max_total_risk:.1%} of balance)"
+                    )
+
         logger.info(f"Trade validated: {action} {volume} lots {symbol}")
         return True, "OK"
-    
-    def calculate_position_size(self, account_balance: float, 
-                                 stop_loss_pips: float = 50) -> float:
+
+    def _default_stop_distance(self) -> float:
+        """Stop distance in price units to assume when a caller gives none."""
+        return float(self.config.get('trading', {}).get('default_stop_distance', 5.0))
+
+    def calculate_position_size(self, account_balance: float,
+                                stop_distance: Optional[float] = None,
+                                symbol: Optional[str] = None,
+                                stop_loss_pips: Optional[float] = None) -> float:
         """
-        Calculate recommended position size based on risk.
-        
+        Largest volume whose loss at the stop stays inside the risk budget.
+
         Args:
-            account_balance: Current account balance
-            stop_loss_pips: Stop loss distance in pips
-        
+            account_balance: Current account balance.
+            stop_distance: Stop distance in price units (USD/oz for gold).
+            symbol: Instrument; defaults to the configured trading symbol.
+            stop_loss_pips: Deprecated alternative to `stop_distance`,
+                converted using the instrument's pip size. Kept so existing
+                callers keep working.
+
         Returns:
-            Recommended volume in lots
+            Volume in lots, rounded down to the broker's volume step.
+
+            Returns **0.0** when the budget cannot fund even the minimum
+            volume. Callers must treat 0.0 as "do not trade" — the previous
+            implementation clamped up to 0.01 lots with `max(volume, 0.01)`,
+            which silently placed a trade larger than the risk budget
+            allowed, exactly when the account could least afford it.
         """
-        risk_per_trade = self.config['trading'].get('risk_per_trade', 0.01)
-        risk_amount = account_balance * risk_per_trade
-        
-        # XAUUSD: 1 pip = $0.01 for 1 lot
-        # So for stop_loss_pips, risk per lot = stop_loss_pips * $10
-        # (1 pip = $0.01, but in MT5 XAUUSD 1 pip is usually 0.01 = $1 for 0.01 lot)
-        # Simplified: $1 per pip for 0.1 lot
-        risk_per_lot = stop_loss_pips * 10  # $10 per pip for 1 lot
-        
-        if risk_per_lot == 0:
-            return 0.01
-        
-        volume = risk_amount / risk_per_lot
-        
-        # Round to 2 decimal places
-        volume = round(volume, 2)
-        
-        # Enforce limits
-        volume = min(volume, self.limits.max_position_size)
-        volume = max(volume, 0.01)  # Minimum 0.01 lot
-        
+        symbol = symbol or self.config.get('trading', {}).get('symbol', 'XAUUSD')
+        risk_per_trade = self.config.get('trading', {}).get('risk_per_trade', 0.01)
+
+        if stop_distance is None:
+            if stop_loss_pips is not None:
+                stop_distance = pips_to_price(symbol, stop_loss_pips)
+            else:
+                stop_distance = self._default_stop_distance()
+
+        if stop_distance <= 0:
+            logger.error("Stop distance must be positive; refusing to size a position")
+            return 0.0
+
+        volume = position_size(symbol, account_balance, risk_per_trade, stop_distance)
+
+        # Never exceed the configured hard cap, whatever the budget allows.
+        if volume > self.limits.max_position_size:
+            volume = normalize_volume(symbol, self.limits.max_position_size)
+
+        if volume <= 0:
+            logger.warning(
+                "Risk budget $%.2f cannot fund the minimum volume at a $%.2f stop — no trade",
+                account_balance * risk_per_trade, stop_distance,
+            )
         return volume
     
     def check_daily_loss(self, daily_pnl: float) -> Tuple[bool, str]:

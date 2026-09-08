@@ -16,14 +16,31 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+# Rich is presentation only — colours, panels, progress bars. Raising here
+# took down every module that logs, which is all of them, so a machine
+# without rich could not run the system at all. Fall back to plain stderr
+# logging instead and keep the same RichLogger surface.
 try:
     from rich.console import Console
     from rich.logging import RichHandler
     from rich.table import Table
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, BarColumn, TaskProgressColumn
-except ImportError:
-    raise ImportError("Rich not installed. Run: pip install rich")
+    RICH_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the environment
+    RICH_AVAILABLE = False
+    Console = RichHandler = Table = Panel = None
+    Progress = SpinnerColumn = BarColumn = TaskProgressColumn = None
+
+
+class _PlainConsole:
+    """Minimal stand-in for rich.Console that strips markup tags."""
+
+    _TAG = __import__("re").compile(r"\[/?[a-zA-Z0-9_ #]+\]")
+
+    def print(self, *args, **kwargs) -> None:
+        text = " ".join(str(a) for a in args)
+        print(self._TAG.sub("", text), file=sys.stderr)
 
 
 class RichLogger:
@@ -40,35 +57,36 @@ class RichLogger:
     
     def __init__(self, name: str = "ClawGold", log_file: Optional[str] = None):
         self.name = name
-        self.console = Console()
-        
+        self.console = Console() if RICH_AVAILABLE else _PlainConsole()
+
         # Configure logger
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.DEBUG)
-        
+
         # Remove existing handlers
         self.logger.handlers = []
-        
-        # Add Rich handler
-        rich_handler = RichHandler(
-            console=self.console,
-            show_time=True,
-            show_level=True,
-            show_path=True,
-            markup=True,
-            rich_tracebacks=True,
-        )
-        
-        # Format: [time] [level] [module] message
-        formatter = logging.Formatter(
-            fmt="%(name)s",
-            datefmt="[%X]"
-        )
-        rich_handler.setFormatter(formatter)
-        self.logger.addHandler(rich_handler)
-        
+
+        if RICH_AVAILABLE:
+            handler = RichHandler(
+                console=self.console,
+                show_time=True,
+                show_level=True,
+                show_path=True,
+                markup=True,
+                rich_tracebacks=True,
+            )
+            handler.setFormatter(logging.Formatter(fmt="%(name)s", datefmt="[%X]"))
+        else:
+            handler = logging.StreamHandler(sys.stderr)
+            handler.setFormatter(logging.Formatter(
+                '%(asctime)s | %(name)-20s | %(levelname)-8s | %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S',
+            ))
+        self.logger.addHandler(handler)
+
         # Optional file handler for persistence
         if log_file:
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
             file_handler = logging.FileHandler(log_file)
             file_formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -107,30 +125,41 @@ class RichLogger:
     
     def panel(self, message: str, title: str = "", style: str = "blue"):
         """Display a panel with message."""
-        panel = Panel(message, title=title, style=style)
-        self.console.print(panel)
-    
+        if not RICH_AVAILABLE:
+            if title:
+                self.console.print(f"--- {title} ---")
+            self.console.print(message)
+            return
+        self.console.print(Panel(message, title=title, style=style))
+
     def table(self, data: list, columns: list, title: str = ""):
         """Display a table."""
+        if not RICH_AVAILABLE:
+            if title:
+                self.console.print(title)
+            self.console.print(" | ".join(str(c) for c in columns))
+            for row in data:
+                self.console.print(" | ".join(str(v) for v in row))
+            return
+
         table = Table(title=title)
-        
         for col in columns:
             table.add_column(col, style="cyan")
-        
         for row in data:
             table.add_row(*[str(v) for v in row])
-        
         self.console.print(table)
-    
+
     def progress(self, total: int, description: str = "", transient: bool = True):
-        """Create a progress bar context manager."""
+        """Create a progress bar context manager, or None when unavailable."""
+        if not RICH_AVAILABLE or total <= 0:
+            return None
         return Progress(
             SpinnerColumn(),
             BarColumn(),
             TaskProgressColumn(),
             console=self.console,
             transient=transient,
-        ) if total > 0 else None
+        )
 
 
 # Global logger instance

@@ -1,150 +1,194 @@
+"""
+ClawGold plugin tools
+=====================
+The tool surface declared in plugin.json: price, moving average, signal,
+trade execution and portfolio status.
+
+All market access goes through the Broker interface, so these tools work
+against the paper broker in simulation mode as well as a live MT5 terminal.
+Previously every function refused to run unless trading.mode was 'real',
+which made the plugin untestable without a funded account.
+"""
+
 import pandas as pd
-import MetaTrader5 as mt5
-import pandas_ta as ta
 from pathlib import Path
+
 try:
-    from .config_loader import load_config, DEFAULT_MT5_TERMINAL_PATH
+    from .config_loader import load_config
+    from .broker import get_broker, Timeframe
+    from .instrument import get_spec
 except ImportError:
-    from config_loader import load_config, DEFAULT_MT5_TERMINAL_PATH
+    from config_loader import load_config
+    from broker import get_broker, Timeframe
+    from instrument import get_spec
 
 CONFIG_FILE = 'config.yaml'
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 config = None
+_broker = None
+
 
 def initialize_plugin():
-    """Initialize the plugin."""
-    global config
+    """Load config and connect to whichever broker trading.mode selects."""
+    global config, _broker
     if config is None:
         try:
             config = load_config(str(ROOT_DIR / CONFIG_FILE))
         except Exception as e:
             return f"Error loading config: {str(e)}"
-    
-    mode = config['trading']['mode']
-    if mode != 'real':
-        return "Only real mode is supported. Set TRADING_MODE=real in .env"
 
-    path = config.get('mt5', {}).get('terminal_path', DEFAULT_MT5_TERMINAL_PATH)
-    login = config['mt5']['login']
-    password = config['mt5']['password']
-    server = config['mt5']['server']
-    if not mt5.initialize(path, login=login, server=server, password=password):
-        return "MT5 initialize failed. Check credentials and MT5 setup."
-    return "ClawGold initialized for real trading with MT5."
+    if _broker is None:
+        try:
+            _broker = get_broker(config)
+            _broker.connect()
+        except Exception as e:
+            _broker = None
+            return f"Broker connection failed: {e}"
+
+    venue = "live MT5" if _broker.is_live else "paper broker (simulation)"
+    return f"ClawGold initialized against {venue}."
+
+
+def _require_broker():
+    """Return the connected broker, connecting on first use."""
+    if _broker is None:
+        message = initialize_plugin()
+        if _broker is None:
+            raise RuntimeError(message)
+    return _broker
+
+
+def _symbol():
+    return config['trading']['symbol']
+
 
 def get_xauusd_price():
-    """Fetch current XAUUSD price."""
-    if config['trading']['mode'] != 'real':
-        return "Error: Only real mode is supported."
+    """Fetch the current price."""
+    try:
+        broker = _require_broker()
+    except RuntimeError as e:
+        return f"Error: {e}"
 
-    symbol = config['trading']['symbol']
-    tick = mt5.symbol_info_tick(symbol)
+    symbol = _symbol()
+    tick = broker.get_tick(symbol)
     if tick is None:
-        return "Error: Unable to fetch price from MT5."
-    return f"Current {symbol} price: {tick.bid:.2f} USD (bid), {tick.ask:.2f} USD (ask)"
+        return "Error: Unable to fetch price."
+    return f"Current {symbol} price: {tick['bid']:.2f} USD (bid), {tick['ask']:.2f} USD (ask)"
+
 
 def calculate_moving_average(period=20):
-    """Calculate simple moving average for the last period days."""
-    if config['trading']['mode'] != 'real':
-        return "Error: Only real mode is supported."
+    """Simple moving average of the last `period` daily closes."""
+    try:
+        broker = _require_broker()
+    except RuntimeError as e:
+        return f"Error: {e}"
 
-    symbol = config['trading']['symbol']
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, period + 10)
-    if rates is None or len(rates) < period:
+    bars = broker.get_rates(_symbol(), Timeframe.D1, period + 10)
+    if bars is None or len(bars) < period:
         return f"Not enough data for MA({period})."
-    closes = [rate.close for rate in rates[-period:]]
-    sma = sum(closes) / len(closes)
-    return f"SMA({period}): {sma:.2f}"
 
-def generate_trading_signal(short_period=10, long_period=20):
-    """Generate trading signal based on MACD."""
-    if config['trading']['mode'] != 'real':
-        return "Error: Only real mode is supported."
+    # Bars are dicts; the previous version used attribute access on a numpy
+    # structured array, which raises AttributeError.
+    closes = [bar['close'] for bar in bars[-period:]]
+    return f"SMA({period}): {sum(closes) / len(closes):.2f}"
 
-    symbol = config['trading']['symbol']
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 100)  # Get enough data
-    if rates is None or len(rates) < 26:  # MACD needs at least 26 periods
+
+def _macd(closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD line and signal line, computed with pandas alone."""
+    ema_fast = closes.ewm(span=fast, adjust=False).mean()
+    ema_slow = closes.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line
+
+
+def generate_trading_signal(short_period=12, long_period=26):
+    """BUY/SELL/HOLD from a MACD crossover on daily bars."""
+    try:
+        broker = _require_broker()
+    except RuntimeError as e:
+        return f"Error: {e}"
+
+    bars = broker.get_rates(_symbol(), Timeframe.D1, 100)
+    if bars is None or len(bars) < long_period:
         return "Not enough data for signal."
-    df = pd.DataFrame(rates)
-    macd = ta.macd(df['close'])
-    if macd is None or macd.empty:
-        return "MACD calculation failed."
-    macd_line = macd['MACD']
-    signal_line = macd['MACDs']
-    if len(macd_line) < 2 or len(signal_line) < 2:
+
+    closes = pd.DataFrame(bars)['close']
+    macd_line, signal_line = _macd(closes, fast=short_period, slow=long_period)
+    if len(macd_line) < 2:
         return "Insufficient data for signal."
-    if macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-2] <= signal_line.iloc[-2]:
+
+    crossed_up = (macd_line.iloc[-1] > signal_line.iloc[-1]
+                  and macd_line.iloc[-2] <= signal_line.iloc[-2])
+    crossed_down = (macd_line.iloc[-1] < signal_line.iloc[-1]
+                    and macd_line.iloc[-2] >= signal_line.iloc[-2])
+
+    if crossed_up:
         return "BUY signal"
-    if macd_line.iloc[-1] < signal_line.iloc[-1] and macd_line.iloc[-2] >= signal_line.iloc[-2]:
+    if crossed_down:
         return "SELL signal"
     return "HOLD"
 
+
 def execute_trade(action, amount):
-    """Execute buying or selling XAUUSD in real mode."""
-    if config['trading']['mode'] != 'real':
-        return "Error: Only real mode is supported."
+    """
+    Buy or sell `amount` units of the underlying (ounces, for gold).
 
-    symbol = config['trading']['symbol']
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
-        return "Error: Unable to fetch tick."
+    The unit-to-lot conversion uses the instrument's contract size rather
+    than a hard-coded 100.
+    """
+    try:
+        broker = _require_broker()
+    except RuntimeError as e:
+        return f"Error: {e}"
 
-    # Convert amount (ounces) to volume (lots), assuming 1 lot = 100 ounces
-    volume = amount / 100.0
-
-    if action.upper() == 'BUY':
-        price = tick.ask
-        order_type = mt5.ORDER_TYPE_BUY
-    elif action.upper() == 'SELL':
-        price = tick.bid
-        order_type = mt5.ORDER_TYPE_SELL
-    else:
+    symbol = _symbol()
+    action = str(action).upper()
+    if action not in ('BUY', 'SELL'):
         return "Invalid action. Use BUY or SELL."
 
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": volume,
-        "type": order_type,
-        "price": price,
-        "deviation": 10,
-        "magic": 123456,
-        "comment": "ClawGold",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
-    }
+    volume = amount / get_spec(symbol).contract_size
+    result = broker.execute_trade(action, volume, symbol=symbol)
+    if not result.get('success'):
+        return f"Order failed: {result.get('error')}"
 
-    result = mt5.order_send(request)
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        return f"Order failed: {result.retcode}"
-    return f"Real {action.upper()}: {amount} ounces at {price:.2f} USD"
+    prefix = "" if broker.is_live else "[paper] "
+    return f"{prefix}{action}: {amount} units at {result['price']:.2f} USD"
 
 
 def get_portfolio_status():
-    """Get current real portfolio/account status."""
-    if config['trading']['mode'] != 'real':
-        return "Error: Only real mode is supported."
+    """Account balance plus open positions."""
+    try:
+        broker = _require_broker()
+    except RuntimeError as e:
+        return f"Error: {e}"
 
-    account = mt5.account_info()
+    account = broker.get_account_info()
     if account is None:
         return "Error: Unable to get account info."
-    balance = account.balance
-    symbol = config['trading']['symbol']
-    positions = mt5.positions_get(symbol=symbol)
-    if positions is None:
-        positions = []
-    status = f"Balance: {balance:.2f} USD\n"
+
+    symbol = _symbol()
+    spec = get_spec(symbol)
+    positions = broker.get_positions(symbol)
+
+    status = ""
+    if not broker.is_live:
+        status += "[simulation — paper broker, no real funds]\n"
+    status += f"Balance: {account['balance']:.2f} {account['currency']}\n"
+    status += f"Equity:  {account['equity']:.2f} {account['currency']}\n"
+
     if positions:
         status += "Positions:\n"
         for pos in positions:
-            type_str = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
-            # Volume in lots, convert to ounces (1 lot = 100 oz)
-            ounces = pos.volume * 100
-            status += f"  {type_str} {ounces:.0f} ounces at {pos.price_open:.2f} USD\n"
+            side = "BUY" if pos['type'] == 0 else "SELL"
+            units = pos['volume'] * spec.contract_size
+            status += (f"  #{pos['ticket']} {side} {units:.0f} units at "
+                       f"{pos['price_open']:.2f} USD, P/L {pos['profit']:.2f}\n")
     else:
         status += "No open positions.\n"
     return status
+
 
 def interactive():
     """Interactive mode for standalone use."""

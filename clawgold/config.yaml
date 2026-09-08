@@ -1,8 +1,24 @@
 trading:
-  mode: real
+  # simulation -> PaperBroker (no real orders, safe default)
+  # real       -> MT5Broker   (live money; also requires MT5_LOGIN in .env)
+  # Override per-run with TRADING_MODE=real.
+  mode: simulation
   initial_balance: 10000
   symbol: XAUUSD
   risk_per_trade: 0.01
+  # Default stop distance in price units (USD/oz for gold) used to size a
+  # position when a signal does not carry its own stop. Sizing is derived
+  # from this and the contract spec in scripts/instrument.py.
+  default_stop_distance: 5.0
+
+# Paper broker settings (mode: simulation). Deterministic given the seed,
+# so the test suite and repeated runs produce the same price series.
+paper:
+  start_price: 2650.0
+  spread: 0.30
+  daily_volatility: 0.011
+  leverage: 100
+  seed: 20260101
 
 # Risk Management Settings
 risk:
@@ -31,9 +47,9 @@ logging:
 # Get bot token from @BotFather on Telegram
 # Chat ID can be your user ID or channel ID (e.g., -1002197548947)
 telegram:
-  enabled: true
+  enabled: false   # set true once bot_token and chat_id are configured
   bot_token: ""  # Set via TELEGRAM_BOT_TOKEN in .env
-  chat_id: "-1002197548947"  # Or use TELEGRAM_CHAT_ID env var
+  chat_id: ""    # Set via TELEGRAM_CHAT_ID in .env
   
   # Notification settings
   notify_on:
@@ -132,13 +148,17 @@ signal_service:
       include_ai_reasoning: true
       include_consultation: true
   # Telegram Group/Channel IDs per tier
+  # Set these to your own Telegram channel IDs, or via the environment:
+  # SIGNAL_CH_FREE / SIGNAL_CH_BASIC / SIGNAL_CH_PRO / SIGNAL_CH_VIP.
+  # Left blank deliberately: broadcasting to an ID you do not own sends
+  # your signals to somebody else's channel.
   channels:
-    free:  "-1002530348291"   # Free room  (แจกฟรี, ล่าช้า 4h)
-    basic: "-1002609941948"   # Basic room ($29/mo, real-time)
-    pro:   "-1002694677449"   # Pro room   ($79/mo, entry+SL+TP+AI)
-    vip:   ""                  # VIP room   ($199/mo) — ตั้งเพิ่มภายหลัง
-  admin_contact: "@ClawGoldAdmin"
-  website: "https://clawgold.io"
+    free:  ""   # Free room  (delayed 4h)
+    basic: ""   # Basic room ($29/mo, real-time)
+    pro:   ""   # Pro room   ($79/mo, entry+SL+TP+AI)
+    vip:   ""   # VIP room   ($199/mo)
+  admin_contact: ""
+  website: ""
 
 # PAMM Manager — Investor managed accounts
 pamm:

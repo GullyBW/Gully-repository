@@ -5,7 +5,6 @@ Advanced Trading Strategies
 grid trading, martingale, and breakout detection.
 """
 
-import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Tuple, Callable, Any
@@ -16,7 +15,10 @@ import time
 import json
 from pathlib import Path
 
-import MetaTrader5 as mt5_lib
+# Timeframes come from the broker layer rather than MetaTrader5 directly, so
+# this module imports cleanly on any platform and works against either the
+# live terminal or the paper broker.
+from broker import Timeframe
 from mt5_manager import MT5Manager
 from risk_manager import RiskManager
 from logger import get_logger
@@ -218,20 +220,14 @@ class AdvancedTrader:
                                 self._modify_stop_loss(mt5, ticket, new_stop)
                                 ts_info['current_stop'] = new_stop
     
-    def _modify_stop_loss(self, mt5, ticket: int, new_sl: float):
-        """Modify position stop loss."""
-        request = {
-            'action': mt5_lib.TRADE_ACTION_SLTP,
-            'position': ticket,
-            'sl': new_sl,
-            'tp': 0  # Keep existing TP
-        }
-        
-        result = mt5.order_send(request)
-        if result and result.retcode == mt5_lib.TRADE_RETCODE_DONE:
+    def _modify_stop_loss(self, broker, ticket: int, new_sl: float):
+        """Move a position's stop loss, leaving its take-profit alone."""
+        result = broker.modify_position(ticket, sl=new_sl)
+        if result.get('success'):
             logger.info(f"Updated stop loss for {ticket} to {new_sl}")
         else:
-            logger.error(f"Failed to update stop loss: {result}")
+            logger.error(f"Failed to update stop loss: {result.get('error')}")
+        return result
     
     def start_grid_trading(self, config: GridConfig, center_price: float, 
                            direction: str = "both") -> List[TradeLevel]:
@@ -313,7 +309,7 @@ class AdvancedTrader:
             Tuple of (is_breakout, direction)
         """
         with MT5Manager() as mt5:
-            rates = mt5.get_rates(symbol, mt5_lib.TIMEFRAME_H1, config.lookback_period + 10)
+            rates = mt5.get_rates(symbol, Timeframe.H1, config.lookback_period + 10)
             
             if not rates or len(rates) < config.lookback_period:
                 return False, ""
@@ -422,7 +418,7 @@ class AdvancedTrader:
                 
                 if spread < 0.5:  # Low spread opportunity
                     # Check for quick momentum
-                    rates = mt5.get_rates(symbol, mt5_lib.TIMEFRAME_M1, 3)
+                    rates = mt5.get_rates(symbol, Timeframe.M1, 3)
                     if rates and len(rates) >= 3:
                         momentum = rates[-1]['close'] - rates[-3]['open']
                         
@@ -463,10 +459,10 @@ class AdvancedTrader:
         """
         with MT5Manager() as mt5:
             timeframes = [
-                (mt5_lib.TIMEFRAME_M15, "M15"),
-                (mt5_lib.TIMEFRAME_H1, "H1"),
-                (mt5_lib.TIMEFRAME_H4, "H4"),
-                (mt5_lib.TIMEFRAME_D1, "D1")
+                (Timeframe.M15, "M15"),
+                (Timeframe.H1, "H1"),
+                (Timeframe.H4, "H4"),
+                (Timeframe.D1, "D1")
             ]
             
             signals = {}
