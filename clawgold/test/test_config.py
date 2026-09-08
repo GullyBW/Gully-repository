@@ -130,6 +130,41 @@ class TestSignalServiceChannels(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self._saved)
 
+    def test_notifier_has_no_default_chat_id(self):
+        """
+        Regression: TelegramNotifier defaulted chat_id to the upstream
+        author's channel, so an install with a bot token but no configured
+        chat sent its trade alerts to a stranger.
+        """
+        os.environ.pop("TELEGRAM_CHAT_ID", None)
+        os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"
+
+        from notifier import TelegramNotifier
+
+        notifier = TelegramNotifier()
+        self.assertEqual(notifier.chat_id, "")
+        self.assertFalse(notifier.enabled,
+                         "notifier enabled itself without a configured chat ID")
+
+    def test_no_upstream_identifiers_remain_in_the_source(self):
+        """No upstream Telegram ID should survive anywhere in code or config."""
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        upstream_ids = ("1002197548947", "1002530348291",
+                        "1002609941948", "1002694677449")
+
+        offenders = []
+        for path in list(root.glob("*.yaml")) + list(root.glob("*.py")) + \
+                list((root / "scripts").glob("*.py")):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for identifier in upstream_ids:
+                if identifier in text:
+                    offenders.append(f"{path.name}: {identifier}")
+
+        self.assertEqual(offenders, [], f"upstream identifiers present: {offenders}")
+
     def test_unconfigured_channels_are_empty_not_upstream_defaults(self):
         """
         Regression: SignalService fell back to the upstream author's channel

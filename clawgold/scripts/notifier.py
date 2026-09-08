@@ -55,7 +55,7 @@ class TelegramNotifier:
     
     Requires:
         - TELEGRAM_BOT_TOKEN: Bot token from @BotFather
-        - TELEGRAM_CHAT_ID: Chat ID or channel ID (e.g., -1002197548947)
+        - TELEGRAM_CHAT_ID: Your own chat or channel ID
     """
     
     def __init__(self, bot_token: Optional[str] = None, chat_id: Optional[str] = None):
@@ -67,7 +67,10 @@ class TelegramNotifier:
             chat_id: Telegram chat/channel ID (or from TELEGRAM_CHAT_ID env)
         """
         self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "-1002197548947")
+        # No default chat ID. This previously fell back to the upstream
+        # author's channel, so an install with a bot token but no configured
+        # chat sent its trade alerts to a stranger.
+        self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
         self.enabled = bool(self.bot_token and self.chat_id)
         
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}" if self.bot_token else None
@@ -396,7 +399,7 @@ if __name__ == "__main__":
     
     print("Testing Telegram Notifier...")
     print(f"Bot Token exists: {bool(os.getenv('TELEGRAM_BOT_TOKEN'))}")
-    print(f"Chat ID: {os.getenv('TELEGRAM_CHAT_ID', '-1002197548947')}")
+    print(f"Chat ID: {os.getenv('TELEGRAM_CHAT_ID') or '(not set)'}")
     
     notifier = TelegramNotifier()
     

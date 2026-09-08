@@ -3,9 +3,10 @@ Background news research worker for container deployment.
 """
 
 import os
-import time
+import sys
 from datetime import datetime
 
+from lifecycle import GracefulShutdown
 from logger import get_logger
 from news_aggregator import NewsAggregator
 
@@ -30,29 +31,44 @@ def main() -> None:
     )
 
     aggregator = NewsAggregator()
+    cycles = 0
 
-    while True:
-        started = datetime.now()
-        try:
-            result = aggregator.research_symbol(
-                symbol=symbol,
-                query=query,
-                use_ai=use_ai,
-            )
-            signal = result.get("trading_signal", {})
-            logger.info(
-                "Research cycle complete | direction=%s confidence=%.2f",
-                signal.get("direction", "neutral"),
-                signal.get("confidence", 0.0),
-            )
-        except Exception:
-            logger.exception("Research cycle failed")
+    # Wait on the shutdown event rather than sleeping: a container stop
+    # would otherwise have to wait out the full interval (30 minutes by
+    # default) before the process noticed the signal.
+    with GracefulShutdown() as shutdown:
 
-        elapsed = int((datetime.now() - started).total_seconds())
-        sleep_for = max(interval_seconds - elapsed, 1)
-        logger.info("Sleeping for %s seconds", sleep_for)
-        time.sleep(sleep_for)
+        @shutdown.on_shutdown
+        def report_totals() -> None:
+            logger.info("News worker stopping after %s cycle(s)", cycles)
+
+        while not shutdown.requested:
+            started = datetime.now()
+            try:
+                result = aggregator.research_symbol(
+                    symbol=symbol,
+                    query=query,
+                    use_ai=use_ai,
+                )
+                signal = result.get("trading_signal", {})
+                cycles += 1
+                logger.info(
+                    "Research cycle complete | direction=%s confidence=%.2f",
+                    signal.get("direction", "neutral"),
+                    signal.get("confidence", 0.0),
+                )
+            except Exception:
+                logger.exception("Research cycle failed")
+
+            elapsed = int((datetime.now() - started).total_seconds())
+            sleep_for = max(interval_seconds - elapsed, 1)
+            logger.info("Sleeping for %s seconds", sleep_for)
+            if shutdown.wait(sleep_for):
+                break
+
+    logger.info("News worker exited cleanly")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

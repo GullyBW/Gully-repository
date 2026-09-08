@@ -261,16 +261,54 @@ def cmd_validate(args):
     from config_validator import ConfigValidator
 
     print("\n[VALIDATE] Validating configuration...")
-    validator = ConfigValidator()
-    errors = validator.validate()
-    
+    errors, warnings = ConfigValidator().validate_all()
+
+    if warnings:
+        print("\n[WARN] Worth checking before you deploy:")
+        for warning in warnings:
+            print(f"  • {warning}")
+
     if errors:
         print("\n[ERROR] Configuration errors found:")
         for error in errors:
             print(f"  • {error}")
         sys.exit(1)
+
+    print("\n[OK] Configuration is valid.\n")
+
+
+def cmd_preflight(args):
+    """Check the system is ready to run, and report what it found."""
+    from preflight import run_preflight
+
+    report = run_preflight(strict=args.strict, live_check=args.live)
+    print(report.render())
+    sys.exit(0 if report.ok else 1)
+
+
+def cmd_kill_switch(args):
+    """Engage, release or report the kill switch."""
+    from config_loader import load_config
+    from lifecycle import KillSwitch
+
+    switch = KillSwitch.from_config(load_config())
+
+    if args.action == 'on':
+        switch.engage(reason=args.reason or "engaged from the CLI")
+        print(f"\n[KILL SWITCH] ENGAGED — no new entries will be opened.")
+        print(f"  File   : {switch.path}")
+        print(f"  Reason : {args.reason or 'not given'}")
+        print("\n  Open positions are untouched — closing them is a trading")
+        print("  decision, not a safety default. Use 'claw.py close --all' for that.")
+        print("  Release with: claw.py kill-switch off\n")
+    elif args.action == 'off':
+        if switch.release():
+            print("\n[KILL SWITCH] Released — new entries permitted again.\n")
+        else:
+            print("\n[KILL SWITCH] Was not engaged; nothing to do.\n")
     else:
-        print("\n[OK] Configuration is valid!\n")
+        print(f"\n[KILL SWITCH] {switch.describe()}\n")
+        sys.exit(1 if switch.engaged else 0)
 
 
 def cmd_entry_check(args):
@@ -2011,6 +2049,24 @@ AI Agent System (SubAgent):
     # validate command
     validate_parser = subparsers.add_parser('validate', help='Validate configuration')
     validate_parser.set_defaults(func=cmd_validate)
+
+    # preflight command
+    preflight_parser = subparsers.add_parser(
+        'preflight', help='Check the system is ready to run')
+    preflight_parser.add_argument('--strict', action='store_true',
+                                  help='treat warnings as failures')
+    preflight_parser.add_argument('--live', action='store_true',
+                                  help='also check live-trading readiness')
+    preflight_parser.set_defaults(func=cmd_preflight)
+
+    # kill-switch command
+    kill_parser = subparsers.add_parser(
+        'kill-switch', help='Halt new entries immediately, without a restart')
+    kill_parser.add_argument('action', nargs='?', default='status',
+                             choices=['on', 'off', 'status'],
+                             help='engage, release, or report (default: status)')
+    kill_parser.add_argument('--reason', type=str, help='why it is being engaged')
+    kill_parser.set_defaults(func=cmd_kill_switch)
 
     # entry-check command
     entry_parser = subparsers.add_parser(

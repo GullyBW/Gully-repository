@@ -124,6 +124,24 @@ def calendar_gate_node(state: TradingState) -> dict:
     messages = list(state.get("messages", []))
     calendar: dict[str, Any] = {"paused": False, "reason": "", "resume_at": None}
 
+    # The kill switch is checked first and costs nothing: it is the
+    # mechanism for stopping trading without a restart, so it must take
+    # effect before any research or broker work happens.
+    try:
+        try:
+            from scripts.lifecycle import KillSwitch
+        except ImportError:
+            from lifecycle import KillSwitch
+
+        switch = KillSwitch.from_config(_load_config())
+        if switch.engaged:
+            calendar["paused"] = True
+            calendar["reason"] = switch.describe()
+            messages.append(f"[safety] {switch.describe()}")
+            return {"calendar": calendar, "messages": messages}
+    except Exception as exc:
+        messages.append(f"[safety] kill-switch check skipped ({exc})")
+
     try:
         try:
             from scripts.economic_calendar import EconomicCalendar

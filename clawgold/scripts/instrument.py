@@ -24,7 +24,7 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from logger import get_logger
 
@@ -113,6 +113,9 @@ _SPECS: Dict[str, ContractSpec] = {
 
 _DEFAULT_SYMBOL = "XAUUSD"
 
+#: Symbols whose config override has already been logged at INFO.
+_LOGGED_OVERRIDES: set = set()
+
 
 def get_spec(symbol: Optional[str] = None) -> ContractSpec:
     """
@@ -159,6 +162,28 @@ def apply_config_overrides(config: Dict[str, Any]) -> None:
         if not isinstance(values, dict):
             continue
         base = get_spec(symbol)
+
+        # Reject nonsense before it reaches the registry. This runs from
+        # load_config, which happens BEFORE validation, so a typo like
+        # `min_volume: -1` would otherwise corrupt every subsequent sizing
+        # calculation with no error anywhere.
+        invalid = [
+            f"{field}={values[field]!r}"
+            for field in ("contract_size", "point", "pip",
+                          "min_volume", "max_volume", "volume_step")
+            if field in values
+            and (not isinstance(values[field], (int, float))
+                 or isinstance(values[field], bool)
+                 or values[field] <= 0)
+        ]
+        if invalid:
+            logger.error(
+                "Ignoring instruments.%s override — these must be positive "
+                "numbers: %s. Keeping the built-in spec.",
+                symbol.upper(), ", ".join(invalid),
+            )
+            continue
+
         register_spec(ContractSpec(
             symbol=symbol.upper(),
             contract_size=float(values.get("contract_size", base.contract_size)),
@@ -170,11 +195,18 @@ def apply_config_overrides(config: Dict[str, Any]) -> None:
             digits=int(values.get("digits", base.digits)),
             quote_currency=values.get("quote_currency", base.quote_currency),
         ))
-        logger.info(
-            "Contract spec for %s overridden from config: min_volume=%s step=%s",
-            symbol.upper(), values.get("min_volume", base.min_volume),
-            values.get("volume_step", base.volume_step),
-        )
+        # Config is reloaded on nearly every call in the pipeline, so this
+        # fires constantly. Log the first application per symbol at INFO and
+        # the repeats at DEBUG, rather than flooding the deployment logs.
+        message = (
+            "Contract spec for %s overridden from config: min_volume=%s step=%s")
+        args = (symbol.upper(), values.get("min_volume", base.min_volume),
+                values.get("volume_step", base.volume_step))
+        if symbol.upper() in _LOGGED_OVERRIDES:
+            logger.debug(message, *args)
+        else:
+            _LOGGED_OVERRIDES.add(symbol.upper())
+            logger.info(message, *args)
 
 
 def refresh_from_broker(symbol: str, symbol_info: object) -> ContractSpec:

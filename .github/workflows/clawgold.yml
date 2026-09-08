@@ -90,6 +90,62 @@ jobs:
         # pass for a suite that never ran.
         run: python run_tests.py
 
+      - name: Config validates
+        run: python claw.py validate
+
+      - name: Preflight passes
+        # The same gate the container entrypoint applies, so a change that
+        # would fail at deploy time fails here instead.
+        run: python claw.py preflight
+
+      - name: Entry budget is achievable
+        run: python claw.py entry-check --price 2650
+
+  container:
+    name: Container build and checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the entrypoint
+        run: bash -n clawgold/docker/entrypoint.sh
+
+      - name: Validate the compose file
+        run: docker compose -f clawgold/docker-compose.yml config --quiet
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: clawgold
+          push: false
+          load: true
+          tags: clawgold:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image runs preflight and the CLI
+        run: |
+          docker run --rm clawgold:ci python claw.py preflight
+          docker run --rm clawgold:ci python claw.py entry-check --price 2650
+
+      - name: Image cannot import MetaTrader5
+        # The image must not pretend it can trade live.
+        run: |
+          docker run --rm -e PREFLIGHT_SKIP=true clawgold:ci python -c "
+          import sys
+          try:
+              import MetaTrader5
+              sys.exit('MetaTrader5 must not be installed in this image')
+          except ImportError:
+              print('correct: MetaTrader5 absent, image is paper-only')
+          "
+
+      - name: Image does not run as root
+        run: |
+          uid=$(docker run --rm -e PREFLIGHT_SKIP=true clawgold:ci id -u)
+          test "$uid" != "0" || { echo "container runs as root"; exit 1; }
+          echo "runs as uid $uid"
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

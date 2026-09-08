@@ -87,7 +87,7 @@ logging:
 
 # Telegram Notifications
 # Get bot token from @BotFather on Telegram
-# Chat ID can be your user ID or channel ID (e.g., -1002197548947)
+# Chat ID is your own user ID or channel ID; set it via TELEGRAM_CHAT_ID
 telegram:
   enabled: false   # set true once bot_token and chat_id are configured
   bot_token: ""  # Set via TELEGRAM_BOT_TOKEN in .env

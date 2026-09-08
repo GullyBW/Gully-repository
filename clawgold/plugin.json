@@ -1,7 +1,7 @@
 {
   "name": "claw-gold",
-  "version": "2.0.0",
-  "description": "ClawGold v2.0 — AI-powered XAUUSD trading with LiteLLM, APScheduler, and advanced strategies",
+  "version": "3.0.0",
+  "description": "ClawGold v3.0 \u2014 AI-assisted XAUUSD trading. Cross-platform, paper-trading by default, deployable, and free to run.",
   "author": "JonusNattapong",
   "homepage": "https://github.com/JonusNattapong/ClawGold",
   "kind": "extension",
@@ -99,7 +99,11 @@
       "risk_per_trade": "0.0-1.0"
     },
     "agent": {
-      "preferred_tools": ["opencode", "kilocode", "gemini"],
+      "preferred_tools": [
+        "opencode",
+        "kilocode",
+        "gemini"
+      ],
       "cache_ttl_hours": 4,
       "timeout_seconds": 180,
       "use_consensus": false
@@ -125,11 +129,11 @@
     "v2.0.0": {
       "date": "2026-03-04",
       "highlights": [
-        "✅ LiteLLM unified AI provider interface",
-        "✅ APScheduler persistent background task scheduling",
-        "✅ Rich enhanced console logging with colors/panels/tables",
-        "✅ Real-time LLM cost tracking per provider",
-        "✅ 100% backward compatible with v1.x"
+        "\u2705 LiteLLM unified AI provider interface",
+        "\u2705 APScheduler persistent background task scheduling",
+        "\u2705 Rich enhanced console logging with colors/panels/tables",
+        "\u2705 Real-time LLM cost tracking per provider",
+        "\u2705 100% backward compatible with v1.x"
       ]
     }
   }

@@ -10,6 +10,56 @@
   <img src="https://raw.githubusercontent.com/OpenKrab/ClawGold/main/public/banner.png" alt="ClawGold Banner" width="800">
 </p>
 
+---
+
+## About this fork
+
+This is a hardened fork of [OpenKrab/ClawGold](https://github.com/OpenKrab/ClawGold),
+kept MIT-licensed with the original copyright intact. What changed:
+
+| | Upstream | This fork |
+|---|---|---|
+| **Runs on** | Windows only | Linux, macOS, Windows, Docker |
+| **Default mode** | `real` (live money) | `simulation` (paper broker) |
+| **Execution** | Direct MetaTrader5 calls | `Broker` interface — MT5 or paper |
+| **Position sizing** | `volume * 100` placeholder | Derived from a real contract spec |
+| **Tests** | 14 discoverable | 260 passing, plus CI |
+| **Cost to run** | API keys assumed | Free mode blocks every paid service |
+| **Small accounts** | — | `entry_budget` caps margin per entry |
+| **Stopping it** | Ctrl-C | Kill switch + graceful shutdown |
+| **Deploy checks** | — | `claw.py preflight` |
+
+A number of upstream defects are fixed along the way — the trading pipeline
+could not place an order at all, and every AI-augmented feature was silently
+disabled by a constructor bug. See the commit history for the full list.
+
+### Start here
+
+| Doc | For |
+|---|---|
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Running it as a service, paper or live |
+| [`docs/FREE_AND_SMALL_ACCOUNT.md`](docs/FREE_AND_SMALL_ACCOUNT.md) | Zero-cost setup, and trading with $10 |
+| [`docs/STRATEGY_REVIEW.md`](docs/STRATEGY_REVIEW.md) | **Where the strategy is statistically weak** |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the pieces fit together |
+
+### Sixty-second start
+
+```bash
+pip install -r requirements-dev.txt   # Linux-installable set
+python claw.py preflight              # is it ready?
+python claw.py entry-check            # can $10 open a position?
+python claw.py graph run              # run the pipeline (paper)
+```
+
+> **On profitability.** The engineering here is tested: sizing arithmetic,
+> risk gates, the execution path and shutdown all have coverage. That is a
+> different claim from the strategy making money. Its edge is **unmeasured** —
+> `docs/STRATEGY_REVIEW.md` explains why, starting with the fact that the
+> backtest validates a different strategy from the one that trades. Run it in
+> simulation and read that document before risking real money.
+
+---
+
 ## Features
 
 - **Phase 1: High-Impact Upgrades** ⚡
@@ -135,8 +185,8 @@ pip install litellm>=1.0.0 apscheduler>=3.10.0 rich>=13.0.0
 ## Getting Started
 
 - Python 3.10+
-- MetaTrader 5 (Windows)
-- AI CLI Tools (at least one recommended):
+- MetaTrader 5 (Windows) — **only for live trading**; the paper broker needs nothing
+- AI CLI Tools (all optional; the technical signal runs without them):
   - `opencode` - OpenCode CLI (`opencode run "<prompt>"`)
   - `kilo` - KiloCode CLI (`kilo run "<prompt>"`)
   - `gemini` - Google Gemini CLI (`gemini "<prompt>"`)
@@ -156,8 +206,17 @@ cd ClawGold
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Linux/macOS, or anywhere you are not trading live:
+pip install -r requirements-dev.txt
+
+# Windows, for live MT5 trading (adds the MetaTrader5 package):
 pip install -r requirements.txt
 ```
+
+`requirements.txt` pins `MetaTrader5`, which is Windows-only and cannot be
+installed elsewhere. `requirements-dev.txt` is everything else, which is
+enough to run the whole system against the paper broker.
 
 3. Configure MT5 credentials in `.env`
 
@@ -733,14 +792,29 @@ ClawGold includes multiple safety mechanisms:
 ## Testing
 
 ```bash
-# Validate configuration
-python claw.py validate
+# Full suite (260 tests)
+python run_tests.py
 
-# Check MT5 connection
-python claw.py balance
+# Only matching modules
+python run_tests.py broker risk
 
-# Test news system (no AI)
-python claw.py news research XAUUSD --no-ai
+# With coverage
+python -m coverage run --source=scripts run_tests.py && python -m coverage report -m
+```
+
+**Do not use `python -m unittest discover -s test`.** The test directory is
+named `test`, which collides with CPython's stdlib `test` package: depending
+on `sys.path` ordering, discovery silently runs the *standard library's*
+suite and reports a pass for tests that never ran. `run_tests.py` loads
+modules by absolute path.
+
+### Pre-deployment checks
+
+```bash
+python claw.py preflight          # readiness: config, broker, paths, secrets
+python claw.py preflight --strict # warnings block too
+python claw.py validate           # config only
+python claw.py entry-check        # can the entry budget open a position?
 ```
 
 ---

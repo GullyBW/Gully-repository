@@ -5,6 +5,95 @@ All notable changes to ClawGold will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-09-08
+
+Hardening fork. The system now runs cross-platform, defaults to paper
+trading, and is deployable as a service. A number of upstream defects that
+silently disabled features are fixed.
+
+### Added
+
+- **Broker abstraction** (`scripts/broker.py`) — a `Broker` interface with
+  two backends: `MT5Broker` for the live terminal and `PaperBroker`, an
+  in-process simulator with a seeded, deterministic price series. Selected
+  by `trading.mode`. The MetaTrader5 import is lazy, so the system runs on
+  Linux, macOS and in Docker.
+- **Contract specs** (`scripts/instrument.py`) — one source of truth for
+  how price movement becomes money (XAUUSD = 100 oz/lot), with per-broker
+  overrides via `instruments:` in config.
+- **Entry budget** — `trading.entry_budget` caps the *margin* a single
+  entry may commit, separately from `risk_per_trade`, which caps what it
+  can lose. Sizing takes the tighter of the two, which is what makes a
+  $10-per-entry account workable.
+- **Free mode** (`scripts/free_mode.py`) — blocks every paid service. In
+  strict mode the system refuses to start when a billable API key is
+  present, rather than quietly spending credit.
+- **Preflight** (`scripts/preflight.py`, `claw.py preflight`) — 14 readiness
+  checks covering config, broker connectivity, writable paths, disk, and
+  committed secrets. Run automatically by the container entrypoint.
+- **Kill switch and graceful shutdown** (`scripts/lifecycle.py`) — a file
+  that halts new entries with no restart, and SIGTERM handling so a
+  container stop unwinds instead of being killed mid-order.
+- **Trading worker** (`scripts/trade_worker.py`) — the deployable service
+  loop, with a heartbeat file the container healthcheck reads.
+- **`claw.py entry-check`** — reports whether the entry budget can open a
+  position, and names the remedies when it cannot.
+- 260 tests (upstream could discover 14), plus a GitHub Actions workflow.
+- `docs/DEPLOYMENT.md`, `docs/FREE_AND_SMALL_ACCOUNT.md`,
+  `docs/STRATEGY_REVIEW.md`.
+
+### Changed
+
+- **`trading.mode` defaults to `simulation`**, not `real`.
+- **Single orchestration engine.** `trading_graph.py` is now the only one;
+  `orchestrator.py` is a deprecation shim delegating to it. The economic
+  calendar pause and adaptive-learning loop were ported across.
+- `mt5_manager.MT5Manager` is a compatibility shim over the broker, so all
+  existing call sites work unchanged.
+- The Docker image runs as a non-root user, has a heartbeat healthcheck,
+  and its default command is a long-running worker rather than a one-shot
+  that exited immediately.
+- `docker-compose.yml` drops the fake alpine "db" container that existed
+  only to own a volume. SQLite is in-process; the volume alone suffices.
+- Tests run via `run_tests.py`; `unittest discover -s test` can silently
+  run CPython's stdlib `test` suite instead of this one.
+
+### Fixed
+
+- `execute_node` called `mt5.connect()` and `mt5.place_order()`, neither of
+  which existed — **the pipeline had never placed an order**.
+- `AgentExecutor(config)` passed positionally bound the dict to `cache_dir`
+  and raised inside `Path()`, which callers swallowed — silently disabling
+  every AI-augmented feature.
+- `AgentResult` now supports mapping access; four callers used
+  `result.get('output')` on a dataclass.
+- `AIResearcher.get_market_sentiment` did not exist, so every research step
+  fell back to neutral.
+- `_extract_confidence` missed "80% confidence", zeroing `avg_confidence`
+  and with it the whole AI signal.
+- The margin check rejected every trade on a flat account (MT5 reports
+  `margin_level` 0 with no positions, and `0 < 100`).
+- Position sizing returns 0.0 ("do not trade") instead of clamping up to
+  the minimum when the risk budget cannot fund it.
+- `config_validator` accepted only `mode: real`, so `claw.py validate`
+  **rejected the configuration the project ships**.
+- `apply_config_overrides` registered invalid contract values (a negative
+  `min_volume`) before validation could run.
+- `rich`, `litellm` and `apscheduler` raised at import time; all three are
+  optional and now degrade with a clear message.
+- `SignalService` defaulted to the upstream author's Telegram channel IDs.
+- `close_positions.py` sent `TRADE_ACTION_CLOSE_POSITION`, which
+  MetaTrader5 does not define.
+- `claw_gold.py` read bars with attribute access on a numpy structured
+  array, raising `AttributeError`.
+
+### Security
+
+- The committed config carries no credentials; preflight fails if it finds
+  any. `.dockerignore` excludes `.env` from the build context.
+- The dashboard binds to `127.0.0.1` rather than `0.0.0.0` — it has no
+  authentication.
+
 ## [2.0.0] - 2026-03-04
 
 ### ⚡ Phase 1: High-Impact Upgrades (Complete)
