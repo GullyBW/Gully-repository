@@ -1,18 +1,29 @@
 """
 Broker abstraction
 ==================
-One interface in front of order execution, with two backends:
+One interface in front of order execution, with three backends:
 
-    MT5Broker    — the real MetaTrader 5 terminal (Windows only)
-    PaperBroker  — an in-process simulator that fills against a synthetic
-                   price series, so the system runs and can be tested on
-                   Linux, in CI, and inside the Docker image
+    PaperBroker      — an in-process simulator that fills against a
+                       synthetic price series, so the system runs and can
+                       be tested on any platform, in CI, and in Docker
+    MT5Broker        — a MetaTrader 5 terminal on this machine (Windows)
+    RemoteMT5Broker  — a terminal on ANOTHER machine, via mt5_bridge_server
 
 The backend is chosen by ``trading.mode`` in config.yaml:
 
-    mode: simulation   -> PaperBroker   (default)
+    mode: simulation   -> PaperBroker      (default)
     mode: paper        -> PaperBroker
-    mode: real         -> MT5Broker
+    mode: real         -> MT5Broker        (Windows only)
+    mode: remote       -> RemoteMT5Broker  (live, from anywhere)
+
+**On macOS and Linux.** The MetaTrader5 package publishes only
+``win_amd64`` wheels: it is a closed-source binary that talks to the
+Windows terminal over local IPC, so no macOS or Linux build exists and
+none can be produced from outside MetaQuotes. ``mode: remote`` is the
+supported route — run the terminal where it works (a Windows VM or VPS,
+or macOS under Wine/CrossOver), expose it with
+``scripts/mt5_bridge_server.py``, and point this at the bridge. Nothing
+upstream of the Broker interface knows the difference. See docs/MACOS.md.
 
 The MetaTrader5 package is imported lazily, inside MT5Broker.connect(), so
 importing this module never fails on a platform where MT5 does not exist.
@@ -27,7 +38,9 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import random
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -193,10 +206,13 @@ class MT5Broker(Broker):
             import MetaTrader5 as mt5  # noqa: N813  (vendor's own casing)
         except ImportError as exc:
             raise BrokerError(
-                "MetaTrader5 is not installed. It is a Windows-only package, so "
-                "live trading is not available on this platform. Set "
-                "trading.mode to 'simulation' in config.yaml to use the paper "
-                "broker instead."
+                f"MetaTrader5 is not installed and cannot be, on this platform "
+                f"({sys.platform}): MetaQuotes publishes Windows-only wheels.\n\n"
+                "Two ways forward:\n"
+                "  * trading.mode = 'remote' — run the terminal on a Windows "
+                "host (or under Wine) with scripts/mt5_bridge_server.py and "
+                "trade it from here. See docs/MACOS.md.\n"
+                "  * trading.mode = 'simulation' — use the paper broker."
             ) from exc
 
         self._mt5 = mt5
@@ -434,6 +450,204 @@ class MT5Broker(Broker):
             code = result.retcode if result else mt5.last_error()
             return {"success": False, "error": f"Modify failed: {code}", "ticket": ticket}
         return {"success": True, "ticket": ticket, "sl": sl, "tp": tp}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remote backend — live MT5 from a host that cannot run MetaTrader5
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RemoteMT5Broker(Broker):
+    """
+    Live trading through an ``mt5_bridge_server`` running elsewhere.
+
+    The MetaTrader5 package ships only ``win_amd64`` wheels — it is a
+    closed-source binary talking to the Windows terminal over local IPC, so
+    there is no macOS or Linux build and none can be produced. This backend
+    is how a Mac trades live: the terminal runs where it works (a Windows
+    VM or VPS, or macOS under Wine), the bridge exposes it over HTTP, and
+    this speaks to the bridge.
+
+    It implements the same ``Broker`` interface as the local backends, so
+    nothing upstream of it knows the difference.
+
+    Config:
+        mt5:
+          bridge:
+            url: http://127.0.0.1:8760
+            token: ...            # or MT5_BRIDGE_TOKEN
+            timeout: 30
+    """
+
+    is_live = True
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        bridge = (config.get("mt5", {}) or {}).get("bridge", {}) or {}
+
+        self.url: str = str(
+            bridge.get("url") or os.environ.get("MT5_BRIDGE_URL", "")
+        ).rstrip("/")
+        self.token: str = str(
+            bridge.get("token") or os.environ.get("MT5_BRIDGE_TOKEN", "")
+        )
+        self.timeout: float = float(bridge.get("timeout", 30))
+        self.connected = False
+
+    # -- transport ----------------------------------------------------------
+
+    def _request(self, method: str, path: str,
+                 params: Optional[Dict[str, Any]] = None,
+                 body: Optional[Dict[str, Any]] = None) -> Any:
+        """One JSON round trip to the bridge, with errors mapped to BrokerError."""
+        import json as _json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        url = f"{self.url}{path}"
+        if params:
+            clean = {k: v for k, v in params.items() if v is not None}
+            if clean:
+                url = f"{url}?{urllib.parse.urlencode(clean)}"
+
+        data = _json.dumps(body).encode("utf-8") if body is not None else None
+        request = urllib.request.Request(url, data=data, method=method)
+        request.add_header("Authorization", f"Bearer {self.token}")
+        if data is not None:
+            request.add_header("Content-Type", "application/json")
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                payload = _json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = _json.loads(exc.read().decode("utf-8")).get("error", "")
+            except Exception:
+                pass
+            if exc.code == 401:
+                raise BrokerError(
+                    "Bridge rejected the token. Check mt5.bridge.token matches "
+                    "the --token the server was started with."
+                ) from exc
+            if exc.code == 403:
+                raise BrokerError(f"Bridge refused the operation: {detail}") from exc
+            raise BrokerError(f"Bridge returned HTTP {exc.code}: {detail or exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            raise BrokerError(
+                f"Cannot reach the MT5 bridge at {self.url}: {exc.reason}. "
+                "Is mt5_bridge_server.py running on the MT5 host, and is the "
+                "SSH tunnel up?"
+            ) from exc
+        except TimeoutError as exc:
+            raise BrokerError(f"Bridge timed out after {self.timeout}s") from exc
+
+        if not payload.get("ok"):
+            raise BrokerError(payload.get("error", "Bridge reported failure"))
+        return payload
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def connect(self) -> None:
+        if not self.url:
+            raise BrokerError(
+                "trading.mode is 'remote' but no bridge URL is configured. "
+                "Set mt5.bridge.url in config.yaml or MT5_BRIDGE_URL in .env."
+            )
+        if not self.token:
+            raise BrokerError(
+                "No bridge token configured. Set mt5.bridge.token or "
+                "MT5_BRIDGE_TOKEN — the bridge can place real trades and "
+                "will not accept unauthenticated requests."
+            )
+
+        # /health needs no token, so this separates "cannot reach it" from
+        # "reached it but the token is wrong" — two very different fixes.
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(f"{self.url}/health", timeout=self.timeout) as response:
+                health = _json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            raise BrokerError(
+                f"Cannot reach the MT5 bridge at {self.url}: {exc}. "
+                "Start it on the MT5 host with "
+                "'python scripts/mt5_bridge_server.py --token ...'."
+            ) from exc
+
+        if not health.get("connected"):
+            raise BrokerError(
+                "The bridge is running but not connected to MetaTrader 5. "
+                "Check the terminal is open and logged in on that host."
+            )
+
+        # Prove the token before anything depends on it.
+        self._request("GET", "/account")
+
+        self.connected = True
+        logger.warning(
+            "LIVE TRADING via MT5 bridge at %s — orders reach a real terminal%s",
+            self.url, " (bridge is READ-ONLY)" if health.get("read_only") else "",
+        )
+
+    def disconnect(self) -> None:
+        self.connected = False
+
+    # -- reads --------------------------------------------------------------
+
+    def get_account_info(self) -> Optional[Dict[str, Any]]:
+        return self._request("GET", "/account").get("account")
+
+    def get_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        return self._request("GET", "/positions", {"symbol": symbol}).get("positions") or []
+
+    def get_tick(self, symbol: str) -> Optional[Dict[str, Any]]:
+        return self._request("GET", "/tick", {"symbol": symbol}).get("tick")
+
+    def get_rates(self, symbol: str, timeframe: int,
+                  count: int) -> Optional[List[Dict[str, Any]]]:
+        name = Timeframe.name(timeframe)
+        return self._request("GET", "/rates", {
+            "symbol": symbol, "timeframe": name, "count": count,
+        }).get("rates")
+
+    # -- writes -------------------------------------------------------------
+
+    def execute_trade(self, action: str, volume: float, symbol: Optional[str] = None,
+                      sl: Optional[float] = None, tp: Optional[float] = None,
+                      deviation: int = 10) -> Dict[str, Any]:
+        try:
+            return self._request("POST", "/trade", body={
+                "action": action, "volume": volume, "symbol": symbol,
+                "sl": sl, "tp": tp, "deviation": deviation,
+            }).get("result", {})
+        except BrokerError as exc:
+            # An order is the one call where a transport failure must not
+            # look like a clean rejection: the trade may have been placed.
+            return {"success": False, "error": str(exc), "uncertain": True}
+
+    def close_position(self, ticket: int) -> Dict[str, Any]:
+        try:
+            return self._request("POST", "/close", body={"ticket": ticket}).get("result", {})
+        except BrokerError as exc:
+            return {"success": False, "error": str(exc), "uncertain": True}
+
+    def close_all_positions(self) -> List[Dict[str, Any]]:
+        try:
+            return self._request("POST", "/close_all").get("result") or []
+        except BrokerError as exc:
+            return [{"success": False, "error": str(exc), "uncertain": True}]
+
+    def modify_position(self, ticket: int, sl: Optional[float] = None,
+                        tp: Optional[float] = None) -> Dict[str, Any]:
+        try:
+            return self._request("POST", "/modify", body={
+                "ticket": ticket, "sl": sl, "tp": tp,
+            }).get("result", {})
+        except BrokerError as exc:
+            return {"success": False, "error": str(exc)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -779,11 +993,12 @@ class PaperBroker(Broker):
 
 PAPER_MODES = {"simulation", "sim", "paper", "demo", "backtest"}
 LIVE_MODES = {"real", "live"}
+REMOTE_MODES = {"remote", "bridge"}
 
 
 def resolve_mode(config: Optional[Dict[str, Any]] = None) -> str:
     """
-    Normalise ``trading.mode`` to 'paper' or 'real'.
+    Normalise ``trading.mode`` to 'paper', 'real' or 'remote'.
 
     Anything not explicitly a live mode resolves to paper. An unrecognised
     value is a configuration mistake, and the safe reading of a mistake is
@@ -793,9 +1008,25 @@ def resolve_mode(config: Optional[Dict[str, Any]] = None) -> str:
     raw = str(cfg.get("trading", {}).get("mode", "simulation")).strip().lower()
     if raw in LIVE_MODES:
         return "real"
+    if raw in REMOTE_MODES:
+        return "remote"
     if raw not in PAPER_MODES:
         logger.warning("Unrecognised trading.mode %r — defaulting to paper trading", raw)
     return "paper"
+
+
+def is_live_mode(mode: str) -> bool:
+    """Both 'real' and 'remote' reach a live terminal with real money."""
+    return mode in ("real", "remote")
+
+
+def metatrader5_available() -> bool:
+    """Whether the MetaTrader5 package can be imported on this host."""
+    try:
+        import MetaTrader5  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 def get_broker(config: Optional[Dict[str, Any]] = None,
@@ -806,11 +1037,33 @@ def get_broker(config: Optional[Dict[str, Any]] = None,
     Live mode additionally requires ``mt5.login`` to be set, so an
     incomplete real-money configuration fails loudly at construction
     instead of silently attempting to connect with login 0.
+
+    On a host where the MetaTrader5 package cannot be installed — macOS or
+    Linux, where MetaQuotes publishes no wheel — 'real' mode explains the
+    remote-bridge route rather than failing with a bare ImportError.
     """
     cfg = config if config is not None else load_config(config_path)
     mode = resolve_mode(cfg)
 
+    if mode == "remote":
+        logger.warning("LIVE TRADING via bridge — orders reach a real terminal")
+        return RemoteMT5Broker(cfg)
+
     if mode == "real":
+        if not metatrader5_available():
+            raise BrokerError(
+                f"trading.mode is 'real' but the MetaTrader5 package is not "
+                f"available on this platform ({sys.platform}). MetaQuotes "
+                "publishes Windows-only wheels, so there is nothing to install "
+                "here.\n\n"
+                "To trade live from macOS or Linux, run the terminal where it "
+                "works and set trading.mode to 'remote':\n"
+                "  1. On a Windows host (or macOS under Wine), start:\n"
+                "       python scripts/mt5_bridge_server.py --token <secret>\n"
+                "  2. Here, set mt5.bridge.url and mt5.bridge.token.\n"
+                "See docs/MACOS.md. Or use 'simulation' for the paper broker."
+            )
+
         login = cfg.get("mt5", {}).get("login", 0)
         if not login:
             raise BrokerError(

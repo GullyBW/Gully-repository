@@ -101,6 +101,12 @@ jobs:
       - name: Entry budget is achievable
         run: python claw.py entry-check --price 2650
 
+      - name: MT5 bridge round-trips without MetaTrader5
+        # The bridge is how macOS and Linux trade live. This proves the
+        # client/server pair works on a host where MetaTrader5 cannot be
+        # installed, which is exactly the situation it exists for.
+        run: python run_tests.py mt5_bridge -v
+
   container:
     name: Container build and checks
     runs-on: ubuntu-latest

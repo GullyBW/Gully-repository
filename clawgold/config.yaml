@@ -1,7 +1,8 @@
 trading:
-  # simulation -> PaperBroker (no real orders, safe default)
-  # real       -> MT5Broker   (live money; also requires MT5_LOGIN in .env)
-  # Override per-run with TRADING_MODE=real.
+  # simulation -> PaperBroker      (no real orders, safe default)
+  # real       -> MT5Broker         (live; Windows only, needs MT5_LOGIN)
+  # remote     -> RemoteMT5Broker   (live from macOS/Linux, via the bridge)
+  # Override per-run with TRADING_MODE=...
   mode: simulation
   initial_balance: 10000
   symbol: XAUUSD
@@ -76,6 +77,21 @@ mt5:
   password: ""
   server: ""
   terminal_path: C:\Program Files\MetaTrader 5\terminal64.exe
+
+  # Bridge settings for trading.mode = remote.
+  #
+  # The MetaTrader5 package ships Windows-only wheels — it is a closed
+  # binary talking to the terminal over local IPC, so there is no macOS or
+  # Linux build. To trade live from a Mac, run the terminal where it works
+  # (a Windows VM/VPS, or macOS under Wine) and expose it with
+  #   python scripts/mt5_bridge_server.py --token <secret>
+  # then point this at it. Prefer an SSH tunnel over opening a port:
+  #   ssh -N -L 8760:127.0.0.1:8760 user@mt5-host
+  # See docs/MACOS.md.
+  bridge:
+    url: ""      # e.g. http://127.0.0.1:8760 — or MT5_BRIDGE_URL
+    token: ""    # shared secret        — or MT5_BRIDGE_TOKEN (prefer .env)
+    timeout: 30
 
 api:
   provider: yfinance

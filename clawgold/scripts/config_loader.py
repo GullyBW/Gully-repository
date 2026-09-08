@@ -72,6 +72,16 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
     if "MT5_SERVER" in os.environ:
         mt5["server"] = os.environ["MT5_SERVER"]
 
+    # Bridge settings for remote (macOS/Linux) live trading. The token is a
+    # credential, so .env is the right home for it.
+    bridge = mt5.setdefault("bridge", {})
+    if "MT5_BRIDGE_URL" in os.environ:
+        bridge["url"] = os.environ["MT5_BRIDGE_URL"].strip()
+    if "MT5_BRIDGE_TOKEN" in os.environ:
+        bridge["token"] = os.environ["MT5_BRIDGE_TOKEN"]
+    if "MT5_BRIDGE_TIMEOUT" in os.environ:
+        bridge["timeout"] = _parse_value(os.environ["MT5_BRIDGE_TIMEOUT"].strip())
+
     mt5["terminal_path"] = os.environ.get(
         "MT5_TERMINAL_PATH",
         mt5.get("terminal_path", DEFAULT_MT5_TERMINAL_PATH),

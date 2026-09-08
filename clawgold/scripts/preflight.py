@@ -222,6 +222,9 @@ def _check_trading_mode(report: PreflightReport, config: Dict[str, Any]) -> str:
     if mode == "real":
         report.add("Trading mode", WARN, "LIVE — real orders, real money",
                    "Set trading.mode to 'simulation' if this is not intended.")
+    elif mode == "remote":
+        report.add("Trading mode", WARN, "LIVE via bridge — real orders, real money",
+                   "Set trading.mode to 'simulation' if this is not intended.")
     else:
         report.add("Trading mode", PASS, "simulation (paper broker, no real orders)")
     return mode
@@ -259,6 +262,57 @@ def _check_broker(report: PreflightReport, config: Dict[str, Any], mode: str) ->
     except Exception as exc:
         report.add("Broker", FAIL, str(exc),
                    "Check trading.mode and the mt5/paper sections of config.yaml.")
+
+
+def _check_bridge(report: PreflightReport, broker) -> None:
+    """
+    Reach the MT5 bridge without placing anything.
+
+    /health needs no token, so a failure here separates "cannot reach the
+    bridge" from "reached it but the token is wrong" — two different fixes.
+    """
+    import json as _json
+    import urllib.request
+
+    if not broker.url:
+        report.add("Bridge", FAIL, "no URL configured",
+                   "Set mt5.bridge.url, or MT5_BRIDGE_URL in .env. See docs/MACOS.md.")
+        return
+    if not broker.token:
+        report.add("Bridge", FAIL, "no token configured",
+                   "Set mt5.bridge.token, or MT5_BRIDGE_TOKEN in .env.")
+        return
+
+    try:
+        with urllib.request.urlopen(f"{broker.url}/health", timeout=8) as response:
+            health = _json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        report.add("Bridge", FAIL, f"unreachable at {broker.url}: {exc}",
+                   "Start scripts/mt5_bridge_server.py on the MT5 host, and "
+                   "check the SSH tunnel is up.")
+        return
+
+    if not health.get("connected"):
+        report.add("Bridge", FAIL, "reachable, but not connected to MetaTrader 5",
+                   "Open and log in to the MT5 terminal on the bridge host.")
+        return
+
+    # Prove the token works, using a read that changes nothing.
+    try:
+        account = broker.get_account_info()
+    except Exception as exc:
+        report.add("Bridge", FAIL, f"token rejected or read failed: {exc}",
+                   "Check mt5.bridge.token matches the bridge's --token.")
+        return
+
+    detail = f"connected via {broker.url}"
+    if account:
+        detail += f", balance {account.get('balance', 0):,.2f} {account.get('currency', '')}"
+    if health.get("read_only"):
+        report.add("Bridge", WARN, detail + " (READ-ONLY)",
+                   "The bridge was started with --read-only; it will refuse orders.")
+    else:
+        report.add("Bridge", PASS, detail)
 
 
 def _check_entry_budget(report: PreflightReport, config: Dict[str, Any]) -> None:
@@ -430,12 +484,18 @@ def _check_kill_switch(report: PreflightReport, config: Dict[str, Any]) -> None:
         report.add("Kill switch", WARN, str(exc))
 
 
-def _check_live_readiness(report: PreflightReport, config: Dict[str, Any]) -> None:
+def _check_live_readiness(report: PreflightReport, config: Dict[str, Any],
+                          mode: str = "real") -> None:
     """Only run with --live. Things that matter solely for real money."""
     mt5 = config.get("mt5", {}) or {}
     telegram = config.get("telegram", {}) or {}
 
-    if not mt5.get("login"):
+    if mode == "remote":
+        # Credentials live on the bridge host, not here — that is the point
+        # of the bridge, and demanding them locally would be wrong.
+        report.add("Live: MT5 credentials", PASS,
+                   "held by the bridge host, not this machine")
+    elif not mt5.get("login"):
         report.add("Live: MT5 credentials", FAIL, "no login configured",
                    "Set MT5_LOGIN, MT5_PASSWORD and MT5_SERVER in .env.")
     else:
@@ -447,12 +507,20 @@ def _check_live_readiness(report: PreflightReport, config: Dict[str, Any]) -> No
         report.add("Live: alerting", WARN, "Telegram not configured",
                    "You will not be notified when trades execute or limits trip.")
 
+    if mode == "remote":
+        report.add("Live: MetaTrader5 package", PASS,
+                   "not needed here — the bridge host runs it")
+        return
+
     try:
         import MetaTrader5  # noqa: F401
         report.add("Live: MetaTrader5 package", PASS, "importable")
     except ImportError:
-        report.add("Live: MetaTrader5 package", FAIL, "not installed",
-                   "MetaTrader5 is Windows-only. Live trading cannot run on this host.")
+        report.add(
+            "Live: MetaTrader5 package", FAIL,
+            f"not installable on {sys.platform} — MetaQuotes ships Windows-only wheels",
+            "Use trading.mode = 'remote' with scripts/mt5_bridge_server.py on a "
+            "Windows host or macOS under Wine. See docs/MACOS.md.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -488,8 +556,8 @@ def run_preflight(strict: bool = False, live_check: bool = False) -> PreflightRe
     _check_secrets_not_committed(report)
     _check_kill_switch(report, config)
 
-    if live_check or mode == "real":
-        _check_live_readiness(report, config)
+    if live_check or mode in ("real", "remote"):
+        _check_live_readiness(report, config, mode)
 
     return report
 

@@ -8,11 +8,13 @@ sending real orders.
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
 from broker import (  # noqa: E402
-    Broker, BrokerError, MT5Broker, PaperBroker, Timeframe, get_broker, resolve_mode,
+    Broker, BrokerError, MT5Broker, PaperBroker, RemoteMT5Broker, Timeframe,
+    get_broker, resolve_mode,
 )
 
 
@@ -54,35 +56,75 @@ class TestBrokerFactory(unittest.TestCase):
         self.assertIsInstance(broker, PaperBroker)
         self.assertFalse(broker.is_live)
 
-    def test_real_mode_without_login_is_refused(self):
-        """A half-configured live setup must fail loudly, not connect as login 0."""
-        cfg = paper_config()
-        cfg["trading"]["mode"] = "real"
-        cfg["mt5"] = {"login": 0}
-        with self.assertRaises(BrokerError) as ctx:
-            get_broker(cfg)
-        self.assertIn("no MT5 login", str(ctx.exception))
-
-    def test_real_mode_with_login_builds_mt5_broker(self):
+    def _live_config(self, **mt5_overrides):
         cfg = paper_config()
         cfg["trading"]["mode"] = "real"
         cfg["mt5"] = {"login": 12345678, "server": "Demo", "password": "x"}
-        broker = get_broker(cfg)
+        cfg["mt5"].update(mt5_overrides)
+        return cfg
+
+    def test_real_mode_without_login_is_refused(self):
+        """A half-configured live setup must fail loudly, not connect as login 0."""
+        # Pretend the package is present, so this exercises the login check
+        # rather than the platform check that would otherwise fire first.
+        with mock.patch("broker.metatrader5_available", return_value=True):
+            with self.assertRaises(BrokerError) as ctx:
+                get_broker(self._live_config(login=0))
+        self.assertIn("no MT5 login", str(ctx.exception))
+
+    def test_real_mode_with_login_builds_mt5_broker(self):
+        with mock.patch("broker.metatrader5_available", return_value=True):
+            broker = get_broker(self._live_config())
         self.assertIsInstance(broker, MT5Broker)
         self.assertTrue(broker.is_live)
 
-    def test_mt5_broker_import_error_is_actionable(self):
-        """On a platform without MetaTrader5, connect() explains the way out."""
-        cfg = paper_config()
-        cfg["trading"]["mode"] = "real"
-        cfg["mt5"] = {"login": 1, "server": "Demo", "password": "x"}
-        broker = get_broker(cfg)
+    def test_real_mode_on_a_platform_without_mt5_points_at_the_bridge(self):
+        """
+        MetaQuotes ships Windows-only wheels, so on macOS or Linux 'real'
+        can never work. Failing at construction with the remote-bridge
+        route beats a bare ImportError later.
+        """
+        with mock.patch("broker.metatrader5_available", return_value=False):
+            with self.assertRaises(BrokerError) as ctx:
+                get_broker(self._live_config())
+        message = str(ctx.exception)
+        self.assertIn("Windows-only", message)
+        self.assertIn("remote", message)
+        self.assertIn("MACOS.md", message)
+
+    def test_mt5_broker_connect_is_actionable_without_the_package(self):
+        """Constructing MT5Broker directly still explains the way out."""
         try:
             import MetaTrader5  # noqa: F401
+            self.skipTest("MetaTrader5 is installed on this host")
         except ImportError:
-            with self.assertRaises(BrokerError) as ctx:
-                broker.connect()
-            self.assertIn("simulation", str(ctx.exception))
+            pass
+
+        with self.assertRaises(BrokerError) as ctx:
+            MT5Broker(self._live_config()).connect()
+        message = str(ctx.exception)
+        self.assertIn("Windows-only", message)
+        self.assertIn("simulation", message)
+
+
+class TestRemoteModeFactory(unittest.TestCase):
+    """`remote` reaches a live terminal on another host — see docs/MACOS.md."""
+
+    def test_remote_builds_the_bridge_client(self):
+        cfg = paper_config()
+        cfg["trading"]["mode"] = "remote"
+        cfg["mt5"] = {"bridge": {"url": "http://127.0.0.1:8760", "token": "t"}}
+        broker = get_broker(cfg)
+        self.assertIsInstance(broker, RemoteMT5Broker)
+        self.assertTrue(broker.is_live)
+
+    def test_remote_needs_no_metatrader5_package(self):
+        """The whole point: this works where MetaTrader5 cannot be installed."""
+        cfg = paper_config()
+        cfg["trading"]["mode"] = "remote"
+        cfg["mt5"] = {"bridge": {"url": "http://127.0.0.1:8760", "token": "t"}}
+        with mock.patch("broker.metatrader5_available", return_value=False):
+            self.assertIsInstance(get_broker(cfg), RemoteMT5Broker)
 
 
 class TestPaperBrokerReads(unittest.TestCase):

@@ -29,8 +29,12 @@ class ConfigValidator:
 
     # Simulation is the default and the safe mode; rejecting it made
     # `claw.py validate` fail on the config the repository ships.
-    VALID_MODES = ['simulation', 'sim', 'paper', 'demo', 'backtest', 'real', 'live']
-    LIVE_MODES = ['real', 'live']
+    VALID_MODES = ['simulation', 'sim', 'paper', 'demo', 'backtest',
+                   'real', 'live', 'remote', 'bridge']
+    #: Modes that reach a real terminal with real money.
+    LIVE_MODES = ['real', 'live', 'remote', 'bridge']
+    #: Live via a bridge on another host, rather than a local terminal.
+    REMOTE_MODES = ['remote', 'bridge']
 
     # Symbols the system has a contract spec for. Anything else can still
     # be traded, but sizing would fall back to the XAUUSD spec, which is
@@ -86,7 +90,11 @@ class ConfigValidator:
         self._validate_logging(config.get('logging', {}) or {})
         self._validate_notifications(config)
 
-        if str(trading.get('mode', '')).lower() in self.LIVE_MODES:
+        mode = str(trading.get('mode', '')).lower()
+        if mode in self.REMOTE_MODES:
+            self._validate_bridge((config.get('mt5', {}) or {}).get('bridge', {}) or {})
+            self._validate_live_safety(trading, config)
+        elif mode in self.LIVE_MODES:
             self._validate_mt5(config.get('mt5', {}) or {})
             self._validate_live_safety(trading, config)
 
@@ -252,6 +260,51 @@ class ConfigValidator:
             self.errors.append("trading.mode is live but no MT5 password is set")
         if not mt5.get('server'):
             self.errors.append("trading.mode is live but no MT5 server is set")
+
+    def _validate_bridge(self, bridge: Dict[str, Any]) -> None:
+        """
+        Check the remote-bridge settings.
+
+        This path exists because MetaTrader5 has no macOS or Linux build, so
+        a Mac reaches a live terminal through a bridge. The bridge can place
+        real trades, so an unauthenticated or misconfigured one is an error
+        rather than a warning.
+        """
+        url = str(bridge.get('url', '') or '').strip()
+        token = str(bridge.get('token', '') or '')
+
+        if not url:
+            self.errors.append(
+                "trading.mode is 'remote' but mt5.bridge.url is not set "
+                "(or MT5_BRIDGE_URL in .env). Start the bridge on the MT5 host "
+                "with scripts/mt5_bridge_server.py — see docs/MACOS.md.")
+        elif not url.startswith(("http://", "https://")):
+            self.errors.append(
+                f"mt5.bridge.url must start with http:// or https:// — got {url!r}")
+
+        if not token:
+            self.errors.append(
+                "trading.mode is 'remote' but no mt5.bridge.token is set "
+                "(or MT5_BRIDGE_TOKEN in .env). The bridge can place real "
+                "trades and rejects unauthenticated requests.")
+        elif len(token) < 16:
+            self.warnings.append(
+                f"mt5.bridge.token is only {len(token)} characters — generate a "
+                "strong one with: python -c \"import secrets; "
+                "print(secrets.token_urlsafe(32))\"")
+
+        # Plain HTTP to a remote host means the token, and every order,
+        # crosses the network in the clear.
+        if url.startswith("http://") and not any(
+                host in url for host in ("127.0.0.1", "localhost", "::1")):
+            self.warnings.append(
+                f"mt5.bridge.url uses plain HTTP to a non-local host ({url}). "
+                "The token and your orders would cross the network unencrypted. "
+                "Prefer an SSH tunnel: ssh -N -L 8760:127.0.0.1:8760 user@host")
+
+        timeout = bridge.get('timeout')
+        if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
+            self.errors.append("mt5.bridge.timeout must be a positive number")
 
     def _validate_live_safety(self, trading: Dict[str, Any], config: Dict[str, Any]) -> None:
         """Extra scrutiny that only applies when real money is at stake."""

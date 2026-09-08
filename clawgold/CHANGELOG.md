@@ -5,6 +5,49 @@ All notable changes to ClawGold will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-09-08
+
+### Added — live MT5 trading from macOS and Linux
+
+The `MetaTrader5` package cannot be made macOS-compatible: release 5.0.4803
+publishes only `win_amd64` wheels, and it is a closed-source binary talking
+to the Windows terminal over local IPC. There is no source to recompile and
+no cross-platform build to enable. So instead of porting it, the terminal
+now runs where it works and is reached across a boundary.
+
+- **`scripts/mt5_bridge_server.py`** — a stdlib-only HTTP server that runs
+  on the MT5 host (Windows VM, VPS, or macOS under Wine) and exposes the
+  terminal. Requires a token, compares it with `hmac.compare_digest`, binds
+  loopback by default, and needs an explicit `--allow-remote` plus a
+  32-character token to bind anywhere else. `--read-only` serves every
+  query and refuses every order. `/health` needs no token so a monitor can
+  poll liveness without holding a credential.
+- **`RemoteMT5Broker`** — implements the same `Broker` interface as the
+  local backends, so the risk manager, pipeline, kill switch and journal
+  are unchanged. Selected with `trading.mode: remote`.
+- Config `mt5.bridge.{url,token,timeout}`, with `MT5_BRIDGE_URL`,
+  `MT5_BRIDGE_TOKEN` and `MT5_BRIDGE_TIMEOUT` overrides.
+- `docs/MACOS.md` — why the package cannot be ported, the four hosting
+  options, SSH-tunnel setup, and the security model.
+- 39 tests, including a real bridge server driven over real HTTP by a real
+  client, placing and closing an order end to end.
+
+### Changed
+
+- `get_broker` now fails at construction when `mode: real` is set on a
+  platform where MetaTrader5 cannot exist, naming the remote-bridge route,
+  rather than deferring to a bare ImportError at connect time.
+- `resolve_mode` understands `remote`/`bridge`; `is_live_mode()` treats
+  them as live, so every safety rule that applies to real money applies to
+  them too.
+- The validator checks bridge URL and token, and warns when the URL is
+  plain HTTP to a non-local host — the token and every order would cross
+  the network in the clear.
+- Preflight reaches `/health` before an authenticated read, so it can tell
+  "bridge unreachable" from "terminal not logged in" from "token rejected".
+- In remote mode preflight no longer demands local MT5 credentials: they
+  live on the bridge host, which is the point.
+
 ## [3.0.0] - 2026-09-08
 
 Hardening fork. The system now runs cross-platform, defaults to paper

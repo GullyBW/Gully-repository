@@ -3,10 +3,18 @@
 How to run ClawGold as a service, in paper or live mode, and what to do
 when something goes wrong.
 
-**Read this first:** the container image **cannot trade live**. The
-`MetaTrader5` package is Windows-only and is deliberately excluded from the
-image. Docker gets you research, signals, backtesting and paper trading;
-live execution needs a Windows host. Both paths are below.
+**Read this first:** the container image **cannot run MetaTrader5** — that
+package is Windows-only and is deliberately excluded. Docker gets you
+research, signals, backtesting and paper trading directly.
+
+For live execution you have two routes:
+
+- **`mode: real`** — run ClawGold on Windows, alongside the terminal.
+- **`mode: remote`** — run ClawGold anywhere (macOS, Linux, Docker) and
+  reach a terminal on another host through `mt5_bridge_server.py`. This is
+  how a Mac trades live; see [`MACOS.md`](MACOS.md).
+
+Both are covered below.
 
 ---
 
@@ -116,11 +124,13 @@ cause the orchestrator to restart the container out from under you.
 
 ---
 
-## 3. Live deployment (Windows)
+## 3. Live deployment
 
-Live trading requires a Windows host with the MetaTrader 5 terminal
-installed and running. There is no way around this — the MT5 Python API
-binds to the local terminal.
+A MetaTrader 5 terminal has to run on Windows somewhere — the MT5 Python
+API binds to a local Windows terminal and MetaQuotes publishes no other
+build. What varies is whether ClawGold runs on that same machine.
+
+### 3a. ClawGold on Windows, next to the terminal (`mode: real`)
 
 ```powershell
 git clone <your-repo>
@@ -176,6 +186,31 @@ python claw.py graph run
 For an unattended service, use NSSM or Task Scheduler. Set
 `TRADE_AUTO_APPROVE=false` to keep the human approval gate — with it
 `true`, orders are placed with no human in the loop.
+
+### 3b. ClawGold on macOS or Linux, terminal elsewhere (`mode: remote`)
+
+`RemoteMT5Broker` implements the same `Broker` interface, so the risk
+manager, pipeline, kill switch and journal are unchanged.
+
+```bash
+# On the MT5 host (Windows VM, VPS, or macOS under Wine)
+python scripts/mt5_bridge_server.py --token "$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+
+# From your machine — tunnel rather than exposing the port
+ssh -N -L 8760:127.0.0.1:8760 user@mt5-host
+
+# .env here
+#   TRADING_MODE=remote
+#   MT5_BRIDGE_URL=http://127.0.0.1:8760
+#   MT5_BRIDGE_TOKEN=<same token>
+
+python claw.py preflight --live     # reports exactly which link is broken
+python claw.py balance
+```
+
+The bridge refuses to start without a token, binds loopback by default,
+and supports `--read-only` for a monitoring host. Full setup, security
+notes and troubleshooting: [`MACOS.md`](MACOS.md).
 
 ---
 
