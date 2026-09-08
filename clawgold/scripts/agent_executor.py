@@ -348,6 +348,9 @@ RISK_ASSESSMENT_SCHEMA = {
 }
 
 
+_MISSING = object()
+
+
 @dataclass
 class AgentResult:
     """Result from an AI agent execution."""
@@ -364,7 +367,32 @@ class AgentResult:
 
     def to_dict(self) -> Dict:
         d = asdict(self)
+        # `output` is the name every caller in the codebase reaches for.
+        d['output'] = self.response
         return d
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Mapping-style access.
+
+        Callers in sentiment_analyzer, risk_manager, advanced_trader and
+        backtest all treat this result as a dict — `result.get('success')`,
+        `result.get('output', '')` — which raised AttributeError and left
+        every AI-augmented feature silently disabled. Supporting .get() here
+        fixes all of them at once, and 'output' aliases 'response'.
+        """
+        if key == 'output':
+            return self.response
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.get(key, _MISSING)
+        if value is _MISSING:
+            raise KeyError(key)
+        return value
+
+    def __contains__(self, key: str) -> bool:
+        return key == 'output' or hasattr(self, key)
 
     def get_json(self) -> Optional[Any]:
         """Return parsed JSON response. Tries to parse if not yet parsed."""
@@ -467,8 +495,9 @@ class AgentExecutor:
 
         agent_cfg = self.config.get('agent', {}) if isinstance(self.config, dict) else {}
         cache_cfg = agent_cfg.get('cache', {}) or {}
-        cache_dir = cache_cfg.get('dir', cache_dir)
-        cache_ttl_hours = cache_cfg.get('ttl_hours', cache_ttl_hours)
+        # `or` rather than a dict default: the key can be present but null.
+        cache_dir = cache_cfg.get('dir') or cache_dir
+        cache_ttl_hours = cache_cfg.get('ttl_hours') or cache_ttl_hours
 
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -893,11 +922,21 @@ class AgentExecutor:
 
     def run_best(self, task: str, *,
                  use_cache: bool = True,
-                 system_prompt: str = "") -> AgentResult:
+                 system_prompt: str = "",
+                 task_name: str = "") -> AgentResult:
         """
         Run task on the best available tool (highest success rate first).
         Falls back to next best on failure.
+
+        Args:
+            task: The prompt to run.
+            use_cache: Reuse a cached response when one is fresh.
+            system_prompt: Prepended to the task.
+            task_name: Label for logging and tracing. Callers across the
+                codebase already passed this; it used to raise TypeError.
         """
+        if task_name:
+            logger.debug("run_best(%s): %s", task_name, task[:60])
         ranked = self._rank_tools()
         if not ranked:
             # No CLI binary is installed. The LiteLLM fallback only used to be
@@ -912,9 +951,9 @@ class AgentExecutor:
                 tool="none", task=task, response="",
                 success=False, execution_time=0,
                 error=(
-                    "No AI CLI tool is installed and no LiteLLM provider is "
-                    "configured, so this command has no way to reach a model. "
-                    "Install one of: "
+                    "No AI CLI tools available on this system, and no LiteLLM "
+                    "provider is configured, so this command has no way to "
+                    "reach a model. Install one of: "
                     + ", ".join(
                         f"{t.value} ({TOOL_COMMANDS[t]['install']})" for t in AgentTool
                     )

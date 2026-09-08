@@ -25,8 +25,8 @@ This file provides guidance to Claude Code and Copilot when working on the ClawG
 # Install dependencies
 pip install -r requirements.txt
 
-# Run tests
-python -m unittest discover -s test -p "test_*.py" -v
+# Run tests (use run_tests.py, NOT unittest discover — see below)
+python run_tests.py
 
 # Validate configuration
 python claw.py validate
@@ -38,17 +38,25 @@ python claw.py balance
 ### Testing
 ```bash
 # All tests
-python -m unittest discover -s test -p "test_*.py" -v
+python run_tests.py
 
-# Specific test file
-python -m unittest test.test_agent_system -v
+# Only matching modules (substring match on the file name)
+python run_tests.py broker risk
+
+# Verbose / stop on first failure
+python run_tests.py -v
+python run_tests.py -f
 
 # With coverage
-python -m coverage run -m unittest discover -s test && python -m coverage report
-
-# Watch mode (rerun on changes)
-while True; do python -m unittest discover -s test; sleep 2; done
+python -m coverage run --source=scripts run_tests.py && python -m coverage report -m
 ```
+
+**Do not use `python -m unittest discover -s test`.** This project's test
+directory is named `test`, which collides with CPython's own stdlib `test`
+package. Depending on how `sys.path` is ordered, discovery silently runs the
+*standard library's* test suite instead of this one and reports a pass for
+tests that never executed. `run_tests.py` loads the repository's test modules
+by absolute path, so the right suite always runs.
 
 ### Development Workflow
 ```bash

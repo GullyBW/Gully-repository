@@ -19,6 +19,12 @@ from dataclasses import dataclass, asdict
 
 from logger import get_logger
 
+# APScheduler backs the background scheduler, which is disabled by default
+# (agent.scheduler.enabled: false). Raising at import time made this module
+# unimportable without it, which took the task-definition API down with it
+# and stopped anything that merely inspects the schedule from running.
+APSCHEDULER_AVAILABLE = True
+APSCHEDULER_IMPORT_ERROR = ""
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -27,8 +33,21 @@ try:
     from apscheduler.jobstores.memory import MemoryJobStore
     from apscheduler.executors.pool import ThreadPoolExecutor
     from pytz import utc
-except ImportError:
-    raise ImportError("APScheduler not installed. Run: pip install apscheduler")
+except ImportError as exc:  # pragma: no cover - depends on the environment
+    APSCHEDULER_AVAILABLE = False
+    APSCHEDULER_IMPORT_ERROR = str(exc)
+    BackgroundScheduler = CronTrigger = IntervalTrigger = None
+    SQLAlchemyJobStore = MemoryJobStore = ThreadPoolExecutor = None
+    utc = None
+
+
+def require_apscheduler() -> None:
+    """Raise a clear error when a caller actually needs the scheduler running."""
+    if not APSCHEDULER_AVAILABLE:
+        raise RuntimeError(
+            f"APScheduler is not installed ({APSCHEDULER_IMPORT_ERROR}). "
+            "Run: pip install apscheduler"
+        )
 
 logger = get_logger(__name__)
 
@@ -62,12 +81,21 @@ class APSchedulerManager:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.use_persistence = use_persistence
-        self.scheduler: Optional[BackgroundScheduler] = None
+        self.scheduler: Optional["BackgroundScheduler"] = None
         self.tasks: Dict[str, TaskConfig] = {}
         self._init_scheduler()
         
     def _init_scheduler(self):
-        """Initialize APScheduler."""
+        """Initialize APScheduler, if it is installed."""
+        if not APSCHEDULER_AVAILABLE:
+            # Task definitions still load and can be inspected; only the
+            # background execution is unavailable.
+            logger.warning(
+                "APScheduler not installed — tasks can be defined and listed, "
+                "but nothing will run in the background. Run: pip install apscheduler"
+            )
+            return
+
         if self.use_persistence:
             jobstore_url = f"sqlite:///{self.db_path}"
             jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}

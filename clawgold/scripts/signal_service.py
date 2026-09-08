@@ -97,14 +97,25 @@ class SignalService:
         self.config = config or {}
 
         # Load tier channel IDs from config
+        # Channel IDs come from config or the environment, and default to
+        # empty. They previously defaulted to the upstream author's own
+        # Telegram channels, so an unconfigured install broadcast its signals
+        # into somebody else's rooms.
         channels_cfg = self.config.get('signal_service', {}).get('channels', {})
         self.TIER_CHANNELS = {
-            'free':  channels_cfg.get('free',  os.getenv('SIGNAL_CH_FREE',  '-1002530348291')),
-            'basic': channels_cfg.get('basic', os.getenv('SIGNAL_CH_BASIC', '-1002609941948')),
-            'pro':   channels_cfg.get('pro',   os.getenv('SIGNAL_CH_PRO',   '-1002694677449')),
-            'vip':   channels_cfg.get('vip',   os.getenv('SIGNAL_CH_VIP',   '')),
+            'free':  channels_cfg.get('free')  or os.getenv('SIGNAL_CH_FREE',  ''),
+            'basic': channels_cfg.get('basic') or os.getenv('SIGNAL_CH_BASIC', ''),
+            'pro':   channels_cfg.get('pro')   or os.getenv('SIGNAL_CH_PRO',   ''),
+            'vip':   channels_cfg.get('vip')   or os.getenv('SIGNAL_CH_VIP',   ''),
         }
-        logger.info(f"Signal channels loaded: { {k: v for k, v in self.TIER_CHANNELS.items() if v} }")
+        configured = {k: v for k, v in self.TIER_CHANNELS.items() if v}
+        if configured:
+            logger.info(f"Signal channels loaded: {configured}")
+        else:
+            logger.warning(
+                "No signal channels configured — broadcasts will be skipped. "
+                "Set signal_service.channels in config.yaml or SIGNAL_CH_* in .env."
+            )
         self._init_db()
 
     @contextmanager

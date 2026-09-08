@@ -69,11 +69,14 @@ class AIResearcher:
             except Exception as e:
                 logger.warning(f"Could not initialize AgentExecutor: {e}")
 
+        # Dispatch by attribute lookup at call time rather than binding the
+        # methods here. Capturing bound methods in __init__ froze them before
+        # any test could patch the class, so @patch.object(AIResearcher,
+        # '_call_opencode') silently had no effect — which is why
+        # test_research_single_success and test_fallback_mechanism failed.
         self.tools = {
-            'opencode': self._call_opencode,
-            'kilocode': self._call_kilocode,
-            'gemini': self._call_gemini,
-            'codex': self._call_codex
+            name: self._dispatcher(f'_call_{name}')
+            for name in ('opencode', 'kilocode', 'gemini', 'codex')
         }
         # Metrics tracking
         self.metrics = {
@@ -83,6 +86,19 @@ class AIResearcher:
             'avg_response_time': {'opencode': 0, 'kilocode': 0, 'gemini': 0, 'codex': 0}
         }
     
+    def _dispatcher(self, method_name: str):
+        """
+        Return a callable that resolves `method_name` on self when invoked.
+
+        The late lookup is the point: it goes through the class every call,
+        so patching the method (in tests, or by a subclass) takes effect.
+        """
+        def call(query: str) -> str:
+            return getattr(self, method_name)(query)
+
+        call.__name__ = method_name
+        return call
+
     def get_metrics(self) -> Dict:
         """Get performance metrics for all AI tools."""
         metrics = {}
@@ -170,13 +186,19 @@ class AIResearcher:
             return None
             
         text_lower = text.lower()
-        # Common patterns for confidence scores
+        # Common patterns for confidence scores.
+        # The percentage-before-the-noun forms ("80% confidence", "80%
+        # confidence level") were missing, so a very ordinary phrasing
+        # returned None. That propagates: average_confidence becomes 0, and
+        # signal confidence is avg_confidence x consensus_strength, so the
+        # whole AI signal silently collapsed to zero.
         patterns = [
-            r'confidence[:\s]+(\d+)%',
+            r'confidence[:\s]+(\d+\.?\d*)\s*%',
             r'confidence[:\s]+(\d+\.?\d*)',
-            r'(\d+)%\s+confident',
-            r'(\d+)%\s+(?:sure|certain)',
-            r'confidence\s+is\s+(\d+)',
+            r'(\d+\.?\d*)\s*%\s+confidence',
+            r'(\d+\.?\d*)\s*%\s+confident',
+            r'(\d+\.?\d*)\s*%\s+(?:sure|certain)',
+            r'confidence\s+(?:is|of|at)\s+(\d+\.?\d*)',
         ]
         
         for pattern in patterns:
@@ -451,6 +473,44 @@ class AIResearcher:
             query = f"{symbol} {topic} - current market sentiment and outlook"
         else:
             query = f"{symbol} gold price today - market sentiment and analysis"
-        
+
         results = self.research_all(query)
         return self.aggregate_results(results)
+
+    def get_market_sentiment(self, symbol: str, topic: Optional[str] = None) -> Dict:
+        """
+        Market sentiment in the shape the trading pipeline consumes.
+
+        `quick_sentiment` returns the raw aggregate — consensus_sentiment,
+        consensus_strength, average_confidence, combined_analysis. The
+        pipeline wants `overall`, `score` and `summary`, and used to call
+        this method before it existed, so every research step fell back to
+        neutral. This adapts one to the other and keeps the raw keys.
+
+        Returns:
+            The aggregate dict plus:
+              overall: 'bullish' | 'bearish' | 'neutral'
+              score:   -1.0..1.0, signed consensus strength
+              summary: the combined analysis text
+        """
+        aggregate = self.quick_sentiment(symbol, topic)
+
+        consensus = aggregate.get('consensus_sentiment', 'neutral')
+        strength = float(aggregate.get('consensus_strength', 0.0) or 0.0)
+        confidence = float(aggregate.get('average_confidence', 0.0) or 0.0)
+
+        # Signed score: agreement scaled by how confident the tools were.
+        magnitude = strength * confidence if confidence else strength
+        if consensus == 'bullish':
+            score = magnitude
+        elif consensus == 'bearish':
+            score = -magnitude
+        else:
+            score = 0.0
+
+        aggregate.update({
+            'overall': consensus,
+            'score': round(max(-1.0, min(1.0, score)), 4),
+            'summary': aggregate.get('combined_analysis', ''),
+        })
+        return aggregate

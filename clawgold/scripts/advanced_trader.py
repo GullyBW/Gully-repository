@@ -488,11 +488,14 @@ class AdvancedTrader:
                 else:
                     signal = "neutral"
                 
+                # Cast out of numpy scalars: these values end up in the
+                # LangGraph checkpoint, which serialises with msgpack and
+                # cannot encode numpy.float64.
                 signals[name] = {
                     'signal': signal,
-                    'price': current['close'],
-                    'ema_20': current['ema_20'],
-                    'ema_50': current['ema_50']
+                    'price': float(current['close']),
+                    'ema_20': float(current['ema_20']),
+                    'ema_50': float(current['ema_50'])
                 }
             
             # Calculate confluence score
@@ -513,5 +516,9 @@ class AdvancedTrader:
             return {
                 'timeframes': signals,
                 'overall_signal': overall,
-                'confluence_score': (bullish_count - bearish_count) / len(signals) if signals else 0
+                'bullish_count': int(bullish_count),
+                'bearish_count': int(bearish_count),
+                'confluence_score': float(
+                    (bullish_count - bearish_count) / len(signals)
+                ) if signals else 0.0,
             }

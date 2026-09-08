@@ -1,0 +1,96 @@
+name: ClawGold
+
+# Scoped to the clawgold/ subtree so it stays out of the way of the
+# Tirelo Services workflows in this same repository.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'clawgold/**'
+      - '.github/workflows/clawgold.yml'
+  pull_request:
+    paths:
+      - 'clawgold/**'
+      - '.github/workflows/clawgold.yml'
+
+defaults:
+  run:
+    working-directory: clawgold
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: clawgold/requirements-dev.txt
+
+      - name: Install dependencies
+        # requirements-dev.txt omits MetaTrader5, which is Windows-only and
+        # cannot install here. The paper broker covers execution instead.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Verify the system imports without MetaTrader5
+        # Guards the regression this abstraction exists to prevent: a
+        # module-level `import MetaTrader5` makes the whole system
+        # unimportable on Linux.
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'scripts')
+          import broker, instrument, mt5_manager, risk_manager
+          import advanced_trader, claw_gold, trading_graph, orchestrator
+          assert 'MetaTrader5' not in sys.modules, 'MetaTrader5 was imported eagerly'
+          print('all modules import cleanly on Linux')
+          "
+
+      - name: Confirm the shipped config does not trade live
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'scripts')
+          import yaml
+          from broker import resolve_mode
+          cfg = yaml.safe_load(open('config.yaml'))
+          assert resolve_mode(cfg) == 'paper', 'config.yaml would trade live'
+          assert not cfg['mt5']['login'], 'an MT5 login is committed'
+          assert cfg['telegram']['chat_id'] == '', 'a Telegram chat_id is committed'
+          assert not any(cfg['signal_service']['channels'].values()), 'signal channel IDs are committed'
+          print('config defaults are safe')
+          "
+
+      - name: Run tests
+        # run_tests.py loads modules by path. Plain `unittest discover -s test`
+        # can pick up CPython's own stdlib `test` package instead and report a
+        # pass for a suite that never ran.
+        run: python run_tests.py
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: clawgold/requirements-dev.txt
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Measure coverage of the risk-critical modules
+        run: |
+          python -m coverage run --source=scripts run_tests.py
+          python -m coverage report -m --include='scripts/instrument.py,scripts/broker.py,scripts/risk_manager.py,scripts/trading_graph.py'
