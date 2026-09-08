@@ -194,7 +194,8 @@ manager, pipeline, kill switch and journal are unchanged.
 
 ```bash
 # On the MT5 host (Windows VM, VPS, or macOS under Wine)
-python scripts/mt5_bridge_server.py --token "$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # generate a token
+python scripts/mt5_bridge_server.py --token <that-token>
 
 # From your machine — tunnel rather than exposing the port
 ssh -N -L 8760:127.0.0.1:8760 user@mt5-host
