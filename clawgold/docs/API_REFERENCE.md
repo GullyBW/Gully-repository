@@ -4,6 +4,8 @@ Complete API documentation for ClawGold modules.
 
 ## Table of Contents
 
+- [Broker](#broker)
+- [Instrument](#instrument)
 - [MT5 Manager](#mt5-manager)
 - [Risk Manager](#risk-manager)
 - [Advanced Trader](#advanced-trader)
@@ -11,6 +13,149 @@ Complete API documentation for ClawGold modules.
 - [AI Researcher](#ai-researcher)
 - [Sentiment Analyzer](#sentiment-analyzer)
 - [News Database](#news-database)
+- [Free Mode](#free-mode)
+- [Lifecycle](#lifecycle)
+- [Preflight](#preflight)
+
+---
+
+## Broker
+
+One interface in front of order execution, with three backends selected by
+`trading.mode`.
+
+```python
+from scripts.broker import get_broker, Timeframe
+
+with get_broker(config) as broker:
+    tick = broker.get_tick("XAUUSD")
+    broker.execute_trade("BUY", 0.10, sl=2645.0, tp=2660.0)
+```
+
+| Backend | `trading.mode` | Platform | Real money |
+| ------- | -------------- | -------- | ---------- |
+| `PaperBroker` | `simulation` | Any | No |
+| `MT5Broker` | `real` | Windows only | Yes |
+| `RemoteMT5Broker` | `remote` | Any | Yes |
+
+Every backend implements the same methods, so callers never branch on which
+one they have.
+
+#### Methods
+
+##### `connect() -> None` / `disconnect() -> None`
+
+Open and close the connection. Raises `BrokerError` on failure. Both
+backends are context managers, so `with get_broker(cfg) as b:` is the
+normal form.
+
+##### `get_account_info() -> Optional[Dict]`
+
+`balance`, `equity`, `margin`, `margin_free`, `profit`, `margin_level`,
+`currency`. Note `margin_level` is `0` when no positions are open — that is
+healthy, not a margin call.
+
+##### `get_positions(symbol: Optional[str] = None) -> List[Dict]`
+
+Open positions as dicts: `ticket`, `symbol`, `type` (0 BUY / 1 SELL),
+`volume`, `price_open`, `price_current`, `sl`, `tp`, `profit`, `time`.
+
+##### `get_tick(symbol: str) -> Optional[Dict]`
+
+`bid`, `ask`, `last`, `time`.
+
+##### `get_rates(symbol: str, timeframe: int, count: int) -> Optional[List[Dict]]`
+
+`count` most recent bars, oldest first, each with `time`, `open`, `high`,
+`low`, `close`, `tick_volume`. Use `Timeframe.M15` / `.H1` / `.H4` / `.D1`
+rather than MetaTrader5's own constants — no module needs to import MT5 to
+name a timeframe.
+
+##### `execute_trade(action, volume, symbol=None, sl=None, tp=None, deviation=10) -> Dict`
+
+Send a market order. Returns `{'success': bool, 'ticket': int, 'price':
+float, ...}` or `{'success': False, 'error': str}`.
+
+On `RemoteMT5Broker` a transport failure returns `uncertain: True` as well —
+the order may in fact have been placed, so check positions before retrying.
+
+##### `close_position(ticket: int) -> Dict` / `close_all_positions() -> List[Dict]`
+
+##### `modify_position(ticket, sl=None, tp=None) -> Dict`
+
+#### Module functions
+
+##### `get_broker(config=None, config_path=None) -> Broker`
+
+Build the backend named by `trading.mode`. Raises `BrokerError` when `real`
+is set on a platform where MetaTrader5 cannot exist, naming the remote
+route rather than failing later with an ImportError.
+
+##### `resolve_mode(config=None) -> str`
+
+Normalises `trading.mode` to `'paper'`, `'real'` or `'remote'`. Anything
+unrecognised resolves to `'paper'` — the safe reading of a mistake is "do
+not send real orders".
+
+##### `is_live_mode(mode: str) -> bool`
+
+True for `real` and `remote`. Both reach a real terminal, so every rule
+that applies to real money applies to both.
+
+##### `metatrader5_available() -> bool`
+
+Whether the MetaTrader5 package can be imported on this host.
+
+---
+
+## Instrument
+
+The only place price movement becomes money. For XAUUSD a lot is 100 troy
+ounces, so a $1.00 move is worth $100 per lot.
+
+```python
+from scripts.instrument import money_risk, position_size, required_margin
+
+money_risk("XAUUSD", volume=0.10, price_distance=8.50)        # 85.0
+position_size("XAUUSD", balance=10_000, risk_fraction=0.01,
+              stop_distance=5.00)                              # 0.20 lots
+required_margin("XAUUSD", volume=0.01, price=2650, leverage=500)  # 5.30
+```
+
+##### `money_risk(symbol, volume, price_distance) -> float`
+
+Money at stake if price moves `price_distance` against `volume` lots.
+
+##### `position_size(symbol, balance, risk_fraction, stop_distance) -> float`
+
+Largest volume whose loss at the stop stays within the risk budget, rounded
+**down** to the broker's volume step. Returns `0.0` when the budget cannot
+fund the minimum volume — callers must treat that as "do not trade", never
+as "use the minimum".
+
+##### `required_margin(symbol, volume, price, leverage) -> float`
+
+What the broker holds to open the position. Different question from risk.
+
+##### `max_volume_for_margin(symbol, margin_budget, price, leverage) -> float`
+
+Largest volume whose margin fits the budget. `0.0` when even the minimum
+does not fit.
+
+##### `min_margin_to_trade(symbol, price, leverage) -> float`
+
+Margin for the smallest position the broker accepts. At 1:100 that is
+$26.50 for 0.01 lots of gold at $2650 — which is why a $10 entry needs
+either higher leverage or a micro account.
+
+##### `normalize_volume(symbol, volume) -> float`
+
+Clamp to the broker's step and bounds, rounding down.
+
+##### `apply_config_overrides(config) -> None`
+
+Apply per-broker `instruments:` overrides. Invalid values (a negative
+`min_volume`) are rejected and logged rather than registered.
 
 ---
 
@@ -18,15 +163,24 @@ Complete API documentation for ClawGold modules.
 
 ### MT5Manager
 
-Context manager for MetaTrader 5 operations.
+Compatibility shim that yields the broker selected by `trading.mode`. It no
+longer talks to MetaTrader 5 itself — see [Broker](#broker) for the
+interface it hands you.
 
 ```python
 from scripts.mt5_manager import MT5Manager
 
-with MT5Manager(config_path: Optional[str] = None) as mt5:
-    # Use mt5 instance
-    pass
+# Yields MT5Broker, PaperBroker or RemoteMT5Broker depending on the config
+with MT5Manager(config_path=None, config=None) as broker:
+    account = broker.get_account_info()
 ```
+
+Entering the context in simulation mode no longer raises — the original
+refused anything but `mode: real`, which meant the only way to run the
+system was to point it at a live account.
+
+The methods below are the Broker interface; they are documented in full
+under [Broker](#broker).
 
 #### Methods
 
@@ -165,16 +319,23 @@ rm = RiskManager(config)
 
 #### Methods
 
-##### `can_trade(symbol: str, action: str, volume: float, account_info: dict = None, positions: list = None) -> Tuple[bool, str]`
+##### `can_trade(symbol, action, volume, account_info=None, positions=None, stop_distance=None, daily_pnl=None) -> Tuple[bool, str]`
 
 Check if trade is allowed.
 
 **Parameters:**
 - `symbol` (str): Trading symbol
 - `action` (str): 'BUY' or 'SELL'
-- `volume` (float): Trade volume
+- `volume` (float): Trade volume in lots
 - `account_info` (dict, optional): Current account info
 - `positions` (list, optional): Current positions
+- `stop_distance` (float, optional): Distance to the stop in price units.
+  Defaults to `trading.default_stop_distance`. This is what makes the risk
+  figure real — money at risk is a function of the stop, not of volume
+  alone.
+- `daily_pnl` (float, optional): Realised P&L today. When supplied, the
+  daily loss limit is enforced here rather than only in a separate call an
+  execution path could skip.
 
 **Returns:**
 ```python
@@ -190,15 +351,65 @@ if not can_trade:
 
 ---
 
-##### `calculate_position_size(account_balance: float, stop_loss_pips: float = 50) -> float`
+##### `calculate_position_size(account_balance, stop_distance=None, symbol=None, stop_loss_pips=None, price=None, entry_budget=None) -> float`
 
 Calculate recommended position size.
 
 **Parameters:**
 - `account_balance` (float): Account balance
-- `stop_loss_pips` (float): Stop loss distance
+- `stop_distance` (float, optional): Stop distance in price units
+- `symbol` (str, optional): Defaults to the configured trading symbol
+- `stop_loss_pips` (float, optional): Deprecated alternative to
+  `stop_distance`, converted via the instrument's pip size
+- `price` (float, optional): Needed to apply an entry budget's margin cap
+- `entry_budget` (float, optional): Max margin for this entry. Defaults to
+  `trading.entry_budget`. The final volume is the smaller of what risk
+  allows and what margin affords.
+
+**Returns 0.0** when the budget cannot fund the minimum volume. Treat that
+as "do not trade" — it does not clamp up to the minimum.
 
 **Returns:** Recommended volume in lots
+
+---
+
+##### `entry_feasibility(price, symbol=None, entry_budget=None) -> Dict`
+
+Can a position be opened at all, given the entry budget? Small accounts
+fail on margin long before they fail on risk, and that is a hard broker
+constraint rather than something sizing can work around.
+
+**Returns:**
+```python
+{
+    'feasible': bool,      # can anything be opened
+    'budget': float,       # the margin cap applied
+    'min_volume': float,   # the broker's smallest position
+    'min_margin': float,   # margin that smallest position needs
+    'volume': float,       # largest volume the budget affords
+    'shortfall': float,    # extra margin needed (0 when feasible)
+    'leverage': float, 'price': float, 'symbol': str,
+    'reason': str,         # plain-language explanation
+}
+```
+
+**Example:**
+```python
+check = rm.entry_feasibility(price=2650.0)
+if not check['feasible']:
+    print(check['reason'])
+    # $10.00 cannot open the smallest XAUUSD position. The broker minimum
+    # is 0.01 lots, which needs $26.50 margin at 1:100 — $16.50 more than
+    # the budget. Options: raise the entry budget, use higher leverage, or
+    # a broker offering a smaller minimum volume.
+```
+
+---
+
+##### `check_daily_loss(daily_pnl: float) -> Tuple[bool, str]`
+
+Whether the daily loss limit still permits trading. Also enforced inside
+`can_trade` when `daily_pnl` is supplied, so no execution path can skip it.
 
 ---
 
@@ -599,6 +810,132 @@ config = load_config('config.yaml')
     }
 }
 ```
+
+---
+
+## Free Mode
+
+Gates the one code path that can incur a charge.
+
+```python
+from scripts.free_mode import FreeMode
+
+free = FreeMode.from_config(config)
+free.assert_no_paid_services()   # raises PaidServiceError in strict mode
+```
+
+##### `FreeMode.from_config(config) -> FreeMode`
+
+Reads `free_mode:` — `enabled`, `allow_paid_llm_fallback`,
+`skip_ai_research`, `strict`.
+
+##### `permits_paid_llm() -> bool`
+
+Whether a billed LiteLLM call may be made. False in free mode unless
+`allow_paid_llm_fallback` is set.
+
+##### `detect_paid_services() -> List[str]`
+
+Billable services that appear configured (OpenAI/Anthropic/Gemini keys,
+Langfuse cloud). Presence of a key is not proof of spending, so this
+reports rather than assumes.
+
+##### `assert_no_paid_services() -> None`
+
+In strict free mode, raises `PaidServiceError` when a paid key is present —
+failing before a run rather than after a bill.
+
+##### `describe() -> str`
+
+One-line summary for startup logs.
+
+---
+
+## Lifecycle
+
+```python
+from scripts.lifecycle import KillSwitch, GracefulShutdown
+
+switch = KillSwitch.from_config(config)
+if switch.engaged:
+    return                       # take no new entries
+
+with GracefulShutdown() as shutdown:
+    while not shutdown.requested:
+        do_one_cycle()
+        if shutdown.wait(interval):
+            break
+```
+
+### KillSwitch
+
+A file whose presence halts new entries. The file is the interface on
+purpose: it works when the process is unresponsive, over SSH, from another
+container sharing the volume, and it survives a restart.
+
+##### `engaged -> bool`
+
+##### `engage(reason: str = "") -> None`
+
+Writes the file with a timestamp, reason and PID, so whoever finds it later
+knows why.
+
+##### `release() -> bool`
+
+Returns True if a switch was actually cleared.
+
+##### `describe() -> str`
+
+State plus the recorded reason.
+
+**It stops new entries; it does not close open positions.** Closing is a
+trading decision, not a safety default.
+
+### GracefulShutdown
+
+##### `requested -> bool`
+
+##### `wait(timeout: float) -> bool`
+
+Sleep, but wake immediately on shutdown. Use this instead of `time.sleep`
+in a service loop, so a container stop does not wait out the interval.
+
+##### `on_shutdown(handler)` 
+
+Register a cleanup handler; usable as a decorator. Handlers run once, in
+order, and a handler that raises is logged without stopping the others.
+
+##### `entries_permitted(config=None, shutdown=None) -> (bool, str)`
+
+Combined gate: kill switch plus shutdown state.
+
+---
+
+## Preflight
+
+```python
+from scripts.preflight import run_preflight
+
+report = run_preflight(strict=False, live_check=False)
+print(report.render())
+if not report.ok:
+    sys.exit(1)
+```
+
+##### `run_preflight(strict=False, live_check=False) -> PreflightReport`
+
+Runs every readiness check. `strict` makes warnings disqualifying;
+`live_check` adds the live-trading checks (implied when the mode is already
+live).
+
+##### `PreflightReport.ok -> bool`
+
+##### `PreflightReport.failures` / `.warnings -> List[Check]`
+
+##### `PreflightReport.render() -> str`
+
+Each `Check` carries `name`, `status` (`PASS` / `WARN` / `FAIL`), `detail`
+and, for anything non-passing, a `remedy`.
 
 ---
 
