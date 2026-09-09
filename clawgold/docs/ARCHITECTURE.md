@@ -86,7 +86,7 @@ One `Broker` interface, three backends, chosen by `trading.mode`.
 | Backend | Mode | Platform | Real money |
 | ------- | ---- | -------- | ---------- |
 | `PaperBroker` | `simulation` | Any | No |
-| `MT5Broker` | `real` | Windows only | Yes |
+| `MT5Broker` | `real` | Windows, macOS | Yes |
 | `RemoteMT5Broker` | `remote` | Any | Yes |
 
 **Responsibilities:**
@@ -430,7 +430,7 @@ articles = news_db.get_recent_news(symbol)
 | Mode | Platform | Needs |
 | ---- | -------- | ----- |
 | `simulation` | any (macOS, Linux, Windows, Docker) | Python 3.10+, `requirements-dev.txt` |
-| `real` | Windows only | `requirements.txt` (includes MetaTrader5), a running MT5 terminal |
+| `real` | Windows, macOS | `requirements.txt` (MetaTrader5 on Windows, mt5-mac on macOS), a running MT5 terminal |
 | `remote` | any | `requirements-dev.txt` here; a bridge host running the terminal |
 
 - Python 3.10+

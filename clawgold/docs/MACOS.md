@@ -2,11 +2,9 @@
 
 ## The honest starting point
 
-**The `MetaTrader5` Python package cannot be made macOS-compatible.** This
-is not a limitation of ClawGold, and it is not something a patch can fix.
-
-Checking PyPI for the current release, 5.0.4803, every published wheel is
-Windows-only:
+**The `MetaTrader5` package itself is Windows-only, and no patch changes
+that.** Checking PyPI for release 5.0.4803, every published wheel is
+`win_amd64`:
 
 ```
 MetaTrader5-5.0.4803-cp310-cp310-win_amd64.whl
@@ -16,24 +14,50 @@ MetaTrader5-5.0.4803-cp313-cp313-win_amd64.whl
 ...
 ```
 
-No `macosx_*`, no `manylinux_*`. The metadata says `Platform: Windows`.
+No `macosx_*`, no `manylinux_*`. The metadata says `Platform: Windows`. The
+package is a thin closed-source binary that talks to a running Windows MT5
+terminal over local Windows IPC; there is no source to recompile.
 
-That is because the package is not really a library — it is a thin
-closed-source binary that talks to a running Windows MT5 terminal over
-local Windows IPC. There is no source to recompile and no cross-platform
-build to enable. Only MetaQuotes could publish one, and they have not.
+**But that does not mean a Mac cannot trade live.** MetaQuotes ships an
+official macOS build of the *terminal*, which is the Windows terminal running
+inside a bundled Wine (CrossOver) wrapper. That wrapper contains a working
+Windows environment — so the official `MetaTrader5` package can run *inside
+it*, on your Mac, with no second machine.
 
-**So `pip install MetaTrader5` on a Mac will always fail.** Anything
-claiming otherwise is either a different package or a wrapper around the
-approach below.
+That is what [`mt5-mac`](https://pypi.org/project/mt5-mac/) does, and ClawGold
+supports it as a first-class backend.
 
-## What you can do instead
+```
+        macOS, one machine
+┌──────────────────────────────────────────────┐
+│ ClawGold                                      │
+│   import mt5_mac as mt5                       │
+│              │ JSON over stdin/stdout         │
+│              ▼                                │
+│ Wine subprocess (inside MetaTrader 5.app)     │
+│   Windows Python 3.9                          │
+│   import MetaTrader5   ← the official package │
+│              │                                │
+│              ▼                                │
+│ terminal64.exe ──▶ your broker                │
+└──────────────────────────────────────────────┘
+```
 
-Run the terminal where it works, and reach it from your Mac.
+So the order path is the real one: real terminal, real MT5 API, real broker.
 
-ClawGold ships this as a first-class backend. `RemoteMT5Broker` implements
-exactly the same `Broker` interface as the local one, so the risk manager,
-the pipeline, the kill switch and the journal cannot tell the difference.
+## Your three options
+
+| Option | Live? | Needs a second machine? | Mode |
+|---|---|---|---|
+| **A** — paper trading | No | No | `simulation` |
+| **B** — mt5-mac, on the Mac | Yes | **No** | `real` |
+| **C** — bridge to another host | Yes | Yes | `remote` |
+
+B is usually what you want on a Mac. C still earns its place: an always-on VPS
+keeps trading when your laptop sleeps, and it is the only route on Linux.
+
+Every option goes through the same `Broker` interface, so the risk manager,
+the pipeline, the kill switch and the journal cannot tell them apart.
 
 ```
    Your Mac                         MT5 host (Windows VM / VPS / Wine)
@@ -55,20 +79,91 @@ If you are developing, backtesting, or evaluating the strategy, you do not
 need MT5 at all. This works on macOS today with no account and no bridge:
 
 ```bash
-pip install -r requirements-dev.txt   # note: -dev, not requirements.txt
+pip install -r requirements-dev.txt   # no MT5 of any kind
 python claw.py preflight
 python claw.py graph run
 ```
 
-`requirements-dev.txt` exists precisely because `requirements.txt` pins
-`MetaTrader5` and therefore cannot install on a Mac.
+`requirements-dev.txt` installs no MT5 package at all, which is what CI and
+the Linux container use. `requirements.txt` also installs cleanly on a Mac —
+its environment markers skip `MetaTrader5` and pull `mt5-mac` instead — so use
+that one if you intend to trade live later.
 
 Given the strategy's edge is unmeasured (`docs/STRATEGY_REVIEW.md`), this
 is where most of the useful work happens anyway.
 
 ---
 
-## Option B — Live trading via the bridge
+## Option B — Live trading on the Mac itself, with mt5-mac
+
+### 1. Install
+
+```bash
+# Install MetaTrader 5 for macOS from metatrader5.com into /Applications first.
+pip install -r requirements.txt     # mt5-mac installs automatically on macOS
+```
+
+`requirements.txt` carries environment markers, so `MetaTrader5` is skipped on
+macOS and `mt5-mac` is skipped everywhere else. The same file works on all
+three platforms.
+
+On the **first** `connect()`, mt5-mac provisions a Windows Python 3.9 and the
+official `MetaTrader5` package inside MetaTrader 5.app's bundled Wine — about
+an 8 MB download, once. Launch MetaTrader 5.app manually and let it finish
+loading before the first run.
+
+### 2. Configure
+
+In `.env`:
+
+```bash
+TRADING_MODE=real
+MT5_LOGIN=12345678
+MT5_PASSWORD=your_password
+MT5_SERVER=YourBroker-Server
+LEVERAGE=<your account's actual leverage>
+```
+
+### 3. Verify before trusting it
+
+```bash
+python claw.py preflight --live     # reports the mt5-mac package explicitly
+python claw.py balance
+python claw.py entry-check
+```
+
+### What ClawGold normalises for you
+
+mt5-mac is close to a drop-in for `MetaTrader5`, but not one. Three
+differences matter, and every one lands somewhere that costs money, so
+`scripts/broker.py` reconciles them rather than leaving them to chance:
+
+| Difference | Unhandled consequence |
+|---|---|
+| Success code is `RES_E_SUCCESS`, not `TRADE_RETCODE_DONE` (both 10009) | `AttributeError` raised *after* an order is sent, while deciding whether it filled |
+| `copy_rates_*` returns `MqlRates` NamedTuples, not numpy structured rows | `row["close"]` raises `TypeError` — all market data fails |
+| Symbol specs expose `contract_size`, not `trade_contract_size` | **Silent**: sizing falls back to the built-in default contract size |
+
+The third is the dangerous one, because nothing raises. `test/test_mt5_mac_compat.py`
+pins all three against rows shaped like the real package's.
+
+### Known limits
+
+- **`last_error()` always returns 0** in mt5-mac 0.3.0, so MT5's own error
+  codes are not available. Failure messages are correspondingly vaguer than on
+  Windows.
+- **Your Mac must stay awake.** Trading stops when it sleeps. For unattended
+  running, use Option C against a VPS.
+- **`mt5-mac` is third-party and at 0.3.0** — beta, MIT-licensed, not a
+  MetaQuotes product. Run it in `simulation` first, then on a demo account,
+  before a funded one.
+- Timeframe constants differ from MetaTrader5's (minute counts vs MetaQuotes'
+  encoding). ClawGold maps them per backend, so this is only a concern if you
+  call the package directly.
+
+---
+
+## Option C — Live trading via the bridge
 
 ### 1. Choose where the terminal runs
 
@@ -217,8 +312,9 @@ curl http://127.0.0.1:8760/health
 python claw.py preflight --live
 ```
 
-| Mode | Broker | Platform | Real money |
-|---|---|---|---|
-| `simulation` | PaperBroker | Any | No |
-| `real` | MT5Broker | Windows only | Yes |
-| `remote` | RemoteMT5Broker | Any | Yes |
+| Mode | Broker | Platform | MT5 package used | Real money |
+|---|---|---|---|---|
+| `simulation` | PaperBroker | Any | none | No |
+| `real` | MT5Broker | Windows | `MetaTrader5` | Yes |
+| `real` | MT5Broker | macOS | `mt5-mac` (wraps `MetaTrader5` in Wine) | Yes |
+| `remote` | RemoteMT5Broker | Any | none locally | Yes |

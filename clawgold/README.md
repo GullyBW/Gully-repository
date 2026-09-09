@@ -207,16 +207,21 @@ cd ClawGold
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Linux/macOS, or anywhere you are not trading live:
+# Anywhere you are not trading live (and the only option on Linux):
 pip install -r requirements-dev.txt
 
-# Windows, for live MT5 trading (adds the MetaTrader5 package):
+# Windows or macOS, for live MT5 trading:
 pip install -r requirements.txt
 ```
 
-`requirements.txt` pins `MetaTrader5`, which is Windows-only and cannot be
-installed elsewhere. `requirements-dev.txt` is everything else, which is
-enough to run the whole system against the paper broker.
+`requirements.txt` uses environment markers to install the right broker
+package per platform: `MetaTrader5` on Windows, and `mt5-mac` on macOS, which
+drives that same official package inside the Wine runtime bundled in
+MetaTrader 5.app. Linux gets neither — trade live from Linux through the
+bridge (`mode: remote`). `requirements-dev.txt` installs no broker package at
+all, which is enough to run the whole system against the paper broker.
+
+See [`docs/MACOS.md`](docs/MACOS.md) for the macOS routes and their limits.
 
 3. Configure MT5 credentials in `.env`
 

@@ -219,15 +219,23 @@ def refresh_from_broker(symbol: str, symbol_info: object) -> ContractSpec:
     """
     base = get_spec(symbol)
 
-    def pick(attr: str, default: float) -> float:
-        value = getattr(symbol_info, attr, None)
-        return float(value) if value else default
+    def pick(attr, default: float) -> float:
+        # MetaTrader5 and mt5-mac disagree on some names (notably
+        # trade_contract_size vs contract_size), so accept either. Getting
+        # this wrong is silent: the default would stand and every position
+        # would be sized against the wrong contract.
+        names = (attr,) if isinstance(attr, str) else attr
+        for name in names:
+            value = getattr(symbol_info, name, None)
+            if value:
+                return float(value)
+        return default
 
     digits = int(pick("digits", base.digits))
     point = pick("point", base.point)
     spec = ContractSpec(
         symbol=symbol.upper(),
-        contract_size=pick("trade_contract_size", base.contract_size),
+        contract_size=pick(("trade_contract_size", "contract_size"), base.contract_size),
         point=point,
         # A 3-digit gold quote makes a pip 10 points; a 2-digit quote makes
         # the point and the pip the same thing.

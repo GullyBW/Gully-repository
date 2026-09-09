@@ -108,6 +108,94 @@ class BrokerError(RuntimeError):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The MT5 API, per platform
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# MetaQuotes publishes win_amd64 wheels only. On macOS the `mt5-mac` package
+# fills the gap, and it does so honestly: it runs the *official* MetaTrader5
+# package under the Wine runtime already bundled inside MetaTrader 5.app, and
+# talks to it as a JSON-over-stdio subprocess. So the terminal, the broker
+# connection and the order semantics are the real ones.
+#
+# It is close to a drop-in, but not one. Three differences bite, and every one
+# of them lands somewhere that costs money, so they are normalised below rather
+# than left for a caller to trip over:
+#
+#   1. The success retcode is `RES_E_SUCCESS`, not `TRADE_RETCODE_DONE`
+#      (both 10009). Unnormalised this is an AttributeError raised *after* an
+#      order has been sent, while deciding whether it worked.
+#   2. `copy_rates_*` returns MqlRates NamedTuples; MetaTrader5 returns numpy
+#      structured rows. `row["close"]` raises TypeError on the former.
+#   3. Symbol specs expose `contract_size`, not `trade_contract_size`. This one
+#      fails silently — a getattr miss falls back to a hard-coded default, so
+#      position sizing would quietly use the wrong contract size.
+
+
+def import_mt5_module():
+    """
+    Import the MT5 API appropriate to this platform.
+
+    Deliberately not done at module scope: importing MetaTrader5 eagerly is
+    what made this system unimportable on Linux and in the container, and CI
+    asserts that it stays lazy.
+    """
+    if sys.platform == "darwin":
+        import mt5_mac as mt5          # macOS: official MT5 under bundled Wine
+    else:
+        import MetaTrader5 as mt5      # noqa: N813  (vendor's own casing)
+    return mt5
+
+
+def mt5_flavour() -> str:
+    """Which package `import_mt5_module` will reach for on this host."""
+    return "mt5-mac" if sys.platform == "darwin" else "MetaTrader5"
+
+
+def retcode_done(mt5) -> int:
+    """
+    The 'order completed' retcode, under whichever name this package uses.
+
+    Never guessed: a wrong constant here reads a rejected order as filled.
+    """
+    for name in ("TRADE_RETCODE_DONE", "RES_E_SUCCESS"):
+        code = getattr(mt5, name, None)
+        if code is not None:
+            return int(code)
+    raise BrokerError(
+        f"{mt5_flavour()} exposes neither TRADE_RETCODE_DONE nor RES_E_SUCCESS, "
+        "so an order result cannot be interpreted. Refusing to trade against an "
+        "API this code does not understand."
+    )
+
+
+def rate_field(row, name: str):
+    """
+    Read one field from a rate row, whichever shape the package returns.
+
+    MetaTrader5 gives numpy structured rows (``row["close"]``); mt5-mac gives
+    MqlRates NamedTuples (``row.close``).
+    """
+    try:
+        return row[name]
+    except (TypeError, IndexError, KeyError):
+        try:
+            return getattr(row, name)
+        except AttributeError as exc:
+            raise BrokerError(
+                f"Rate row from {mt5_flavour()} has no field {name!r}."
+            ) from exc
+
+
+def spec_field(symbol_info, names, default):
+    """First present attribute among ``names``, else ``default``."""
+    for name in names:
+        value = getattr(symbol_info, name, None)
+        if value:
+            return value
+    return default
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Interface
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -198,13 +286,28 @@ class MT5Broker(Broker):
         self.connected = False
         self._mt5 = None
         self._tf_map: Dict[int, int] = {}
+        # Resolved against the live package in connect(); 10009 is the
+        # MQL5-documented value both packages agree on.
+        self._retcode_done = 10009
 
     # -- lifecycle ----------------------------------------------------------
 
     def connect(self) -> None:
         try:
-            import MetaTrader5 as mt5  # noqa: N813  (vendor's own casing)
+            mt5 = import_mt5_module()
         except ImportError as exc:
+            if sys.platform == "darwin":
+                raise BrokerError(
+                    "mt5-mac is not installed, so MetaTrader 5 cannot be "
+                    "reached on this Mac.\n\n"
+                    "  pip install mt5-mac\n\n"
+                    "It also needs MetaTrader 5.app in /Applications; on first "
+                    "connect it provisions a Windows Python inside that app's "
+                    "bundled Wine (~8 MB, once).\n\n"
+                    "Alternatives: trading.mode = 'remote' to reach a terminal "
+                    "on another host, or 'simulation' for the paper broker. "
+                    "See docs/MACOS.md."
+                ) from exc
             raise BrokerError(
                 f"MetaTrader5 is not installed and cannot be, on this platform "
                 f"({sys.platform}): MetaQuotes publishes Windows-only wheels.\n\n"
@@ -216,6 +319,7 @@ class MT5Broker(Broker):
             ) from exc
 
         self._mt5 = mt5
+        self._retcode_done = retcode_done(mt5)
         self._tf_map = {
             Timeframe.M1: mt5.TIMEFRAME_M1,
             Timeframe.M5: mt5.TIMEFRAME_M5,
@@ -324,12 +428,12 @@ class MT5Broker(Broker):
             return None
         return [
             {
-                "time": int(r["time"]),
-                "open": float(r["open"]),
-                "high": float(r["high"]),
-                "low": float(r["low"]),
-                "close": float(r["close"]),
-                "tick_volume": int(r["tick_volume"]),
+                "time": int(rate_field(r, "time")),
+                "open": float(rate_field(r, "open")),
+                "high": float(rate_field(r, "high")),
+                "low": float(rate_field(r, "low")),
+                "close": float(rate_field(r, "close")),
+                "tick_volume": int(rate_field(r, "tick_volume")),
             }
             for r in rates
         ]
@@ -380,7 +484,7 @@ class MT5Broker(Broker):
             error = mt5.last_error()
             logger.error("Order failed: %s", error)
             return {"success": False, "error": str(error)}
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
+        if result.retcode != self._retcode_done:
             logger.error("Order rejected with retcode %s", result.retcode)
             return {"success": False, "error": f"Retcode: {result.retcode}"}
 
@@ -426,7 +530,7 @@ class MT5Broker(Broker):
             "type_filling": mt5.ORDER_FILLING_IOC,
         })
 
-        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        if result is None or result.retcode != self._retcode_done:
             code = result.retcode if result else mt5.last_error()
             return {"success": False, "error": f"Close failed: {code}", "ticket": ticket}
         return {"success": True, "ticket": ticket, "price": price, "profit": position.profit}
@@ -446,7 +550,7 @@ class MT5Broker(Broker):
             "sl": sl if sl is not None else position.sl,
             "tp": tp if tp is not None else position.tp,
         })
-        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        if result is None or result.retcode != self._retcode_done:
             code = result.retcode if result else mt5.last_error()
             return {"success": False, "error": f"Modify failed: {code}", "ticket": ticket}
         return {"success": True, "ticket": ticket, "sl": sl, "tp": tp}
@@ -1021,9 +1125,14 @@ def is_live_mode(mode: str) -> bool:
 
 
 def metatrader5_available() -> bool:
-    """Whether the MetaTrader5 package can be imported on this host."""
+    """
+    Whether an MT5 API can be imported on this host.
+
+    On macOS that means mt5-mac, which drives the official package inside
+    MetaTrader 5.app's bundled Wine; everywhere else, MetaTrader5 itself.
+    """
     try:
-        import MetaTrader5  # noqa: F401
+        import_mt5_module()
         return True
     except ImportError:
         return False
@@ -1051,13 +1160,24 @@ def get_broker(config: Optional[Dict[str, Any]] = None,
 
     if mode == "real":
         if not metatrader5_available():
+            if sys.platform == "darwin":
+                raise BrokerError(
+                    "trading.mode is 'real' but mt5-mac is not installed, so "
+                    "MetaTrader 5 cannot be reached on this Mac.\n\n"
+                    "  pip install mt5-mac\n\n"
+                    "It needs MetaTrader 5.app installed in /Applications and "
+                    "drives it through that app's bundled Wine runtime.\n\n"
+                    "Or set trading.mode to 'remote' to reach a terminal on "
+                    "another host, or 'simulation' for the paper broker. "
+                    "See docs/MACOS.md."
+                )
             raise BrokerError(
                 f"trading.mode is 'real' but the MetaTrader5 package is not "
                 f"available on this platform ({sys.platform}). MetaQuotes "
                 "publishes Windows-only wheels, so there is nothing to install "
                 "here.\n\n"
-                "To trade live from macOS or Linux, run the terminal where it "
-                "works and set trading.mode to 'remote':\n"
+                "To trade live from Linux, run the terminal where it works and "
+                "set trading.mode to 'remote':\n"
                 "  1. On a Windows host (or macOS under Wine), start:\n"
                 "       python scripts/mt5_bridge_server.py --token <secret>\n"
                 "  2. Here, set mt5.bridge.url and mt5.bridge.token.\n"

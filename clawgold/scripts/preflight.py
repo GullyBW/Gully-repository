@@ -512,15 +512,29 @@ def _check_live_readiness(report: PreflightReport, config: Dict[str, Any],
                    "not needed here — the bridge host runs it")
         return
 
+    from broker import import_mt5_module, mt5_flavour
+
+    flavour = mt5_flavour()
     try:
-        import MetaTrader5  # noqa: F401
-        report.add("Live: MetaTrader5 package", PASS, "importable")
+        import_mt5_module()
+        detail = "importable"
+        if sys.platform == "darwin":
+            detail += " — drives MetaTrader 5.app's bundled Wine runtime"
+        report.add(f"Live: {flavour} package", PASS, detail)
     except ImportError:
-        report.add(
-            "Live: MetaTrader5 package", FAIL,
-            f"not installable on {sys.platform} — MetaQuotes ships Windows-only wheels",
-            "Use trading.mode = 'remote' with scripts/mt5_bridge_server.py on a "
-            "Windows host or macOS under Wine. See docs/MACOS.md.")
+        if sys.platform == "darwin":
+            report.add(
+                f"Live: {flavour} package", FAIL,
+                "not installed",
+                "pip install mt5-mac, and install MetaTrader 5.app in "
+                "/Applications. First connect provisions a Windows Python "
+                "inside its bundled Wine (~8 MB). See docs/MACOS.md.")
+        else:
+            report.add(
+                f"Live: {flavour} package", FAIL,
+                f"not installable on {sys.platform} — MetaQuotes ships Windows-only wheels",
+                "Use trading.mode = 'remote' with scripts/mt5_bridge_server.py on a "
+                "Windows host or macOS under Wine. See docs/MACOS.md.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

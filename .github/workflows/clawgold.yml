@@ -53,8 +53,21 @@ jobs:
           import broker, instrument, mt5_manager, risk_manager
           import advanced_trader, claw_gold, trading_graph, orchestrator
           assert 'MetaTrader5' not in sys.modules, 'MetaTrader5 was imported eagerly'
+          assert 'mt5_mac' not in sys.modules, 'mt5_mac was imported eagerly'
           print('all modules import cleanly on Linux')
           "
+
+      - name: Platform-aware MT5 import resolves correctly
+        # macOS reaches for mt5-mac (which drives the official MetaTrader5
+        # package inside MetaTrader 5.app's bundled Wine); every other
+        # platform reaches for MetaTrader5 itself. Getting this backwards
+        # would make Linux silently import a macOS-only package.
+        run: python test/check_platform_selection.py
+
+      - name: requirements.txt is installable on every platform
+        # The markers are what let one requirements file serve Windows,
+        # macOS and Linux. A malformed marker fails only at install time.
+        run: python test/check_requirement_markers.py
 
       - name: Confirm the shipped config does not trade live
         run: |

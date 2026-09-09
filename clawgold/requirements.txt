@@ -2,7 +2,11 @@ yfinance
 pandas
 numpy
 requests
-MetaTrader5
+# MetaTrader5 ships win_amd64 wheels only. On macOS, mt5-mac drives that
+# same official package inside the Wine runtime bundled in MetaTrader 5.app.
+# The markers keep this file installable on all three platforms.
+MetaTrader5; sys_platform == "win32"
+mt5-mac; sys_platform == "darwin"
 PyYAML
 pandas-ta
 backtrader

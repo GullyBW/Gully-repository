@@ -35,7 +35,7 @@ with get_broker(config) as broker:
 | Backend | `trading.mode` | Platform | Real money |
 | ------- | -------------- | -------- | ---------- |
 | `PaperBroker` | `simulation` | Any | No |
-| `MT5Broker` | `real` | Windows only | Yes |
+| `MT5Broker` | `real` | Windows, macOS | Yes |
 | `RemoteMT5Broker` | `remote` | Any | Yes |
 
 Every backend implements the same methods, so callers never branch on which

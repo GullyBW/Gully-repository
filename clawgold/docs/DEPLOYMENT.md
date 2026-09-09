@@ -7,14 +7,18 @@ when something goes wrong.
 package is Windows-only and is deliberately excluded. Docker gets you
 research, signals, backtesting and paper trading directly.
 
-For live execution you have two routes:
+For live execution you have three routes:
 
-- **`mode: real`** — run ClawGold on Windows, alongside the terminal.
+- **`mode: real` on Windows** — run ClawGold alongside the terminal, using
+  the `MetaTrader5` package.
+- **`mode: real` on macOS** — run ClawGold on the Mac, using `mt5-mac`,
+  which drives the official `MetaTrader5` package inside the Wine runtime
+  bundled in MetaTrader 5.app. No second machine. See [`MACOS.md`](MACOS.md).
 - **`mode: remote`** — run ClawGold anywhere (macOS, Linux, Docker) and
-  reach a terminal on another host through `mt5_bridge_server.py`. This is
-  how a Mac trades live; see [`MACOS.md`](MACOS.md).
+  reach a terminal on another host through `mt5_bridge_server.py`. Still the
+  only route on Linux, and the right one for unattended 24/7 running.
 
-Both are covered below.
+All three are covered below.
 
 ---
 
@@ -187,7 +191,28 @@ For an unattended service, use NSSM or Task Scheduler. Set
 `TRADE_AUTO_APPROVE=false` to keep the human approval gate — with it
 `true`, orders are placed with no human in the loop.
 
-### 3b. ClawGold on macOS or Linux, terminal elsewhere (`mode: remote`)
+### 3b. ClawGold on macOS, terminal on the same Mac (`mode: real`)
+
+```bash
+# MetaTrader 5.app must be installed in /Applications.
+pip install -r requirements.txt      # pulls mt5-mac on macOS
+
+# .env here
+#   TRADING_MODE=real
+#   MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
+#   LEVERAGE=<your account's actual leverage>
+
+python claw.py preflight --live
+python claw.py balance
+```
+
+The first connect provisions a Windows Python inside MetaTrader 5.app's
+bundled Wine (~8 MB, once). The Mac must stay awake to keep trading — for
+unattended running use the bridge route below against a VPS. The go-live
+checklist above applies unchanged, and `docs/MACOS.md` lists the API
+differences ClawGold normalises and mt5-mac's known limits.
+
+### 3c. ClawGold on macOS or Linux, terminal elsewhere (`mode: remote`)
 
 `RemoteMT5Broker` implements the same `Broker` interface, so the risk
 manager, pipeline, kill switch and journal are unchanged.
@@ -317,7 +342,7 @@ which is how you configure a container without rebuilding it.
 
 | Variable | Meaning |
 |---|---|
-| `TRADING_MODE` | `simulation` (default) or `real` |
+| `TRADING_MODE` | `simulation` (default), `real`, or `remote` |
 | `ENTRY_BUDGET` | Max margin per entry; 0 disables the cap |
 | `LEVERAGE` | Account leverage, for margin arithmetic |
 | `RISK_PER_TRADE` | Fraction of balance risked per trade |

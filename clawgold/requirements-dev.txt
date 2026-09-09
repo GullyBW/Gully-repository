@@ -1,11 +1,11 @@
 # Linux-installable dependency set for development and CI.
 #
-# requirements.txt pins MetaTrader5, which is a Windows-only package: pip
-# cannot install it on Linux or macOS, so `pip install -r requirements.txt`
-# fails outright on a CI runner. This file carries everything except that,
-# which is enough to run the whole system against the paper broker.
+# requirements.txt installs an MT5 package on Windows (MetaTrader5) and on
+# macOS (mt5-mac). Neither exists for Linux, and CI needs no broker package
+# at all, so this file carries everything except those — enough to run the
+# whole system against the paper broker.
 #
-# Live trading still needs requirements.txt on Windows.
+# Live trading needs requirements.txt, on Windows or macOS.
 
 # --- core ---
 PyYAML
@@ -28,3 +28,6 @@ yfinance
 
 # --- test tooling ---
 coverage
+# Used by test/check_requirement_markers.py to evaluate the environment
+# markers in requirements.txt without installing anything.
+packaging

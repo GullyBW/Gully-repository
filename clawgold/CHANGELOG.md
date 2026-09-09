@@ -5,6 +5,56 @@ All notable changes to ClawGold will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-09-09
+
+### Added — live MT5 trading on macOS itself, via mt5-mac
+
+3.1.0 said a Mac had to reach a terminal on another host. That was too
+strong. MetaQuotes ships an official macOS build of the *terminal*, which is
+the Windows terminal inside a bundled Wine wrapper — and the official
+`MetaTrader5` package runs inside that wrapper. `mt5-mac` (PyPI, MIT, 0.3.0)
+packages exactly that, so a Mac can now trade live on one machine.
+
+- `broker.import_mt5_module()` selects the package by platform: `mt5_mac` on
+  darwin, `MetaTrader5` elsewhere. Still lazy, inside `connect()` — an eager
+  import is what made the system unimportable on Linux, and CI asserts both
+  packages stay unimported at module scope.
+- `requirements.txt` now carries environment markers, so one file serves
+  Windows, macOS and Linux. It installs cleanly on a Mac for the first time.
+- `metatrader5_available()` and preflight are platform-aware; `mode: real` on
+  a Mac without mt5-mac now names the install rather than the bridge.
+
+### Fixed — three ways mt5-mac is not a drop-in
+
+Verified against the installed package, not its README, which claims a full
+API match. Each of these lands somewhere that costs money:
+
+- Success retcode is `RES_E_SUCCESS`, not `TRADE_RETCODE_DONE` (both 10009).
+  Unhandled this is an `AttributeError` raised *after* an order is sent,
+  while deciding whether it filled. `retcode_done()` resolves either name and
+  refuses to trade against an API exposing neither, rather than assuming.
+- `copy_rates_*` returns `MqlRates` NamedTuples, not numpy structured rows,
+  so `row["close"]` raises `TypeError` — every rate fetch. `rate_field()`
+  reads both shapes.
+- Symbol specs expose `contract_size`, not `trade_contract_size`. This one is
+  **silent**: the getattr miss fell back to the built-in default, so every
+  position would have been sized against a possibly-wrong contract size.
+
+`last_error()` always returns 0 in mt5-mac 0.3.0, so MT5 error codes are
+unavailable on macOS. Documented in `docs/MACOS.md` rather than papered over.
+
+### Changed
+
+- `docs/MACOS.md` restructured around three options (paper / mt5-mac / bridge)
+  and corrects 3.1.0's overstatement. The bridge is still the only Linux route
+  and the right choice for unattended 24/7 running, since a sleeping Mac stops
+  trading.
+- `docs/DEPLOYMENT.md`, `README.md`, `ARCHITECTURE.md`, `API_REFERENCE.md`
+  updated: `real` mode is no longer Windows-only.
+- 20 new tests (321 total) in `test/test_mt5_mac_compat.py`, plus two CI
+  checks: platform selection, and that the requirements markers resolve to
+  exactly one broker package per platform.
+
 ## [3.1.0] - 2026-09-08
 
 ### Added — live MT5 trading from macOS and Linux
