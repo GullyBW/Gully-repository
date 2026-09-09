@@ -110,6 +110,13 @@ jobs:
   container:
     name: Container build and checks
     runs-on: ubuntu-latest
+    # This job's shell steps address the repo root, because the Docker
+    # build context is clawgold/ and `docker compose -f` wants a path from
+    # the checkout. The workflow-level `working-directory: clawgold` would
+    # otherwise make every one of those paths resolve to clawgold/clawgold/.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
 
