@@ -246,14 +246,22 @@ def cmd_monitor(args):
 
 def cmd_backtest(args):
     """Run backtest."""
-    print("\n[BACKTEST] Running backtest...")
-    # Import and run backtest
     import backtest
-    backtest.run(
-        symbol=args.symbol,
-        period=args.period,
-        strategy=args.strategy
-    )
+    try:
+        backtest.run(
+            symbol=getattr(args, "symbol", None),
+            timeframe=getattr(args, "timeframe", None),
+            start_date=getattr(args, "start_date", None),
+            end_date=getattr(args, "end_date", None),
+            data_source=getattr(args, "data_source", None),
+            initial_balance=getattr(args, "initial_balance", None),
+            strategy=getattr(args, "strategy", None),
+            period=getattr(args, "period", None),
+            explain=getattr(args, "explain", False),
+        )
+    except backtest.BacktestError as exc:
+        print(f"\n[BACKTEST] Cannot run: {exc}\n", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_validate(args):
@@ -2040,8 +2048,16 @@ AI Agent System (SubAgent):
     
     # backtest command
     backtest_parser = subparsers.add_parser('backtest', help='Run backtest')
-    backtest_parser.add_argument('--symbol', '-s', default='XAUUSD', help='Symbol to backtest')
-    backtest_parser.add_argument('--period', '-p', default='1y', help='Period (e.g., 1m, 3m, 1y)')
+    backtest_parser.add_argument('--symbol', '-s', help='Symbol to backtest')
+    backtest_parser.add_argument('--timeframe', '-t', help='Timeframe, e.g. M15, H1, D1')
+    backtest_parser.add_argument('--start-date', help='Start date, YYYY-MM-DD')
+    backtest_parser.add_argument('--end-date', help='End date, YYYY-MM-DD')
+    backtest_parser.add_argument('--data-source',
+                                 choices=['mt5', 'yfinance', 'paper'],
+                                 help='Where bars come from (default: config.yaml)')
+    backtest_parser.add_argument('--initial-balance', type=float, help='Starting balance')
+    backtest_parser.add_argument('--explain', action='store_true', help='Add AI analysis')
+    backtest_parser.add_argument('--period', '-p', help='Deprecated; use --start-date/--end-date')
     backtest_parser.add_argument('--strategy', choices=['macd', 'ma_crossover'], 
                                   default='macd', help='Strategy to test')
     backtest_parser.set_defaults(func=cmd_backtest)
@@ -2552,7 +2568,16 @@ AI Agent System (SubAgent):
     graph_show = graph_sub.add_parser('show', help='Show graph structure')
     graph_show.set_defaults(func=cmd_graph_show)
 
-    args = parser.parse_args()
+    # `--mode <command>` is an alias for the subcommand of the same name, so
+    # `claw.py --mode backtest --timeframe M15` and `claw.py backtest
+    # --timeframe M15` are the same invocation.
+    argv = sys.argv[1:]
+    if '--mode' in argv:
+        index = argv.index('--mode')
+        if index + 1 < len(argv):
+            mode = argv[index + 1]
+            argv = [mode] + argv[:index] + argv[index + 2:]
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
