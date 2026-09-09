@@ -401,7 +401,8 @@ def _check_writable_paths(report: PreflightReport, config: Dict[str, Any]) -> No
     """Data and logs must be writable or the journal silently disappears."""
     targets = [ROOT / "data", ROOT / "logs"]
 
-    log_file = (config.get("logging", {}) or {}).get("log_file")
+    logging_cfg = config.get("logging", {}) or {}
+    log_file = logging_cfg.get("file_path") or logging_cfg.get("log_file")
     if log_file:
         targets.append((ROOT / log_file).parent)
 

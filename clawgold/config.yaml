@@ -63,6 +63,37 @@ paper:
   leverage:
   seed: 20260101
 
+# Historical backtesting
+#
+# NOTE: `mode: backtest` here selects the backtest data/engine settings. It is
+# NOT trading.mode — broker.resolve_mode() maps "backtest" to the paper broker,
+# so this can never place a real order.
+#
+# data_source:
+#   mt5       - historical rates from a MetaTrader 5 terminal. On macOS this
+#               goes through mt5-mac (the official MetaTrader5 package running
+#               inside MetaTrader 5.app's bundled Wine); on Windows through
+#               MetaTrader5 directly. Requires a running, logged-in terminal.
+#   yfinance  - daily GC=F gold futures. Free, no terminal, but a different
+#               instrument from your broker's XAUUSD, and daily-only.
+#   paper     - deterministic synthetic bars from PaperBroker. Runs anywhere
+#               and proves the pipeline; says nothing about real performance.
+backtest:
+  symbol: "XAUUSD"
+  timeframe: "M15"
+  mode: "backtest"
+  initial_balance: 10000.0
+  start_date: "2026-01-01"
+  end_date: "2026-03-01"
+  data_source: "mt5"
+
+  # Strategy under test. This is the inherited SMA crossover, which is NOT
+  # the strategy trading_graph.py actually trades - see docs/STRATEGY_REVIEW.md.
+  strategy: "ma_crossover"
+  short_period: 10
+  long_period: 20
+  commission: 0.001
+
 # Risk Management Settings
 risk:
   max_positions: 5
@@ -99,7 +130,28 @@ api:
 
 logging:
   enable: true
-  log_file: logs/trades.log
+
+  # Verbosity for both console and file handlers.
+  level: "INFO"
+
+  # "json" emits one JSON object per line — parseable by a log shipper.
+  # "text" emits the human-readable pipe-delimited format.
+  format: "json"
+
+  # Rotation is what stops a chatty failure loop from filling the disk.
+  # At 10 MB x 5 backups the logs occupy at most ~60 MB (current + 5).
+  file_path: logs/clawgold.log
+  max_bytes: 10485760      # 10 MB
+  backup_count: 5
+
+  # true restricts the *file* handler to trade-related records; the console
+  # still shows everything. Useful when the file is an audit trail rather
+  # than a debugging aid.
+  log_trades_only: false
+
+  # Deprecated alias for file_path, still read so existing configs and
+  # deployments keep working. file_path wins when both are set.
+  log_file: logs/clawgold.log
 
 # Telegram Notifications
 # Get bot token from @BotFather on Telegram

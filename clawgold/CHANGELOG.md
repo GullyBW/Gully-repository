@@ -5,6 +5,49 @@ All notable changes to ClawGold will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-09-09
+
+### Fixed — the logs grew without bound
+
+`scripts/logger.py` used a plain `FileHandler` against a date-stamped path.
+That is two disk leaks at once: each file grew unboundedly, and a new one was
+created every day and never pruned. `scripts/rich_logger.py` had the same
+plain handler. Neither read the `logging` block in config.yaml at all.
+
+- Both now use `logging.handlers.RotatingFileHandler` with `maxBytes` and
+  `backupCount` mapped from config.yaml. At the shipped 10 MB x 5 the logs
+  occupy at most ~60 MB.
+- `config.yaml` gains `level`, `format`, `file_path`, `max_bytes`,
+  `backup_count` and `log_trades_only`. `log_file` is kept as a deprecated
+  alias so existing configs and deployments keep working.
+- `format: json` emits one JSON object per line, carrying anything passed via
+  `extra={...}` — parseable by a log shipper. The console stays human-readable.
+- `log_trades_only` restricts the *file* handler to trade records.
+- `claw.py validate` now rejects a non-positive `max_bytes` or `backup_count`,
+  because either silently disables rotation, and an unknown `format`.
+- A logger that cannot open its file no longer stops the process; the console
+  handler still works.
+
+### Added — scripts/clean_runtime_data.py
+
+Prunes what rotation does not cover: `__pycache__`/`.pyc`, orphaned SQLite
+sidecars, test databases, and archived logs past an age threshold (14 days by
+default). `--dry-run` shows without changing.
+
+Built around what it must refuse. It never deletes the log currently being
+written, and the databases holding real state — `clawgold.db` is the trade
+journal — are refused without `--force`. Orphaned `-wal`/`-journal` sidecars
+are removed only when their main database is already gone, since otherwise
+they may hold uncommitted data.
+
+### Changed
+
+- `.gitignore` gains `*.log.*` and `data/*.db`. (Written on their own lines:
+  a trailing comment on a pattern line becomes part of the pattern.)
+- 26 new tests (347 total), including one that writes past the limit and
+  asserts a backup appears and `backupCount` is honoured — configuration is a
+  claim, rotation happening is the behaviour.
+
 ## [3.2.0] - 2026-09-09
 
 ### Added — live MT5 trading on macOS itself, via mt5-mac

@@ -320,8 +320,37 @@ python claw.py perf stats                 # track record
 python claw.py agent metrics              # AI tool success rates
 ```
 
-Logs rotate at 10 MB with 5 files kept (`docker-compose.yml`), so a chatty
-failure loop cannot fill the disk.
+Logs rotate at two levels, so a chatty failure loop cannot fill the disk:
+Docker's json-file driver caps container stdout (`docker-compose.yml`), and
+the application's own file handler is a `RotatingFileHandler` configured
+from `config.yaml`:
+
+```yaml
+logging:
+  level: "INFO"
+  format: "json"              # one object per line, for a log shipper
+  file_path: logs/clawgold.log
+  max_bytes: 10485760         # 10 MB
+  backup_count: 5             # so at most ~60 MB total
+  log_trades_only: false      # true limits the *file* to trade records
+```
+
+`claw.py validate` rejects a non-positive `max_bytes` or `backup_count`,
+since either silently disables rotation.
+
+### Pruning what rotation does not cover
+
+```bash
+python scripts/clean_runtime_data.py             # bytecode + archives >14 days
+python scripts/clean_runtime_data.py --dry-run   # show, change nothing
+python scripts/clean_runtime_data.py --days 30   # keep archives longer
+```
+
+It removes `__pycache__`/`.pyc`, orphaned SQLite sidecars and test
+databases, and archived logs past the age threshold. It never touches the
+log currently being written, and it **refuses to delete the databases
+holding real state** — `clawgold.db` is the trade journal — unless given
+`--force`. Safe to run from cron; it exits non-zero only on bad arguments.
 
 ### What to alert on
 
