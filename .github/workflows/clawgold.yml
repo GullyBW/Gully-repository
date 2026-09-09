@@ -126,6 +126,13 @@ jobs:
       - name: Validate the compose file
         run: docker compose -f clawgold/docker-compose.yml config --quiet
 
+      - name: Set up buildx
+        # The default `docker` driver cannot export a build cache, so
+        # `cache-to: type=gha` below fails on it outright. The
+        # docker-container driver buildx installs here supports both that
+        # and `load: true`, which the image checks need.
+        uses: docker/setup-buildx-action@v3
+
       - name: Build the image
         uses: docker/build-push-action@v6
         with:
