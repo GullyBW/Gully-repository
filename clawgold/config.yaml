@@ -1,0 +1,233 @@
+trading:
+  # simulation -> PaperBroker      (no real orders, safe default)
+  # real       -> MT5Broker         (live; Windows only, needs MT5_LOGIN)
+  # remote     -> RemoteMT5Broker   (live from macOS/Linux, via the bridge)
+  # Override per-run with TRADING_MODE=...
+  mode: simulation
+  initial_balance: 10000
+  symbol: XAUUSD
+  risk_per_trade: 0.01
+  # Default stop distance in price units (USD/oz for gold) used to size a
+  # position when a signal does not carry its own stop. Sizing is derived
+  # from this and the contract spec in scripts/instrument.py.
+  default_stop_distance: 5.0
+
+  # Maximum MARGIN to commit to a single entry, in account currency.
+  # This is what makes a small account workable: it bounds what the broker
+  # holds to OPEN the position, which is a different question from what the
+  # trade risks if the stop is hit.
+  # Final volume = min(what risk allows, what this budget affords).
+  # Set to 0 to disable the cap and size on risk alone.
+  entry_budget: 10.0
+
+  # Account leverage, used for the margin arithmetic above.
+  # At 1:100 a $10 entry CANNOT open the standard 0.01-lot gold minimum
+  # (that needs ~$26.50 at $2650/oz). Run `python claw.py entry-check` to
+  # see whether your numbers work before you rely on them.
+  leverage: 500
+
+# Per-broker contract overrides. The minimum volume and volume step decide
+# whether a small account can trade at all, and they vary by broker:
+# standard accounts stop at 0.01 lots, cent/micro accounts often allow
+# 0.001. Check your broker's contract specification and set it here.
+instruments:
+  XAUUSD:
+    min_volume: 0.01
+    volume_step: 0.01
+
+# Free mode — run the whole system with no paid services.
+# Nothing here calls a paid API: no LiteLLM keys, no Langfuse cloud, no
+# market-data subscription. The signal comes from the technical path
+# (EMA confluence) plus the local keyword sentiment analyser, both of which
+# run offline. If an AI CLI happens to be installed it is still used; free
+# mode only stops the system from REQUIRING anything paid.
+free_mode:
+  enabled: true
+  # Never fall back to a paid LiteLLM API call.
+  allow_paid_llm_fallback: false
+  # Skip the AI research step entirely rather than waiting on tools that
+  # may not be installed. The technical path carries the signal alone.
+  skip_ai_research: false
+  # Refuse to start if a paid service is configured, instead of silently
+  # spending money.
+  strict: true
+
+# Paper broker settings (mode: simulation). Deterministic given the seed,
+# so the test suite and repeated runs produce the same price series.
+paper:
+  start_price: 2650.0
+  spread: 0.30
+  daily_volatility: 0.011
+  # Omit to inherit trading.leverage, so the simulator and the sizing
+  # arithmetic never disagree about what an entry costs.
+  leverage:
+  seed: 20260101
+
+# Risk Management Settings
+risk:
+  max_positions: 5
+  max_daily_loss: 500.0
+  max_position_size: 1.0
+  max_total_risk: 0.05
+  min_margin_level: 100.0
+
+# MT5 settings (can override via env vars: MT5_LOGIN, MT5_PASSWORD, MT5_SERVER)
+mt5:
+  login: 0
+  password: ""
+  server: ""
+  terminal_path: C:\Program Files\MetaTrader 5\terminal64.exe
+
+  # Bridge settings for trading.mode = remote.
+  #
+  # The MetaTrader5 package ships Windows-only wheels — it is a closed
+  # binary talking to the terminal over local IPC, so there is no macOS or
+  # Linux build. To trade live from a Mac, run the terminal where it works
+  # (a Windows VM/VPS, or macOS under Wine) and expose it with
+  #   python scripts/mt5_bridge_server.py --token <secret>
+  # then point this at it. Prefer an SSH tunnel over opening a port:
+  #   ssh -N -L 8760:127.0.0.1:8760 user@mt5-host
+  # See docs/MACOS.md.
+  bridge:
+    url: ""      # e.g. http://127.0.0.1:8760 — or MT5_BRIDGE_URL
+    token: ""    # shared secret        — or MT5_BRIDGE_TOKEN (prefer .env)
+    timeout: 30
+
+api:
+  provider: yfinance
+  ticker: GC=F
+
+logging:
+  enable: true
+  log_file: logs/trades.log
+
+# Telegram Notifications
+# Get bot token from @BotFather on Telegram
+# Chat ID is your own user ID or channel ID; set it via TELEGRAM_CHAT_ID
+telegram:
+  enabled: false   # set true once bot_token and chat_id are configured
+  bot_token: ""  # Set via TELEGRAM_BOT_TOKEN in .env
+  chat_id: ""    # Set via TELEGRAM_CHAT_ID in .env
+  
+  # Notification settings
+  notify_on:
+    trade_executed: true      # When trade is opened
+    position_alert: true      # When P/L threshold hit
+    signal_generated: true    # When AI signal generated
+    daily_summary: true       # Daily at configured time
+    system_errors: true       # System errors/warnings
+    
+  # Alert thresholds
+  alert_thresholds:
+    profit_percent: 2.0       # Alert when profit > 2%
+    loss_percent: -1.0        # Alert when loss > -1%
+    
+  # Daily summary time (24-hour format)
+  summary_time: "17:00"
+
+# AI Sub-Agent System
+# Uses external AI CLI tools as autonomous agents for trading tasks.
+# No model training required — delegates to pre-trained AI via CLI.
+agent:
+  # Preferred tool order for auto-selection (run_best fallback chain)
+  preferred_tools:
+    - gemini
+    - opencode
+    - kilocode
+    - codex
+
+  # Cache settings (avoid re-running identical queries)
+  cache:
+    enabled: true
+    ttl_hours: 4              # Cached responses expire after 4 hours
+    dir: "data/agent_cache"
+
+  # Execution defaults
+  execution:
+    timeout: 120              # Max seconds per CLI invocation
+    max_parallel: 3           # Max concurrent tool calls (consensus/parallel)
+    consensus_tools: 3        # Number of tools for consensus queries
+
+  # Scheduler settings (automated daily tasks)
+  scheduler:
+    enabled: false            # Set true to auto-start scheduler
+    db_path: "data/agent_scheduler.db"
+    tasks:
+      morning_research:
+        time: "07:00"
+        enabled: true
+      morning_plan:
+        time: "07:30"
+        enabled: true
+      midday_analysis:
+        time: "12:00"
+        enabled: true
+      position_check:
+        interval_seconds: 600 # Every 10 minutes
+        enabled: true
+      afternoon_risk:
+        time: "15:00"
+        enabled: true
+      daily_summary:
+        time: "17:00"
+        enabled: true
+      evening_research:
+        time: "20:00"
+        enabled: true
+
+  # Notify results via Telegram
+  notify_results: true
+
+# ─────────────────────────────────────────────────────────────
+# BUSINESS MODULES
+# ─────────────────────────────────────────────────────────────
+
+# Signal Service — Telegram subscription business
+signal_service:
+  db_path: "data/signal_service.db"
+  tiers:
+    free:
+      delay_hours: 4
+      signals_per_day: 3
+      price_usd: 0
+    basic:
+      delay_hours: 0
+      signals_per_day: 999
+      price_usd: 29
+    pro:
+      delay_hours: 0
+      signals_per_day: 999
+      price_usd: 79
+      include_ai_reasoning: true
+    vip:
+      delay_hours: 0
+      signals_per_day: 999
+      price_usd: 199
+      include_ai_reasoning: true
+      include_consultation: true
+  # Telegram Group/Channel IDs per tier
+  # Set these to your own Telegram channel IDs, or via the environment:
+  # SIGNAL_CH_FREE / SIGNAL_CH_BASIC / SIGNAL_CH_PRO / SIGNAL_CH_VIP.
+  # Left blank deliberately: broadcasting to an ID you do not own sends
+  # your signals to somebody else's channel.
+  channels:
+    free:  ""   # Free room  (delayed 4h)
+    basic: ""   # Basic room ($29/mo, real-time)
+    pro:   ""   # Pro room   ($79/mo, entry+SL+TP+AI)
+    vip:   ""   # VIP room   ($199/mo)
+  admin_contact: ""
+  website: ""
+
+# PAMM Manager — Investor managed accounts
+pamm:
+  db_path: "data/pamm.db"
+  performance_fee: 0.20    # 20% of profits above high watermark
+  management_fee: 0.015    # 1.5% per year (billed monthly)
+  minimum_investment: 1000 # USD
+  reporting_day: 1         # Day of month to generate statements
+
+# Performance Tracker — Track record & reporting
+performance:
+  db_path: "data/performance.db"
+  report_output: "performance_report.html"
+  myfxbook_export: "data/myfxbook_export.json"

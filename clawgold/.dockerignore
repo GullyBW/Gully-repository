@@ -1,0 +1,39 @@
+# Keep credentials, local state and build noise out of the image.
+# Anything listed here is also excluded from the build context, so it
+# cannot be baked into a layer even accidentally.
+
+# Secrets — never in an image
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+.github
+
+# Local state: SQLite databases, caches and the kill switch belong to a
+# deployment, not to the image. They arrive via the mounted volume.
+data/
+logs/
+*.db
+*.db-journal
+*.log
+
+# Python build artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
