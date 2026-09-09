@@ -99,7 +99,28 @@ api:
 
 logging:
   enable: true
-  log_file: logs/trades.log
+
+  # Verbosity for both console and file handlers.
+  level: "INFO"
+
+  # "json" emits one JSON object per line — parseable by a log shipper.
+  # "text" emits the human-readable pipe-delimited format.
+  format: "json"
+
+  # Rotation is what stops a chatty failure loop from filling the disk.
+  # At 10 MB x 5 backups the logs occupy at most ~60 MB (current + 5).
+  file_path: logs/clawgold.log
+  max_bytes: 10485760      # 10 MB
+  backup_count: 5
+
+  # true restricts the *file* handler to trade-related records; the console
+  # still shows everything. Useful when the file is an audit trail rather
+  # than a debugging aid.
+  log_trades_only: false
+
+  # Deprecated alias for file_path, still read so existing configs and
+  # deployments keep working. file_path wins when both are set.
+  log_file: logs/clawgold.log
 
 # Telegram Notifications
 # Get bot token from @BotFather on Telegram

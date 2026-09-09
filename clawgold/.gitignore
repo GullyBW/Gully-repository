@@ -122,6 +122,15 @@ dmypy.json
 Thumbs.db
 
 # Project specific
+# Runtime artifacts. None of this belongs in the repository: rotated logs
+# and SQLite databases are machine-local state, and scripts/clean_runtime_data.py
+# prunes them.
 logs/
-data/
 *.log
+# Rotated backups: clawgold.log.1, clawgold.log.2, ...
+# (a trailing comment on a pattern line would become part of the pattern)
+*.log.*
+data/
+# Redundant under data/, but explicit about the intent.
+data/*.db
+__pycache__/

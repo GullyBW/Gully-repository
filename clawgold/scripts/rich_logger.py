@@ -12,6 +12,7 @@ Phase 1: High Impact / Quick Wins
 """
 
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 from typing import Optional
@@ -87,7 +88,16 @@ class RichLogger:
         # Optional file handler for persistence
         if log_file:
             Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.FileHandler(log_file)
+            # Rotating, not plain: this file is written by long-running
+            # workers, and an unbounded handler fills the disk. Limits come
+            # from the same config.yaml block as scripts/logger.py.
+            from logger import DEFAULTS as _LOG_DEFAULTS, _CONFIG as _LOG_CONFIG
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=int(_LOG_CONFIG.get("max_bytes") or _LOG_DEFAULTS["max_bytes"]),
+                backupCount=int(_LOG_CONFIG.get("backup_count") or _LOG_DEFAULTS["backup_count"]),
+                encoding="utf-8",
+            )
             file_formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S'

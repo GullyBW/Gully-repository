@@ -336,8 +336,29 @@ class ConfigValidator:
     def _validate_logging(self, logging_cfg: Dict[str, Any]) -> None:
         if 'enable' not in logging_cfg:
             self.errors.append("Missing logging.enable")
-        if 'log_file' not in logging_cfg:
-            self.errors.append("Missing logging.log_file")
+        # file_path is the documented key; log_file is the deprecated alias.
+        if not logging_cfg.get('file_path') and not logging_cfg.get('log_file'):
+            self.errors.append("Missing logging.file_path")
+
+        fmt = str(logging_cfg.get('format', 'text')).lower()
+        if fmt not in ('json', 'text'):
+            self.errors.append(
+                f"logging.format is {fmt!r}; expected 'json' or 'text'")
+
+        # A non-positive rotation setting silently disables rotation, which
+        # is how a disk fills up.
+        for key in ('max_bytes', 'backup_count'):
+            if key not in logging_cfg:
+                continue
+            try:
+                value = int(logging_cfg[key])
+            except (TypeError, ValueError):
+                self.errors.append(f"logging.{key} is not a number")
+                continue
+            if value <= 0:
+                self.errors.append(
+                    f"logging.{key} is {value}; a non-positive value disables "
+                    "log rotation, so the log would grow without bound")
 
     def _validate_notifications(self, config: Dict[str, Any]) -> None:
         telegram = config.get('telegram', {}) or {}
